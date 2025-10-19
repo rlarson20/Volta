@@ -219,13 +219,79 @@ impl Tensor {
     //each op producing new tensor should have appropriate grad_fn
     //
     //eg:
-    //AddGradFn: in back, take grad of out, pass to parents
-    //since delta(a+b)/delta(a) = 1, delta(a+b)/delta(b) = 1,
-    //grad flows unchanged to in
-    //MulGradFn: z = x * y, delta(z)/delta(x) = y, back mul incoming grad by other parent val
     //MatMulGradFn: more complex: grad involves transposes:
     //if z = X dot W, grad w.rt X = grad_out dot W.transpose,
     //and grad w.rt W = X.transpose dot grad.out
+    //
+    //
+    //with forward pass creating comp graph
+    //via parents links and grad_fn
+    //impl back pass to perform autodiff
+    //
+    //add method Tensor::backward(&mut self)
+    //computes grad w.rt tensor
+    //usually called on final loss scalar
+    //if tensor not scalar
+    //enforce user calls .backward() only on scalar loss
+    //or define what it means:
+    //eg sum of grads
+    //
+    //backward should traverse graph from curr tensor back to all deps:
+    //start by setting grad of final tensor (self) to appropriate val:
+    //typically tensor of ones w same shape (del loss/ del loss = 1)
+    //for scalar loss, grad = 1.0
+    //use topological order traversal (acyclic graph)
+    //propogate grads
+    //collect all tensors in graph by traversing parents recursively
+    //dfs or iterative stack
+    //alternatively
+    //during forward op creation
+    //you can keep a global list or assign each tensor an incremental id,
+    //sort by creation order (topo sort)
+    //iterate in rev topo order: use its grad_fn.backward to get grad for parents, accumulate into
+    //parents .grad
+    //mark tensors as visited to avoid repeating backprop
+    //also handle case of leaves (no parents, req_grad false)
+
+    pub fn backward(&mut self) {
+        assert!(
+            self.requires_grad,
+            "Called backward on a tensor that doesn't require grad"
+        );
+        if self.grad.is_none() {
+            self.grad = Some(vec![1.0; self.data.len()]);
+        }
+        let mut stack = vec![self];
+        while let Some(tensor) = stack.pop() {
+            //if has grad_fn and parents, prop grads
+            if let Some(ref grad_fn) = tensor.grad_fn {
+                //ensure grad is present
+                //should be if set for output
+                let grad_out_data = tensor.grad.as_ref().unwrap();
+                let grad_out = Tensor::new(grad_out_data.clone(), &tensor.shape, false);
+                //make parent grads
+                let parent_grads = grad_fn.backward(&grad_out, &tensor.parents);
+                for (parent_grad, parent_ref) in parent_grads.into_iter().zip(tensor.parents.iter())
+                {
+                    if let Some(g) = parent_grad {
+                        let mut parent = parent_ref.borrow_mut();
+                        if parent.grad.is_none() {
+                            parent.grad = Some(g.data)
+                        } else {
+                            let existing = parent.grad.as_mut().unwrap();
+                            for (accum, new) in existing.iter_mut().zip(g.data.iter()) {
+                                *accum += new;
+                            }
+                        }
+                    }
+                    if parent_ref.borrow().grad_fn.is_some() {
+                        //push parent to stack for further backprop
+                        stack.push(&mut *parent_ref.borrow_mut());
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub struct Tensor {
