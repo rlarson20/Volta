@@ -17,7 +17,49 @@ impl GradFn for AddGradFn {
             Some(Tensor::new(out_grad.data.clone(), &out_grad.shape, false)),
             Some(Tensor::new(out_grad.data.clone(), &out_grad.shape, false)),
         ]
+    }
 }
+
+struct MulGradFn;
+impl GradFn for MulGradFn {
+    fn backward(&self, out_grad: &Tensor, parents: &[TensorRef]) -> Vec<Option<Tensor>> {
+        let x_val = parents[0].borrow();
+        let y_val = parents[1].borrow();
+        let grad_x = if x_val.requires_grad {
+            let data = out_grad
+                .data
+                .iter()
+                .zip(y_val.data.iter())
+                .map(|(g, &y)| g * y)
+                .collect();
+            Some(Tensor::new(data, &out_grad.shape, false))
+        } else {
+            None
+        };
+        let grad_y = if y_val.requires_grad {
+            let data = out_grad
+                .data
+                .iter()
+                .zip(x_val.data.iter())
+                .map(|(g, &x)| g * x)
+                .collect();
+            Some(Tensor::new(data, &out_grad.shape, false))
+        } else {
+            None
+        };
+        vec![grad_x, grad_y]
+    }
+}
+//Note:
+//above use parents as slite of TensorRef
+//assume like Rc<RefCell<Tensor>>
+//call borrow to get actual Tensor
+//in practice, design GradFn to carry necessary info
+//maybe store copy of operand if needed for back
+//to avoid borroiwng parents
+//to keep conceptual, directly access parents here
+//each GradFn::backward returns vec of grads aligned w parents vec
+//using none for parent w no grad req
 
 pub enum Device {
     CPU,
