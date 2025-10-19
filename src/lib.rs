@@ -44,6 +44,10 @@ impl Tensor {
         let size = shape.iter().product();
         Tensor::new(vec![1.0; size], shape, false)
     }
+    //ref to data or copy of data
+    pub fn data(&self) -> &[f32] {
+        &self.data
+    }
     //for something like
     //Tensor::rand(shape: &[usize])
     //integrate rand crate to fill data w normal dist
@@ -53,6 +57,15 @@ impl Tensor {
     //tensor.shape()
     //tensor.num_elements()
     //etc
+    //other methods to add:
+    //reshape
+    //to_device
+    //
+    //end goal:
+    //getting basic funcs done
+    //create tensor, print to verify shape and data align
+    //requires_grad stays false for now
+    //enable autograd in later steps
 }
 
 pub struct Tensor {
