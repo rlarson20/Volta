@@ -35,8 +35,15 @@ impl Tensor {
         }
     }
     //Tensor::zeros(shape: &[usize])
+    pub fn zeros(shape: &[usize]) -> Tensor {
+        let size = shape.iter().product();
+        Tensor::new(vec![0.0; size], shape, false)
+    }
     //Tensor::ones(shape: &[usize])
-    //using vec![0.0; size]
+    pub fn ones(shape: &[usize]) -> Tensor {
+        let size = shape.iter().product();
+        Tensor::new(vec![1.0; size], shape, false)
+    }
     //for something like
     //Tensor::rand(shape: &[usize])
     //integrate rand crate to fill data w normal dist
