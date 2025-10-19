@@ -1,6 +1,11 @@
 pub trait GradFn {}
 pub struct TensorRef {}
-pub struct Device {}
+
+pub enum Device {
+    CPU,
+    GPU,
+    //TODO: possible Metal variant
+}
 
 pub struct Tensor {
     pub data: Vec<f32>,         // flat data vec, len = prod shape dims
