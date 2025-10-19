@@ -1,0 +1,7 @@
+/target
+
+references/*
+*.md
+!README.md
+
+.bacon-locations
