@@ -1,10 +1,51 @@
 pub trait GradFn {}
-pub struct TensorRef {}
+pub struct TensorRef {
+    //may end up as:
+    //type TensorRef = std::rc::Rc<std::cell::RefCell<Tensor>>
+    //to allow shared mut refs to parent tensors in graph
+    //multiple child tensors can refer to parent
+    //during backprop can mutate parents through refs
+    //using Rc<RefCell<Tensor>> is simple approach for dyn graph
+    //for thread-safety, use Arc<Mutex<Tensor>>
+    //starting single-threaded
+}
 
 pub enum Device {
     CPU,
     GPU,
     //TODO: possible Metal variant
+}
+
+impl Tensor {
+    //from data and shape
+    pub fn new(data: Vec<f32>, shape: &[usize], requires_grad: bool) -> Tensor {
+        assert_eq!(
+            data.len(),
+            shape.iter().product::<usize>(),
+            "Data length must match shape"
+        );
+        Tensor {
+            data,
+            shape: shape.to_vec(),
+            grad: None,
+            requires_grad,
+            grad_fn: None,
+            parents: vec![],
+            device: Device::CPU,
+        }
+    }
+    //Tensor::zeros(shape: &[usize])
+    //Tensor::ones(shape: &[usize])
+    //using vec![0.0; size]
+    //for something like
+    //Tensor::rand(shape: &[usize])
+    //integrate rand crate to fill data w normal dist
+    //
+    //impl debug, display trait
+    //methods for props
+    //tensor.shape()
+    //tensor.num_elements()
+    //etc
 }
 
 pub struct Tensor {
