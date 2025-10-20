@@ -1,3 +1,4 @@
+use std::cell::Ref;
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -6,6 +7,51 @@ pub type Tensor = Rc<RefCell<RawTensor>>;
 //using Rc<RefCell<Tensor>> is simple approach for dyn graph
 //for thread-safety, use Arc<Mutex<Tensor>>
 //starting single-threaded
+
+// enum UnaryOp {
+//     NoOp, //may not be necessary
+//     Exp2,
+//     Log2,
+//     Cast, //may not be necessary
+//     Sin,
+//     Cos, //may not be necessary
+//     Sqrt,
+//     Recip,
+//     Neg,
+// }
+// enum BinaryOp {
+//     Add,
+//     Sub,
+//     Mul,
+//     Div,
+//     Max,
+//     Mod,
+//     Cmplt, //idk what it is
+// }
+// enum ReduceOp {
+//     Sum,
+//     Max,
+// }
+// enum TernaryOp {
+//     MulAcc,
+//     Where,
+// }
+// enum MovementOp {
+//     Reshape,
+//     Permute,
+//     Expand,
+//     Pad,
+//     Shrink,
+//     Stride,
+// }
+// enum LoadOp {
+//     Empty,
+//     Rand,
+//     Const,
+//     From,
+//     Contiguous,
+//     Custom,
+// }
 
 pub trait GradFn {
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>>;
@@ -16,7 +62,7 @@ struct AddGradFn;
 impl GradFn for AddGradFn {
     fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
         //TODO: update to ensure it updates parents correctly
-        let grad = RawTensor::new(out_grad.data.clone(), &out_grad.shape, false);
+        let grad: Tensor = RawTensor::new(out_grad.data.clone(), &out_grad.shape, false);
         vec![Some(grad.clone()), Some(grad)]
     }
     fn clone_box(&self) -> Box<dyn GradFn> {
@@ -27,10 +73,10 @@ impl GradFn for AddGradFn {
 struct ElemMulGradFn;
 impl GradFn for ElemMulGradFn {
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
-        let x_val = parents[0].borrow();
-        let y_val = parents[1].borrow();
-        let grad_x = if x_val.requires_grad {
-            let data = out_grad
+        let x_val: Ref<'_, RawTensor> = parents[0].borrow();
+        let y_val: Ref<'_, RawTensor> = parents[1].borrow();
+        let grad_x: Option<Tensor> = if x_val.requires_grad {
+            let data: Vec<f32> = out_grad
                 .data
                 .iter()
                 .zip(y_val.data.iter())
@@ -40,8 +86,8 @@ impl GradFn for ElemMulGradFn {
         } else {
             None
         };
-        let grad_y = if y_val.requires_grad {
-            let data = out_grad
+        let grad_y: Option<Tensor> = if y_val.requires_grad {
+            let data: Vec<f32> = out_grad
                 .data
                 .iter()
                 .zip(x_val.data.iter())
@@ -61,9 +107,9 @@ impl GradFn for ElemMulGradFn {
 struct SubGradFn;
 impl GradFn for SubGradFn {
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
-        let x_requires_grad = parents[0].borrow().requires_grad;
-        let y_requires_grad = parents[1].borrow().requires_grad;
-        let grad_x = if x_requires_grad {
+        let x_requires_grad: bool = parents[0].borrow().requires_grad;
+        let y_requires_grad: bool = parents[1].borrow().requires_grad;
+        let grad_x: Option<Tensor> = if x_requires_grad {
             Some(RawTensor::new(
                 out_grad.data.clone(),
                 &out_grad.shape,
@@ -72,7 +118,7 @@ impl GradFn for SubGradFn {
         } else {
             None
         };
-        let grad_y = if y_requires_grad {
+        let grad_y: Option<Tensor> = if y_requires_grad {
             let data = out_grad.data.iter().map(|&g| -g).collect();
             Some(RawTensor::new(data, &out_grad.shape, false))
         } else {
@@ -92,8 +138,8 @@ struct SumGradFn {
 impl GradFn for SumGradFn {
     fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
         // Gradient of sum broadcasts output grad to input shape
-        let size = self.input_shape.iter().product();
-        let grad_val = out_grad.data[0]; // sum produces scalar
+        let size: usize = self.input_shape.iter().product();
+        let grad_val: f32 = out_grad.data[0]; // sum produces scalar
         vec![Some(RawTensor::new(
             vec![grad_val; size],
             &self.input_shape,
