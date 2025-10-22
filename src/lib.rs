@@ -1309,9 +1309,6 @@ impl RawTensor {
     ///
     /// This repeats values along dimensions where from_shape is 1
     /// and to_shape is larger.
-    ///
-    /// **FIXME**: Current implementation may have edge cases with
-    /// complex broadcasting patterns. Works for common cases.
     fn broadcast_to(data: &[f32], from_shape: &[usize], to_shape: &[usize]) -> Vec<f32> {
         if from_shape == to_shape {
             return data.to_vec();
@@ -1325,16 +1322,16 @@ impl RawTensor {
         let offset = to_shape.len() - from_shape.len();
         padded_from[offset..].copy_from_slice(from_shape);
         let from_strides_padded = Self::compute_strides(&padded_from);
+        let to_strides = Self::compute_strides(to_shape);
 
         // For each output position, compute corresponding input position
         for i in 0..to_size {
             let mut from_idx = 0;
             let mut remainder = i;
             //calc coords based on to_shape and map
-            for (dim, &_dim_size) in to_shape.iter().enumerate() {
-                let stride = to_shape[dim + 1..].iter().product::<usize>();
-                let coord = remainder / stride;
-                remainder %= stride;
+            for dim in 0..to_shape.len() {
+                let coord = remainder / to_strides[dim];
+                remainder %= to_strides[dim];
                 //if dim broadcast (size was 1) use coord 0 for from_idx
                 if padded_from[dim] != 1 {
                     from_idx += coord * from_strides_padded[dim];
@@ -1384,25 +1381,22 @@ impl RawTensor {
         }
         let mut result = vec![0.0; target_shape.iter().product()];
         let target_strides = Self::compute_strides(target_shape);
+        let grad_strides = Self::compute_strides(grad_shape);
 
         // For each gradient element, sum into appropriate result position
         for (i, &grad_val) in grad.iter().enumerate() {
             let mut target_idx = 0;
             let mut remainder = i;
 
-            //convert lin index i in grad_shape to coord
-            for (dim, &_dim_size) in grad_shape.iter().enumerate() {
-                let stride = grad_shape[dim + 1..].iter().product::<usize>();
-                let coord = remainder / stride;
-                remainder %= stride;
+            // convert lin index i in grad_shape to coords and map to target
+            for dim in 0..grad_shape.len() {
+                let coord = remainder / grad_strides[dim];
+                remainder %= grad_strides[dim];
 
                 // Map to target coordinate (skip if was broadcast)
-                // FIXED: Account for padded_target indexing
                 if dim >= offset && padded_target[dim] != 1 {
                     let target_dim_idx = dim - offset;
-                    if padded_target[dim] != 1 {
-                        target_idx += coord * target_strides[target_dim_idx];
-                    }
+                    target_idx += coord * target_strides[target_dim_idx];
                 }
             }
             if target_idx < result.len() {
@@ -2839,6 +2833,42 @@ impl TensorOps for Tensor {
     }
 }
 
+// ===== Modules =====
+
+pub trait Module {
+    fn forward(&self, x: &Tensor) -> Tensor;
+    fn parameters(&self) -> Vec<Tensor>;
+    fn zero_grad(&mut self) {
+        for p in self.parameters() {
+            p.borrow_mut().grad = None;
+        }
+    }
+}
+
+impl Module for Sequential {
+    fn forward(&self, x: &Tensor) -> Tensor {
+        let mut current = x.clone();
+        for layer in &self.layers {
+            current = layer.forward(&current);
+        }
+        current
+    }
+    fn parameters(&self) -> Vec<Tensor> {
+        self.layers.iter().flat_map(|l| l.parameters()).collect()
+    }
+}
+
+impl Sequential {
+    // Helper constructor for easier testing and building
+    pub fn new(layers: Vec<Box<dyn Module>>) -> Self {
+        Sequential { layers }
+    }
+}
+
+pub struct Sequential {
+    layers: Vec<Box<dyn Module>>,
+}
+
 // ===== OPTIMIZERS =====
 
 /// Stochastic Gradient Descent optimizer with optional momentum
@@ -2915,6 +2945,71 @@ impl SGD {
                     }
                 }
             }
+        }
+    }
+}
+
+pub struct Adam {
+    params: Vec<Tensor>,
+    lr: f32,
+    betas: (f32, f32),
+    eps: f32,
+    m: Vec<Vec<f32>>, // 1st moment
+    v: Vec<Vec<f32>>, // 2nd moment
+    t: usize,         // timestep
+}
+
+impl Adam {
+    pub fn step(&mut self) {
+        self.t += 1;
+        for (i, param) in self.params.iter().enumerate() {
+            let mut p = param.borrow_mut();
+            if let Some(grad) = &p.grad {
+                // Update biased moments
+                for j in 0..grad.len() {
+                    self.m[i][j] = self.betas.0 * self.m[i][j] + (1.0 - self.betas.0) * grad[j];
+                    self.v[i][j] =
+                        self.betas.1 * self.v[i][j] + (1.0 - self.betas.1) * grad[j].powi(2);
+                }
+
+                // Bias correction
+                let m_hat_scale = 1.0 / (1.0 - self.betas.0.powi(self.t as i32));
+                let v_hat_scale = 1.0 / (1.0 - self.betas.1.powi(self.t as i32));
+
+                // Update parameters
+                for j in 0..p.data.len() {
+                    let m_hat = self.m[i][j] * m_hat_scale;
+                    let v_hat = self.v[i][j] * v_hat_scale;
+                    p.data[j] -= self.lr * m_hat / (v_hat.sqrt() + self.eps);
+                }
+            }
+        }
+    }
+}
+impl Adam {
+    pub fn new(params: Vec<Tensor>, lr: f32, betas: (f32, f32), eps: f32) -> Self {
+        let m = params
+            .iter()
+            .map(|p| vec![0.0; p.borrow().data.len()])
+            .collect();
+        let v = params
+            .iter()
+            .map(|p| vec![0.0; p.borrow().data.len()])
+            .collect();
+        Adam {
+            params,
+            lr,
+            betas,
+            eps,
+            m,
+            v,
+            t: 0,
+        }
+    }
+
+    pub fn zero_grad(&self) {
+        for param in &self.params {
+            param.borrow_mut().grad = None;
         }
     }
 }
@@ -3338,7 +3433,7 @@ mod misc_tests {
         assert_eq!(y.grad(), Some(vec![-2.5, -3.5, -4.5]));
     }
 
-    #[test] //failing rn, adds 10 to the second half when should be adding 20
+    #[test]
     fn test_broadcast_3d() {
         // (1, 2, 3) + (2, 1) -> (1, 2, 3) but will broadcast to match
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[1, 2, 3], true);
@@ -3813,5 +3908,43 @@ mod axis_reduce_tests {
         let passed =
             RawTensor::check_gradients_simple(&x, |t| RawTensor::max_dim(t, 1, false).sum());
         assert!(passed, "max_dim gradient check failed");
+    }
+
+    #[test]
+    fn test_softmax_forward() {
+        // Test softmax computation
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
+        let y = RawTensor::softmax(&x, 1);
+
+        // Each row should sum to 1.0
+        let row0_sum: f32 = y.borrow().data[0..3].iter().sum();
+        let row1_sum: f32 = y.borrow().data[3..6].iter().sum();
+
+        approx::assert_relative_eq!(row0_sum, 1.0, epsilon = 1e-6);
+        approx::assert_relative_eq!(row1_sum, 1.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn test_gradcheck_softmax() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], true);
+        let passed = RawTensor::check_gradients_simple(&x, |t| RawTensor::softmax(t, 1).sum());
+        assert!(passed, "Softmax gradient check failed");
+    }
+
+    #[test]
+    fn test_cross_entropy_loss() {
+        // Simple 2-class, 2-sample batch
+        let logits = RawTensor::new(vec![2.0, 1.0, 0.5, 2.5], &[2, 2], true);
+        let targets = RawTensor::new(vec![1.0, 0.0, 0.0, 1.0], &[2, 2], false);
+
+        let loss = RawTensor::cross_entropy_loss(&logits, &targets);
+        loss.backward();
+
+        // Loss should be positive scalar
+        assert_eq!(loss.borrow().shape, vec![1]);
+        assert!(loss.borrow().data[0] > 0.0);
+
+        // Gradients should exist and have correct shape
+        assert_eq!(logits.grad().unwrap().len(), 4);
     }
 }
