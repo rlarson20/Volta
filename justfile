@@ -39,8 +39,8 @@ ask-status model:
 	@echo "Asking!"
 	-cargo build &> err.txt
 	-cargo test &> tests.txt
-	files-to-prompt Cargo.toml src/lib.rs src/notes.rs err.txt tests.txt o3-deep-research-plan.md > context.md
-	cat context.md | llm --model "openrouter/{{model}}" --system "Give a status report on how complete this repository is." > status-report.md
+	files-to-prompt Cargo.toml src/lib.rs src/notes.rs err.txt tests.txt o3-deep-research-plan.md status-report.md > context.md
+	cat context.md | llm --model "openrouter/{{model}}" --system "Give an updated status report on how complete this repository is." > status-report.md
 	@echo "Finished!"
 
 ask model:

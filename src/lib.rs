@@ -1,4 +1,4 @@
-//! # Torch From Scratch
+//! # Torch From Scratch / Volta
 //!
 //! A minimal automatic differentiation library implementing PyTorch-like tensor operations
 //! from scratch in pure Rust. This library provides:
@@ -494,6 +494,119 @@ impl GradFn for MeanGradFn {
     fn clone_box(&self) -> Box<dyn GradFn> {
         Box::new(MeanGradFn {
             input_shape: self.input_shape.clone(),
+        })
+    }
+}
+
+/// Gradient for sum_dim: broadcast ones back to input shape
+struct SumDimGradFn {
+    input_shape: Vec<usize>,
+    dim: usize,
+    keepdim: bool,
+}
+
+impl GradFn for SumDimGradFn {
+    fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
+        let grad_data = &out_grad.data;
+        let grad_shape = &out_grad.shape;
+
+        // If keepdim=false, we need to unsqueeze the dimension back
+        let mut expanded_shape = grad_shape.clone();
+        if !self.keepdim {
+            expanded_shape.insert(self.dim, 1);
+        }
+
+        // Broadcast gradient back to input shape
+        // Each output element contributed to by input_shape[dim] elements
+        let size: usize = self.input_shape.iter().product();
+        let mut result = vec![0.0; size];
+
+        let _strides = RawTensor::compute_strides(&self.input_shape);
+        let grad_strides = RawTensor::compute_strides(&expanded_shape);
+
+        for i in 0..size {
+            // Get input coordinates
+            let mut coords = vec![0; self.input_shape.len()];
+            let mut rem = i;
+            for (d, &dim_sz) in self.input_shape.iter().enumerate().rev() {
+                coords[d] = rem % dim_sz;
+                rem /= dim_sz;
+            }
+
+            // Map to gradient coordinates (zero out the summed dimension)
+            let mut grad_coords = coords.clone();
+            grad_coords[self.dim] = 0;
+
+            let grad_idx: usize = grad_coords
+                .iter()
+                .zip(&grad_strides)
+                .map(|(c, s)| c * s)
+                .sum();
+            result[i] = grad_data[grad_idx];
+        }
+
+        vec![Some(RawTensor::new(result, &self.input_shape, false))]
+    }
+
+    fn clone_box(&self) -> Box<dyn GradFn> {
+        Box::new(SumDimGradFn {
+            input_shape: self.input_shape.clone(),
+            dim: self.dim,
+            keepdim: self.keepdim,
+        })
+    }
+}
+
+/// Gradient for max_dim: sparse gradient to max elements only
+struct MaxDimGradFn {
+    input_shape: Vec<usize>,
+    max_indices: Vec<usize>, // linear indices of max elements
+    dim: usize,
+    keepdim: bool,
+}
+
+impl GradFn for MaxDimGradFn {
+    fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
+        let grad_data = &out_grad.data;
+        let grad_shape = &out_grad.shape;
+
+        let mut expanded_shape = grad_shape.clone();
+        if !self.keepdim {
+            expanded_shape.insert(self.dim, 1);
+        }
+
+        let size: usize = self.input_shape.iter().product();
+        let mut result = vec![0.0; size];
+
+        // Only max elements receive gradient
+        let grad_strides = RawTensor::compute_strides(&expanded_shape);
+
+        for (out_idx, &max_lin_idx) in self.max_indices.iter().enumerate() {
+            // Convert output index to coordinates in expanded shape
+            let mut grad_coords = vec![0; expanded_shape.len()];
+            let mut rem = out_idx;
+            for (d, &dim_sz) in expanded_shape.iter().enumerate().rev() {
+                grad_coords[d] = rem % dim_sz;
+                rem /= dim_sz;
+            }
+
+            let grad_idx: usize = grad_coords
+                .iter()
+                .zip(&grad_strides)
+                .map(|(c, s)| c * s)
+                .sum();
+            result[max_lin_idx] = grad_data[grad_idx];
+        }
+
+        vec![Some(RawTensor::new(result, &self.input_shape, false))]
+    }
+
+    fn clone_box(&self) -> Box<dyn GradFn> {
+        Box::new(MaxDimGradFn {
+            input_shape: self.input_shape.clone(),
+            max_indices: self.max_indices.clone(),
+            dim: self.dim,
+            keepdim: self.keepdim,
         })
     }
 }
@@ -1284,9 +1397,9 @@ impl RawTensor {
                 remainder %= stride;
 
                 // Map to target coordinate (skip if was broadcast)
-                let target_dim_idx = dim as i32 - offset as i32;
-                if target_dim_idx >= 0 {
-                    let target_dim_idx = target_dim_idx as usize;
+                // FIXED: Account for padded_target indexing
+                if dim >= offset && padded_target[dim] != 1 {
+                    let target_dim_idx = dim - offset;
                     if padded_target[dim] != 1 {
                         target_idx += coord * target_strides[target_dim_idx];
                     }
@@ -1448,6 +1561,188 @@ impl RawTensor {
     }
     pub fn mean(self_t: &Tensor) -> Tensor {
         Self::reduce_op(self_t, ReduceOp::Mean)
+    }
+}
+
+// ===== SOFTMAX & AXIS REDUCTIONS =====  // <-- NEW SECTION HERE
+impl RawTensor {
+    /// Sum along a specific axis
+    ///
+    /// # Arguments
+    /// * `dim` - Axis to reduce (0-indexed)
+    /// * `keepdim` - If true, keep reduced dimension as size 1
+    ///
+    /// # Examples
+    /// let x = Tensor::new(vec![1,2,3,4,5,6], &[2,3], true);
+    /// x.sum_dim(1, false) // -> [6, 15] shape [2]
+    /// x.sum_dim(1, true)  // -> [[6], [15]] shape [2,1]
+    pub fn sum_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
+        let (data, shape, req_grad) = {
+            let s = self_t.borrow();
+            assert!(
+                dim < s.shape.len(),
+                "dim {} out of bounds for shape {:?}",
+                dim,
+                s.shape
+            );
+            (s.data.clone(), s.shape.clone(), s.requires_grad)
+        };
+
+        let _dim_size = shape[dim];
+        let mut out_shape = shape.clone();
+        out_shape[dim] = 1; // intermediate shape before squeeze
+        let out_size: usize = out_shape.iter().product();
+        let mut result = vec![0.0; out_size];
+
+        // Compute strides for indexing
+        let _strides = Self::compute_strides(&shape);
+        let out_strides = Self::compute_strides(&out_shape);
+
+        // Sum over the target dimension
+        for i in 0..data.len() {
+            // Convert linear index to coordinates
+            let mut coords = vec![0; shape.len()];
+            let mut rem = i;
+            for (d, &dim_sz) in shape.iter().enumerate().rev() {
+                coords[d] = rem % dim_sz;
+                rem /= dim_sz;
+            }
+
+            // Zero out the target dimension for output indexing
+            let mut out_coords = coords.clone();
+            out_coords[dim] = 0;
+
+            // Convert output coords to linear index
+            let out_idx: usize = out_coords
+                .iter()
+                .zip(&out_strides)
+                .map(|(c, s)| c * s)
+                .sum();
+            result[out_idx] += data[i];
+        }
+
+        // Squeeze dimension if keepdim=false
+        let final_shape = if keepdim {
+            out_shape
+        } else {
+            out_shape
+                .iter()
+                .enumerate()
+                .filter(|(d, _)| *d != dim)
+                .map(|(_, &sz)| sz)
+                .collect()
+        };
+
+        let out = Self::new(result, &final_shape, req_grad);
+
+        if req_grad {
+            out.borrow_mut().parents = vec![self_t.clone()];
+            out.borrow_mut().grad_fn = Some(Box::new(SumDimGradFn {
+                input_shape: shape,
+                dim,
+                keepdim,
+            }));
+        }
+        out
+    }
+
+    /// Max along a specific axis
+    ///
+    /// Returns maximum value along dimension and stores indices for backward pass.
+    pub fn max_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
+        let (data, shape, req_grad) = {
+            let s = self_t.borrow();
+            assert!(
+                dim < s.shape.len(),
+                "dim {} out of bounds for shape {:?}",
+                dim,
+                s.shape
+            );
+            (s.data.clone(), s.shape.clone(), s.requires_grad)
+        };
+
+        let _dim_size = shape[dim];
+        let mut out_shape = shape.clone();
+        out_shape[dim] = 1;
+        let out_size: usize = out_shape.iter().product();
+
+        let mut result = vec![f32::NEG_INFINITY; out_size];
+        let mut max_indices = vec![0; out_size]; // track which index won
+
+        let _strides = Self::compute_strides(&shape);
+        let out_strides = Self::compute_strides(&out_shape);
+
+        for i in 0..data.len() {
+            let mut coords = vec![0; shape.len()];
+            let mut rem = i;
+            for (d, &dim_sz) in shape.iter().enumerate().rev() {
+                coords[d] = rem % dim_sz;
+                rem /= dim_sz;
+            }
+
+            let mut out_coords = coords.clone();
+            out_coords[dim] = 0;
+            let out_idx: usize = out_coords
+                .iter()
+                .zip(&out_strides)
+                .map(|(c, s)| c * s)
+                .sum();
+
+            if data[i] > result[out_idx] {
+                result[out_idx] = data[i];
+                max_indices[out_idx] = i; // store linear index of max element
+            }
+        }
+
+        let final_shape = if keepdim {
+            out_shape.clone()
+        } else {
+            out_shape
+                .iter()
+                .enumerate()
+                .filter(|(d, _)| *d != dim)
+                .map(|(_, &sz)| sz)
+                .collect()
+        };
+
+        let out = Self::new(result, &final_shape, req_grad);
+
+        if req_grad {
+            out.borrow_mut().parents = vec![self_t.clone()];
+            out.borrow_mut().grad_fn = Some(Box::new(MaxDimGradFn {
+                input_shape: shape,
+                max_indices,
+                dim,
+                keepdim,
+            }));
+        }
+        out
+    }
+
+    pub fn softmax(self_t: &Tensor, dim: usize) -> Tensor {
+        let max = Self::max_dim(self_t, dim, true);
+        let shifted = self_t.sub(&max);
+        let exp_x = shifted.exp();
+        let sum_exp = Self::sum_dim(&exp_x, dim, true);
+        exp_x.div(&sum_exp)
+    }
+}
+
+// ===== LOSS FUNCTIONS =====
+impl RawTensor {
+    pub fn mse_loss(pred: &Tensor, target: &Tensor) -> Tensor {
+        let diff = pred.sub(target);
+        let squared = diff.elem_mul(&diff);
+        squared.mean()
+    }
+
+    pub fn cross_entropy_loss(logits: &Tensor, targets: &Tensor) -> Tensor {
+        let softmax = Self::softmax(logits, 1);
+        let log_probs = softmax.log();
+        // -sum(targets * log_probs, dim=1).mean()
+        let prod = targets.elem_mul(&log_probs);
+        let sum = Self::sum_dim(&prod, 1, false);
+        sum.neg().mean()
     }
 }
 
@@ -2415,6 +2710,13 @@ pub trait TensorOps {
     //Gradient ops
     fn backward(&self);
     fn grad(&self) -> Option<Vec<f32>>;
+
+    // Axis reductions
+    fn sum_dim(&self, dim: usize, keepdim: bool) -> Tensor;
+    fn max_dim(&self, dim: usize, keepdim: bool) -> Tensor;
+
+    // Softmax
+    fn softmax(&self, dim: usize) -> Tensor;
 }
 
 impl TensorOps for Tensor {
@@ -2525,6 +2827,15 @@ impl TensorOps for Tensor {
     }
     fn grad(&self) -> Option<Vec<f32>> {
         self.borrow().grad.clone()
+    }
+    fn sum_dim(&self, dim: usize, keepdim: bool) -> Tensor {
+        RawTensor::sum_dim(self, dim, keepdim)
+    }
+    fn max_dim(&self, dim: usize, keepdim: bool) -> Tensor {
+        RawTensor::max_dim(self, dim, keepdim)
+    }
+    fn softmax(&self, dim: usize) -> Tensor {
+        RawTensor::softmax(self, dim)
     }
 }
 
@@ -3433,5 +3744,74 @@ mod misc_tests {
             y.sum()
         });
         assert!(passed, "Vec-mat matmul gradient check failed");
+    }
+}
+
+#[cfg(test)]
+mod axis_reduce_tests {
+    use super::*;
+
+    #[test]
+    fn test_sum_dim_basic() {
+        // [2,3] sum along dim=1 -> [2]
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
+        let y = RawTensor::sum_dim(&x, 1, false);
+
+        assert_eq!(y.borrow().shape, vec![2]);
+        assert_eq!(y.borrow().data, vec![6.0, 15.0]); // [1+2+3, 4+5+6]
+    }
+
+    #[test]
+    fn test_sum_dim_keepdim() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
+        let y = RawTensor::sum_dim(&x, 0, true);
+
+        assert_eq!(y.borrow().shape, vec![1, 2]);
+        assert_eq!(y.borrow().data, vec![4.0, 6.0]); // [1+3, 2+4]
+    }
+
+    #[test]
+    fn test_sum_dim_backward() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], true);
+        let y = RawTensor::sum_dim(&x, 1, false); // [6, 15]
+        y.backward();
+
+        // Gradient broadcasts back: each element contributed once
+        assert_eq!(x.grad(), Some(vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0]));
+    }
+
+    #[test]
+    fn test_max_dim_basic() {
+        let x = RawTensor::new(vec![1.0, 5.0, 3.0, 2.0, 8.0, 4.0], &[2, 3], false);
+        let y = RawTensor::max_dim(&x, 1, false);
+
+        assert_eq!(y.borrow().shape, vec![2]);
+        assert_eq!(y.borrow().data, vec![5.0, 8.0]); // max of each row
+    }
+
+    #[test]
+    fn test_max_dim_backward() {
+        let x = RawTensor::new(vec![1.0, 5.0, 3.0, 2.0, 8.0, 4.0], &[2, 3], true);
+        let y = RawTensor::max_dim(&x, 1, false);
+        y.backward();
+
+        // Only max elements get gradient
+        assert_eq!(x.grad(), Some(vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0]));
+    }
+
+    #[test]
+    fn test_gradcheck_sum_dim() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], true);
+        let passed =
+            RawTensor::check_gradients_simple(&x, |t| RawTensor::sum_dim(t, 0, false).sum());
+        assert!(passed, "sum_dim gradient check failed");
+    }
+
+    #[test]
+    fn test_gradcheck_max_dim() {
+        let x = RawTensor::new(vec![1.0, 5.0, 3.0, 2.0], &[2, 2], true);
+        let passed =
+            RawTensor::check_gradients_simple(&x, |t| RawTensor::max_dim(t, 1, false).sum());
+        assert!(passed, "max_dim gradient check failed");
     }
 }
