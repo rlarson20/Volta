@@ -3025,6 +3025,19 @@ pub struct Linear {
     bias: Option<Tensor>,
 }
 
+impl Module for Linear {
+    fn forward(&self, x: &Tensor) -> Tensor {
+        self.forward(x)
+    }
+    fn parameters(&self) -> Vec<Tensor> {
+        let mut params = vec![self.weight.clone()];
+        if let Some(ref bias) = self.bias {
+            params.push(bias.clone())
+        }
+        params
+    }
+}
+
 impl Linear {
     /// Create a new linear layer with random initialization
     ///
