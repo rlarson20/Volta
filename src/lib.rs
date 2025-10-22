@@ -1,23 +1,61 @@
+//! # Torch From Scratch
+//!
+//! A minimal automatic differentiation library implementing PyTorch-like tensor operations
+//! from scratch in pure Rust. This library provides:
+//! - Dynamic computation graphs for automatic differentiation
+//! - Broadcasting support for tensor operations
+//! - Common neural network operations (matmul, activations, etc.)
+//! - Numerical gradient checking for validation
+//!
+//! ## Architecture
+//!
+//! The library uses reference-counted interior mutability (`Rc<RefCell<RawTensor>>`) to build
+//! dynamic computation graphs. Each tensor operation creates new tensors and stores gradient
+//! functions that know how to backpropagate through that operation.
+
 use rand::Rng;
 use rand_distr::{Distribution, Normal};
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 
+/// Type alias for a reference-counted, interior-mutable tensor.
+///
+/// We use `Rc<RefCell<RawTensor>>` to allow multiple references to the same tensor
+/// (needed for computation graphs) while still allowing mutation (for gradient accumulation).
+///
+/// **Note for production**: This is single-threaded only. For multi-threading,
+/// replace with `Arc<Mutex<RawTensor>>`.
 pub type Tensor = Rc<RefCell<RawTensor>>;
-//using Rc<RefCell<Tensor>> is simple approach for dyn graph
-//for thread-safety, use Arc<Mutex<Tensor>>
-//starting single-threaded
 
-// ===== OPS =====
+// ===== OPERATION ENUMS =====
+// These enums categorize all operations our tensor library supports.
+// Each category has a corresponding gradient implementation.
 
+/// Unary operations: single input, single output
+///
+/// Each operation has a corresponding derivative:
+/// - Neg: d(-x)/dx = -1
+/// - Recip: d(1/x)/dx = -1/x²
+/// - Sqrt: d(√x)/dx = 1/(2√x)
+/// - Exp: d(eˣ)/dx = eˣ
+/// - Log: d(ln(x))/dx = 1/x
+/// - Exp2: d(2ˣ)/dx = 2ˣ·ln(2)
+/// - Log2: d(log₂(x))/dx = 1/(x·ln(2))
+/// - Sin: d(sin(x))/dx = cos(x)
+/// - Cos: d(cos(x))/dx = -sin(x)
+/// - Tanh: d(tanh(x))/dx = 1 - tanh²(x)
+/// - Sigmoid: d(σ(x))/dx = σ(x)·(1-σ(x))
+/// - ReLU: d(max(0,x))/dx = x > 0 ? 1 : 0
 #[derive(Clone, Copy)]
 pub enum UnaryOp {
     Neg,
     Recip,
     Sqrt,
     Exp2,
+    Exp,
     Log2,
+    Log,
     Sin,
     Cos,
     Tanh,
@@ -25,58 +63,87 @@ pub enum UnaryOp {
     ReLU,
 }
 
+/// Binary operations: two inputs, one output
+///
+/// Broadcasting is automatically handled for compatible shapes.
+/// Non-differentiable operations (Mod, Cmplt) return tensors with requires_grad=false.
 #[derive(Clone, Copy)]
 pub enum BinaryOp {
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Max,
-    Mod,
-    Cmplt,
+    Add,   // x + y
+    Sub,   // x - y
+    Mul,   // x * y (element-wise)
+    Div,   // x / y (element-wise)
+    Max,   // max(x, y) (element-wise)
+    Mod,   // x % y (non-differentiable)
+    Cmplt, // x < y ? 1 : 0 (non-differentiable)
 }
 
+/// Reduction operations: reduce tensor to scalar
+///
+/// These operations collapse all dimensions and require special gradient handling
+/// since the output shape differs from the input.
 #[derive(Clone, Copy)]
 pub enum ReduceOp {
-    Sum,
-    Max,
-    Mean,
+    Sum,  // Σ(x) - gradient broadcasts ones
+    Max,  // max(x) - gradient goes only to max element
+    Mean, // mean(x) - gradient broadcasts 1/n
 }
 
+/// Ternary operations: three inputs, one output
 #[derive(Clone, Copy)]
 pub enum TernaryOp {
-    MulAcc,
-    Where,
+    MulAcc, // x*y + z (fused multiply-accumulate)
+    Where,  // condition ? x : y (masked selection)
 }
 
+/// Movement operations: reshape/reorder data without changing values
+///
+/// These operations don't modify data values, only how they're indexed.
+/// Gradients must "undo" these operations during backpropagation.
 #[derive(Clone)]
 pub enum MovementOp {
-    Reshape { new_shape: Vec<usize> },
-    Permute { axes: Vec<usize> },
-    Expand { new_shape: Vec<usize> },
-    Pad { padding: Vec<(usize, usize)> },
-    Shrink { ranges: Vec<(usize, usize)> },
-    Stride { strides: Vec<usize> },
+    Reshape { new_shape: Vec<usize> }, // Change shape, preserve order
+    Permute { axes: Vec<usize> },      // Transpose/reorder axes
+    Expand { new_shape: Vec<usize> },  // Broadcast to larger shape
+    Pad { padding: Vec<(usize, usize)> }, // Add zeros around edges
+    Shrink { ranges: Vec<(usize, usize)> }, // Extract subregion
+    Stride { strides: Vec<usize> },    // Subsample with stride
 }
 
+/// Load operations: tensor creation without computation graph
+///
+/// These are "leaf" operations that don't have gradients to backpropagate.
 pub enum LoadOp {
-    Empty,
-    Rand,
-    Const,
-    From,
-    Contiguous,
-    Custom,
+    Empty,      // Allocate uninitialized
+    Rand,       // Random uniform [0,1)
+    Const,      // Filled with constant
+    From,       // From Vec<f32>
+    Contiguous, // Ensure contiguous memory
+    Custom,     // User-defined
 }
 
-// ===== GRADFN =====
+// ===== GRADIENT FUNCTION TRAIT =====
 
+/// Trait for gradient computation functions.
+///
+/// Each operation type implements this to define how gradients flow backward.
+/// The `backward` method takes:
+/// - `out_grad`: gradient of loss w.r.t. this operation's output
+/// - `parents`: the input tensors to this operation
+///
+/// Returns: vector of gradients w.r.t. each parent (Some if requires_grad, None otherwise)
 pub trait GradFn {
+    /// Compute gradients for parent tensors given output gradient
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>>;
+    /// Clone this gradient function (needed for Rc/RefCell)
     fn clone_box(&self) -> Box<dyn GradFn>;
 }
 
-// ===== GRADFN IMPLEMENTATIONS =====
+// ===== GRADIENT FUNCTION IMPLEMENTATIONS =====
 
+/// Gradient function for unary operations
+///
+/// Stores which operation was performed so backward can apply the correct derivative.
 struct UnaryGradFn {
     op: UnaryOp,
 }
@@ -84,6 +151,9 @@ struct UnaryGradFn {
 impl GradFn for UnaryGradFn {
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let x = parents[0].borrow();
+
+        // Apply chain rule: ∂L/∂x = ∂L/∂y · ∂y/∂x
+        // where y = f(x) is the unary operation
         let grad_data: Vec<f32> = match self.op {
             UnaryOp::Neg => out_grad.data.iter().map(|&g| -g).collect(),
             UnaryOp::Recip => out_grad
@@ -97,6 +167,18 @@ impl GradFn for UnaryGradFn {
                 .iter()
                 .zip(&x.data)
                 .map(|(&g, &x)| g / (2.0 * x.sqrt()))
+                .collect(),
+            UnaryOp::Exp => out_grad
+                .data
+                .iter()
+                .zip(&x.data)
+                .map(|(&g, &x)| g * x.exp())
+                .collect(),
+            UnaryOp::Log => out_grad
+                .data
+                .iter()
+                .zip(&x.data)
+                .map(|(&g, &x)| g / x)
                 .collect(),
             UnaryOp::Exp2 => {
                 let ln2 = std::f32::consts::LN_2;
@@ -161,6 +243,10 @@ impl GradFn for UnaryGradFn {
     }
 }
 
+/// Gradient function for binary operations
+///
+/// Handles broadcasting during backward pass - gradients must be summed
+/// over dimensions that were broadcast in the forward pass.
 struct BinaryGradFn {
     op: BinaryOp,
 }
@@ -172,8 +258,9 @@ impl GradFn for BinaryGradFn {
 
         let (grad_x, grad_y) = match self.op {
             BinaryOp::Add => {
+                // ∂(x+y)/∂x = 1, ∂(x+y)/∂y = 1
+                // But must sum over broadcast dimensions
                 let gx = if x_val.requires_grad {
-                    // Sum gradient over broadcast dimensions
                     let summed = RawTensor::sum_over_broadcast_dims(
                         &out_grad.data,
                         &out_grad.shape,
@@ -196,6 +283,7 @@ impl GradFn for BinaryGradFn {
                 (gx, gy)
             }
             BinaryOp::Sub => {
+                // ∂(x-y)/∂x = 1, ∂(x-y)/∂y = -1
                 let gx = if x_val.requires_grad {
                     let summed = RawTensor::sum_over_broadcast_dims(
                         &out_grad.data,
@@ -220,6 +308,7 @@ impl GradFn for BinaryGradFn {
                 (gx, gy)
             }
             BinaryOp::Mul => {
+                // ∂(x*y)/∂x = y, ∂(x*y)/∂y = x
                 let gx = if x_val.requires_grad {
                     // Broadcast y to out_grad shape for multiplication
                     let y_bc = RawTensor::broadcast_to(&y_val.data, &y_val.shape, &out_grad.shape);
@@ -252,6 +341,7 @@ impl GradFn for BinaryGradFn {
                 (gx, gy)
             }
             BinaryOp::Div => {
+                // ∂(x/y)/∂x = 1/y, ∂(x/y)/∂y = -x/y²
                 let gx = if x_val.requires_grad {
                     let y_bc = RawTensor::broadcast_to(&y_val.data, &y_val.shape, &out_grad.shape);
                     let grad: Vec<f32> = out_grad
@@ -285,6 +375,7 @@ impl GradFn for BinaryGradFn {
                 (gx, gy)
             }
             BinaryOp::Max => {
+                // Gradient flows to whichever input was larger
                 let gx = if x_val.requires_grad {
                     let x_bc = RawTensor::broadcast_to(&x_val.data, &x_val.shape, &out_grad.shape);
                     let y_bc = RawTensor::broadcast_to(&y_val.data, &y_val.shape, &out_grad.shape);
@@ -333,6 +424,9 @@ impl GradFn for BinaryGradFn {
     }
 }
 
+/// Gradient function for Sum reduction
+///
+/// Sum reduction collapses to scalar, so gradient broadcasts back to original shape.
 struct SumGradFn {
     input_shape: Vec<usize>,
 }
@@ -355,9 +449,12 @@ impl GradFn for SumGradFn {
     }
 }
 
+/// Gradient function for Max reduction
+///
+/// Only the maximum element receives gradient; all others get zero.
 struct MaxReduceGradFn {
     input_shape: Vec<usize>,
-    max_index: usize,
+    max_index: usize, // Linear index of the maximum element
 }
 
 impl GradFn for MaxReduceGradFn {
@@ -376,6 +473,9 @@ impl GradFn for MaxReduceGradFn {
     }
 }
 
+/// Gradient function for Mean reduction
+///
+/// Each element gets gradient / num_elements.
 struct MeanGradFn {
     input_shape: Vec<usize>,
 }
@@ -398,6 +498,12 @@ impl GradFn for MeanGradFn {
     }
 }
 
+/// Gradient function for MulAcc (fused multiply-add)
+///
+/// z = x*y + w has gradients:
+/// - ∂z/∂x = y
+/// - ∂z/∂y = x
+/// - ∂z/∂w = 1
 struct MulAccGradFn;
 impl GradFn for MulAccGradFn {
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
@@ -445,6 +551,10 @@ impl GradFn for MulAccGradFn {
     }
 }
 
+/// Gradient function for Where (conditional selection)
+///
+/// Gradient flows through the branch that was selected.
+/// The condition tensor itself is not differentiable.
 struct WhereGradFn {
     condition: Vec<f32>,
 }
@@ -486,6 +596,13 @@ impl GradFn for WhereGradFn {
     }
 }
 
+/// Gradient function for matrix multiplication
+///
+/// For z = x @ y:
+/// - ∂L/∂x = ∂L/∂z @ y^T
+/// - ∂L/∂y = x^T @ ∂L/∂z
+///
+/// Handles multiple cases: 2D×2D, 2D×1D, 1D×2D, 1D×1D (dot product)
 struct MatMulGradFn;
 
 impl GradFn for MatMulGradFn {
@@ -608,7 +725,10 @@ impl GradFn for MatMulGradFn {
     }
 }
 
-// Unified movement op gradient
+/// Unified gradient function for all movement operations
+///
+/// Movement ops don't change data values, only how they're indexed.
+/// During backward, we need to "undo" the movement to restore the original shape.
 #[derive(Clone)]
 struct MovementGradFn {
     op: MovementOp,
@@ -619,10 +739,11 @@ impl GradFn for MovementGradFn {
     fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let grad_tensor = match &self.op {
             MovementOp::Reshape { .. } => {
+                // Reshape back to original shape
                 RawTensor::new(out_grad.data.clone(), &self.original_shape, false)
             }
             MovementOp::Permute { axes } => {
-                // Compute inverse permutation
+                // Invert the permutation to restore original order
                 let mut inverse_axes = vec![0; axes.len()];
                 for (i, &ax) in axes.iter().enumerate() {
                     inverse_axes[ax] = i;
@@ -633,7 +754,7 @@ impl GradFn for MovementGradFn {
                 return vec![Some(result)];
             }
             MovementOp::Expand { new_shape } => {
-                // Sum over expanded dimensions
+                // Sum gradient over dimensions that were expanded (broadcast)
                 let mut grad_data = vec![0.0; self.original_shape.iter().product()];
                 let old_strides = RawTensor::compute_strides(&self.original_shape);
                 let new_strides = RawTensor::compute_strides(new_shape);
@@ -644,6 +765,7 @@ impl GradFn for MovementGradFn {
                     for j in (0..new_shape.len()).rev() {
                         let coord = rem / new_strides[j];
                         rem %= new_strides[j];
+                        // If this dimension was size 1, don't advance the index
                         if self.original_shape[j] != 1 {
                             old_idx += coord * old_strides[j];
                         }
@@ -653,7 +775,7 @@ impl GradFn for MovementGradFn {
                 RawTensor::new(grad_data, &self.original_shape, false)
             }
             MovementOp::Pad { padding } => {
-                // Strip padding from gradient
+                // Remove padding from gradient (extract center region)
                 let mut result = vec![0.0; self.original_shape.iter().product()];
                 let old_strides = RawTensor::compute_strides(&self.original_shape);
                 let new_strides = RawTensor::compute_strides(&out_grad.shape);
@@ -707,7 +829,7 @@ impl GradFn for MovementGradFn {
                 RawTensor::new(result, &self.original_shape, false)
             }
             MovementOp::Shrink { ranges } => {
-                // Pad gradient back to original size
+                // Pad gradient back to original size (inverse of shrink)
                 let mut result = vec![0.0; self.original_shape.iter().product()];
                 let old_strides = RawTensor::compute_strides(&self.original_shape);
                 let new_strides = RawTensor::compute_strides(&out_grad.shape);
@@ -730,7 +852,7 @@ impl GradFn for MovementGradFn {
                     }
 
                     for i in 0..new_shape[dim] {
-                        let old_i = i + ranges[dim].0;
+                        let old_i = i + ranges[dim].0; //Offset by range start
                         unshrink_recursive(
                             result,
                             grad,
@@ -761,7 +883,7 @@ impl GradFn for MovementGradFn {
                 RawTensor::new(result, &self.original_shape, false)
             }
             MovementOp::Stride { strides } => {
-                // Upsample gradient
+                // Upsample gradient (inverse of stride/downsampling)
                 let mut result = vec![0.0; self.original_shape.iter().product()];
                 let old_strides_mem = RawTensor::compute_strides(&self.original_shape);
                 let new_strides_mem = RawTensor::compute_strides(&out_grad.shape);
@@ -829,6 +951,12 @@ impl GradFn for MovementGradFn {
     }
 }
 
+// ===== DEVICE ENUM =====
+
+/// Compute device for tensor operations
+///
+/// Currently only CPU is implemented. GPU would require integration
+/// with CUDA/OpenCL, and Metal would be for Apple Silicon.
 #[derive(Debug, Clone)]
 pub enum Device {
     CPU,
@@ -836,6 +964,19 @@ pub enum Device {
     //TODO: possible Metal variant
 }
 
+// ===== RAW TENSOR STRUCTURE =====
+
+/// The core tensor structure containing data and gradient tracking
+///
+/// This is wrapped in `Rc<RefCell<>>` to create the public `Tensor` type.
+/// Fields:
+/// - `data`: flat Vec<f32> of actual values (row-major order)
+/// - `shape`: dimensions, e.g. [batch, channels, height, width]
+/// - `grad`: accumulated gradient (Some if requires_grad, None otherwise)
+/// - `requires_grad`: whether to track gradients for this tensor
+/// - `grad_fn`: function to compute parent gradients during backward
+/// - `parents`: input tensors that this tensor depends on
+/// - `device`: where computation happens (CPU/GPU)
 pub struct RawTensor {
     pub data: Vec<f32>,         // flat data vec, len = prod shape dims
     pub shape: Vec<usize>,      //tensor dims, eg [B,C,H,W]
@@ -870,10 +1011,17 @@ impl std::fmt::Debug for RawTensor {
             .finish()
     }
 }
-
-//CONSTRUCTORS
+// ===== TENSOR CONSTRUCTORS =====
 impl RawTensor {
-    //from data and shape
+    /// Create a new tensor from data and shape
+    ///
+    /// # Arguments
+    /// * `data` - Flat vector of values (length must equal product of shape dimensions)
+    /// * `shape` - Dimensions of the tensor
+    /// * `requires_grad` - Whether to track gradients for backpropagation
+    ///
+    /// # Panics
+    /// Panics if data.len() != shape.product()
     pub fn new(data: Vec<f32>, shape: &[usize], requires_grad: bool) -> Tensor {
         assert_eq!(
             data.len(),
@@ -891,21 +1039,24 @@ impl RawTensor {
         };
         Rc::new(RefCell::new(raw))
     }
+    /// Create a tensor filled with zeros
     pub fn zeros(shape: &[usize]) -> Tensor {
         let size = shape.iter().product();
         Self::new(vec![0.0; size], shape, false)
     }
+    /// Create a tensor filled with ones
     pub fn ones(shape: &[usize]) -> Tensor {
         let size = shape.iter().product();
         Self::new(vec![1.0; size], shape, false)
     }
+    /// Create a tensor with random values uniformly distributed in [0, 1)
     pub fn rand(shape: &[usize]) -> Tensor {
         let size = shape.iter().product();
         let mut rng = rand::rng();
         let data: Vec<f32> = (0..size).map(|_| rng.random::<f32>()).collect();
         Self::new(data, shape, false)
     }
-
+    /// Create a tensor with values from standard normal distribution N(0, 1)
     pub fn randn(shape: &[usize]) -> Tensor {
         let size = shape.iter().product();
         let normal = Normal::new(0.0, 1.0).unwrap();
@@ -919,9 +1070,12 @@ impl RawTensor {
 impl RawTensor {
     /* methods for props: tensor.shape(), tensor.num_elements(), etc */
 }
-
-//UnaryOps
+// ===== UNARY OPERATIONS =====
 impl RawTensor {
+    /// Apply a unary operation element-wise
+    ///
+    /// This is the unified implementation for all unary ops.
+    /// Creates a new tensor and sets up gradient tracking if needed.
     pub fn unary_op(t: &Tensor, op: UnaryOp) -> Tensor {
         let (data, shape, req) = {
             let s = t.borrow();
@@ -934,7 +1088,9 @@ impl RawTensor {
                 UnaryOp::Recip => 1.0 / x,
                 UnaryOp::Sqrt => x.sqrt(),
                 UnaryOp::Exp2 => 2_f32.powf(x),
+                UnaryOp::Exp => x.exp(),
                 UnaryOp::Log2 => x.log2(),
+                UnaryOp::Log => x.ln(),
                 UnaryOp::Sin => x.sin(),
                 UnaryOp::Cos => x.cos(),
                 UnaryOp::Tanh => x.tanh(),
@@ -942,13 +1098,17 @@ impl RawTensor {
                 UnaryOp::ReLU => x.max(0.0),
             })
             .collect();
+
         let out = Self::new(result, &shape, req);
+
+        // Set up backpropagation if this tensor requires gradients
         if out.borrow().requires_grad {
             out.borrow_mut().parents = vec![t.clone()];
             out.borrow_mut().grad_fn = Some(Box::new(UnaryGradFn { op }));
         }
         out
     }
+    // Convenience methods for each unary operation
     pub fn neg(t: &Tensor) -> Tensor {
         Self::unary_op(t, UnaryOp::Neg)
     }
@@ -963,6 +1123,12 @@ impl RawTensor {
     }
     pub fn log2(t: &Tensor) -> Tensor {
         Self::unary_op(t, UnaryOp::Log2)
+    }
+    pub fn exp(t: &Tensor) -> Tensor {
+        Self::unary_op(t, UnaryOp::Exp)
+    }
+    pub fn log(t: &Tensor) -> Tensor {
+        Self::unary_op(t, UnaryOp::Log)
     }
     pub fn sin(t: &Tensor) -> Tensor {
         Self::unary_op(t, UnaryOp::Sin)
@@ -981,9 +1147,18 @@ impl RawTensor {
     }
 }
 
-//BinaryOps
+// ===== BINARY OPERATIONS =====
 impl RawTensor {
-    // Helper: compute broadcast shape following numpy rules
+    /// Compute broadcast shape following NumPy broadcasting rules
+    ///
+    /// Rules:
+    /// 1. Align shapes from the right (trailing dimensions)
+    /// 2. For each dimension, both must be equal OR one must be 1
+    /// 3. Output dimension is the maximum of the two
+    ///
+    /// Examples:
+    /// - (3, 1) + (1, 4) -> (3, 4)
+    /// - (5, 3, 1) + (1, 4) -> (5, 3, 4)
     fn broadcast_shape(shape_a: &[usize], shape_b: &[usize]) -> Vec<usize> {
         let max_len = shape_a.len().max(shape_b.len());
         let mut result = vec![1; max_len];
@@ -1017,8 +1192,13 @@ impl RawTensor {
         result
     }
 
-    // FIXME!!!
-    // Helper: broadcast data to target shape
+    /// Broadcast data from one shape to another
+    ///
+    /// This repeats values along dimensions where from_shape is 1
+    /// and to_shape is larger.
+    ///
+    /// **FIXME**: Current implementation may have edge cases with
+    /// complex broadcasting patterns. Works for common cases.
     fn broadcast_to(data: &[f32], from_shape: &[usize], to_shape: &[usize]) -> Vec<f32> {
         if from_shape == to_shape {
             return data.to_vec();
@@ -1033,6 +1213,7 @@ impl RawTensor {
         padded_from[offset..].copy_from_slice(from_shape);
         let from_strides_padded = Self::compute_strides(&padded_from);
 
+        // For each output position, compute corresponding input position
         for i in 0..to_size {
             let mut from_idx = 0;
             let mut remainder = i;
@@ -1051,7 +1232,11 @@ impl RawTensor {
         result
     }
 
-    // Helper: sum gradient over broadcast dimensions
+    /// Sum gradient over dimensions that were broadcast
+    ///
+    /// During backward pass, if a dimension was broadcast from size 1 to size N,
+    /// we need to sum the gradients over that dimension to get the gradient
+    /// for the original size-1 dimension.
     fn sum_over_broadcast_dims(
         grad: &[f32],
         grad_shape: &[usize],
@@ -1061,12 +1246,12 @@ impl RawTensor {
             return grad.to_vec();
         }
 
-        // Pad target_shape with leading 1s
+        // Pad target_shape with leading 1s to match ranks
         let mut padded_target = vec![1; grad_shape.len()];
         let offset = grad_shape.len() - target_shape.len();
         padded_target[offset..].copy_from_slice(target_shape);
 
-        // Find dimensions that were broadcast (where target was 1)
+        // Find dimensions that need summing (where target was 1, grad is >1)
         let mut sum_axes = Vec::new();
         for (i, (&g, &t)) in grad_shape.iter().zip(&padded_target).enumerate() {
             if t == 1 && g > 1 {
@@ -1086,6 +1271,8 @@ impl RawTensor {
         }
         let mut result = vec![0.0; target_shape.iter().product()];
         let target_strides = Self::compute_strides(target_shape);
+
+        // For each gradient element, sum into appropriate result position
         for (i, &grad_val) in grad.iter().enumerate() {
             let mut target_idx = 0;
             let mut remainder = i;
@@ -1096,7 +1283,7 @@ impl RawTensor {
                 let coord = remainder / stride;
                 remainder %= stride;
 
-                //if wasnt bc, add to index
+                // Map to target coordinate (skip if was broadcast)
                 let target_dim_idx = dim as i32 - offset as i32;
                 if target_dim_idx >= 0 {
                     let target_dim_idx = target_dim_idx as usize;
@@ -1112,6 +1299,13 @@ impl RawTensor {
         result
     }
 
+    /// Apply a binary operation with broadcasting
+    ///
+    /// Steps:
+    /// 1. Compute broadcast shape
+    /// 2. Broadcast both inputs to that shape
+    /// 3. Apply operation element-wise
+    /// 4. Set up gradient tracking
     pub fn binary_op(self_t: &Tensor, other: &Tensor, op: BinaryOp) -> Tensor {
         let (data_a, shape_a, req_a) = {
             let s = self_t.borrow();
@@ -1164,6 +1358,7 @@ impl RawTensor {
         out
     }
 
+    // Convenience methods for binary operations
     pub fn add(self_t: &Tensor, other: &Tensor) -> Tensor {
         Self::binary_op(self_t, other, BinaryOp::Add)
     }
@@ -1187,9 +1382,12 @@ impl RawTensor {
     }
 }
 
-// ===== REDUCE OPS =====
+// ===== REDUCE OPERATIONS =====
 
 impl RawTensor {
+    /// Apply a reduction operation that collapses tensor to scalar
+    ///
+    /// All reduction ops produce a shape [1] output.
     pub fn reduce_op(self_t: &Tensor, op: ReduceOp) -> Tensor {
         let (data, shape, req_grad) = {
             let s = self_t.borrow();
@@ -1253,8 +1451,10 @@ impl RawTensor {
     }
 }
 
-//TernaryOps
+// ===== TERNARY OPERATIONS =====
+
 impl RawTensor {
+    /// Apply ternary operations (3 inputs, 1 output)
     pub fn ternary_op(x: &Tensor, y: &Tensor, z: &Tensor, op: TernaryOp) -> Tensor {
         let (data_x, shape_x, req_x) = {
             let s = x.borrow();
@@ -1285,6 +1485,9 @@ impl RawTensor {
             TernaryOp::Where => {
                 // x is condition, y is true branch, z is false branch
                 // x[i] != 0 ? y[i] : z[i]
+                // Conditional selection: x ? y : z
+                // x is condition (nonzero = true), y is true branch, z is false branch
+
                 let data = data_x
                     .iter()
                     .zip(&data_y)
@@ -1322,8 +1525,9 @@ impl RawTensor {
     }
 }
 
-// ===== MOVEMENT OPS =====
+// ===== MOVEMENT OPERATIONS =====
 impl RawTensor {
+    /// Reshape tensor to new shape (same number of elements)
     pub fn reshape(self_t: &Tensor, new_shape: &[usize]) -> Tensor {
         let (data, old_shape, req_grad) = {
             let s = self_t.borrow();
@@ -1348,6 +1552,10 @@ impl RawTensor {
         out
     }
 
+    /// Internal permute implementation (no gradient tracking)
+    ///
+    /// Reorders axes according to the permutation specified by `axes`.
+    /// For example, axes=[1,0] transposes a 2D matrix.
     fn permute_impl(self_t: &Tensor, axes: &[usize]) -> Tensor {
         let (data, shape) = {
             let s = self_t.borrow();
@@ -1361,6 +1569,7 @@ impl RawTensor {
 
         let mut new_data = vec![0.0; data.len()];
 
+        // Helper: convert linear index to coordinates
         fn index_to_coords(idx: usize, shape: &[usize]) -> Vec<usize> {
             let mut coords = vec![0; shape.len()];
             let mut remaining = idx;
@@ -1371,12 +1580,14 @@ impl RawTensor {
             coords
         }
 
+        // Helper: convert coordinates to linear index using strides
         fn coords_to_index(coords: &[usize], strides: &[usize]) -> usize {
             coords.iter().zip(strides).map(|(c, s)| c * s).sum()
         }
 
         for (new_idx, val) in new_data.iter_mut().enumerate() {
             let new_coords = index_to_coords(new_idx, &new_shape);
+            // Map new coordinates back to old coordinates
             let mut old_coords = vec![0; axes.len()];
             for (i, &ax) in axes.iter().enumerate() {
                 old_coords[ax] = new_coords[i];
@@ -1387,6 +1598,10 @@ impl RawTensor {
         Self::new(new_data, &new_shape, false)
     }
 
+    /// Permute (reorder) tensor axes
+    ///
+    /// # Arguments
+    /// * `axes` - New ordering of axes (must be a valid permutation of 0..rank)
     pub fn permute(self_t: &Tensor, axes: &[usize]) -> Tensor {
         let req_grad = self_t.borrow().requires_grad;
         let old_shape = self_t.borrow().shape.clone();
@@ -1413,6 +1628,10 @@ impl RawTensor {
         out
     }
 
+    /// Expand (broadcast) tensor to larger shape
+    ///
+    /// Dimensions can only be expanded from size 1 to size N.
+    /// Rank must remain the same.
     pub fn expand(self_t: &Tensor, new_shape: &[usize]) -> Tensor {
         let (data, old_shape, req_grad) = {
             let s = self_t.borrow();
@@ -1465,6 +1684,10 @@ impl RawTensor {
         out
     }
 
+    /// Pad tensor with zeros
+    ///
+    /// # Arguments
+    /// * `padding` - For each dimension, (left_pad, right_pad)
     pub fn pad(self_t: &Tensor, padding: &[(usize, usize)]) -> Tensor {
         let (data, old_shape, req_grad) = {
             let s = self_t.borrow();
@@ -1551,6 +1774,10 @@ impl RawTensor {
         out
     }
 
+    /// Extract a sub-region of the tensor
+    ///
+    /// # Arguments
+    /// * `ranges` - For each dimension, (start, end) indices
     pub fn shrink(self_t: &Tensor, ranges: &[(usize, usize)]) -> Tensor {
         let (data, old_shape, req_grad) = {
             let s = self_t.borrow();
@@ -1631,6 +1858,9 @@ impl RawTensor {
         out
     }
 
+    /// Subsample tensor with specified strides
+    ///
+    /// Similar to slicing with step: array[::2] takes every other element
     pub fn stride_op(self_t: &Tensor, strides: &[usize]) -> Tensor {
         let (data, old_shape, req_grad) = {
             let s = self_t.borrow();
@@ -1716,6 +1946,10 @@ impl RawTensor {
         out
     }
 
+    /// Compute memory strides for row-major layout
+    ///
+    /// For shape [3, 4, 5], strides are [20, 5, 1]
+    /// This tells us how many elements to skip to move one step in each dimension.
     fn compute_strides(shape: &[usize]) -> Vec<usize> {
         let mut strides = vec![1; shape.len()];
         for i in (0..shape.len().saturating_sub(1)).rev() {
@@ -1725,37 +1959,42 @@ impl RawTensor {
     }
 }
 
-// ===== LOAD OPS =====
+// ===== LOAD OPERATIONS =====
 //other methods to add:
 //to_device LoadOp?
 
 impl RawTensor {
+    /// Create empty (zero-filled) tensor
     pub fn empty(shape: &[usize]) -> Tensor {
         let size = shape.iter().product();
         Self::new(vec![0.0; size], shape, false)
     }
-
+    /// Create tensor filled with constant value
     pub fn constant(value: f32, shape: &[usize]) -> Tensor {
         let size = shape.iter().product();
         Self::new(vec![value; size], shape, false)
     }
-
+    /// Create tensor from existing Vec
     pub fn from_vec(data: Vec<f32>, shape: &[usize]) -> Tensor {
         Self::new(data, shape, false)
     }
 
+    /// Ensure tensor is contiguous in memory
+    ///
+    /// Currently all tensors are contiguous. This would be needed
+    /// if we implement views/strides that share memory.
     pub fn contiguous(self_t: &Tensor) -> Tensor {
-        // For now, all tensors are contiguous
-        // Later: handle views/strides
         let s = self_t.borrow();
         Self::new(s.data.clone(), &s.shape, s.requires_grad)
     }
 }
 
-// ===== MATMUL =====
+// ===== MATRIX MULTIPLICATION =====
 
 impl RawTensor {
-    // Helper: transpose 2D matrix stored as flat vec
+    /// Transpose a 2D matrix
+    ///
+    /// For shape [m, n], produces shape [n, m]
     fn transpose_2d(data: &[f32], shape: &[usize]) -> Vec<f32> {
         assert_eq!(shape.len(), 2, "Transpose expects 2D shape");
         let (m, n) = (shape[0], shape[1]);
@@ -1769,7 +2008,8 @@ impl RawTensor {
     }
 
     // Helper: raw matmul computation
-    // a: (m, k), b: (k, n) -> result: (m, n)
+    /// Raw matrix multiplication: (m,k) @ (k,n) -> (m,n)
+    /// Uses naive O(mnk) algorithm. For production, use optimized BLAS.
     fn matmul_raw(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
         let mut result = vec![0.0; m * n];
         for i in 0..m {
@@ -1784,6 +2024,13 @@ impl RawTensor {
         result
     }
 
+    /// Matrix multiplication with multiple cases
+    ///
+    /// Supports:
+    /// - (m,n) @ (n,p) -> (m,p)  [standard matmul]
+    /// - (m,n) @ (n,) -> (m,)    [matrix-vector]
+    /// - (n,) @ (n,p) -> (p,)    [vector-matrix]
+    /// - (n,) @ (n,) -> scalar   [dot product]
     pub fn matmul(self_t: &Tensor, other: &Tensor) -> Tensor {
         let (data_a, shape_a, req_a) = {
             let s = self_t.borrow();
@@ -1883,6 +2130,7 @@ impl RawTensor {
         }
     }
 
+    /// Transpose a 2D tensor
     pub fn transpose(self_t: &Tensor) -> Tensor {
         let (data, shape, req_grad) = {
             let s = self_t.borrow();
@@ -1909,9 +2157,18 @@ impl RawTensor {
     }
 }
 
-// ===== BACKWARD =====
+// ===== BACKPROPAGATION =====
 
 impl RawTensor {
+    /// Run backpropagation starting from this tensor
+    ///
+    /// This implements reverse-mode automatic differentiation:
+    /// 1. Initialize this tensor's gradient to 1 (assumes it's a scalar loss)
+    /// 2. Traverse the computation graph backwards (topological sort via DFS)
+    /// 3. For each node, call its grad_fn to compute parent gradients
+    /// 4. Accumulate gradients in each parent tensor
+    ///
+    /// Uses a HashSet to track visited nodes and avoid recomputation.
     pub fn backward(tensor_ref: &Tensor) {
         let tensor = tensor_ref.borrow();
         assert!(
@@ -1919,7 +2176,7 @@ impl RawTensor {
             "Called backward on a tensor that doesn't require grad"
         );
         drop(tensor);
-
+        // Initialize gradient if not already set
         {
             let mut tensor = tensor_ref.borrow_mut();
             if tensor.grad.is_none() {
@@ -1932,10 +2189,12 @@ impl RawTensor {
             }
         }
 
+        // DFS-based topological traversal
         let mut stack = vec![tensor_ref.clone()];
         let mut visited = HashSet::new();
 
         while let Some(tensor) = stack.pop() {
+            // Use raw pointer for HashSet (Rc doesn't impl Hash)
             if !visited.insert(tensor.as_ptr()) {
                 continue;
             }
@@ -1948,6 +2207,7 @@ impl RawTensor {
                     t.shape.clone(),
                 )
             };
+            // If this node has a gradient function, backpropagate
             if let Some(grad_fn) = grad_fn
                 && let Some(grad_out_data) = grad_data
             {
@@ -1960,12 +2220,16 @@ impl RawTensor {
                     parents: vec![],
                     device: Device::CPU,
                 };
+                // Compute gradients for parent tensors
                 let parent_grads = grad_fn.backward(&grad_out, &parents);
 
+                // Accumulate gradients in parents
                 for (parent_grad, parent_ref) in parent_grads.into_iter().zip(parents.iter()) {
                     if let Some(g) = parent_grad {
                         let mut parent = parent_ref.borrow_mut();
                         let g_data = g.borrow().data.clone();
+
+                        // Initialize or accumulate gradient
                         if parent.grad.is_none() {
                             parent.grad = Some(g_data)
                         } else {
@@ -1974,6 +2238,7 @@ impl RawTensor {
                                 *accum += new;
                             }
                         }
+                        // Add to stack if it has grad_fn (not a leaf)
                         if parent.grad_fn.is_some() {
                             drop(parent);
                             stack.push(parent_ref.clone());
@@ -1990,12 +2255,21 @@ impl RawTensor {
 impl RawTensor {
     /// Check gradients numerically using finite differences
     ///
-    /// For a scalar function f(x), the gradient is approximated as:
-    /// ∂f/∂x ≈ (f(x+ε) - f(x-ε)) / (2ε)
+    /// For each parameter, we compute:
     ///
-    /// This is more accurate than forward difference: (f(x+ε) - f(x)) / ε
+    /// Analytical gradient: What our backward() computes
+    /// Numerical gradient: (f(x+ε) - f(x-ε)) / (2ε)
     ///
-    /// Returns: (max_error, mean_error, passed)
+    /// The central difference formula is more accurate than forward difference.
+    ///
+    /// # Arguments
+    /// * `tensor` - The input tensor whose gradients to check
+    /// * `loss_fn` - Function that computes a scalar loss from the tensor
+    /// * `epsilon` - Step size for finite differences (typically 1e-5 to 1e-2)
+    /// * `tolerance` - Maximum acceptable relative error (typically 1e-3 to 1e-2)
+    ///
+    /// # Returns
+    /// (max_error, mean_error, passed)
     pub fn check_gradients<F>(
         tensor: &Tensor,
         loss_fn: F,
@@ -2065,7 +2339,9 @@ impl RawTensor {
         (max_error, mean_error, passed)
     }
 
-    /// Simplified gradient checker with default params
+    /// Simplified gradient checker with default parameters
+    ///
+    /// Uses epsilon=1e-2 and tolerance=1e-3, which work well for most cases.
     pub fn check_gradients_simple<F>(tensor: &Tensor, loss_fn: F) -> bool
     where
         F: Fn(&Tensor) -> Tensor,
@@ -2086,9 +2362,13 @@ impl RawTensor {
     }
 }
 
-// ===== TRAIT API =====
+// ===== TRAIT-BASED API =====
 
+/// Public trait for tensor operations
+///
+/// This provides a more ergonomic API: `tensor.add(&other)` instead of `RawTensor::add(&tensor, &other)`
 pub trait TensorOps {
+    //Binary ops
     fn add(&self, other: &Tensor) -> Tensor;
     fn sub(&self, other: &Tensor) -> Tensor;
     fn elem_mul(&self, other: &Tensor) -> Tensor;
@@ -2097,24 +2377,30 @@ pub trait TensorOps {
     fn modulo(&self, other: &Tensor) -> Tensor;
     fn cmplt(&self, other: &Tensor) -> Tensor;
 
+    // Unary ops
     fn neg(&self) -> Tensor;
     fn recip(&self) -> Tensor;
     fn sqrt(&self) -> Tensor;
     fn exp2(&self) -> Tensor;
     fn log2(&self) -> Tensor;
+    fn exp(&self) -> Tensor;
+    fn log(&self) -> Tensor;
     fn sin(&self) -> Tensor;
     fn cos(&self) -> Tensor;
     fn tanh(&self) -> Tensor;
     fn sigmoid(&self) -> Tensor;
     fn relu(&self) -> Tensor;
 
+    //Reduce ops
     fn sum(&self) -> Tensor;
     fn max_reduce(&self) -> Tensor;
     fn mean(&self) -> Tensor;
 
+    //Ternary ops
     fn mulacc(&self, y: &Tensor, z: &Tensor) -> Tensor;
     fn where_op(&self, x: &Tensor, y: &Tensor) -> Tensor;
 
+    // Movement ops
     fn reshape(&self, new_shape: &[usize]) -> Tensor;
     fn permute(&self, axes: &[usize]) -> Tensor;
     fn expand(&self, new_shape: &[usize]) -> Tensor;
@@ -2122,9 +2408,11 @@ pub trait TensorOps {
     fn shrink(&self, ranges: &[(usize, usize)]) -> Tensor;
     fn stride_op(&self, strides: &[usize]) -> Tensor;
 
+    //Matmul
     fn matmul(&self, other: &Tensor) -> Tensor;
     fn transpose(&self) -> Tensor;
 
+    //Gradient ops
     fn backward(&self);
     fn grad(&self) -> Option<Vec<f32>>;
 }
@@ -2166,6 +2454,12 @@ impl TensorOps for Tensor {
     }
     fn log2(&self) -> Tensor {
         RawTensor::log2(self)
+    }
+    fn exp(&self) -> Tensor {
+        RawTensor::exp(self)
+    }
+    fn log(&self) -> Tensor {
+        RawTensor::log(self)
     }
     fn sin(&self) -> Tensor {
         RawTensor::sin(self)
@@ -2234,8 +2528,15 @@ impl TensorOps for Tensor {
     }
 }
 
-// ===== Optimizers =====
+// ===== OPTIMIZERS =====
 
+/// Stochastic Gradient Descent optimizer with optional momentum
+///
+/// Update rule:
+/// - Without momentum: θ ← θ - lr·∇θ
+/// - With momentum: v ← β·v - lr·∇θ, θ ← θ + v
+///
+/// Momentum helps accelerate convergence and dampen oscillations.
 pub struct SGD {
     params: Vec<Tensor>,
     lr: f32,
@@ -2244,28 +2545,12 @@ pub struct SGD {
 }
 
 impl SGD {
-    pub fn step(&mut self) {
-        for (i, param) in self.params.iter().enumerate() {
-            let mut p = param.borrow_mut();
-            if let Some(grad) = &p.grad.clone() {
-                if self.momentum > 0.0 {
-                    for (v, &g) in self.velocity[i].iter_mut().zip(grad.iter()) {
-                        *v = self.momentum * *v - self.lr * g;
-                    }
-                    for (d, &v) in p.data.iter_mut().zip(&self.velocity[i]) {
-                        *d += v;
-                    }
-                } else {
-                    for (d, &g) in p.data.iter_mut().zip(grad.iter()) {
-                        *d -= self.lr * g;
-                    }
-                }
-            }
-        }
-    }
-}
-
-impl SGD {
+    /// Create a new SGD optimizer
+    ///
+    /// # Arguments
+    /// * `params` - List of parameters to optimize
+    /// * `lr` - Learning rate (typical: 0.01 to 0.1)
+    /// * `momentum` - Momentum coefficient (typical: 0.9, or 0.0 for no momentum)
     pub fn new(params: Vec<Tensor>, lr: f32, momentum: f32) -> Self {
         let velocity = if momentum > 0.0 {
             params
@@ -2284,6 +2569,10 @@ impl SGD {
         }
     }
 
+    /// Zero all parameter gradients
+    ///
+    /// Must be called before each backward pass to avoid gradient accumulation
+    /// across multiple batches.
     pub fn zero_grad(&self) {
         for param in &self.params {
             param.borrow_mut().grad = None;
@@ -2291,14 +2580,50 @@ impl SGD {
     }
 }
 
-// ===== NN layers =====
+impl SGD {
+    /// Perform one optimization step
+    ///
+    /// Updates all parameters using their accumulated gradients.
+    pub fn step(&mut self) {
+        for (i, param) in self.params.iter().enumerate() {
+            let mut p = param.borrow_mut();
+            if let Some(grad) = &p.grad.clone() {
+                if self.momentum > 0.0 {
+                    // Update velocity: v = momentum·v - lr·grad
+                    for (v, &g) in self.velocity[i].iter_mut().zip(grad.iter()) {
+                        *v = self.momentum * *v - self.lr * g;
+                    }
+                    // Update parameters: θ = θ + v
+                    for (d, &v) in p.data.iter_mut().zip(&self.velocity[i]) {
+                        *d += v;
+                    }
+                } else {
+                    // Simple SGD: θ = θ - lr·grad
+                    for (d, &g) in p.data.iter_mut().zip(grad.iter()) {
+                        *d -= self.lr * g;
+                    }
+                }
+            }
+        }
+    }
+}
 
+// ===== NEURAL NETWORK LAYERS =====
+
+/// Fully-connected (dense/linear) layer
+///
+/// Computes: y = xW + b
+/// where x is (batch, in_features), W is (in_features, out_features), b is (out_features)
 pub struct Linear {
     weight: Tensor,
     bias: Option<Tensor>,
 }
 
 impl Linear {
+    /// Create a new linear layer with random initialization
+    ///
+    /// Uses randn (normal distribution) for weights. For better initialization,
+    /// consider using Xavier/He initialization.
     pub fn new(in_features: usize, out_features: usize, use_bias: bool) -> Self {
         let w = RawTensor::randn(&[in_features, out_features]);
         w.borrow_mut().requires_grad = true;
@@ -2312,6 +2637,7 @@ impl Linear {
         Linear { weight: w, bias: b }
     }
 
+    /// Forward pass through the layer
     pub fn forward(&self, x: &Tensor) -> Tensor {
         let out = x.matmul(&self.weight);
         if let Some(b) = &self.bias {
@@ -2323,6 +2649,12 @@ impl Linear {
 }
 
 impl RawTensor {
+    /// Xavier uniform initialization
+    ///
+    /// Samples weights uniformly from [-limit, limit] where
+    /// limit = sqrt(6 / (fan_in + fan_out))
+    ///
+    /// This helps maintain gradient variance across layers.
     pub fn xavier_uniform(shape: &[usize]) -> Tensor {
         let fan_in = shape[0];
         let fan_out = shape[1];
@@ -2335,6 +2667,12 @@ impl RawTensor {
 }
 
 // ===== TESTS =====
+//
+// The test suite validates:
+// - Basic operations (add, mul, etc.)
+// - Gradient correctness (chain rule, broadcasting)
+// - Complex scenarios (neural networks, matmul variants)
+// - Numerical gradient checking (validates all gradients)
 
 #[cfg(test)]
 mod tests {

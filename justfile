@@ -3,6 +3,19 @@ check:
 	cargo build
 	cargo test
 
+ask-custom model prompt:
+	@echo "Cleaning!"
+	-rm err.txt tests.txt
+	-rm context.md
+	-rm err-recommendations.md
+	-rm recommendations.md
+	@echo "Asking!"
+	-cargo build &> err.txt
+	-cargo test &> tests.txt
+	files-to-prompt Cargo.toml src/lib.rs err.txt tests.txt > context.md
+	cat context.md | llm --model "openrouter/{{model}}" --system "{{prompt}}" > custom-resp.md
+	@echo "Finished!"
+
 ask-err model:
 	@echo "Cleaning!"
 	-rm err.txt tests.txt
