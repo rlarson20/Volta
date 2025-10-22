@@ -5,7 +5,17 @@ repos:
       - id: fmt
       - id: cargo-check
       - id: clippy
-        args: ["--all-targets", "--", "-D", "warnings"]
+        args:
+          [
+            "--all-targets",
+            "--",
+            "-A",
+            "clippy::needless_range_loop",
+            "-A",
+            "clippy::too_many_arguments",
+            "-D",
+            "warnings",
+          ]
 
   - repo: local
     hooks:

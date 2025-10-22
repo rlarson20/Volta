@@ -1,4 +1,5 @@
-use std::cell::Ref;
+use rand::Rng;
+use rand_distr::{Distribution, Normal};
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -8,126 +9,327 @@ pub type Tensor = Rc<RefCell<RawTensor>>;
 //for thread-safety, use Arc<Mutex<Tensor>>
 //starting single-threaded
 
-// enum UnaryOp {
-//     NoOp, //may not be necessary
-//     Exp2,
-//     Log2,
-//     Cast, //may not be necessary
-//     Sin,
-//     Cos, //may not be necessary
-//     Sqrt,
-//     Recip,
-//     Neg,
-// }
-// enum BinaryOp {
-//     Add,
-//     Sub,
-//     Mul,
-//     Div,
-//     Max,
-//     Mod,
-//     Cmplt, //idk what it is
-// }
-// enum ReduceOp {
-//     Sum,
-//     Max,
-// }
-// enum TernaryOp {
-//     MulAcc,
-//     Where,
-// }
-// enum MovementOp {
-//     Reshape,
-//     Permute,
-//     Expand,
-//     Pad,
-//     Shrink,
-//     Stride,
-// }
-// enum LoadOp {
-//     Empty,
-//     Rand,
-//     Const,
-//     From,
-//     Contiguous,
-//     Custom,
-// }
+// ===== OPS =====
+
+#[derive(Clone, Copy)]
+pub enum UnaryOp {
+    Neg,
+    Recip,
+    Sqrt,
+    Exp2,
+    Log2,
+    Sin,
+    Cos,
+    Tanh,
+    Sigmoid,
+    ReLU,
+}
+
+#[derive(Clone, Copy)]
+pub enum BinaryOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Max,
+    Mod,
+    Cmplt,
+}
+
+#[derive(Clone, Copy)]
+pub enum ReduceOp {
+    Sum,
+    Max,
+    Mean,
+}
+
+#[derive(Clone, Copy)]
+pub enum TernaryOp {
+    MulAcc,
+    Where,
+}
+
+#[derive(Clone)]
+pub enum MovementOp {
+    Reshape { new_shape: Vec<usize> },
+    Permute { axes: Vec<usize> },
+    Expand { new_shape: Vec<usize> },
+    Pad { padding: Vec<(usize, usize)> },
+    Shrink { ranges: Vec<(usize, usize)> },
+    Stride { strides: Vec<usize> },
+}
+
+pub enum LoadOp {
+    Empty,
+    Rand,
+    Const,
+    From,
+    Contiguous,
+    Custom,
+}
+
+// ===== GRADFN =====
 
 pub trait GradFn {
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>>;
     fn clone_box(&self) -> Box<dyn GradFn>;
 }
 
-struct AddGradFn;
-impl GradFn for AddGradFn {
-    fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
-        //TODO: update to ensure it updates parents correctly
-        let grad: Tensor = RawTensor::new(out_grad.data.clone(), &out_grad.shape, false);
-        vec![Some(grad.clone()), Some(grad)]
+// ===== GRADFN IMPLEMENTATIONS =====
+
+struct UnaryGradFn {
+    op: UnaryOp,
+}
+
+impl GradFn for UnaryGradFn {
+    fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+        let x = parents[0].borrow();
+        let grad_data: Vec<f32> = match self.op {
+            UnaryOp::Neg => out_grad.data.iter().map(|&g| -g).collect(),
+            UnaryOp::Recip => out_grad
+                .data
+                .iter()
+                .zip(&x.data)
+                .map(|(&g, &x)| -g / (x * x))
+                .collect(),
+            UnaryOp::Sqrt => out_grad
+                .data
+                .iter()
+                .zip(&x.data)
+                .map(|(&g, &x)| g / (2.0 * x.sqrt()))
+                .collect(),
+            UnaryOp::Exp2 => {
+                let ln2 = std::f32::consts::LN_2;
+                out_grad
+                    .data
+                    .iter()
+                    .zip(&x.data)
+                    .map(|(&g, &x)| g * 2_f32.powf(x) * ln2)
+                    .collect()
+            }
+            UnaryOp::Log2 => {
+                let ln2 = std::f32::consts::LN_2;
+                out_grad
+                    .data
+                    .iter()
+                    .zip(&x.data)
+                    .map(|(&g, &x)| g / (x * ln2))
+                    .collect()
+            }
+            UnaryOp::Sin => out_grad
+                .data
+                .iter()
+                .zip(&x.data)
+                .map(|(&g, &x)| g * x.cos())
+                .collect(),
+            UnaryOp::Cos => out_grad
+                .data
+                .iter()
+                .zip(&x.data)
+                .map(|(&g, &x)| -g * x.sin())
+                .collect(),
+            UnaryOp::Tanh => out_grad
+                .data
+                .iter()
+                .zip(&x.data)
+                .map(|(&g, &x)| {
+                    let t = x.tanh();
+                    g * (1.0 - t * t)
+                })
+                .collect(),
+            UnaryOp::Sigmoid => out_grad
+                .data
+                .iter()
+                .zip(&x.data)
+                .map(|(&g, &x)| {
+                    let s = 1.0 / (1.0 + (-x).exp());
+                    g * s * (1.0 - s)
+                })
+                .collect(),
+            UnaryOp::ReLU => out_grad
+                .data
+                .iter()
+                .zip(&x.data)
+                .map(|(&g, &x)| if x > 0.0 { g } else { 0.0 })
+                .collect(),
+        };
+        vec![Some(RawTensor::new(grad_data, &x.shape, false))]
     }
+
     fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(AddGradFn)
+        Box::new(UnaryGradFn { op: self.op })
     }
 }
 
-struct ElemMulGradFn;
-impl GradFn for ElemMulGradFn {
-    fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
-        let x_val: Ref<'_, RawTensor> = parents[0].borrow();
-        let y_val: Ref<'_, RawTensor> = parents[1].borrow();
-        let grad_x: Option<Tensor> = if x_val.requires_grad {
-            let data: Vec<f32> = out_grad
-                .data
-                .iter()
-                .zip(y_val.data.iter())
-                .map(|(g, &y)| g * y)
-                .collect();
-            Some(RawTensor::new(data, &out_grad.shape, false))
-        } else {
-            None
-        };
-        let grad_y: Option<Tensor> = if y_val.requires_grad {
-            let data: Vec<f32> = out_grad
-                .data
-                .iter()
-                .zip(x_val.data.iter())
-                .map(|(g, &x)| g * x)
-                .collect();
-            Some(RawTensor::new(data, &out_grad.shape, false))
-        } else {
-            None
-        };
-        vec![grad_x, grad_y]
-    }
-    fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(ElemMulGradFn)
-    }
+struct BinaryGradFn {
+    op: BinaryOp,
 }
 
-struct SubGradFn;
-impl GradFn for SubGradFn {
+impl GradFn for BinaryGradFn {
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
-        let x_requires_grad: bool = parents[0].borrow().requires_grad;
-        let y_requires_grad: bool = parents[1].borrow().requires_grad;
-        let grad_x: Option<Tensor> = if x_requires_grad {
-            Some(RawTensor::new(
-                out_grad.data.clone(),
-                &out_grad.shape,
-                false,
-            ))
-        } else {
-            None
+        let x_val = parents[0].borrow();
+        let y_val = parents[1].borrow();
+
+        let (grad_x, grad_y) = match self.op {
+            BinaryOp::Add => {
+                let gx = if x_val.requires_grad {
+                    // Sum gradient over broadcast dimensions
+                    let summed = RawTensor::sum_over_broadcast_dims(
+                        &out_grad.data,
+                        &out_grad.shape,
+                        &x_val.shape,
+                    );
+                    Some(RawTensor::new(summed, &x_val.shape, false))
+                } else {
+                    None
+                };
+                let gy = if y_val.requires_grad {
+                    let summed = RawTensor::sum_over_broadcast_dims(
+                        &out_grad.data,
+                        &out_grad.shape,
+                        &y_val.shape,
+                    );
+                    Some(RawTensor::new(summed, &y_val.shape, false))
+                } else {
+                    None
+                };
+                (gx, gy)
+            }
+            BinaryOp::Sub => {
+                let gx = if x_val.requires_grad {
+                    let summed = RawTensor::sum_over_broadcast_dims(
+                        &out_grad.data,
+                        &out_grad.shape,
+                        &x_val.shape,
+                    );
+                    Some(RawTensor::new(summed, &x_val.shape, false))
+                } else {
+                    None
+                };
+                let gy = if y_val.requires_grad {
+                    let neg_grad: Vec<f32> = out_grad.data.iter().map(|&g| -g).collect();
+                    let summed = RawTensor::sum_over_broadcast_dims(
+                        &neg_grad,
+                        &out_grad.shape,
+                        &y_val.shape,
+                    );
+                    Some(RawTensor::new(summed, &y_val.shape, false))
+                } else {
+                    None
+                };
+                (gx, gy)
+            }
+            BinaryOp::Mul => {
+                let gx = if x_val.requires_grad {
+                    // Broadcast y to out_grad shape for multiplication
+                    let y_bc = RawTensor::broadcast_to(&y_val.data, &y_val.shape, &out_grad.shape);
+                    let grad: Vec<f32> = out_grad
+                        .data
+                        .iter()
+                        .zip(&y_bc)
+                        .map(|(&g, &y)| g * y)
+                        .collect();
+                    let summed =
+                        RawTensor::sum_over_broadcast_dims(&grad, &out_grad.shape, &x_val.shape);
+                    Some(RawTensor::new(summed, &x_val.shape, false))
+                } else {
+                    None
+                };
+                let gy = if y_val.requires_grad {
+                    let x_bc = RawTensor::broadcast_to(&x_val.data, &x_val.shape, &out_grad.shape);
+                    let grad: Vec<f32> = out_grad
+                        .data
+                        .iter()
+                        .zip(&x_bc)
+                        .map(|(&g, &x)| g * x)
+                        .collect();
+                    let summed =
+                        RawTensor::sum_over_broadcast_dims(&grad, &out_grad.shape, &y_val.shape);
+                    Some(RawTensor::new(summed, &y_val.shape, false))
+                } else {
+                    None
+                };
+                (gx, gy)
+            }
+            BinaryOp::Div => {
+                let gx = if x_val.requires_grad {
+                    let y_bc = RawTensor::broadcast_to(&y_val.data, &y_val.shape, &out_grad.shape);
+                    let grad: Vec<f32> = out_grad
+                        .data
+                        .iter()
+                        .zip(&y_bc)
+                        .map(|(&g, &y)| g / y)
+                        .collect();
+                    let summed =
+                        RawTensor::sum_over_broadcast_dims(&grad, &out_grad.shape, &x_val.shape);
+                    Some(RawTensor::new(summed, &x_val.shape, false))
+                } else {
+                    None
+                };
+                let gy = if y_val.requires_grad {
+                    let x_bc = RawTensor::broadcast_to(&x_val.data, &x_val.shape, &out_grad.shape);
+                    let y_bc = RawTensor::broadcast_to(&y_val.data, &y_val.shape, &out_grad.shape);
+                    let grad: Vec<f32> = out_grad
+                        .data
+                        .iter()
+                        .zip(&x_bc)
+                        .zip(&y_bc)
+                        .map(|((&g, &x), &y)| -g * x / (y * y))
+                        .collect();
+                    let summed =
+                        RawTensor::sum_over_broadcast_dims(&grad, &out_grad.shape, &y_val.shape);
+                    Some(RawTensor::new(summed, &y_val.shape, false))
+                } else {
+                    None
+                };
+                (gx, gy)
+            }
+            BinaryOp::Max => {
+                let gx = if x_val.requires_grad {
+                    let x_bc = RawTensor::broadcast_to(&x_val.data, &x_val.shape, &out_grad.shape);
+                    let y_bc = RawTensor::broadcast_to(&y_val.data, &y_val.shape, &out_grad.shape);
+                    let grad: Vec<f32> = out_grad
+                        .data
+                        .iter()
+                        .zip(&x_bc)
+                        .zip(&y_bc)
+                        .map(|((&g, &x), &y)| if x >= y { g } else { 0.0 })
+                        .collect();
+                    let summed =
+                        RawTensor::sum_over_broadcast_dims(&grad, &out_grad.shape, &x_val.shape);
+                    Some(RawTensor::new(summed, &x_val.shape, false))
+                } else {
+                    None
+                };
+                let gy = if y_val.requires_grad {
+                    let x_bc = RawTensor::broadcast_to(&x_val.data, &x_val.shape, &out_grad.shape);
+                    let y_bc = RawTensor::broadcast_to(&y_val.data, &y_val.shape, &out_grad.shape);
+                    let grad: Vec<f32> = out_grad
+                        .data
+                        .iter()
+                        .zip(&x_bc)
+                        .zip(&y_bc)
+                        .map(|((&g, &x), &y)| if y > x { g } else { 0.0 })
+                        .collect();
+                    let summed =
+                        RawTensor::sum_over_broadcast_dims(&grad, &out_grad.shape, &y_val.shape);
+                    Some(RawTensor::new(summed, &y_val.shape, false))
+                } else {
+                    None
+                };
+                (gx, gy)
+            }
+            BinaryOp::Mod | BinaryOp::Cmplt => {
+                // Non-differentiable
+                (None, None)
+            }
         };
-        let grad_y: Option<Tensor> = if y_requires_grad {
-            let data = out_grad.data.iter().map(|&g| -g).collect();
-            Some(RawTensor::new(data, &out_grad.shape, false))
-        } else {
-            None
-        };
+
         vec![grad_x, grad_y]
     }
+
     fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(SubGradFn)
+        Box::new(BinaryGradFn { op: self.op })
     }
 }
 
@@ -137,9 +339,8 @@ struct SumGradFn {
 
 impl GradFn for SumGradFn {
     fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
-        // Gradient of sum broadcasts output grad to input shape
         let size: usize = self.input_shape.iter().product();
-        let grad_val: f32 = out_grad.data[0]; // sum produces scalar
+        let grad_val: f32 = out_grad.data[0];
         vec![Some(RawTensor::new(
             vec![grad_val; size],
             &self.input_shape,
@@ -150,6 +351,480 @@ impl GradFn for SumGradFn {
     fn clone_box(&self) -> Box<dyn GradFn> {
         Box::new(SumGradFn {
             input_shape: self.input_shape.clone(),
+        })
+    }
+}
+
+struct MaxReduceGradFn {
+    input_shape: Vec<usize>,
+    max_index: usize,
+}
+
+impl GradFn for MaxReduceGradFn {
+    fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
+        let size: usize = self.input_shape.iter().product();
+        let mut grad_data = vec![0.0; size];
+        grad_data[self.max_index] = out_grad.data[0];
+        vec![Some(RawTensor::new(grad_data, &self.input_shape, false))]
+    }
+
+    fn clone_box(&self) -> Box<dyn GradFn> {
+        Box::new(MaxReduceGradFn {
+            input_shape: self.input_shape.clone(),
+            max_index: self.max_index,
+        })
+    }
+}
+
+struct MeanGradFn {
+    input_shape: Vec<usize>,
+}
+
+impl GradFn for MeanGradFn {
+    fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
+        let size: usize = self.input_shape.iter().product();
+        let grad_val = out_grad.data[0] / (size as f32);
+        vec![Some(RawTensor::new(
+            vec![grad_val; size],
+            &self.input_shape,
+            false,
+        ))]
+    }
+
+    fn clone_box(&self) -> Box<dyn GradFn> {
+        Box::new(MeanGradFn {
+            input_shape: self.input_shape.clone(),
+        })
+    }
+}
+
+struct MulAccGradFn;
+impl GradFn for MulAccGradFn {
+    fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+        let x_val = parents[0].borrow();
+        let y_val = parents[1].borrow();
+
+        let grad_x = if x_val.requires_grad {
+            let data = out_grad
+                .data
+                .iter()
+                .zip(&y_val.data)
+                .map(|(&g, &y)| g * y)
+                .collect();
+            Some(RawTensor::new(data, &out_grad.shape, false))
+        } else {
+            None
+        };
+
+        let grad_y = if y_val.requires_grad {
+            let data = out_grad
+                .data
+                .iter()
+                .zip(&x_val.data)
+                .map(|(&g, &x)| g * x)
+                .collect();
+            Some(RawTensor::new(data, &out_grad.shape, false))
+        } else {
+            None
+        };
+
+        let grad_z = if parents[2].borrow().requires_grad {
+            Some(RawTensor::new(
+                out_grad.data.clone(),
+                &out_grad.shape,
+                false,
+            ))
+        } else {
+            None
+        };
+
+        vec![grad_x, grad_y, grad_z]
+    }
+    fn clone_box(&self) -> Box<dyn GradFn> {
+        Box::new(MulAccGradFn)
+    }
+}
+
+struct WhereGradFn {
+    condition: Vec<f32>,
+}
+impl GradFn for WhereGradFn {
+    fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+        let x_requires = parents[0].borrow().requires_grad;
+        let y_requires = parents[1].borrow().requires_grad;
+
+        let grad_x = if x_requires {
+            let data = out_grad
+                .data
+                .iter()
+                .zip(&self.condition)
+                .map(|(&g, &c)| if c != 0.0 { g } else { 0.0 })
+                .collect();
+            Some(RawTensor::new(data, &out_grad.shape, false))
+        } else {
+            None
+        };
+
+        let grad_y = if y_requires {
+            let data = out_grad
+                .data
+                .iter()
+                .zip(&self.condition)
+                .map(|(&g, &c)| if c == 0.0 { g } else { 0.0 })
+                .collect();
+            Some(RawTensor::new(data, &out_grad.shape, false))
+        } else {
+            None
+        };
+
+        vec![grad_x, grad_y]
+    }
+    fn clone_box(&self) -> Box<dyn GradFn> {
+        Box::new(WhereGradFn {
+            condition: self.condition.clone(),
+        })
+    }
+}
+
+struct MatMulGradFn;
+
+impl GradFn for MatMulGradFn {
+    fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+        let x = parents[0].borrow();
+        let y = parents[1].borrow();
+
+        // For z = x @ y where x: (m,n), y: (n,p), z: (m,p)
+        // ∂L/∂x = ∂L/∂z @ y^T  -> (m,p) @ (p,n) = (m,n)
+        // ∂L/∂y = x^T @ ∂L/∂z  -> (n,m) @ (m,p) = (n,p)
+
+        let grad_x = if x.requires_grad {
+            match (x.shape.len(), y.shape.len()) {
+                (2, 2) => {
+                    // Standard 2D: ∂L/∂x = out_grad @ y^T
+                    let y_t = RawTensor::transpose_2d(&y.data, &y.shape);
+                    let grad_data = RawTensor::matmul_raw(
+                        &out_grad.data,
+                        &y_t,
+                        out_grad.shape[0],
+                        out_grad.shape[1],
+                        y.shape[0],
+                    );
+                    Some(RawTensor::new(grad_data, &x.shape, false))
+                }
+                (2, 1) => {
+                    // Matrix-vector: (m,n) @ (n,) -> (m,)
+                    // ∂L/∂x = ∂L/∂z[:,None] @ v[None,:] = outer(out_grad, v)
+                    let m = x.shape[0];
+                    let n = x.shape[1];
+                    let mut grad_data = vec![0.0; m * n];
+                    for i in 0..m {
+                        let gz_i = out_grad.data[i];
+                        for j in 0..n {
+                            grad_data[i * n + j] = gz_i * y.data[j];
+                        }
+                    }
+                    Some(RawTensor::new(grad_data, &x.shape, false))
+                }
+                (1, 2) => {
+                    // Vector-matrix: (n,) @ (n,p) -> (p,)
+                    // ∂L/∂x: out_grad is (p,), y is (n,p)
+                    // grad_x = out_grad @ y^T -> (p,) @ (p,n) -> (n,)
+                    let mut grad_data = vec![0.0; x.shape[0]];
+                    for i in 0..x.shape[0] {
+                        for j in 0..y.shape[1] {
+                            grad_data[i] += out_grad.data[j] * y.data[i * y.shape[1] + j];
+                        }
+                    }
+                    Some(RawTensor::new(grad_data, &x.shape, false))
+                }
+                (1, 1) => {
+                    // Dot: (n,) @ (n,) -> scalar
+                    // ∂L/∂x = out_grad * y
+                    let og = out_grad.data[0];
+                    let grad_data: Vec<f32> = y.data.iter().map(|&v| og * v).collect();
+                    Some(RawTensor::new(grad_data, &x.shape, false))
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        let grad_y = if y.requires_grad {
+            match (x.shape.len(), y.shape.len()) {
+                (2, 2) => {
+                    let x_t = RawTensor::transpose_2d(&x.data, &x.shape);
+                    let grad_data = RawTensor::matmul_raw(
+                        &x_t,
+                        &out_grad.data,
+                        x.shape[1],
+                        x.shape[0],
+                        out_grad.shape[1],
+                    );
+                    Some(RawTensor::new(grad_data, &y.shape, false))
+                }
+                (2, 1) => {
+                    // Matrix-vector: (m,n) @ (n,) -> (m,)
+                    // ∂L/∂v = X^T @ ∂L/∂z -> (n,)
+                    let m = x.shape[0];
+                    let n = x.shape[1];
+                    let mut grad_data = vec![0.0; n];
+                    for j in 0..n {
+                        let mut sum = 0.0;
+                        for i in 0..m {
+                            sum += x.data[i * n + j] * out_grad.data[i];
+                        }
+                        grad_data[j] = sum;
+                    }
+                    Some(RawTensor::new(grad_data, &y.shape, false))
+                }
+                (1, 2) => {
+                    // grad_y = x^T @ out_grad -> (n,1) @ (1,p) -> (n,p)
+                    let mut grad_data = vec![0.0; y.shape[0] * y.shape[1]];
+                    for i in 0..y.shape[0] {
+                        for j in 0..y.shape[1] {
+                            grad_data[i * y.shape[1] + j] = x.data[i] * out_grad.data[j];
+                        }
+                    }
+                    Some(RawTensor::new(grad_data, &y.shape, false))
+                }
+                (1, 1) => {
+                    // Dot: (n,) @ (n,) -> scalar
+                    let og = out_grad.data[0];
+                    let grad_data: Vec<f32> = x.data.iter().map(|&u| og * u).collect();
+                    Some(RawTensor::new(grad_data, &y.shape, false))
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        vec![grad_x, grad_y]
+    }
+
+    fn clone_box(&self) -> Box<dyn GradFn> {
+        Box::new(MatMulGradFn)
+    }
+}
+
+// Unified movement op gradient
+#[derive(Clone)]
+struct MovementGradFn {
+    op: MovementOp,
+    original_shape: Vec<usize>,
+}
+
+impl GradFn for MovementGradFn {
+    fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
+        let grad_tensor = match &self.op {
+            MovementOp::Reshape { .. } => {
+                RawTensor::new(out_grad.data.clone(), &self.original_shape, false)
+            }
+            MovementOp::Permute { axes } => {
+                // Compute inverse permutation
+                let mut inverse_axes = vec![0; axes.len()];
+                for (i, &ax) in axes.iter().enumerate() {
+                    inverse_axes[ax] = i;
+                }
+                // Permute gradient back
+                let grad_t = RawTensor::new(out_grad.data.clone(), &out_grad.shape, false);
+                let result = RawTensor::permute_impl(&grad_t, &inverse_axes);
+                return vec![Some(result)];
+            }
+            MovementOp::Expand { new_shape } => {
+                // Sum over expanded dimensions
+                let mut grad_data = vec![0.0; self.original_shape.iter().product()];
+                let old_strides = RawTensor::compute_strides(&self.original_shape);
+                let new_strides = RawTensor::compute_strides(new_shape);
+
+                for i in 0..out_grad.data.len() {
+                    let mut old_idx = 0;
+                    let mut rem = i;
+                    for j in (0..new_shape.len()).rev() {
+                        let coord = rem / new_strides[j];
+                        rem %= new_strides[j];
+                        if self.original_shape[j] != 1 {
+                            old_idx += coord * old_strides[j];
+                        }
+                    }
+                    grad_data[old_idx] += out_grad.data[i];
+                }
+                RawTensor::new(grad_data, &self.original_shape, false)
+            }
+            MovementOp::Pad { padding } => {
+                // Strip padding from gradient
+                let mut result = vec![0.0; self.original_shape.iter().product()];
+                let old_strides = RawTensor::compute_strides(&self.original_shape);
+                let new_strides = RawTensor::compute_strides(&out_grad.shape);
+
+                fn unpad_recursive(
+                    result: &mut [f32],
+                    grad: &[f32],
+                    dim: usize,
+                    old_shape: &[usize],
+                    _new_shape: &[usize],
+                    padding: &[(usize, usize)],
+                    old_offset: usize,
+                    new_offset: usize,
+                    old_strides: &[usize],
+                    new_strides: &[usize],
+                ) {
+                    if dim == old_shape.len() {
+                        result[old_offset] = grad[new_offset];
+                        return;
+                    }
+
+                    for i in 0..old_shape[dim] {
+                        let new_i = i + padding[dim].0;
+                        unpad_recursive(
+                            result,
+                            grad,
+                            dim + 1,
+                            old_shape,
+                            _new_shape,
+                            padding,
+                            old_offset + i * old_strides[dim],
+                            new_offset + new_i * new_strides[dim],
+                            old_strides,
+                            new_strides,
+                        );
+                    }
+                }
+
+                unpad_recursive(
+                    &mut result,
+                    &out_grad.data,
+                    0,
+                    &self.original_shape,
+                    &out_grad.shape,
+                    padding,
+                    0,
+                    0,
+                    &old_strides,
+                    &new_strides,
+                );
+                RawTensor::new(result, &self.original_shape, false)
+            }
+            MovementOp::Shrink { ranges } => {
+                // Pad gradient back to original size
+                let mut result = vec![0.0; self.original_shape.iter().product()];
+                let old_strides = RawTensor::compute_strides(&self.original_shape);
+                let new_strides = RawTensor::compute_strides(&out_grad.shape);
+
+                fn unshrink_recursive(
+                    result: &mut [f32],
+                    grad: &[f32],
+                    dim: usize,
+                    old_shape: &[usize],
+                    new_shape: &[usize],
+                    ranges: &[(usize, usize)],
+                    old_offset: usize,
+                    new_offset: usize,
+                    old_strides: &[usize],
+                    new_strides: &[usize],
+                ) {
+                    if dim == old_shape.len() {
+                        result[old_offset] = grad[new_offset];
+                        return;
+                    }
+
+                    for i in 0..new_shape[dim] {
+                        let old_i = i + ranges[dim].0;
+                        unshrink_recursive(
+                            result,
+                            grad,
+                            dim + 1,
+                            old_shape,
+                            new_shape,
+                            ranges,
+                            old_offset + old_i * old_strides[dim],
+                            new_offset + i * new_strides[dim],
+                            old_strides,
+                            new_strides,
+                        );
+                    }
+                }
+
+                unshrink_recursive(
+                    &mut result,
+                    &out_grad.data,
+                    0,
+                    &self.original_shape,
+                    &out_grad.shape,
+                    ranges,
+                    0,
+                    0,
+                    &old_strides,
+                    &new_strides,
+                );
+                RawTensor::new(result, &self.original_shape, false)
+            }
+            MovementOp::Stride { strides } => {
+                // Upsample gradient
+                let mut result = vec![0.0; self.original_shape.iter().product()];
+                let old_strides_mem = RawTensor::compute_strides(&self.original_shape);
+                let new_strides_mem = RawTensor::compute_strides(&out_grad.shape);
+
+                fn unstride_recursive(
+                    result: &mut [f32],
+                    grad: &[f32],
+                    dim: usize,
+                    old_shape: &[usize],
+                    new_shape: &[usize],
+                    strides: &[usize],
+                    old_offset: usize,
+                    new_offset: usize,
+                    old_strides: &[usize],
+                    new_strides: &[usize],
+                ) {
+                    if dim == old_shape.len() {
+                        result[old_offset] = grad[new_offset];
+                        return;
+                    }
+
+                    for i in 0..new_shape[dim] {
+                        let old_i = i * strides[dim];
+                        if old_i < old_shape[dim] {
+                            unstride_recursive(
+                                result,
+                                grad,
+                                dim + 1,
+                                old_shape,
+                                new_shape,
+                                strides,
+                                old_offset + old_i * old_strides[dim],
+                                new_offset + i * new_strides[dim],
+                                old_strides,
+                                new_strides,
+                            );
+                        }
+                    }
+                }
+
+                unstride_recursive(
+                    &mut result,
+                    &out_grad.data,
+                    0,
+                    &self.original_shape,
+                    &out_grad.shape,
+                    strides,
+                    0,
+                    0,
+                    &old_strides_mem,
+                    &new_strides_mem,
+                );
+                RawTensor::new(result, &self.original_shape, false)
+            }
+        };
+
+        vec![Some(grad_tensor)]
+    }
+
+    fn clone_box(&self) -> Box<dyn GradFn> {
+        Box::new(MovementGradFn {
+            op: self.op.clone(),
+            original_shape: self.original_shape.clone(),
         })
     }
 }
@@ -196,6 +871,7 @@ impl std::fmt::Debug for RawTensor {
     }
 }
 
+//CONSTRUCTORS
 impl RawTensor {
     //from data and shape
     pub fn new(data: Vec<f32>, shape: &[usize], requires_grad: bool) -> Tensor {
@@ -215,49 +891,228 @@ impl RawTensor {
         };
         Rc::new(RefCell::new(raw))
     }
-    //Tensor::zeros(shape: &[usize])
     pub fn zeros(shape: &[usize]) -> Tensor {
         let size = shape.iter().product();
         Self::new(vec![0.0; size], shape, false)
     }
-    //Tensor::ones(shape: &[usize])
     pub fn ones(shape: &[usize]) -> Tensor {
         let size = shape.iter().product();
         Self::new(vec![1.0; size], shape, false)
     }
-    //for something like
-    //Tensor::rand(shape: &[usize])
-    //integrate rand crate to fill data w normal dist
-    //
-    //impl debug, display trait
-    //methods for props
-    //tensor.shape()
-    //tensor.num_elements()
-    //etc
-    //other methods to add:
-    //reshape
-    //to_device
-    //
-    //end goal:
-    //getting basic funcs done
-    //create tensor, print to verify shape and data align
-    //requires_grad stays false for now
-    //enable autograd in later steps
-    //
-    //next step: arithmetic ops on tensors
-    //start with element wise
-    //forward manner first
-    //
-    //for each, add:
-    //num computation, eg adding 2 tensors element wise
-    //building autograd graph:
-    //new out tensor recording how it was computed from inputs
-    //(eg, parents, grad_fn)
-    //
-    //shape compat:
-    //first require exact shape matches for bin op
-    //later add broadcasting a la numpy
-    pub fn add(self_t: &Tensor, other: &Tensor) -> Tensor {
+    pub fn rand(shape: &[usize]) -> Tensor {
+        let size = shape.iter().product();
+        let mut rng = rand::rng();
+        let data: Vec<f32> = (0..size).map(|_| rng.random::<f32>()).collect();
+        Self::new(data, shape, false)
+    }
+
+    pub fn randn(shape: &[usize]) -> Tensor {
+        let size = shape.iter().product();
+        let normal = Normal::new(0.0, 1.0).unwrap();
+        let mut rng = rand::rng();
+        let data: Vec<f32> = (0..size).map(|_| normal.sample(&mut rng)).collect();
+        Self::new(data, shape, false)
+    }
+}
+
+//basic util
+impl RawTensor {
+    /* methods for props: tensor.shape(), tensor.num_elements(), etc */
+}
+
+//UnaryOps
+impl RawTensor {
+    pub fn unary_op(t: &Tensor, op: UnaryOp) -> Tensor {
+        let (data, shape, req) = {
+            let s = t.borrow();
+            (s.data.clone(), s.shape.clone(), s.requires_grad)
+        };
+        let result = data
+            .iter()
+            .map(|&x| match op {
+                UnaryOp::Neg => -x,
+                UnaryOp::Recip => 1.0 / x,
+                UnaryOp::Sqrt => x.sqrt(),
+                UnaryOp::Exp2 => 2_f32.powf(x),
+                UnaryOp::Log2 => x.log2(),
+                UnaryOp::Sin => x.sin(),
+                UnaryOp::Cos => x.cos(),
+                UnaryOp::Tanh => x.tanh(),
+                UnaryOp::Sigmoid => 1.0 / (1.0 + (-x).exp()),
+                UnaryOp::ReLU => x.max(0.0),
+            })
+            .collect();
+        let out = Self::new(result, &shape, req);
+        if out.borrow().requires_grad {
+            out.borrow_mut().parents = vec![t.clone()];
+            out.borrow_mut().grad_fn = Some(Box::new(UnaryGradFn { op }));
+        }
+        out
+    }
+    pub fn neg(t: &Tensor) -> Tensor {
+        Self::unary_op(t, UnaryOp::Neg)
+    }
+    pub fn recip(t: &Tensor) -> Tensor {
+        Self::unary_op(t, UnaryOp::Recip)
+    }
+    pub fn sqrt(t: &Tensor) -> Tensor {
+        Self::unary_op(t, UnaryOp::Sqrt)
+    }
+    pub fn exp2(t: &Tensor) -> Tensor {
+        Self::unary_op(t, UnaryOp::Exp2)
+    }
+    pub fn log2(t: &Tensor) -> Tensor {
+        Self::unary_op(t, UnaryOp::Log2)
+    }
+    pub fn sin(t: &Tensor) -> Tensor {
+        Self::unary_op(t, UnaryOp::Sin)
+    }
+    pub fn cos(t: &Tensor) -> Tensor {
+        Self::unary_op(t, UnaryOp::Cos)
+    }
+    pub fn tanh(t: &Tensor) -> Tensor {
+        Self::unary_op(t, UnaryOp::Tanh)
+    }
+    pub fn sigmoid(t: &Tensor) -> Tensor {
+        Self::unary_op(t, UnaryOp::Sigmoid)
+    }
+    pub fn relu(t: &Tensor) -> Tensor {
+        Self::unary_op(t, UnaryOp::ReLU)
+    }
+}
+
+//BinaryOps
+impl RawTensor {
+    // Helper: compute broadcast shape following numpy rules
+    fn broadcast_shape(shape_a: &[usize], shape_b: &[usize]) -> Vec<usize> {
+        let max_len = shape_a.len().max(shape_b.len());
+        let mut result = vec![1; max_len];
+
+        // Align from right (trailing dimensions)
+        for i in 0..max_len {
+            let a_dim = if i < shape_a.len() {
+                shape_a[shape_a.len() - 1 - i]
+            } else {
+                1
+            };
+            let b_dim = if i < shape_b.len() {
+                shape_b[shape_b.len() - 1 - i]
+            } else {
+                1
+            };
+
+            if a_dim == b_dim {
+                result[max_len - 1 - i] = a_dim;
+            } else if a_dim == 1 {
+                result[max_len - 1 - i] = b_dim;
+            } else if b_dim == 1 {
+                result[max_len - 1 - i] = a_dim;
+            } else {
+                panic!(
+                    "Cannot broadcast shapes {:?} and {:?} at dimension {}",
+                    shape_a, shape_b, i
+                );
+            }
+        }
+        result
+    }
+
+    // FIXME!!!
+    // Helper: broadcast data to target shape
+    fn broadcast_to(data: &[f32], from_shape: &[usize], to_shape: &[usize]) -> Vec<f32> {
+        if from_shape == to_shape {
+            return data.to_vec();
+        }
+
+        let to_size: usize = to_shape.iter().product();
+        let mut result = vec![0.0; to_size];
+
+        // Pad from_shape with leading 1s to match rank
+        let mut padded_from = vec![1; to_shape.len()];
+        let offset = to_shape.len() - from_shape.len();
+        padded_from[offset..].copy_from_slice(from_shape);
+        let from_strides_padded = Self::compute_strides(&padded_from);
+
+        for i in 0..to_size {
+            let mut from_idx = 0;
+            let mut remainder = i;
+            //calc coords based on to_shape and map
+            for (dim, &_dim_size) in to_shape.iter().enumerate() {
+                let stride = to_shape[dim + 1..].iter().product::<usize>();
+                let coord = remainder / stride;
+                remainder %= stride;
+                //if dim broadcast (size was 1) use coord 0 for from_idx
+                if padded_from[dim] != 1 {
+                    from_idx += coord * from_strides_padded[dim];
+                }
+            }
+            result[i] = data[from_idx];
+        }
+        result
+    }
+
+    // Helper: sum gradient over broadcast dimensions
+    fn sum_over_broadcast_dims(
+        grad: &[f32],
+        grad_shape: &[usize],
+        target_shape: &[usize],
+    ) -> Vec<f32> {
+        if grad_shape == target_shape {
+            return grad.to_vec();
+        }
+
+        // Pad target_shape with leading 1s
+        let mut padded_target = vec![1; grad_shape.len()];
+        let offset = grad_shape.len() - target_shape.len();
+        padded_target[offset..].copy_from_slice(target_shape);
+
+        // Find dimensions that were broadcast (where target was 1)
+        let mut sum_axes = Vec::new();
+        for (i, (&g, &t)) in grad_shape.iter().zip(&padded_target).enumerate() {
+            if t == 1 && g > 1 {
+                sum_axes.push(i);
+            }
+        }
+
+        // Also sum over leading dimensions if target has fewer dims
+        for i in 0..offset {
+            if !sum_axes.contains(&i) {
+                sum_axes.push(i);
+            }
+        }
+
+        if sum_axes.is_empty() {
+            return grad.to_vec();
+        }
+        let mut result = vec![0.0; target_shape.iter().product()];
+        let target_strides = Self::compute_strides(target_shape);
+        for (i, &grad_val) in grad.iter().enumerate() {
+            let mut target_idx = 0;
+            let mut remainder = i;
+
+            //convert lin index i in grad_shape to coord
+            for (dim, &_dim_size) in grad_shape.iter().enumerate() {
+                let stride = grad_shape[dim + 1..].iter().product::<usize>();
+                let coord = remainder / stride;
+                remainder %= stride;
+
+                //if wasnt bc, add to index
+                let target_dim_idx = dim as i32 - offset as i32;
+                if target_dim_idx >= 0 {
+                    let target_dim_idx = target_dim_idx as usize;
+                    if padded_target[dim] != 1 {
+                        target_idx += coord * target_strides[target_dim_idx];
+                    }
+                }
+            }
+            if target_idx < result.len() {
+                result[target_idx] += grad_val;
+            }
+        }
+        result
+    }
+
+    pub fn binary_op(self_t: &Tensor, other: &Tensor, op: BinaryOp) -> Tensor {
         let (data_a, shape_a, req_a) = {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone(), s.requires_grad)
@@ -266,137 +1121,797 @@ impl RawTensor {
             let o = other.borrow();
             (o.data.clone(), o.shape.clone(), o.requires_grad)
         };
-        assert_eq!(shape_a, shape_b);
 
-        let result_data: Vec<f32> = data_a.iter().zip(&data_b).map(|(a, b)| a + b).collect();
-        let out = Self::new(result_data, &shape_a, req_a || req_b);
+        // Compute broadcast shape
+        let out_shape = Self::broadcast_shape(&shape_a, &shape_b);
+
+        // Broadcast inputs to output shape
+        let bc_data_a = Self::broadcast_to(&data_a, &shape_a, &out_shape);
+        let bc_data_b = Self::broadcast_to(&data_b, &shape_b, &out_shape);
+
+        let result_data: Vec<f32> = bc_data_a
+            .iter()
+            .zip(&bc_data_b)
+            .map(|(a, b)| match op {
+                BinaryOp::Add => a + b,
+                BinaryOp::Sub => a - b,
+                BinaryOp::Mul => a * b,
+                BinaryOp::Div => a / b,
+                BinaryOp::Max => a.max(*b),
+                BinaryOp::Mod => a % b,
+                BinaryOp::Cmplt => {
+                    if a < b {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                }
+            })
+            .collect();
+
+        // Mod and Cmplt are non-differentiable
+        let requires_grad = match op {
+            BinaryOp::Mod | BinaryOp::Cmplt => false,
+            _ => req_a || req_b,
+        };
+
+        let out = Self::new(result_data, &out_shape, requires_grad);
 
         if out.borrow().requires_grad {
             out.borrow_mut().parents = vec![self_t.clone(), other.clone()];
-            out.borrow_mut().grad_fn = Some(Box::new(AddGradFn));
+            out.borrow_mut().grad_fn = Some(Box::new(BinaryGradFn { op }));
         }
         out
+    }
+
+    pub fn add(self_t: &Tensor, other: &Tensor) -> Tensor {
+        Self::binary_op(self_t, other, BinaryOp::Add)
     }
     pub fn sub(self_t: &Tensor, other: &Tensor) -> Tensor {
-        let (data_a, shape_a, req_a) = {
-            let s = self_t.borrow();
-            (s.data.clone(), s.shape.clone(), s.requires_grad)
-        };
-        let (data_b, shape_b, req_b) = {
-            let o = other.borrow();
-            (o.data.clone(), o.shape.clone(), o.requires_grad)
-        };
-        assert_eq!(shape_a, shape_b);
-
-        let result_data: Vec<f32> = data_a
-            .iter()
-            .zip(data_b.iter())
-            .map(|(a, b)| a - b)
-            .collect();
-        let out = Self::new(result_data, &shape_a, req_a || req_b);
-        if out.borrow().requires_grad {
-            out.borrow_mut().parents = vec![self_t.clone(), other.clone()];
-            out.borrow_mut().grad_fn = Some(Box::new(SubGradFn));
-        }
-        out
+        Self::binary_op(self_t, other, BinaryOp::Sub)
     }
     pub fn elem_mul(self_t: &Tensor, other: &Tensor) -> Tensor {
-        let (data_a, shape_a, req_a) = {
-            let s = self_t.borrow();
-            (s.data.clone(), s.shape.clone(), s.requires_grad)
-        };
-        let (data_b, shape_b, req_b) = {
-            let o = other.borrow();
-            (o.data.clone(), o.shape.clone(), o.requires_grad)
-        };
-        assert_eq!(shape_a, shape_b);
-
-        let result_data: Vec<f32> = data_a
-            .iter()
-            .zip(data_b.iter())
-            .map(|(a, b)| a * b)
-            .collect();
-        let out = Self::new(result_data, &shape_a, req_a || req_b);
-        if out.borrow().requires_grad {
-            out.borrow_mut().parents = vec![self_t.clone(), other.clone()];
-            out.borrow_mut().grad_fn = Some(Box::new(ElemMulGradFn));
-        }
-        out
+        Self::binary_op(self_t, other, BinaryOp::Mul)
     }
-    //iterating through self/other.data to compute val
-    //make new out tensor, requires_grad if either needs grad
-    //if grad needed, store refs in parents
-    //also assign grad_fn, obj knows how to prop grad for op
-    //make OpGradFn type (struct/enum var) impl trait GradFn
-    //other ops:
-    //negation, flips sign with simple grad func
-    //relu: max(0,x) elementwise, adds non-lin
-    //grad 1 for +, 0 for - during backprop
-    //
-    //matmul/dotprod: crucial
-    //basic matmul for 2D tensor:
-    //A.shape (m,n)
-    //B.shape (n,p)
-    //res.shape(m,p)
-    //
-    //triple nested loop to compute
-    //C_{i,j} = sum_k A_{i,k} * B_{k,j}
-    //to optimize later w/ BLAS or parallel loop
-    //
-    //if needed, impl tensor indexing, slicing, reshaping
-    //eg: flattening tensor, reshape for ops
-    //each op producing new tensor should have appropriate grad_fn
-    //
-    //eg:
-    //MatMulGradFn: more complex: grad involves transposes:
-    //if z = X dot W, grad w.rt X = grad_out dot W.transpose,
-    //and grad w.rt W = X.transpose dot grad.out
-    //
-    //
-    //with forward pass creating comp graph
-    //via parents links and grad_fn
-    //impl back pass to perform autodiff
-    //
-    //add method Tensor::backward(&mut self)
-    //computes grad w.rt tensor
-    //usually called on final loss scalar
-    //if tensor not scalar
-    //enforce user calls .backward() only on scalar loss
-    //or define what it means:
-    //eg sum of grads
-    //
-    //backward should traverse graph from curr tensor back to all deps:
-    //start by setting grad of final tensor (self) to appropriate val:
-    //typically tensor of ones w same shape (del loss/ del loss = 1)
-    //for scalar loss, grad = 1.0
-    //use topological order traversal (acyclic graph)
-    //propogate grads
-    //collect all tensors in graph by traversing parents recursively
-    //dfs or iterative stack
-    //alternatively
-    //during forward op creation
-    //you can keep a global list or assign each tensor an incremental id,
-    //sort by creation order (topo sort)
-    //iterate in rev topo order: use its grad_fn.backward to get grad for parents, accumulate into
-    //parents .grad
-    //mark tensors as visited to avoid repeating backprop
-    //also handle case of leaves (no parents, req_grad false)
+    pub fn div(self_t: &Tensor, other: &Tensor) -> Tensor {
+        Self::binary_op(self_t, other, BinaryOp::Div)
+    }
+    pub fn max_elem(self_t: &Tensor, other: &Tensor) -> Tensor {
+        Self::binary_op(self_t, other, BinaryOp::Max)
+    }
+    pub fn modulo(self_t: &Tensor, other: &Tensor) -> Tensor {
+        Self::binary_op(self_t, other, BinaryOp::Mod)
+    }
+    pub fn cmplt(self_t: &Tensor, other: &Tensor) -> Tensor {
+        Self::binary_op(self_t, other, BinaryOp::Cmplt)
+    }
+}
 
-    pub fn sum(self_t: &Tensor) -> Tensor {
+// ===== REDUCE OPS =====
+
+impl RawTensor {
+    pub fn reduce_op(self_t: &Tensor, op: ReduceOp) -> Tensor {
         let (data, shape, req_grad) = {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone(), s.requires_grad)
         };
-        let sum_val: f32 = data.iter().sum();
-        let out = Self::new(vec![sum_val], &[1], req_grad);
+
+        let (result_val, grad_fn): (f32, Box<dyn GradFn>) = match op {
+            ReduceOp::Sum => {
+                let sum: f32 = data.iter().sum();
+                (
+                    sum,
+                    Box::new(SumGradFn {
+                        input_shape: shape.clone(),
+                    }),
+                )
+            }
+            ReduceOp::Max => {
+                let (max_val, max_idx) = data
+                    .iter()
+                    .enumerate()
+                    .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                    .map(|(idx, &val)| (val, idx))
+                    .unwrap();
+                (
+                    max_val,
+                    Box::new(MaxReduceGradFn {
+                        input_shape: shape.clone(),
+                        max_index: max_idx,
+                    }),
+                )
+            }
+            ReduceOp::Mean => {
+                let sum: f32 = data.iter().sum();
+                let mean_val = sum / (data.len() as f32);
+                (
+                    mean_val,
+                    Box::new(MeanGradFn {
+                        input_shape: shape.clone(),
+                    }),
+                )
+            }
+        };
+
+        let out = Self::new(vec![result_val], &[1], req_grad);
 
         if out.borrow().requires_grad {
             out.borrow_mut().parents = vec![self_t.clone()];
-            out.borrow_mut().grad_fn = Some(Box::new(SumGradFn { input_shape: shape }));
+            out.borrow_mut().grad_fn = Some(grad_fn);
         }
         out
     }
 
+    pub fn sum(self_t: &Tensor) -> Tensor {
+        Self::reduce_op(self_t, ReduceOp::Sum)
+    }
+    pub fn max_reduce(self_t: &Tensor) -> Tensor {
+        Self::reduce_op(self_t, ReduceOp::Max)
+    }
+    pub fn mean(self_t: &Tensor) -> Tensor {
+        Self::reduce_op(self_t, ReduceOp::Mean)
+    }
+}
+
+//TernaryOps
+impl RawTensor {
+    pub fn ternary_op(x: &Tensor, y: &Tensor, z: &Tensor, op: TernaryOp) -> Tensor {
+        let (data_x, shape_x, req_x) = {
+            let s = x.borrow();
+            (s.data.clone(), s.shape.clone(), s.requires_grad)
+        };
+        let (data_y, shape_y, req_y) = {
+            let s = y.borrow();
+            (s.data.clone(), s.shape.clone(), s.requires_grad)
+        };
+        let (data_z, shape_z, req_z) = {
+            let s = z.borrow();
+            (s.data.clone(), s.shape.clone(), s.requires_grad)
+        };
+        assert_eq!(shape_x, shape_y, "Ternary op requires matching shapes");
+        assert_eq!(shape_x, shape_z, "Ternary op requires matching shapes");
+
+        let (result_data, grad_fn, requires_grad): (Vec<f32>, Box<dyn GradFn>, bool) = match op {
+            TernaryOp::MulAcc => {
+                // x * y + z
+                let data = data_x
+                    .iter()
+                    .zip(&data_y)
+                    .zip(&data_z)
+                    .map(|((a, b), c)| a * b + c)
+                    .collect();
+                (data, Box::new(MulAccGradFn), req_x || req_y || req_z)
+            }
+            TernaryOp::Where => {
+                // x is condition, y is true branch, z is false branch
+                // x[i] != 0 ? y[i] : z[i]
+                let data = data_x
+                    .iter()
+                    .zip(&data_y)
+                    .zip(&data_z)
+                    .map(|((c, a), b)| if *c != 0.0 { *a } else { *b })
+                    .collect();
+                (
+                    data,
+                    Box::new(WhereGradFn {
+                        condition: data_x.clone(),
+                    }),
+                    req_y || req_z,
+                )
+            }
+        };
+
+        let out = Self::new(result_data, &shape_x, requires_grad);
+
+        if out.borrow().requires_grad {
+            let parents = match op {
+                TernaryOp::MulAcc => vec![x.clone(), y.clone(), z.clone()],
+                TernaryOp::Where => vec![y.clone(), z.clone()], // condition is not a parent
+            };
+            out.borrow_mut().parents = parents;
+            out.borrow_mut().grad_fn = Some(grad_fn);
+        }
+        out
+    }
+
+    pub fn mulacc(x: &Tensor, y: &Tensor, z: &Tensor) -> Tensor {
+        Self::ternary_op(x, y, z, TernaryOp::MulAcc)
+    }
+    pub fn where_op(cond: &Tensor, x: &Tensor, y: &Tensor) -> Tensor {
+        Self::ternary_op(cond, x, y, TernaryOp::Where)
+    }
+}
+
+// ===== MOVEMENT OPS =====
+impl RawTensor {
+    pub fn reshape(self_t: &Tensor, new_shape: &[usize]) -> Tensor {
+        let (data, old_shape, req_grad) = {
+            let s = self_t.borrow();
+            (s.data.clone(), s.shape.clone(), s.requires_grad)
+        };
+
+        let old_size: usize = old_shape.iter().product();
+        let new_size: usize = new_shape.iter().product();
+        assert_eq!(old_size, new_size, "Cannot reshape: size mismatch");
+
+        let out = Self::new(data, new_shape, req_grad);
+
+        if req_grad {
+            out.borrow_mut().parents = vec![self_t.clone()];
+            out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
+                op: MovementOp::Reshape {
+                    new_shape: new_shape.to_vec(),
+                },
+                original_shape: old_shape,
+            }));
+        }
+        out
+    }
+
+    fn permute_impl(self_t: &Tensor, axes: &[usize]) -> Tensor {
+        let (data, shape) = {
+            let s = self_t.borrow();
+            (s.data.clone(), s.shape.clone())
+        };
+        assert_eq!(axes.len(), shape.len(), "Axes length must match rank");
+
+        let new_shape: Vec<usize> = axes.iter().map(|&i| shape[i]).collect();
+        let old_strides = Self::compute_strides(&shape);
+        let _new_strides: Vec<usize> = axes.iter().map(|&i| old_strides[i]).collect();
+
+        let mut new_data = vec![0.0; data.len()];
+
+        fn index_to_coords(idx: usize, shape: &[usize]) -> Vec<usize> {
+            let mut coords = vec![0; shape.len()];
+            let mut remaining = idx;
+            for i in (0..shape.len()).rev() {
+                coords[i] = remaining % shape[i];
+                remaining /= shape[i];
+            }
+            coords
+        }
+
+        fn coords_to_index(coords: &[usize], strides: &[usize]) -> usize {
+            coords.iter().zip(strides).map(|(c, s)| c * s).sum()
+        }
+
+        for (new_idx, val) in new_data.iter_mut().enumerate() {
+            let new_coords = index_to_coords(new_idx, &new_shape);
+            let mut old_coords = vec![0; axes.len()];
+            for (i, &ax) in axes.iter().enumerate() {
+                old_coords[ax] = new_coords[i];
+            }
+            let old_idx = coords_to_index(&old_coords, &old_strides);
+            *val = data[old_idx];
+        }
+        Self::new(new_data, &new_shape, false)
+    }
+
+    pub fn permute(self_t: &Tensor, axes: &[usize]) -> Tensor {
+        let req_grad = self_t.borrow().requires_grad;
+        let old_shape = self_t.borrow().shape.clone();
+
+        // Verify axes is a valid permutation
+        let mut sorted_axes = axes.to_vec();
+        sorted_axes.sort_unstable();
+        for (i, &ax) in sorted_axes.iter().enumerate() {
+            assert_eq!(i, ax, "Invalid permutation axes");
+        }
+
+        let out = Self::permute_impl(self_t, axes);
+        out.borrow_mut().requires_grad = req_grad;
+
+        if req_grad {
+            out.borrow_mut().parents = vec![self_t.clone()];
+            out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
+                op: MovementOp::Permute {
+                    axes: axes.to_vec(),
+                },
+                original_shape: old_shape,
+            }));
+        }
+        out
+    }
+
+    pub fn expand(self_t: &Tensor, new_shape: &[usize]) -> Tensor {
+        let (data, old_shape, req_grad) = {
+            let s = self_t.borrow();
+            (s.data.clone(), s.shape.clone(), s.requires_grad)
+        };
+
+        assert_eq!(old_shape.len(), new_shape.len(), "Expand: rank must match");
+
+        // Verify broadcasting rules: old dims must be 1 or equal to new
+        for (old_d, new_d) in old_shape.iter().zip(new_shape) {
+            assert!(
+                *old_d == 1 || old_d == new_d,
+                "Cannot expand dimension {} to {}",
+                old_d,
+                new_d
+            );
+        }
+
+        let new_size: usize = new_shape.iter().product();
+        let mut result = vec![0.0; new_size];
+
+        // Broadcast by repeating values
+        let old_strides = Self::compute_strides(&old_shape);
+        let new_strides = Self::compute_strides(new_shape);
+
+        for i in 0..new_size {
+            let mut old_idx = 0;
+            let mut rem = i;
+            for j in (0..new_shape.len()).rev() {
+                let coord = rem / new_strides[j];
+                rem %= new_strides[j];
+                if old_shape[j] != 1 {
+                    old_idx += coord * old_strides[j];
+                }
+            }
+            result[i] = data[old_idx];
+        }
+
+        let out = Self::new(result, new_shape, req_grad);
+
+        if req_grad {
+            out.borrow_mut().parents = vec![self_t.clone()];
+            out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
+                op: MovementOp::Expand {
+                    new_shape: new_shape.to_vec(),
+                },
+                original_shape: old_shape,
+            }));
+        }
+        out
+    }
+
+    pub fn pad(self_t: &Tensor, padding: &[(usize, usize)]) -> Tensor {
+        let (data, old_shape, req_grad) = {
+            let s = self_t.borrow();
+            (s.data.clone(), s.shape.clone(), s.requires_grad)
+        };
+
+        assert_eq!(
+            padding.len(),
+            old_shape.len(),
+            "Padding length must match rank"
+        );
+
+        let new_shape: Vec<usize> = old_shape
+            .iter()
+            .zip(padding)
+            .map(|(d, (l, r))| d + l + r)
+            .collect();
+
+        let new_size: usize = new_shape.iter().product();
+        let mut result = vec![0.0; new_size];
+
+        // Copy old data into padded positions
+        let old_strides = Self::compute_strides(&old_shape);
+        let new_strides = Self::compute_strides(&new_shape);
+
+        fn pad_recursive(
+            result: &mut [f32],
+            data: &[f32],
+            dim: usize,
+            old_shape: &[usize],
+            _new_shape: &[usize],
+            padding: &[(usize, usize)],
+            old_offset: usize,
+            new_offset: usize,
+            old_strides: &[usize],
+            new_strides: &[usize],
+        ) {
+            if dim == old_shape.len() {
+                result[new_offset] = data[old_offset];
+                return;
+            }
+
+            for i in 0..old_shape[dim] {
+                let new_i = i + padding[dim].0;
+                pad_recursive(
+                    result,
+                    data,
+                    dim + 1,
+                    old_shape,
+                    _new_shape,
+                    padding,
+                    old_offset + i * old_strides[dim],
+                    new_offset + new_i * new_strides[dim],
+                    old_strides,
+                    new_strides,
+                );
+            }
+        }
+
+        pad_recursive(
+            &mut result,
+            &data,
+            0,
+            &old_shape,
+            &new_shape,
+            padding,
+            0,
+            0,
+            &old_strides,
+            &new_strides,
+        );
+
+        let out = Self::new(result, &new_shape, req_grad);
+
+        if req_grad {
+            out.borrow_mut().parents = vec![self_t.clone()];
+            out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
+                op: MovementOp::Pad {
+                    padding: padding.to_vec(),
+                },
+                original_shape: old_shape,
+            }));
+        }
+        out
+    }
+
+    pub fn shrink(self_t: &Tensor, ranges: &[(usize, usize)]) -> Tensor {
+        let (data, old_shape, req_grad) = {
+            let s = self_t.borrow();
+            (s.data.clone(), s.shape.clone(), s.requires_grad)
+        };
+
+        assert_eq!(
+            ranges.len(),
+            old_shape.len(),
+            "Ranges length must match rank"
+        );
+
+        let new_shape: Vec<usize> = ranges.iter().map(|(start, end)| end - start).collect();
+        let new_size: usize = new_shape.iter().product();
+        let mut result = vec![0.0; new_size];
+
+        let old_strides = Self::compute_strides(&old_shape);
+        let new_strides = Self::compute_strides(&new_shape);
+
+        fn shrink_recursive(
+            result: &mut [f32],
+            data: &[f32],
+            dim: usize,
+            old_shape: &[usize],
+            new_shape: &[usize],
+            ranges: &[(usize, usize)],
+            old_offset: usize,
+            new_offset: usize,
+            old_strides: &[usize],
+            new_strides: &[usize],
+        ) {
+            if dim == old_shape.len() {
+                result[new_offset] = data[old_offset];
+                return;
+            }
+
+            for i in 0..new_shape[dim] {
+                let old_i = i + ranges[dim].0;
+                shrink_recursive(
+                    result,
+                    data,
+                    dim + 1,
+                    old_shape,
+                    new_shape,
+                    ranges,
+                    old_offset + old_i * old_strides[dim],
+                    new_offset + i * new_strides[dim],
+                    old_strides,
+                    new_strides,
+                );
+            }
+        }
+
+        shrink_recursive(
+            &mut result,
+            &data,
+            0,
+            &old_shape,
+            &new_shape,
+            ranges,
+            0,
+            0,
+            &old_strides,
+            &new_strides,
+        );
+
+        let out = Self::new(result, &new_shape, req_grad);
+
+        if req_grad {
+            out.borrow_mut().parents = vec![self_t.clone()];
+            out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
+                op: MovementOp::Shrink {
+                    ranges: ranges.to_vec(),
+                },
+                original_shape: old_shape,
+            }));
+        }
+        out
+    }
+
+    pub fn stride_op(self_t: &Tensor, strides: &[usize]) -> Tensor {
+        let (data, old_shape, req_grad) = {
+            let s = self_t.borrow();
+            (s.data.clone(), s.shape.clone(), s.requires_grad)
+        };
+
+        assert_eq!(
+            strides.len(),
+            old_shape.len(),
+            "Strides length must match rank"
+        );
+
+        let new_shape: Vec<usize> = old_shape
+            .iter()
+            .zip(strides)
+            .map(|(d, s)| d.div_ceil(*s))
+            .collect();
+
+        let new_size: usize = new_shape.iter().product();
+        let mut result = vec![0.0; new_size];
+
+        let old_strides_mem = Self::compute_strides(&old_shape);
+        let new_strides_mem = Self::compute_strides(&new_shape);
+
+        fn stride_recursive(
+            result: &mut [f32],
+            data: &[f32],
+            dim: usize,
+            old_shape: &[usize],
+            new_shape: &[usize],
+            strides: &[usize],
+            old_offset: usize,
+            new_offset: usize,
+            old_strides: &[usize],
+            new_strides: &[usize],
+        ) {
+            if dim == old_shape.len() {
+                result[new_offset] = data[old_offset];
+                return;
+            }
+
+            for i in 0..new_shape[dim] {
+                let old_i = i * strides[dim];
+                stride_recursive(
+                    result,
+                    data,
+                    dim + 1,
+                    old_shape,
+                    new_shape,
+                    strides,
+                    old_offset + old_i * old_strides[dim],
+                    new_offset + i * new_strides[dim],
+                    old_strides,
+                    new_strides,
+                );
+            }
+        }
+
+        stride_recursive(
+            &mut result,
+            &data,
+            0,
+            &old_shape,
+            &new_shape,
+            strides,
+            0,
+            0,
+            &old_strides_mem,
+            &new_strides_mem,
+        );
+
+        let out = Self::new(result, &new_shape, req_grad);
+
+        if req_grad {
+            out.borrow_mut().parents = vec![self_t.clone()];
+            out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
+                op: MovementOp::Stride {
+                    strides: strides.to_vec(),
+                },
+                original_shape: old_shape,
+            }));
+        }
+        out
+    }
+
+    fn compute_strides(shape: &[usize]) -> Vec<usize> {
+        let mut strides = vec![1; shape.len()];
+        for i in (0..shape.len().saturating_sub(1)).rev() {
+            strides[i] = strides[i + 1] * shape[i + 1];
+        }
+        strides
+    }
+}
+
+// ===== LOAD OPS =====
+//other methods to add:
+//to_device LoadOp?
+
+impl RawTensor {
+    pub fn empty(shape: &[usize]) -> Tensor {
+        let size = shape.iter().product();
+        Self::new(vec![0.0; size], shape, false)
+    }
+
+    pub fn constant(value: f32, shape: &[usize]) -> Tensor {
+        let size = shape.iter().product();
+        Self::new(vec![value; size], shape, false)
+    }
+
+    pub fn from_vec(data: Vec<f32>, shape: &[usize]) -> Tensor {
+        Self::new(data, shape, false)
+    }
+
+    pub fn contiguous(self_t: &Tensor) -> Tensor {
+        // For now, all tensors are contiguous
+        // Later: handle views/strides
+        let s = self_t.borrow();
+        Self::new(s.data.clone(), &s.shape, s.requires_grad)
+    }
+}
+
+// ===== MATMUL =====
+
+impl RawTensor {
+    // Helper: transpose 2D matrix stored as flat vec
+    fn transpose_2d(data: &[f32], shape: &[usize]) -> Vec<f32> {
+        assert_eq!(shape.len(), 2, "Transpose expects 2D shape");
+        let (m, n) = (shape[0], shape[1]);
+        let mut result = vec![0.0; m * n];
+        for i in 0..m {
+            for j in 0..n {
+                result[j * m + i] = data[i * n + j];
+            }
+        }
+        result
+    }
+
+    // Helper: raw matmul computation
+    // a: (m, k), b: (k, n) -> result: (m, n)
+    fn matmul_raw(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
+        let mut result = vec![0.0; m * n];
+        for i in 0..m {
+            for j in 0..n {
+                let mut sum = 0.0;
+                for p in 0..k {
+                    sum += a[i * k + p] * b[p * n + j];
+                }
+                result[i * n + j] = sum;
+            }
+        }
+        result
+    }
+
+    pub fn matmul(self_t: &Tensor, other: &Tensor) -> Tensor {
+        let (data_a, shape_a, req_a) = {
+            let s = self_t.borrow();
+            (s.data.clone(), s.shape.clone(), s.requires_grad)
+        };
+        let (data_b, shape_b, req_b) = {
+            let o = other.borrow();
+            (o.data.clone(), o.shape.clone(), o.requires_grad)
+        };
+
+        // Handle different cases
+        match (shape_a.len(), shape_b.len()) {
+            (2, 2) => {
+                // Standard 2D matmul: (m,n) @ (n,p) -> (m,p)
+                let (m, n) = (shape_a[0], shape_a[1]);
+                let (n2, p) = (shape_b[0], shape_b[1]);
+                assert_eq!(
+                    n, n2,
+                    "Matmul dimension mismatch: ({},{}) @ ({},{})",
+                    m, n, n2, p
+                );
+
+                let result_data = Self::matmul_raw(&data_a, &data_b, m, n, p);
+                let out = Self::new(result_data, &[m, p], req_a || req_b);
+
+                if out.borrow().requires_grad {
+                    out.borrow_mut().parents = vec![self_t.clone(), other.clone()];
+                    out.borrow_mut().grad_fn = Some(Box::new(MatMulGradFn));
+                }
+                out
+            }
+            (2, 1) => {
+                // Matrix-vector: (m,n) @ (n,) -> (m,)
+                let (m, n) = (shape_a[0], shape_a[1]);
+                let n2 = shape_b[0];
+                assert_eq!(n, n2, "Matmul dimension mismatch: ({},{}) @ ({})", m, n, n2);
+
+                let mut result_data = vec![0.0; m];
+                for i in 0..m {
+                    let mut sum = 0.0;
+                    for j in 0..n {
+                        sum += data_a[i * n + j] * data_b[j];
+                    }
+                    result_data[i] = sum;
+                }
+
+                let out = Self::new(result_data, &[m], req_a || req_b);
+
+                if out.borrow().requires_grad {
+                    out.borrow_mut().parents = vec![self_t.clone(), other.clone()];
+                    out.borrow_mut().grad_fn = Some(Box::new(MatMulGradFn));
+                }
+                out
+            }
+            (1, 2) => {
+                // Vector-matrix: (n,) @ (n,p) -> (p,)
+                let n = shape_a[0];
+                let (n2, p) = (shape_b[0], shape_b[1]);
+                assert_eq!(n, n2, "Matmul dimension mismatch: ({}) @ ({},{})", n, n2, p);
+
+                let mut result_data = vec![0.0; p];
+                for j in 0..p {
+                    let mut sum = 0.0;
+                    for i in 0..n {
+                        sum += data_a[i] * data_b[i * p + j];
+                    }
+                    result_data[j] = sum;
+                }
+
+                let out = Self::new(result_data, &[p], req_a || req_b);
+
+                if out.borrow().requires_grad {
+                    out.borrow_mut().parents = vec![self_t.clone(), other.clone()];
+                    out.borrow_mut().grad_fn = Some(Box::new(MatMulGradFn));
+                }
+                out
+            }
+            (1, 1) => {
+                // Dot product: (n,) @ (n,) -> scalar
+                let n = shape_a[0];
+                let n2 = shape_b[0];
+                assert_eq!(n, n2, "Dot product dimension mismatch: ({}) @ ({})", n, n2);
+
+                let sum: f32 = data_a.iter().zip(&data_b).map(|(a, b)| a * b).sum();
+                let out = Self::new(vec![sum], &[1], req_a || req_b);
+
+                if out.borrow().requires_grad {
+                    out.borrow_mut().parents = vec![self_t.clone(), other.clone()];
+                    out.borrow_mut().grad_fn = Some(Box::new(MatMulGradFn));
+                }
+                out
+            }
+            _ => panic!(
+                "Matmul not supported for shapes: {:?} @ {:?}",
+                shape_a, shape_b
+            ),
+        }
+    }
+
+    pub fn transpose(self_t: &Tensor) -> Tensor {
+        let (data, shape, req_grad) = {
+            let s = self_t.borrow();
+            (s.data.clone(), s.shape.clone(), s.requires_grad)
+        };
+
+        assert_eq!(shape.len(), 2, "Transpose expects 2D tensor");
+
+        let transposed_data = Self::transpose_2d(&data, &shape);
+        let new_shape = vec![shape[1], shape[0]];
+
+        let out = Self::new(transposed_data, &new_shape, req_grad);
+
+        if req_grad {
+            out.borrow_mut().parents = vec![self_t.clone()];
+            // Use movement grad with inverse permutation [1,0]
+            out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
+                op: MovementOp::Permute { axes: vec![1, 0] },
+                // original shape is the input shape; movement grad uses it to map back
+                original_shape: vec![shape[0], shape[1]],
+            }));
+        }
+        out
+    }
+}
+
+// ===== BACKWARD =====
+
+impl RawTensor {
     pub fn backward(tensor_ref: &Tensor) {
         let tensor = tensor_ref.borrow();
         assert!(
@@ -404,15 +1919,19 @@ impl RawTensor {
             "Called backward on a tensor that doesn't require grad"
         );
         drop(tensor);
-        //init gradient for starting tensor
+
         {
             let mut tensor = tensor_ref.borrow_mut();
             if tensor.grad.is_none() {
-                tensor.grad = Some(vec![1.0; tensor.data.len()]);
+                let grad_size = if tensor.shape.len() == 1 && tensor.shape[0] == 1 {
+                    1
+                } else {
+                    tensor.data.len()
+                };
+                tensor.grad = Some(vec![1.0; grad_size]);
             }
         }
 
-        //use TensorRef stack instead of mut refs
         let mut stack = vec![tensor_ref.clone()];
         let mut visited = HashSet::new();
 
@@ -451,7 +1970,7 @@ impl RawTensor {
                             parent.grad = Some(g_data)
                         } else {
                             let existing = parent.grad.as_mut().unwrap();
-                            for (accum, new) in existing.iter_mut().zip(g_data.iter()) {
+                            for (accum, &new) in existing.iter_mut().zip(g_data.iter()) {
                                 *accum += new;
                             }
                         }
@@ -466,11 +1985,146 @@ impl RawTensor {
     }
 }
 
+// ===== NUMERICAL GRADIENT CHECKING =====
+
+impl RawTensor {
+    /// Check gradients numerically using finite differences
+    ///
+    /// For a scalar function f(x), the gradient is approximated as:
+    /// ∂f/∂x ≈ (f(x+ε) - f(x-ε)) / (2ε)
+    ///
+    /// This is more accurate than forward difference: (f(x+ε) - f(x)) / ε
+    ///
+    /// Returns: (max_error, mean_error, passed)
+    pub fn check_gradients<F>(
+        tensor: &Tensor,
+        loss_fn: F,
+        epsilon: f32,
+        tolerance: f32,
+    ) -> (f32, f32, bool)
+    where
+        F: Fn(&Tensor) -> Tensor,
+    {
+        // Compute analytical gradient
+        let loss = loss_fn(tensor);
+        loss.backward();
+
+        let analytical_grad = tensor.grad().expect("Tensor must have gradient");
+        let mut numerical_grad = vec![0.0; analytical_grad.len()];
+
+        let original_data = tensor.borrow().data.clone();
+        let original_shape = tensor.borrow().shape.clone();
+        let requires_grad = tensor.borrow().requires_grad;
+
+        // Compute numerical gradient for each element
+        for i in 0..original_data.len() {
+            //f(x + epsilon)
+            let mut data_plus = original_data.clone();
+            data_plus[i] += epsilon;
+            let tensor_plus = RawTensor::new(data_plus, &original_shape, requires_grad);
+            let loss_plus = loss_fn(&tensor_plus);
+            let val_plus = loss_plus.borrow().data[0];
+
+            let mut data_minus = original_data.clone();
+            data_minus[i] -= epsilon;
+            let tensor_minus = RawTensor::new(data_minus, &original_shape, requires_grad);
+            let loss_minus = loss_fn(&tensor_minus);
+            let val_minus = loss_minus.borrow().data[0];
+            //central diff
+            numerical_grad[i] = (val_plus - val_minus) / (2.0 * epsilon);
+        }
+
+        // Compute errors
+        let mut max_error: f32 = 0.0;
+        let mut total_error: f32 = 0.0;
+
+        for (i, (&analytical, &numerical)) in
+            analytical_grad.iter().zip(&numerical_grad).enumerate()
+        {
+            let error = (analytical - numerical).abs();
+            let relative_error = if numerical.abs() > 1e-8 {
+                error / numerical.abs()
+            } else {
+                error
+            };
+
+            max_error = max_error.max(relative_error);
+            total_error += relative_error;
+
+            if relative_error > tolerance {
+                eprintln!(
+                    "Gradient mismatch at index {}: analytical={:.6e}, numerical={:.6e}, error={:.6e}",
+                    i, analytical, numerical, relative_error
+                );
+            }
+        }
+
+        let mean_error = total_error / analytical_grad.len() as f32;
+        let passed = max_error < tolerance;
+
+        (max_error, mean_error, passed)
+    }
+
+    /// Simplified gradient checker with default params
+    pub fn check_gradients_simple<F>(tensor: &Tensor, loss_fn: F) -> bool
+    where
+        F: Fn(&Tensor) -> Tensor,
+    {
+        let (max_err, mean_err, passed) = Self::check_gradients(
+            tensor, loss_fn, 1e-2, // epsilon
+            1e-3, // tolerance
+        );
+
+        if !passed {
+            eprintln!(
+                "Gradient check FAILED: max_error={:.6e}, mean_error={:.6e}",
+                max_err, mean_err
+            );
+        }
+
+        passed
+    }
+}
+
+// ===== TRAIT API =====
+
 pub trait TensorOps {
     fn add(&self, other: &Tensor) -> Tensor;
     fn sub(&self, other: &Tensor) -> Tensor;
     fn elem_mul(&self, other: &Tensor) -> Tensor;
+    fn div(&self, other: &Tensor) -> Tensor;
+    fn max_elem(&self, other: &Tensor) -> Tensor;
+    fn modulo(&self, other: &Tensor) -> Tensor;
+    fn cmplt(&self, other: &Tensor) -> Tensor;
+
+    fn neg(&self) -> Tensor;
+    fn recip(&self) -> Tensor;
+    fn sqrt(&self) -> Tensor;
+    fn exp2(&self) -> Tensor;
+    fn log2(&self) -> Tensor;
+    fn sin(&self) -> Tensor;
+    fn cos(&self) -> Tensor;
+    fn tanh(&self) -> Tensor;
+    fn sigmoid(&self) -> Tensor;
+    fn relu(&self) -> Tensor;
+
     fn sum(&self) -> Tensor;
+    fn max_reduce(&self) -> Tensor;
+    fn mean(&self) -> Tensor;
+
+    fn mulacc(&self, y: &Tensor, z: &Tensor) -> Tensor;
+    fn where_op(&self, x: &Tensor, y: &Tensor) -> Tensor;
+
+    fn reshape(&self, new_shape: &[usize]) -> Tensor;
+    fn permute(&self, axes: &[usize]) -> Tensor;
+    fn expand(&self, new_shape: &[usize]) -> Tensor;
+    fn pad(&self, padding: &[(usize, usize)]) -> Tensor;
+    fn shrink(&self, ranges: &[(usize, usize)]) -> Tensor;
+    fn stride_op(&self, strides: &[usize]) -> Tensor;
+
+    fn matmul(&self, other: &Tensor) -> Tensor;
+    fn transpose(&self) -> Tensor;
+
     fn backward(&self);
     fn grad(&self) -> Option<Vec<f32>>;
 }
@@ -485,9 +2139,93 @@ impl TensorOps for Tensor {
     fn elem_mul(&self, other: &Tensor) -> Tensor {
         RawTensor::elem_mul(self, other)
     }
+    fn div(&self, other: &Tensor) -> Tensor {
+        RawTensor::div(self, other)
+    }
+    fn max_elem(&self, other: &Tensor) -> Tensor {
+        RawTensor::max_elem(self, other)
+    }
+    fn modulo(&self, other: &Tensor) -> Tensor {
+        RawTensor::modulo(self, other)
+    }
+    fn cmplt(&self, other: &Tensor) -> Tensor {
+        RawTensor::cmplt(self, other)
+    }
+
+    fn neg(&self) -> Tensor {
+        RawTensor::neg(self)
+    }
+    fn recip(&self) -> Tensor {
+        RawTensor::recip(self)
+    }
+    fn sqrt(&self) -> Tensor {
+        RawTensor::sqrt(self)
+    }
+    fn exp2(&self) -> Tensor {
+        RawTensor::exp2(self)
+    }
+    fn log2(&self) -> Tensor {
+        RawTensor::log2(self)
+    }
+    fn sin(&self) -> Tensor {
+        RawTensor::sin(self)
+    }
+    fn cos(&self) -> Tensor {
+        RawTensor::cos(self)
+    }
+    fn tanh(&self) -> Tensor {
+        RawTensor::tanh(self)
+    }
+    fn sigmoid(&self) -> Tensor {
+        RawTensor::sigmoid(self)
+    }
+    fn relu(&self) -> Tensor {
+        RawTensor::relu(self)
+    }
+
     fn sum(&self) -> Tensor {
         RawTensor::sum(self)
     }
+    fn max_reduce(&self) -> Tensor {
+        RawTensor::max_reduce(self)
+    }
+    fn mean(&self) -> Tensor {
+        RawTensor::mean(self)
+    }
+
+    fn mulacc(&self, y: &Tensor, z: &Tensor) -> Tensor {
+        RawTensor::mulacc(self, y, z)
+    }
+    fn where_op(&self, x: &Tensor, y: &Tensor) -> Tensor {
+        RawTensor::where_op(self, x, y)
+    }
+
+    fn reshape(&self, new_shape: &[usize]) -> Tensor {
+        RawTensor::reshape(self, new_shape)
+    }
+    fn permute(&self, axes: &[usize]) -> Tensor {
+        RawTensor::permute(self, axes)
+    }
+    fn expand(&self, new_shape: &[usize]) -> Tensor {
+        RawTensor::expand(self, new_shape)
+    }
+    fn pad(&self, padding: &[(usize, usize)]) -> Tensor {
+        RawTensor::pad(self, padding)
+    }
+    fn shrink(&self, ranges: &[(usize, usize)]) -> Tensor {
+        RawTensor::shrink(self, ranges)
+    }
+    fn stride_op(&self, strides: &[usize]) -> Tensor {
+        RawTensor::stride_op(self, strides)
+    }
+
+    fn matmul(&self, other: &Tensor) -> Tensor {
+        RawTensor::matmul(self, other)
+    }
+    fn transpose(&self) -> Tensor {
+        RawTensor::transpose(self)
+    }
+
     fn backward(&self) {
         RawTensor::backward(self)
     }
@@ -496,366 +2234,107 @@ impl TensorOps for Tensor {
     }
 }
 
-//need to finish:
-//basic operations
-//autograd
-//broadcasting: allowing ops on tensors of diff shapes, see line 465 for explanation
-//mean
-//sum (done)
-//sigmoid
-//tanh
-//relu
-//forward/back for each
-//avoid in place ops
-//use pure funcs returning new tensors
-//if needed,
-//add in place later
-//
-//make sure to test for each to ensure grad impl correct
-//
-//when autograd in place, make higher abs for NN layers and models
-//
-//define structs for layers:
-//Linear, fully connected
-//Conv2d, conv if ambitious
-//hold tensor params
-//
-//eg
-//
-//pub struct Linear {
-//  pub weight: Tensor, //shape: (in_feat, out_feat)
-//  pub bias: Tensor, //shape: (out_feat,)
-//}
-//
-//impl Linear {
-//  pub fn new(in_feat: usize, out_feat: usize) -> Linear {
-//      //init weight w small rand vals, bias w 0s
-//      let w = Tensor::new(randow_vector(in_feat * out_feat), &[in_feat, out_feat], true);
-//      let b = Tensor::zeros(&[out_feat])
-//      Linear { weight: w, bias: b }
-//  }
-//  pub fn forward(&self, input: &Tensor) -> Tensor {
-//      //in shape: batch size, in_feat
-//      //out = in dot weight plus bias
-//      let out = input.matmul(&self.weight); //batchsize, out_feat
-//      out.add(&self.bias) //bc bias over batch
-//  }
-//}
-//
-//Linear::forward use matmul impled, then add bias
-//
-//bc across batch dim
-//
-//bc weight, bias have requires_grad=true,
-//all ops w them w track grads
-//
-//make trait Module if polymorphic API for layers (like in PyTorch, all layers are modules)
-//
-//eg
-//
-//pub trait Module {
-//  fn forward(&self, input: &Tensor) -> Tensor;
-//  fn parameters(&self) -> Vec<TensorRef>; //collect train params, fix bc no more tensor-ref
-//}
-//
-//impl Module for Linear {
-// fn forward(&self, input: &Tensor) -> Tensor { self.forward(input)}
-// fn parameters(&self) -> Vec<TensorRef> { //again, fix no more tensorref
-// vec![Rc::new(RefCell::new(self.weight.clone())),Rc::new(RefCell::new(self.bias.clone()))]
-// }
-//}
-//
-//params method returns ref to internal tensors
-//so an optim can update
-//if building larger network (struct w multi layers)
-//
-//can impl Module for it returning concat of all sub-layers params
-//
-//can add other layers:
-//
-//ReLU as layer (although it's stateless/pure, so can use tensor op)
-//Sequential to stack layers in order
-//depends on how full featured i want
-//
-//to train models:
-//
-//need to compute loss
-//update weights
-//
-//loss: common loss includes MSELoss/MeanSquaredErr for regression
-//Cross-entropy for classifcation
-//
-//impl funcs take pred and target Tensors and return Tensor loss
-//
-//eg
-//
-//fn mse_loss(pred: &Tensor, target: &Tensor) -> Tensor {
-//  let diff = pred.add(&target.neg()) //pred - target
-//  let sq = diff * &diff; //elem wise square
-//  sq.mean() //ret avg of sq err
-//}
-//
-//autograd will handle bw pass for loss
-//composed of basic ops defined
-//
-//optims:
-//create optim struct
-//begin with SGD
-//needs to adjust model params based on grads
-//
-//eg
-//
-//pub struct SGD {
-// lr: f32,
-//}
-//
-//impl SGD {
-//  pub fn new(lr: f32) -> Self { SGD { lr } }
-//  pub fn step(&self, params: &[TensorRef]) {//FIX TR EXISTENCE
-//      for param_ref in params {
-//          let mut param = param_ref.borrow_mut();
-//          if !param.requires_grad {
-//              continue;
-//          }
-//          if let Some(ref grad) = param.grad {
-//              //update params: param = param - lr * grad
-//              for (val, grad_val) in param.data.iter_mut().zip(grad.iter()) {
-//                  *val -= self.lr * grad_val;
-//              }
-//          }
-//          //typically reset grads to 0 after update
-//          param.grad = None;
-//      }
-//  }
-//}
-//
-//usage:
-//after comp loss.backward()
-//call optim.step(params) where params is list of all train params
-//eg gathered from layers
-//will subtract lr times grad from each params data in place
-//after step, set each param.grad = None
-//or 0 out grad vec
-//so that next iter back starts fresh
-//
-//training loop:
-//loop over epoch, batches
-//
-//do pred = model.forward(input)
-//loss = loss_fn(pred, target)
-//loss.backward()
-//optim.step()
-//outside framework code, good to verify things work
-//
-//to make fully featured, need to add HW accel
-//involves abstracting ops over diff backends
-//
-//eg enum Device { CPU, GPU } w/ vars like GPU(Metal) or more specific
-//
-//add fields in Tensor  like device
-//include to_device(&self, device: Device) -> Tensor
-//to transfer data btwn CPU/GPU
-//eg
-//CPU tensor but want to run GPU op
-//need to copy to GPU mem
-//
-//for each op: branch on device:
-//
-//impl Tensor {
-//  pub fn add(&self, other: &Tensor) -> Tensor {
-//      asset!(self.shape == other.shape);
-//      match self.device {
-//          Device::CPU => {
-//              //CPU impl
-//          }
-//          Device::GPU => {
-//              //GPU impl
-//          }
-//      }
-//  }
-//  //similar device specific impl
-//}
-//
-//on CPU, already have impl
-//
-//for GPU, need to impl using Apple framework
-//
-//can design backend trait instead
-//eg
-//trait Backend { fn add(x:&Tensor, y&Tensor) -> Tensor; //other ops}
-//have a CpuBackend struct
-//MetalBackend struct
-//impl Backend trait
-//
-//can add complexity
-//
-//simpler approach is match on device
-//but i do still want to learn rust better w this
-//
-//start w few GPU ops
-//to test concept
-//eg add, matmul
-//default to CPU for any NYI
-//or raise error if attempted
-//
-//since silicon doesnt support CUDA
-//use apple compute APIs to accel ops on GPU
-//
-//few options
-//
-//Apple Metal API:
-//for ML
-//MPS: collection of high-performance GPU routine
-//eg
-//optimized kernels for malmul
-//MPSMatrixMultiply
-//convolution
-//etc
-//call these from rust using Obj-C runtime
-//crates like metal for low-level Metal
-//objc for apple frameworks
-//using MPS
-//can offload heavy ops
-//eg
-//call MPS matmul on GPU
-//setting up MTLBuffers for input tensors
-//getting result
-//
-//custom Metal compute shaders
-//write Metal compute function in Apple shading lang, similar to C
-//perform element-wise ops or custom kernels
-//in rust,
-//load shader code
-//execute on GPU w metal crate
-//to do vec add on gpu
-//write shader adding 2 arrays element wise
-//rust code would make buffers for 2 input arrays
-//one output array on GPU
-//encode compute command
-//run it
-//
-//direct Metal gives bess perf
-//complexity tradeoff
-//manage GPU and mem transfers
-//
-//init: might only impl key op or 2
-//matmul, conv
-//to see speedup
-//
-//accel/BLAS
-//
-//not GPU
-//accel framework
-//espec BLAS, vDSP libs
-//optim for Apple CPUs (neon vectorization)
-//can use Neural Engine for tasks under hood
-//can use accel for matmuls,
-//FFTs by calling C interface
-//
-//eg
-//cblas_sgemm for matmul == easy cpu perf boost
-//
-//add FFI binding:
-//
-//extern "C" {
-//  fn cblas_sgemm(order: i3d, transA: i32, transB: i32, m: i32, n: i32, k: i32, alpha: f32, A: *const f32, lda: i32, B: *const f32, ldb: i32, beta: f32, C: *mut f32, ldc: i32);
-//}
-//
-//then in Tensor::matmul for CPU
-//call func w appropriate params to mul A by B into C
-//offloads heavy math to apples optimed impl
-//using all cores and vec units
-//quick perf win on CPU
-//doesnt use GPU
-//
-//if want non-apple specific soln
-//use wgpu crate
-//rust impl of webgpu
-//
-//wgpu can target mac metal
-//vulkan on other
-//directx/opengl where appropriate
-//can write shater/compute programs in WGSL or SPIR-V
-//
-//more general, can add matmul shader, WGPU run on metal for m1, CUDA for nvidia w vulkan, etc
-//one api for all
-//can be overkill
-//
-//for my framework:
-//
-//start w key ops using MPS
-//provides high level GPU ops
-//to do GPU matmul:
-//
-//create metal device and cmd queue w metal crate
-//create mps_matrix_descriptor for input/output, allocate mps_matrix objs backed by MTLBuffers
-//create MPSMatMul kernel w appropriate dims
-//encode kernel on cmd buffer w in/out matrices, commit cmd buffer
-//after exec, read back result from output mtlbuffer in Rust Tensor
-//keep it on GPU if chaining GPU ops
-//
-//procedure wrapped inside Tensor::matmul when device == Device::GPU
-//bit code involved
-//conceptually straightforward
-//allocate GPU mem
-//call GPU kernel
-//sync results
-//
-//write some unsafe
-//use Obj-C runtime
-//
-//elem-wise ops like add, relu
-//
-//could use MPS: MPSVector, MPSUnaryImageKernel for certain ops
-//or just quickly write simple Metal compute shader string
-//compile it at runtime
-//for isntance, shader that does output[i] = input1[i] + input2[i] in parallel
-//metal crate == make library from src and compute pipeline
-//
-//provide way to move data btwn CPU and GPU
-//to_device
-//
-//eg
-//
-//tensor on CPU, call GPU op
-//should internally copy to GPU buffer
-//perform op
-//keep res on GPU perhaps
-//managing when to bring data back
-//sync is important
-//might not copy back until needed or do immediate for simplicity
-//
-//ANE:
-//not publicly accessible for custom code
-//used via coreml for inference
-//stick w metal and gpu methods
-//
-//impl and debug GPU harder than CPU
-//get CPU solid
-//progressively add GPU support
-//feature gate GPU code
-//eg
-//only compile metal-code on macOS
-//use rust conditional compilation
-//
-//start with 1 op
-//test it
-//
-//check that CPU vs GPU ive same res for some input
-//proceed to add more
-//
-//build iteratively
-//
-//first get core autograd done on CPU
-//add layers and training loop
-//train simple model: 2-layer neural net on small DS
-//entirely on CPU
-//ensures APU and autograd are correct
-//add hw accel for comp heavy parts
-//matmul, conv
-//using apple GPU
-//can fallback when not impl
-//learn internals at each stage, verify right
+// ===== Optimizers =====
+
+pub struct SGD {
+    params: Vec<Tensor>,
+    lr: f32,
+    momentum: f32,
+    velocity: Vec<Vec<f32>>,
+}
+
+impl SGD {
+    pub fn step(&mut self) {
+        for (i, param) in self.params.iter().enumerate() {
+            let mut p = param.borrow_mut();
+            if let Some(grad) = &p.grad.clone() {
+                if self.momentum > 0.0 {
+                    for (v, &g) in self.velocity[i].iter_mut().zip(grad.iter()) {
+                        *v = self.momentum * *v - self.lr * g;
+                    }
+                    for (d, &v) in p.data.iter_mut().zip(&self.velocity[i]) {
+                        *d += v;
+                    }
+                } else {
+                    for (d, &g) in p.data.iter_mut().zip(grad.iter()) {
+                        *d -= self.lr * g;
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl SGD {
+    pub fn new(params: Vec<Tensor>, lr: f32, momentum: f32) -> Self {
+        let velocity = if momentum > 0.0 {
+            params
+                .iter()
+                .map(|p| vec![0.0; p.borrow().data.len()])
+                .collect()
+        } else {
+            vec![]
+        };
+
+        SGD {
+            params,
+            lr,
+            momentum,
+            velocity,
+        }
+    }
+
+    pub fn zero_grad(&self) {
+        for param in &self.params {
+            param.borrow_mut().grad = None;
+        }
+    }
+}
+
+// ===== NN layers =====
+
+pub struct Linear {
+    weight: Tensor,
+    bias: Option<Tensor>,
+}
+
+impl Linear {
+    pub fn new(in_features: usize, out_features: usize, use_bias: bool) -> Self {
+        let w = RawTensor::randn(&[in_features, out_features]);
+        w.borrow_mut().requires_grad = true;
+        let b = if use_bias {
+            let b = RawTensor::zeros(&[out_features]);
+            b.borrow_mut().requires_grad = true;
+            Some(b)
+        } else {
+            None
+        };
+        Linear { weight: w, bias: b }
+    }
+
+    pub fn forward(&self, x: &Tensor) -> Tensor {
+        let out = x.matmul(&self.weight);
+        if let Some(b) = &self.bias {
+            out.add(b)
+        } else {
+            out
+        }
+    }
+}
+
+impl RawTensor {
+    pub fn xavier_uniform(shape: &[usize]) -> Tensor {
+        let fan_in = shape[0];
+        let fan_out = shape[1];
+        let limit = (6.0 / (fan_in + fan_out) as f32).sqrt();
+        let data: Vec<f32> = (0..fan_in * fan_out)
+            .map(|_| rand::rng().random_range(-limit..limit))
+            .collect();
+        Self::new(data, shape, false)
+    }
+}
+
+// ===== TESTS =====
 
 #[cfg(test)]
 mod tests {
@@ -914,5 +2393,707 @@ mod tests {
 
         assert_eq!(a.grad(), Some(vec![0.5, 0.5, 0.5, 0.5]));
         assert_eq!(b.grad(), Some(vec![1.0, 2.0, 3.0, 4.0]));
+    }
+}
+
+#[cfg(test)]
+mod unary_tests {
+    use super::*;
+    use approx::assert_relative_eq;
+
+    #[test]
+    fn test_neg_forward_backward() {
+        let x = RawTensor::new(vec![2.0, -3.0], &[2], true);
+        let y = x.neg();
+
+        // Forward
+        assert_eq!(y.borrow().data, vec![-2.0, 3.0]);
+
+        // Backward: ∂(-x)/∂x = -1
+        y.backward();
+        assert_eq!(x.grad(), Some(vec![-1.0, -1.0]));
+    }
+
+    #[test]
+    fn test_sqrt_chain() {
+        let x = RawTensor::new(vec![4.0], &[1], true);
+        let y = x.sqrt(); // y = 2.0
+        let z = y.elem_mul(&y); // z = 4.0
+        z.backward();
+
+        // ∂z/∂x = ∂z/∂y * ∂y/∂x = 2y * 1/(2√x) = 2*2 * 1/4 = 1.0
+        assert_relative_eq!(x.grad().unwrap()[0], 1.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn test_exp2_log2_inverse() {
+        let x = RawTensor::new(vec![2.0], &[1], true);
+        let y = x.exp2().log2(); // should recover x
+        y.backward();
+
+        assert_relative_eq!(y.borrow().data[0], 2.0, epsilon = 1e-6);
+        // Chain rule: ∂(log2(2^x))/∂x = 1
+        assert_relative_eq!(x.grad().unwrap()[0], 1.0, epsilon = 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod binary_tests {
+    use super::*;
+
+    #[test]
+    fn test_div_backward() {
+        let x = RawTensor::new(vec![6.0], &[1], true);
+        let y = RawTensor::new(vec![2.0], &[1], true);
+        let z = x.div(&y); // z = 3.0
+        z.backward();
+
+        // ∂(x/y)/∂x = 1/y = 0.5
+        assert_eq!(x.grad(), Some(vec![0.5]));
+        // ∂(x/y)/∂y = -x/y² = -6/4 = -1.5
+        assert_eq!(y.grad(), Some(vec![-1.5]));
+    }
+
+    #[test]
+    fn test_max_backward() {
+        let x = RawTensor::new(vec![3.0, 1.0], &[2], true);
+        let y = RawTensor::new(vec![2.0, 4.0], &[2], true);
+        let z = x.max_elem(&y);
+        let loss = z.sum();
+        loss.backward();
+
+        // max picks [3.0, 4.0], so grads flow to x[0] and y[1]
+        assert_eq!(x.grad(), Some(vec![1.0, 0.0]));
+        assert_eq!(y.grad(), Some(vec![0.0, 1.0]));
+    }
+}
+
+#[cfg(test)]
+mod reduce_tests {
+    use super::*;
+
+    #[test]
+    fn test_reduce_max_backward() {
+        let x = RawTensor::new(vec![1.0, 5.0, 3.0], &[3], true);
+        let y = x.max_reduce(); // finds 5.0 at index 1
+        y.backward();
+
+        // Only max element gets gradient
+        assert_eq!(x.grad(), Some(vec![0.0, 1.0, 0.0]));
+    }
+}
+
+#[cfg(test)]
+mod ternary_tests {
+    use super::*;
+
+    #[test]
+    fn test_mulacc_backward() {
+        // z = x*y + w
+        let x = RawTensor::new(vec![2.0], &[1], true);
+        let y = RawTensor::new(vec![3.0], &[1], true);
+        let w = RawTensor::new(vec![1.0], &[1], true);
+        let z = x.mulacc(&y, &w); // z = 7.0
+        z.backward();
+
+        assert_eq!(x.grad(), Some(vec![3.0])); // ∂z/∂x = y
+        assert_eq!(y.grad(), Some(vec![2.0])); // ∂z/∂y = x
+        assert_eq!(w.grad(), Some(vec![1.0])); // ∂z/∂w = 1
+    }
+
+    #[test]
+    fn test_where_backward() {
+        let cond = RawTensor::new(vec![1.0, 0.0], &[2], false);
+        let x = RawTensor::new(vec![10.0, 20.0], &[2], true);
+        let y = RawTensor::new(vec![30.0, 40.0], &[2], true);
+        let z = cond.where_op(&x, &y); // picks [10.0, 40.0]
+        z.backward();
+
+        assert_eq!(x.grad(), Some(vec![1.0, 0.0])); // grad flows where cond=1
+        assert_eq!(y.grad(), Some(vec![0.0, 1.0])); // grad flows where cond=0
+    }
+}
+
+#[cfg(test)]
+mod movement_tests {
+    use super::*;
+
+    #[test]
+    fn test_reshape_backward() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], true);
+        let y = x.reshape(&[2, 2]);
+        let loss = y.sum();
+        loss.backward();
+
+        // Gradient reshapes back to [4]
+        assert_eq!(x.grad(), Some(vec![1.0, 1.0, 1.0, 1.0]));
+    }
+
+    #[test]
+    fn test_permute_backward() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], true);
+        let y = x.permute(&[1, 0]); // transpose
+        let loss = y.sum();
+        loss.backward();
+
+        // Gradient permutes back
+        assert_eq!(x.grad(), Some(vec![1.0, 1.0, 1.0, 1.0]));
+    }
+}
+
+#[cfg(test)]
+mod misc_tests {
+    use super::*;
+    // ===== NEURAL NETWORK LAYER TEST =====
+
+    #[test]
+    fn test_linear_layer() {
+        // Simple linear layer: y = xW + b
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0], &[1, 3], true);
+        let w = RawTensor::new(vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6], &[3, 2], true);
+        let b = RawTensor::new(vec![0.1, 0.2], &[1, 2], true);
+
+        let y = x.matmul(&w); // [1,3] @ [3,2] = [1,2]
+        let out = y.add(&b);
+        let loss = out.sum();
+
+        loss.backward();
+
+        // All should have gradients
+        assert!(x.grad().is_some());
+        assert!(w.grad().is_some());
+        assert!(b.grad().is_some());
+
+        // b gradient should be ones (direct path from sum)
+        assert_eq!(b.grad(), Some(vec![1.0, 1.0]));
+    }
+
+    // ===== BROADCASTING TESTS =====
+
+    #[test]
+    fn test_broadcast_shape() {
+        // (3, 1) and (1, 4) -> (3, 4)
+        let shape = RawTensor::broadcast_shape(&[3, 1], &[1, 4]);
+        assert_eq!(shape, vec![3, 4]);
+
+        // (5, 3, 1) and (1, 4) -> (5, 3, 4)
+        let shape = RawTensor::broadcast_shape(&[5, 3, 1], &[1, 4]);
+        assert_eq!(shape, vec![5, 3, 4]);
+
+        // (1,) and (3, 4) -> (3, 4)
+        let shape = RawTensor::broadcast_shape(&[1], &[3, 4]);
+        assert_eq!(shape, vec![3, 4]);
+
+        // (3, 4) and (4,) -> (3, 4)
+        let shape = RawTensor::broadcast_shape(&[3, 4], &[4]);
+        assert_eq!(shape, vec![3, 4]);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot broadcast")]
+    fn test_broadcast_incompatible() {
+        RawTensor::broadcast_shape(&[3, 2], &[4, 3]);
+    }
+
+    #[test]
+    fn test_broadcast_add_scalar() {
+        // (2, 3) + scalar -> (2, 3)
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], true);
+        let scalar = RawTensor::new(vec![10.0], &[1], true);
+        let y = x.add(&scalar);
+
+        assert_eq!(y.borrow().shape, vec![2, 3]);
+        assert_eq!(y.borrow().data, vec![11.0, 12.0, 13.0, 14.0, 15.0, 16.0]);
+
+        y.backward();
+
+        // x gradient: all ones
+        assert_eq!(x.grad(), Some(vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0]));
+        // scalar gradient: sum of all gradients = 6.0
+        assert_eq!(scalar.grad(), Some(vec![6.0]));
+    }
+
+    #[test]
+    fn test_broadcast_mul_vector() {
+        // (2, 3) * (3,) -> (2, 3)
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], true);
+        let v = RawTensor::new(vec![2.0, 3.0, 4.0], &[3], true);
+        let y = x.elem_mul(&v);
+
+        assert_eq!(y.borrow().shape, vec![2, 3]);
+        assert_eq!(y.borrow().data, vec![2.0, 6.0, 12.0, 8.0, 15.0, 24.0]);
+
+        y.backward();
+
+        // x gradient: broadcast v
+        assert_eq!(x.grad(), Some(vec![2.0, 3.0, 4.0, 2.0, 3.0, 4.0]));
+        // v gradient: sum over rows
+        assert_eq!(v.grad(), Some(vec![5.0, 7.0, 9.0])); // [1+4, 2+5, 3+6]
+    }
+
+    #[test]
+    fn test_broadcast_add_matrix() {
+        // (2, 1) + (1, 3) -> (2, 3)
+        let x = RawTensor::new(vec![1.0, 2.0], &[2, 1], true);
+        let y = RawTensor::new(vec![10.0, 20.0, 30.0], &[1, 3], true);
+        let z = x.add(&y);
+
+        assert_eq!(z.borrow().shape, vec![2, 3]);
+        assert_eq!(z.borrow().data, vec![11.0, 21.0, 31.0, 12.0, 22.0, 32.0]);
+
+        z.backward();
+
+        // x gradient: sum over columns -> [3.0, 3.0]
+        assert_eq!(x.grad(), Some(vec![3.0, 3.0]));
+        // y gradient: sum over rows -> [2.0, 2.0, 2.0]
+        assert_eq!(y.grad(), Some(vec![2.0, 2.0, 2.0]));
+    }
+
+    #[test]
+    fn test_broadcast_batch_bias() {
+        // Simulate batch with bias: (batch=3, features=2) + (features=2,)
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[3, 2], true);
+        let bias = RawTensor::new(vec![0.5, 1.0], &[2], true);
+        let y = x.add(&bias);
+
+        assert_eq!(y.borrow().shape, vec![3, 2]);
+        assert_eq!(y.borrow().data, vec![1.5, 3.0, 3.5, 5.0, 5.5, 7.0]);
+
+        let loss = y.sum();
+        loss.backward();
+
+        // x gradient: all ones
+        assert_eq!(x.grad(), Some(vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0]));
+        // bias gradient: sum over batch -> [3.0, 3.0]
+        assert_eq!(bias.grad(), Some(vec![3.0, 3.0]));
+    }
+
+    #[test]
+    fn test_broadcast_div() {
+        // (2, 3) / (1, 3) -> (2, 3)
+        let x = RawTensor::new(vec![2.0, 4.0, 6.0, 8.0, 10.0, 12.0], &[2, 3], true);
+        let y = RawTensor::new(vec![2.0, 2.0, 2.0], &[1, 3], true);
+        let z = x.div(&y);
+
+        assert_eq!(z.borrow().shape, vec![2, 3]);
+        assert_eq!(z.borrow().data, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+
+        z.backward();
+
+        // x gradient: 1/y broadcast
+        assert_eq!(x.grad(), Some(vec![0.5, 0.5, 0.5, 0.5, 0.5, 0.5]));
+        // y gradient: sum(-x/y²) over rows
+        // -2/4=-0.5, -4/4=-1.0, -6/4=-1.5 (row 1)
+        // -8/4=-2.0, -10/4=-2.5, -12/4=-3.0 (row 2)
+        // sum: [-2.5, -3.5, -4.5]
+        assert_eq!(y.grad(), Some(vec![-2.5, -3.5, -4.5]));
+    }
+
+    #[test] //failing rn, adds 10 to the second half when should be adding 20
+    fn test_broadcast_3d() {
+        // (1, 2, 3) + (2, 1) -> (1, 2, 3) but will broadcast to match
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[1, 2, 3], true);
+        let y = RawTensor::new(vec![10.0, 20.0], &[2, 1], true);
+        let z = x.add(&y);
+
+        assert_eq!(z.borrow().shape, vec![1, 2, 3]);
+        // Row 0: [1,2,3] + 10 = [11,12,13]
+        // Row 1: [4,5,6] + 20 = [24,25,26]
+        assert_eq!(z.borrow().data, vec![11.0, 12.0, 13.0, 24.0, 25.0, 26.0]);
+
+        z.backward();
+
+        // x gradient: all ones
+        assert_eq!(x.grad(), Some(vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0]));
+        // y gradient: sum over last dimension -> [3.0, 3.0]
+        assert_eq!(y.grad(), Some(vec![3.0, 3.0]));
+    }
+
+    #[test]
+    fn test_broadcast_max() {
+        // (2, 3) max (3,) -> (2, 3)
+        let x = RawTensor::new(vec![1.0, 5.0, 3.0, 4.0, 2.0, 6.0], &[2, 3], true);
+        let y = RawTensor::new(vec![2.0, 3.0, 4.0], &[3], true);
+        let z = x.max_elem(&y);
+
+        assert_eq!(z.borrow().shape, vec![2, 3]);
+        // [max(1,2), max(5,3), max(3,4)] = [2,5,4]
+        // [max(4,2), max(2,3), max(6,4)] = [4,3,6]
+        assert_eq!(z.borrow().data, vec![2.0, 5.0, 4.0, 4.0, 3.0, 6.0]);
+
+        z.backward();
+
+        // Gradient flows to max elements
+        // x: [0, 1, 0, 1, 0, 1] (x wins at indices 1, 3, 5)
+        assert_eq!(x.grad(), Some(vec![0.0, 1.0, 0.0, 1.0, 0.0, 1.0]));
+        // y: sum over rows where y wins
+        // y[0] wins at (0,0): 1
+        // y[1] wins at (1,1): 1
+        // y[2] wins at (0,2): 1
+        // Total: [1, 1, 1]
+        assert_eq!(y.grad(), Some(vec![1.0, 1.0, 1.0]));
+    }
+
+    #[test]
+    fn test_broadcast_bias_add() {
+        // Common pattern: batch matmul + bias
+        // (batch=2, in=3) @ (3, 4) + (4,) -> (2, 4)
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], true);
+        let w = RawTensor::new(
+            vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2],
+            &[3, 4],
+            true,
+        );
+        let b = RawTensor::new(vec![0.01, 0.02, 0.03, 0.04], &[4], true);
+
+        let y = x.matmul(&w);
+        let z = y.add(&b); // Broadcasting happens here
+        let loss = z.sum();
+
+        loss.backward();
+
+        // All should have gradients
+        assert!(x.grad().is_some());
+        assert!(w.grad().is_some());
+        assert!(b.grad().is_some());
+
+        // Bias gradient should be [batch_size, batch_size, ...]
+        // Sum over batch dimension -> [2, 2, 2, 2]
+        assert_eq!(b.grad(), Some(vec![2.0, 2.0, 2.0, 2.0]));
+    }
+
+    #[test]
+    fn test_matmul_matrix_vector_backward() {
+        // (m,n) @ (n,) -> (m,)
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[3, 2], true);
+        let v = RawTensor::new(vec![0.5, -1.0], &[2], true);
+
+        // z = X @ v
+        let z = x.matmul(&v);
+        // loss = sum(z) => ∂L/∂z = 1
+        let loss = z.sum();
+        loss.backward();
+
+        // ∂L/∂X = outer(ones(m), v) = repeat v on each row
+        assert_eq!(x.grad(), Some(vec![0.5, -1.0, 0.5, -1.0, 0.5, -1.0]));
+        // ∂L/∂v = X^T @ ones(m) = column sums of X
+        // sums: col0 = 1+3+5 = 9, col1 = 2+4+6 = 12
+        assert_eq!(v.grad(), Some(vec![9.0, 12.0]));
+    }
+
+    #[test]
+    fn test_dot_backward() {
+        // (n,) @ (n,) -> scalar
+        let a = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], true);
+        let b = RawTensor::new(vec![4.0, 5.0, 6.0], &[3], true);
+
+        // loss = a · b = 1*4 + 2*5 + 3*6 = 32
+        let loss = a.matmul(&b);
+        loss.backward();
+
+        // ∂L/∂a = b
+        assert_eq!(a.grad(), Some(vec![4.0, 5.0, 6.0]));
+        // ∂L/∂b = a
+        assert_eq!(b.grad(), Some(vec![1.0, 2.0, 3.0]));
+    }
+
+    #[test]
+    fn test_gradcheck_matrix_vector_matmul() {
+        // Check gradients numerically for X in (m,n) @ (n,)
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], true);
+        let v = RawTensor::new(vec![0.3, -0.7], &[2], false);
+        let passed = RawTensor::check_gradients_simple(&x, |t| t.matmul(&v).sum());
+        assert!(passed, "Matrix-vector matmul gradient check failed");
+    }
+
+    #[test]
+    fn test_broadcast_sub() {
+        // Test that sub also broadcasts correctly
+        let x = RawTensor::new(vec![5.0, 6.0, 7.0, 8.0], &[2, 2], true);
+        let y = RawTensor::new(vec![1.0, 2.0], &[2], true);
+        let z = x.sub(&y);
+
+        assert_eq!(z.borrow().shape, vec![2, 2]);
+        assert_eq!(z.borrow().data, vec![4.0, 4.0, 6.0, 6.0]);
+
+        z.backward();
+
+        assert_eq!(x.grad(), Some(vec![1.0, 1.0, 1.0, 1.0]));
+        // Sub gradient for y is negative and summed
+        assert_eq!(y.grad(), Some(vec![-2.0, -2.0]));
+    }
+
+    // ===== NUMERICAL GRADIENT CHECKING TESTS =====
+
+    #[test]
+    fn test_gradcheck_unary_ops() {
+        // Test sqrt gradient
+        let x = RawTensor::new(vec![4.0, 9.0, 16.0], &[3], true);
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let y = t.sqrt();
+            y.sum()
+        });
+        assert!(passed, "Sqrt gradient check failed");
+
+        // Test sin gradient
+        let x = RawTensor::new(vec![0.5, 1.0, 1.5], &[3], true);
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let y = t.sin();
+            y.sum()
+        });
+        assert!(passed, "Sin gradient check failed");
+
+        // Test sigmoid gradient
+        let x = RawTensor::new(vec![0.0, 1.0, -1.0], &[3], true);
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let y = t.sigmoid();
+            y.sum()
+        });
+        assert!(passed, "Sigmoid gradient check failed");
+    }
+
+    #[test]
+    fn test_gradcheck_binary_ops() {
+        // Test add gradient
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], true);
+        let y = RawTensor::new(vec![4.0, 5.0, 6.0], &[3], false);
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let z = t.add(&y);
+            z.sum()
+        });
+        assert!(passed, "Add gradient check failed");
+
+        // Test mul gradient
+        let x = RawTensor::new(vec![2.0, 3.0], &[2], true);
+        let y = RawTensor::new(vec![4.0, 5.0], &[2], false);
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let z = t.elem_mul(&y);
+            z.sum()
+        });
+        assert!(passed, "Mul gradient check failed");
+
+        // Test div gradient
+        let x = RawTensor::new(vec![6.0, 8.0], &[2], true);
+        let y = RawTensor::new(vec![2.0, 4.0], &[2], false);
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let z = t.div(&y);
+            z.sum()
+        });
+        assert!(passed, "Div gradient check failed");
+    }
+
+    #[test]
+    fn test_gradcheck_matmul() {
+        // Test matmul gradient for first operand
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], true);
+        let w = RawTensor::new(
+            vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+            &[3, 3],
+            false,
+        );
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let y = t.matmul(&w);
+            y.sum()
+        });
+        assert!(passed, "Matmul gradient check failed");
+    }
+
+    #[test]
+    fn test_gradcheck_broadcast() {
+        // Test broadcasting gradient
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], true);
+        let y = RawTensor::new(vec![0.5], &[1], false);
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let z = t.elem_mul(&y);
+            z.sum()
+        });
+        assert!(passed, "Broadcast gradient check failed");
+
+        // Test with matrix broadcast
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], true);
+        let y = RawTensor::new(vec![0.5, 1.0], &[2], false);
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let z = t.add(&y);
+            z.sum()
+        });
+        assert!(passed, "Matrix broadcast gradient check failed");
+    }
+
+    #[test]
+    fn test_gradcheck_movement_ops() {
+        // Test reshape gradient
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], true);
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let y = t.reshape(&[2, 2]);
+            y.sum()
+        });
+        assert!(passed, "Reshape gradient check failed");
+
+        // Test permute gradient
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], true);
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let y = t.permute(&[1, 0]);
+            y.sum()
+        });
+        assert!(passed, "Permute gradient check failed");
+
+        // Test pad gradient
+        let x = RawTensor::new(vec![1.0, 2.0], &[2], true);
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let y = t.pad(&[(1, 1)]);
+            y.sum()
+        });
+        assert!(passed, "Pad gradient check failed");
+
+        // Test shrink gradient
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], true);
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let y = t.shrink(&[(1, 3)]);
+            y.sum()
+        });
+        assert!(passed, "Shrink gradient check failed");
+    }
+
+    #[test]
+    fn test_gradcheck_reduce_ops() {
+        // Test mean gradient
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], true);
+        let passed = RawTensor::check_gradients_simple(&x, |t| t.mean());
+        assert!(passed, "Mean gradient check failed");
+
+        // Test max gradient (more challenging due to discontinuity)
+        let x = RawTensor::new(vec![1.0, 5.0, 3.0, 2.0], &[4], true);
+        let passed = RawTensor::check_gradients_simple(&x, |t| t.max_reduce());
+        assert!(passed, "Max gradient check failed");
+    }
+
+    #[test]
+    fn test_gradcheck_ternary_ops() {
+        // Test mulacc gradient
+        let x = RawTensor::new(vec![1.0, 2.0], &[2], true);
+        let y = RawTensor::new(vec![3.0, 4.0], &[2], false);
+        let z = RawTensor::new(vec![0.5, 1.0], &[2], false);
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let out = t.mulacc(&y, &z);
+            out.sum()
+        });
+        assert!(passed, "MulAcc gradient check failed");
+    }
+
+    #[test]
+    fn test_gradcheck_complex_chain() {
+        // Test complex computation graph
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], true);
+        let w = RawTensor::new(vec![0.5, 1.0, 1.5], &[3], false);
+
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            // y = sigmoid(x * w)
+            let prod = t.elem_mul(&w);
+            let y = prod.sigmoid();
+            y.sum()
+        });
+        assert!(passed, "Complex chain gradient check failed");
+    }
+
+    #[test]
+    fn test_gradcheck_neural_network_layer() {
+        // Test full linear layer: y = xW + b
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0], &[1, 3], true);
+        let w = RawTensor::new(vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6], &[3, 2], false);
+        let b = RawTensor::new(vec![0.1, 0.2], &[2], false);
+
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let y = t.matmul(&w);
+            let z = y.add(&b);
+            z.sum()
+        });
+        assert!(passed, "Neural network layer gradient check failed");
+    }
+
+    #[test]
+    fn test_gradcheck_with_tolerance() {
+        // Test with custom epsilon and tolerance
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], true);
+
+        let (max_err, mean_err, passed) = RawTensor::check_gradients(
+            &x,
+            |t| {
+                let y = t.relu();
+                y.sum()
+            },
+            1e-5, // smaller epsilon
+            1e-2, // larger tolerance (ReLU has discontinuity at 0)
+        );
+
+        assert!(passed, "Custom tolerance gradient check failed");
+        println!(
+            "ReLU gradcheck: max_err={:.6e}, mean_err={:.6e}",
+            max_err, mean_err
+        );
+    }
+
+    #[test]
+    fn test_gradcheck_multidim() {
+        // Test with 2D tensors
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], true);
+
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let y = t.sqrt();
+            let z = y.elem_mul(t);
+            z.sum()
+        });
+        assert!(passed, "Multidim gradient check failed");
+    }
+
+    #[test]
+    fn test_gradcheck_expand() {
+        let x = RawTensor::new(vec![1.0, 2.0], &[2, 1], true);
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let y = t.expand(&[2, 3]);
+            y.sum()
+        });
+        assert!(passed, "Expand gradient check failed");
+    }
+
+    #[test]
+    fn test_gradcheck_pad() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], true);
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let y = t.pad(&[(1, 1)]);
+            y.sum()
+        });
+        assert!(passed, "Pad gradient check failed");
+    }
+
+    #[test]
+    fn test_gradcheck_shrink() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0], &[5], true);
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let y = t.shrink(&[(1, 4)]);
+            y.sum()
+        });
+        assert!(passed, "Shrink gradient check failed");
+    }
+
+    #[test]
+    fn test_gradcheck_stride() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[6], true);
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let y = t.stride_op(&[2]);
+            y.sum()
+        });
+        assert!(passed, "Stride gradient check failed");
+    }
+
+    #[test]
+    fn test_gradcheck_matmul_vec() {
+        // vec-mat: (n,) @ (n,p) -> (p,)
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], true);
+        let w = RawTensor::new(vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6], &[3, 2], false);
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let y = t.matmul(&w);
+            y.sum()
+        });
+        assert!(passed, "Vec-mat matmul gradient check failed");
     }
 }
