@@ -2302,43 +2302,62 @@ impl RawTensor {
     /// Raw matrix multiplication: (m,k) @ (k,n) -> (m,n)
     /// Uses naive O(mnk) algorithm. For production, use optimized BLAS.
     fn matmul_raw(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
-        // #[cfg(feature = "accelerate")]
-        // {
-        //     use cblas_sys::*;
-        //     let mut result = vec![0.0; m * n];
-        //     unsafe {
-        //         cblas_sgemm(
-        //             cblas::Layout::RowMajor,
-        //             cblas::Transpose::None,
-        //             cblas::Transpose::None,
-        //             m as i32,
-        //             n as i32,
-        //             k as i32,
-        //             1.0,
-        //             a.as_ptr(),
-        //             k as i32,
-        //             b.as_ptr(),
-        //             n as i32,
-        //             0.0,
-        //             result.as_mut_ptr(),
-        //             n as i32,
-        //         );
-        //     }
-        //     result
-        // }
-        // #[cfg(not(feature = "accelerate"))]
-        // { below }
-        let mut result = vec![0.0; m * n];
-        for i in 0..m {
-            for j in 0..n {
-                let mut sum = 0.0;
-                for p in 0..k {
-                    sum += a[i * k + p] * b[p * n + j];
-                }
-                result[i * n + j] = sum;
+        #[cfg(all(feature = "accelerate", target_os = "macos"))]
+        {
+            unsafe extern "C" {
+                fn cblas_sgemm(
+                    layout: i32,
+                    trans_a: i32,
+                    trans_b: i32,
+                    m: i32,
+                    n: i32,
+                    k: i32,
+                    alpha: f32,
+                    a: *const f32,
+                    lda: i32,
+                    b: *const f32,
+                    ldb: i32,
+                    beta: f32,
+                    c: *mut f32,
+                    ldc: i32,
+                );
             }
+
+            let mut result = vec![0.0; m * n];
+            unsafe {
+                cblas_sgemm(
+                    101, // CblasRowMajor
+                    111, // CblasNoTrans
+                    111, // CblasNoTrans
+                    m as i32,
+                    n as i32,
+                    k as i32,
+                    1.0,
+                    a.as_ptr(),
+                    k as i32,
+                    b.as_ptr(),
+                    n as i32,
+                    0.0,
+                    result.as_mut_ptr(),
+                    n as i32,
+                );
+            }
+            result
         }
-        result
+        #[cfg(not(all(feature = "accelerate", target_os = "macos")))]
+        {
+            let mut result = vec![0.0; m * n];
+            for i in 0..m {
+                for j in 0..n {
+                    let mut sum = 0.0;
+                    for p in 0..k {
+                        sum += a[i * k + p] * b[p * n + j];
+                    }
+                    result[i * n + j] = sum;
+                }
+            }
+            result
+        }
     }
 
     /// Matrix multiplication with multiple cases
@@ -4249,6 +4268,33 @@ mod misc_tests {
 
             println!("Epoch {} complete", epoch);
         }
+    }
+    #[test]
+    fn bench_matmul_speedup() {
+        use std::time::Instant;
+
+        let a = vec![1.0; 256 * 256];
+        let b = vec![1.0; 256 * 256];
+
+        let start = Instant::now();
+        let _ = RawTensor::matmul_raw(&a, &b, 256, 256, 256);
+        let duration = start.elapsed();
+
+        println!("256x256 matmul: {:?}", duration);
+
+        #[cfg(feature = "accelerate")]
+        assert!(
+            duration.as_millis() < 10,
+            "BLAS should be <10ms, got {:?}",
+            duration
+        );
+
+        #[cfg(not(feature = "accelerate"))]
+        assert!(
+            duration.as_millis() > 50,
+            "Naive should be >50ms, got {:?}",
+            duration
+        );
     }
 }
 
