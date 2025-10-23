@@ -211,19 +211,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "torch-from-scratch"
-version = "0.1.0"
-dependencies = [
- "approx",
- "bincode",
- "blas-src",
- "cblas-sys",
- "rand",
- "rand_distr",
- "serde_derive",
-]
-
-[[package]]
 name = "unicode-ident"
 version = "1.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -240,6 +227,18 @@ name = "virtue"
 version = "0.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "051eb1abcf10076295e815102942cc58f9d5e3b4560e46e53c21e8ff6f3af7b1"
+
+[[package]]
+name = "volta"
+version = "0.1.0"
+dependencies = [
+ "approx",
+ "bincode",
+ "blas-src",
+ "cblas-sys",
+ "rand",
+ "rand_distr",
+]
 
 [[package]]
 name = "wasip2"

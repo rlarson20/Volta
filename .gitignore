@@ -2,6 +2,7 @@
 
 references/*
 *.md
+*.txt
 !README.md
 
 .bacon-locations

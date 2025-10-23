@@ -13,8 +13,6 @@
 //   - **API Ergonomics:** The `Rc<RefCell<RawTensor>>` pattern is simple but verbose. As the API grows, managing borrows and `_mut` calls can become cumbersome. A future refactor might explore a more ergonomic API, but this risks significant breaking changes. For now, correctness is paramount.
 
 // TODO:
-// 1. **Implement Module trait and Sequential container** - This will enable building multi-layer networks
-// 2. **Add loss functions (MSE, CrossEntropy)** - Essential for training
 // 3. **Improve optimizer with weight decay and other SGD variants** - More training options
 //
 // **Risky areas:**
