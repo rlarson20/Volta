@@ -1124,6 +1124,7 @@ impl std::fmt::Debug for RawTensor {
             .finish()
     }
 }
+
 // ===== TENSOR CONSTRUCTORS =====
 impl RawTensor {
     /// Create a new tensor from data and shape
@@ -1183,6 +1184,7 @@ impl RawTensor {
 impl RawTensor {
     /* methods for props: tensor.shape(), tensor.num_elements(), etc */
 }
+
 // ===== UNARY OPERATIONS =====
 impl RawTensor {
     /// Apply a unary operation element-wise
@@ -1558,7 +1560,7 @@ impl RawTensor {
     }
 }
 
-// ===== SOFTMAX & AXIS REDUCTIONS =====  // <-- NEW SECTION HERE
+// ===== SOFTMAX & AXIS REDUCTIONS =====
 impl RawTensor {
     /// Sum along a specific axis
     ///
@@ -2300,6 +2302,32 @@ impl RawTensor {
     /// Raw matrix multiplication: (m,k) @ (k,n) -> (m,n)
     /// Uses naive O(mnk) algorithm. For production, use optimized BLAS.
     fn matmul_raw(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
+        // #[cfg(feature = "accelerate")]
+        // {
+        //     use cblas_sys::*;
+        //     let mut result = vec![0.0; m * n];
+        //     unsafe {
+        //         cblas_sgemm(
+        //             cblas::Layout::RowMajor,
+        //             cblas::Transpose::None,
+        //             cblas::Transpose::None,
+        //             m as i32,
+        //             n as i32,
+        //             k as i32,
+        //             1.0,
+        //             a.as_ptr(),
+        //             k as i32,
+        //             b.as_ptr(),
+        //             n as i32,
+        //             0.0,
+        //             result.as_mut_ptr(),
+        //             n as i32,
+        //         );
+        //     }
+        //     result
+        // }
+        // #[cfg(not(feature = "accelerate"))]
+        // { below }
         let mut result = vec![0.0; m * n];
         for i in 0..m {
             for j in 0..n {
@@ -2865,8 +2893,32 @@ impl Sequential {
     }
 }
 
+// Usage example
+#[allow(dead_code)]
+impl Sequential {
+    fn build_mlp(input_dim: usize, hidden_dim: usize, output_dim: usize) -> Sequential {
+        Sequential::new(vec![
+            Box::new(Linear::new(input_dim, hidden_dim, true)),
+            Box::new(ReLU),
+            Box::new(Linear::new(hidden_dim, output_dim, true)),
+        ])
+    }
+}
+
 pub struct Sequential {
     layers: Vec<Box<dyn Module>>,
+}
+
+pub struct ReLU;
+
+impl Module for ReLU {
+    fn forward(&self, x: &Tensor) -> Tensor {
+        x.relu()
+    }
+
+    fn parameters(&self) -> Vec<Tensor> {
+        vec![] // No learnable params
+    }
 }
 
 // ===== OPTIMIZERS =====
@@ -3014,6 +3066,8 @@ impl Adam {
     }
 }
 
+//TODO: implement Muon
+
 // ===== NEURAL NETWORK LAYERS =====
 
 /// Fully-connected (dense/linear) layer
@@ -3044,7 +3098,7 @@ impl Linear {
     /// Uses randn (normal distribution) for weights. For better initialization,
     /// consider using Xavier/He initialization.
     pub fn new(in_features: usize, out_features: usize, use_bias: bool) -> Self {
-        let w = RawTensor::randn(&[in_features, out_features]);
+        let w = RawTensor::xavier_uniform(&[in_features, out_features]);
         w.borrow_mut().requires_grad = true;
         let b = if use_bias {
             let b = RawTensor::zeros(&[out_features]);
@@ -3082,6 +3136,100 @@ impl RawTensor {
             .map(|_| rand::rng().random_range(-limit..limit))
             .collect();
         Self::new(data, shape, false)
+    }
+}
+
+// ===== DataLoaders =====
+
+pub struct DataLoader {
+    data: Vec<f32>,
+    targets: Vec<f32>,
+    data_shape: Vec<usize>, // per-sample shape
+    target_shape: Vec<usize>,
+    batch_size: usize,
+    shuffle: bool,
+    indices: Vec<usize>,
+    current: usize,
+}
+
+impl DataLoader {
+    pub fn new(
+        data: Vec<f32>,
+        targets: Vec<f32>,
+        data_shape: &[usize],   // e.g., [28, 28] for MNIST
+        target_shape: &[usize], // e.g., [10] for one-hot
+        batch_size: usize,
+        shuffle: bool,
+    ) -> Self {
+        let num_samples = data.len() / data_shape.iter().product::<usize>();
+        let mut indices: Vec<usize> = (0..num_samples).collect();
+
+        if shuffle {
+            use rand::seq::SliceRandom;
+            indices.shuffle(&mut rand::rng());
+        }
+
+        DataLoader {
+            data,
+            targets,
+            data_shape: data_shape.to_vec(),
+            target_shape: target_shape.to_vec(),
+            batch_size,
+            shuffle,
+            indices,
+            current: 0,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.current = 0;
+        if self.shuffle {
+            use rand::seq::SliceRandom;
+            self.indices.shuffle(&mut rand::rng());
+        }
+    }
+}
+
+impl Iterator for DataLoader {
+    type Item = (Tensor, Tensor);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current >= self.indices.len() {
+            return None;
+        }
+
+        let end = (self.current + self.batch_size).min(self.indices.len());
+        let batch_indices = &self.indices[self.current..end];
+        let actual_batch = batch_indices.len();
+
+        let sample_size: usize = self.data_shape.iter().product();
+        let target_size: usize = self.target_shape.iter().product();
+
+        // Gather batch
+        let mut batch_data = Vec::with_capacity(actual_batch * sample_size);
+        let mut batch_targets = Vec::with_capacity(actual_batch * target_size);
+
+        for &idx in batch_indices {
+            let data_start = idx * sample_size;
+            let target_start = idx * target_size;
+
+            batch_data.extend_from_slice(&self.data[data_start..data_start + sample_size]);
+            batch_targets
+                .extend_from_slice(&self.targets[target_start..target_start + target_size]);
+        }
+
+        self.current = end;
+
+        let mut batch_shape = vec![actual_batch];
+        batch_shape.extend_from_slice(&self.data_shape);
+
+        let mut target_batch_shape = vec![actual_batch];
+        target_batch_shape.extend_from_slice(&self.target_shape);
+
+        Some((
+            RawTensor::new(batch_data, &batch_shape, false),
+            RawTensor::new(batch_targets, &target_batch_shape, false),
+        ))
     }
 }
 
@@ -3852,6 +4000,255 @@ mod misc_tests {
             y.sum()
         });
         assert!(passed, "Vec-mat matmul gradient check failed");
+    }
+    #[test]
+    fn test_broadcast_3d_fix() {
+        // (2,1) broadcasted with (1,2,3) -> (1,2,3)
+        let x = RawTensor::new(vec![10.0, 20.0], &[2, 1], true);
+        let y = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[1, 2, 3], true);
+        let z = x.add(&y);
+
+        assert_eq!(z.borrow().shape, vec![1, 2, 3]);
+        // Row 0: [1,2,3] + 10 = [11,12,13]
+        // Row 1: [4,5,6] + 20 = [24,25,26]
+        assert_eq!(z.borrow().data, vec![11.0, 12.0, 13.0, 24.0, 25.0, 26.0]);
+
+        z.backward();
+        assert_eq!(x.grad(), Some(vec![3.0, 3.0])); // sum over last dim
+        assert_eq!(y.grad(), Some(vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0]));
+    }
+
+    #[test]
+    fn test_broadcast_batch_channels() {
+        // Typical conv bias: (B,C,H,W) + (C,1,1) -> (B,C,H,W)
+        let x = RawTensor::new((0..16).map(|i| i as f32).collect(), &[2, 2, 2, 2], true);
+        let bias = RawTensor::new(vec![0.1, 0.2], &[2, 1, 1], true);
+        let z = x.add(&bias);
+
+        assert_eq!(z.borrow().shape, vec![2, 2, 2, 2]);
+        let loss = z.sum();
+        loss.backward();
+
+        // Bias grad should sum over B,H,W -> [8.0, 8.0]
+        assert_eq!(bias.grad(), Some(vec![8.0, 8.0]));
+    }
+
+    #[test]
+    fn test_gradcheck_broadcast_3d() {
+        let x = RawTensor::new(vec![1.0, 2.0], &[2, 1], true);
+        let y = RawTensor::new(vec![0.5; 6], &[1, 2, 3], false);
+        let passed = RawTensor::check_gradients_simple(&x, |t| t.add(&y).sum());
+        assert!(passed, "3D broadcast gradcheck failed");
+    }
+    #[test]
+    fn test_sequential_forward() {
+        let model = Sequential::new(vec![
+            Box::new(Linear::new(3, 4, true)),
+            Box::new(ReLU),
+            Box::new(Linear::new(4, 2, true)),
+        ]);
+
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0], &[1, 3], true);
+        let y = model.forward(&x);
+
+        assert_eq!(y.borrow().shape, vec![1, 2]);
+
+        let loss = y.sum();
+        loss.backward();
+
+        // All layer params should have gradients
+        for param in model.parameters() {
+            assert!(param.grad().is_some(), "Missing gradient");
+        }
+    }
+
+    #[test]
+    fn test_sequential_zero_grad() {
+        let mut model = Sequential::new(vec![Box::new(Linear::new(2, 3, true))]);
+
+        let x = RawTensor::new(vec![1.0, 2.0], &[1, 2], true);
+        model.forward(&x).sum().backward();
+
+        // Params have grads
+        assert!(model.parameters()[0].grad().is_some());
+
+        model.zero_grad();
+
+        // Grads cleared
+        for p in model.parameters() {
+            assert!(p.grad().is_none());
+        }
+    }
+    #[test]
+    fn test_adam_converges_faster() {
+        // Synthetic dataset: learn XOR-like function
+        // Inputs: 4 samples, 2 features
+        let x_data = vec![
+            0.0, 0.0, // -> 0
+            0.0, 1.0, // -> 1
+            1.0, 0.0, // -> 1
+            1.0, 1.0, // -> 0
+        ];
+        let x = RawTensor::new(x_data, &[4, 2], false);
+
+        let y_data = vec![0.0, 1.0, 1.0, 0.0];
+        let y = RawTensor::new(y_data, &[4], false);
+
+        // Model: 2 -> 4 -> 1
+        let model = Sequential::new(vec![
+            Box::new(Linear::new(2, 4, true)),
+            Box::new(ReLU),
+            Box::new(Linear::new(4, 1, true)),
+        ]);
+
+        let params = model.parameters();
+        let mut opt = Adam::new(params, 0.1, (0.9, 0.999), 1e-8);
+
+        let mut losses = vec![];
+        for epoch in 0..150 {
+            opt.zero_grad();
+
+            let pred = model.forward(&x).reshape(&[4]);
+            let loss = RawTensor::mse_loss(&pred, &y);
+            loss.backward();
+            opt.step();
+
+            losses.push(loss.borrow().data[0]);
+
+            if epoch % 10 == 0 {
+                println!("Epoch {}: loss={:.6}", epoch, losses[epoch]);
+            }
+        }
+
+        // Should converge to <0.12 in 150 epochs
+        assert!(
+            losses[149] < 0.12,
+            "Adam failed to converge: final loss={:.6}",
+            losses[149]
+        );
+
+        // Loss should be monotonically decreasing (with some tolerance)
+        let mid_loss = losses[75];
+        let final_loss = losses[149];
+        assert!(
+            final_loss < mid_loss * 0.5,
+            "Loss not decreasing fast enough"
+        );
+    }
+    #[test]
+    fn test_adam_vs_sgd() {
+        // Same setup, train two models
+        fn train_model(use_adam: bool) -> f32 {
+            let x_data = vec![0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0];
+            let x = RawTensor::new(x_data, &[4, 2], false);
+            let y_data = vec![0.0, 1.0, 1.0, 0.0];
+            let y = RawTensor::new(y_data, &[4], false);
+
+            let model = Sequential::new(vec![
+                Box::new(Linear::new(2, 8, true)),
+                Box::new(ReLU),
+                Box::new(Linear::new(8, 1, true)),
+            ]);
+
+            let params = model.parameters();
+
+            if use_adam {
+                let mut opt = Adam::new(params, 0.05, (0.9, 0.999), 1e-8);
+                for _ in 0..50 {
+                    opt.zero_grad();
+                    let pred = model.forward(&x).reshape(&[4]);
+                    let loss = RawTensor::mse_loss(&pred, &y);
+                    loss.backward();
+                    opt.step();
+                }
+            } else {
+                let mut opt = SGD::new(params, 0.01, 0.0);
+                for _ in 0..50 {
+                    opt.zero_grad();
+                    let pred = model.forward(&x).reshape(&[4]);
+                    let loss = RawTensor::mse_loss(&pred, &y);
+                    loss.backward();
+                    opt.step();
+                }
+            }
+
+            // Return final loss
+            let pred = model.forward(&x).reshape(&[4]);
+            RawTensor::mse_loss(&pred, &y).borrow().data[0]
+        }
+
+        let adam_loss = train_model(true);
+        let sgd_loss = train_model(false);
+
+        println!(
+            "Adam final loss: {:.6}, SGD final loss: {:.6}",
+            adam_loss, sgd_loss
+        );
+
+        // Adam should be significantly better
+        assert!(adam_loss < sgd_loss * 0.75, "Adam not outperforming SGD");
+    }
+    #[test]
+    fn test_dataloader_iteration() {
+        // 8 samples, 2 features each
+        let data = (0..16).map(|i| i as f32).collect();
+        let targets = vec![0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0];
+
+        let mut loader = DataLoader::new(
+            data,
+            targets,
+            &[2],  // 2 features per sample
+            &[1],  // 1 target per sample
+            3,     // batch_size
+            false, // no shuffle for deterministic test
+        );
+
+        // First batch: samples 0,1,2
+        let (x, y) = loader.next().unwrap();
+        assert_eq!(x.borrow().shape, vec![3, 2]);
+        assert_eq!(x.borrow().data, vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
+        assert_eq!(y.borrow().shape, vec![3, 1]);
+
+        // Second batch: samples 3,4,5
+        let (x, _y) = loader.next().unwrap();
+        assert_eq!(x.borrow().shape, vec![3, 2]);
+
+        // Third batch: samples 6,7 (partial)
+        let (x, _y) = loader.next().unwrap();
+        assert_eq!(x.borrow().shape, vec![2, 2]);
+
+        // Done
+        assert!(loader.next().is_none());
+
+        // Reset
+        loader.reset();
+        let (x, _) = loader.next().unwrap();
+        assert_eq!(x.borrow().shape, vec![3, 2]);
+    }
+
+    #[test]
+    fn test_dataloader_in_training_loop() {
+        let data = vec![0.0; 40]; // 10 samples, 4 features
+        let targets = vec![1.0; 10];
+
+        let model = Sequential::new(vec![Box::new(Linear::new(4, 2, true))]);
+
+        let mut opt = SGD::new(model.parameters(), 0.1, 0.0);
+
+        for epoch in 0..2 {
+            let loader = DataLoader::new(data.clone(), targets.clone(), &[4], &[1], 3, false);
+
+            for (batch_x, _batch_y) in loader {
+                opt.zero_grad();
+                let pred = model.forward(&batch_x);
+                // Dummy loss
+                let loss = pred.sum();
+                loss.backward();
+                opt.step();
+            }
+
+            println!("Epoch {} complete", epoch);
+        }
     }
 }
 

@@ -2,9 +2,6 @@
 // 2. Expand matmul gradients to fully support batched matmul (3D+) and broadcasting semantics; current implementation only covers 1D/2D.
 // 3. Introduce keepdim reductions and axis-specific reduce ops; ensure backward sums with correct unsqueeze/expand.
 //
-//   1.  **Refine NN Module API (High Impact, Medium Ease):** Formalize the `Module` trait as described in the research plan. Implement a `Sequential` container to compose layers. This is crucial for building anything beyond a single-layer model and enables clean parameter management. First, add `exp` and `log` (natural logarithm) unary ops, as they are prerequisites for activation and loss functions like Softmax and Cross-Entropy.
-//   2.  **Implement Loss Functions (High Impact, Easy):** Create a module for loss functions. Implement `MSELoss` for regression and `CrossEntropyLoss` for classification. These are fundamental building blocks for any training loop.
-//   3.  **Implement Adam Optimizer (High Impact, Medium Ease):** While SGD works, Adam is the de facto standard for training deep learning models. Implementing it requires adding state for the first and second moments of the gradients to the optimizer struct, but it dramatically improves convergence speed and stability.
 //
 // - **Blockers:**
 //
@@ -21,7 +18,6 @@
 // 3. **Improve optimizer with weight decay and other SGD variants** - More training options
 //
 // **Risky areas:**
-// - Broadcasting edge cases with high-dimensional tensors
 // - Memory management in the autograd graph (potential cycles)
 // - Numerical stability for certain operations (e.g., softmax)
 //

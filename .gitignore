@@ -5,3 +5,4 @@ references/*
 !README.md
 
 .bacon-locations
+.aider*
