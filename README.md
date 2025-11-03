@@ -151,7 +151,7 @@ The next major steps for Volta are focused on expanding its capabilities to hand
 
 ## Contributing
 
-Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/your-username/volta/issues).
+Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/rlarson20/volta/issues).
 
 ## License
 
