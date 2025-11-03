@@ -70,6 +70,7 @@ impl GradFn for MovementGradFn {
                 let old_strides = RawTensor::compute_strides(&self.original_shape);
                 let new_strides = RawTensor::compute_strides(&out_grad.shape);
 
+                #[allow(clippy::too_many_arguments)]
                 fn unpad_recursive(
                     result: &mut [f32],
                     grad: &[f32],
@@ -124,6 +125,7 @@ impl GradFn for MovementGradFn {
                 let old_strides = RawTensor::compute_strides(&self.original_shape);
                 let new_strides = RawTensor::compute_strides(&out_grad.shape);
 
+                #[allow(clippy::too_many_arguments)]
                 fn unshrink_recursive(
                     result: &mut [f32],
                     grad: &[f32],
@@ -178,6 +180,7 @@ impl GradFn for MovementGradFn {
                 let old_strides_mem = RawTensor::compute_strides(&self.original_shape);
                 let new_strides_mem = RawTensor::compute_strides(&out_grad.shape);
 
+                #[allow(clippy::too_many_arguments)]
                 fn unstride_recursive(
                     result: &mut [f32],
                     grad: &[f32],
@@ -373,6 +376,7 @@ impl RawTensor {
         let old_strides = Self::compute_strides(&old_shape);
         let new_strides = Self::compute_strides(new_shape);
 
+        #[allow(clippy::needless_range_loop)]
         for i in 0..new_size {
             let mut old_idx = 0;
             let mut rem = i;
@@ -429,6 +433,7 @@ impl RawTensor {
         let old_strides = Self::compute_strides(&old_shape);
         let new_strides = Self::compute_strides(&new_shape);
 
+        #[allow(clippy::too_many_arguments)]
         fn pad_recursive(
             result: &mut [f32],
             data: &[f32],
@@ -513,6 +518,7 @@ impl RawTensor {
         let old_strides = Self::compute_strides(&old_shape);
         let new_strides = Self::compute_strides(&new_shape);
 
+        #[allow(clippy::too_many_arguments)]
         fn shrink_recursive(
             result: &mut [f32],
             data: &[f32],
@@ -601,6 +607,7 @@ impl RawTensor {
         let old_strides_mem = Self::compute_strides(&old_shape);
         let new_strides_mem = Self::compute_strides(&new_shape);
 
+        #[allow(clippy::too_many_arguments)]
         fn stride_recursive(
             result: &mut [f32],
             data: &[f32],
