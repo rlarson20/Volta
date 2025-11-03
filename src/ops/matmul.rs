@@ -23,6 +23,7 @@ impl RawTensor {
     /// Raw matrix multiplication: (m,k) @ (k,n) -> (m,n)
     /// Uses naive O(mnk) algorithm. For production, use optimized BLAS.
     pub fn matmul_raw(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
+        //TODO: read up more on how the cfg and features stuff works in Rust
         #[cfg(all(feature = "accelerate", target_os = "macos"))]
         {
             unsafe extern "C" {
@@ -261,6 +262,7 @@ impl GradFn for MatMulGradFn {
                     // ∂L/∂x: out_grad is (p,), y is (n,p)
                     // grad_x = out_grad @ y^T -> (p,) @ (p,n) -> (n,)
                     let mut grad_data = vec![0.0; x.shape[0]];
+                    #[allow(clippy::needless_range_loop)]
                     for i in 0..x.shape[0] {
                         for j in 0..y.shape[1] {
                             grad_data[i] += out_grad.data[j] * y.data[i * y.shape[1] + j];
@@ -300,6 +302,7 @@ impl GradFn for MatMulGradFn {
                     let m = x.shape[0];
                     let n = x.shape[1];
                     let mut grad_data = vec![0.0; n];
+                    #[allow(clippy::needless_range_loop)]
                     for j in 0..n {
                         let mut sum = 0.0;
                         for i in 0..m {
