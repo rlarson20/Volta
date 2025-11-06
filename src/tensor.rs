@@ -130,6 +130,14 @@ impl RawTensor {
             .collect();
         Self::new(data, shape, false)
     }
+    //TODO: implement ACTUAL He initialization
+    //which is better for ReLU using networks
+    //
+    //whereas Xavier samples each element in W^(l) from the fan-in/out,
+    //He uses a sample from N(0, 2/n_{l-1})
+    pub fn he_initialization(_shape: &[usize]) -> Tensor {
+        todo!("Need a deeper review before I add this.")
+    }
 }
 
 // ===== LOSS FUNCTIONS =====

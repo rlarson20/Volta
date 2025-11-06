@@ -24,7 +24,7 @@ impl Module for Linear {
 impl Linear {
     /// Create a new linear layer with random initialization
     ///
-    /// Uses Xavier/He initialization.
+    /// Uses Xavier initialization.
     pub fn new(in_features: usize, out_features: usize, use_bias: bool) -> Self {
         let w = RawTensor::xavier_uniform(&[in_features, out_features]);
         w.borrow_mut().requires_grad = true;
