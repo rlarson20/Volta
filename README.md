@@ -14,7 +14,7 @@ This project is an educational endeavor to demystify the inner workings of moder
 - **Reverse-Mode Autodiff:** A powerful `backward()` method for efficient end-to-end gradient calculation.
 - **Rich Tensor Operations:** A comprehensive set of unary, binary, reduction, and matrix operations via an ergonomic `TensorOps` trait.
 - **NumPy-style Broadcasting:** Sophisticated support for operations on tensors with different shapes.
-- **Neural Network Primitives:** High-level `nn::Module` trait with `Linear`, `ReLU`, and `Sequential` layers for building models.
+- **Neural Network Primitives:** High-level `nn::Module` trait with `Linear`, `Conv2d`, `MaxPool2d`, `ReLU`, and `Sequential` layers for building models.
 - **Classic Optimizers:** Includes `SGD` (with momentum) and `Adam` for model training.
 - **Model Persistence:** Save and load `Linear` layer weights to a compact binary format using `bincode`.
 - **BLAS Acceleration (macOS):** Optional performance boost for matrix multiplication via Apple's Accelerate framework.

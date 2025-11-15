@@ -3,7 +3,7 @@ use crate::tensor::Tensor;
 pub mod layers;
 pub mod optim;
 
-pub use layers::{Conv2d, Linear, ReLU, Sequential};
+pub use layers::{Conv2d, Linear, MaxPool2d, ReLU, Sequential};
 pub use optim::{Adam, SGD};
 
 pub trait Module {

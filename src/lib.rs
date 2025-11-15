@@ -23,7 +23,7 @@ pub mod tensor;
 // Re-export main types for easy access
 pub use autograd::GradFn;
 pub use device::Device;
-pub use nn::{Adam, Conv2d, Linear, Module, ReLU, SGD, Sequential};
+pub use nn::{Adam, Conv2d, Linear, MaxPool2d, Module, ReLU, SGD, Sequential};
 pub use tensor::{RawTensor, Tensor, TensorOps};
 
 // Main entry points
