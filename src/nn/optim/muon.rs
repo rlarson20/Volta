@@ -26,7 +26,6 @@ impl Muon {
             .iter()
             .map(|p| vec![0.0; p.borrow().data.len()])
             .collect();
-
         Muon {
             params,
             lr,
@@ -151,18 +150,30 @@ impl Muon {
     }
 }
 
-//TODO: fix this test
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::RawTensor;
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use crate::RawTensor;
-//
-//     #[test]
-//     #[ignore = "need to finish implementing this test"]
-//     fn test_muon_init() {
-//         let x = RawTensor::new(vec![1.0, 2.0], &[1, 2], true);
-//         let opt = Muon::new(vec![x], 0.01, 0.9, true, 5);
-//         todo!("need to finish implementing test for Muon optimizer")
-//     }
-// }
+    #[test]
+    fn test_muon_step() {
+        // Simple test: Ensure parameters change after a step
+        let x = RawTensor::new(vec![1.0, -1.0, 0.5, 0.5], &[2, 2], true);
+        // Artificial gradient
+        x.borrow_mut().grad = Some(vec![0.1, 0.1, -0.1, -0.1]);
+
+        let mut opt = Muon::new(vec![x.clone()], 0.1, 0.9, true, 5);
+
+        let data_before = x.borrow().data.clone();
+        opt.step();
+        let data_after = x.borrow().data.clone();
+
+        // Verify data changed
+        assert_ne!(data_before, data_after);
+
+        // Verify Newton-Schulz didn't explode values (regularization property)
+        for v in data_after {
+            assert!(v.abs() < 2.0);
+        }
+    }
+}
