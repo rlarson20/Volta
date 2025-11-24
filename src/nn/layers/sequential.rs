@@ -23,9 +23,17 @@ impl Module for Sequential {
     fn state_dict(&self) -> StateDict {
         let mut state = StateDict::new();
         for (i, layer) in self.layers.iter().enumerate() {
-            let sub_state = layer.state_dict();
-            for (key, value) in sub_state {
-                state.insert(format!("{}.{}", i, key), value);
+            match layer.state_dict().is_empty() {
+                false => {
+                    let sub_state = layer.state_dict();
+                    for (key, value) in sub_state {
+                        state.insert(format!("{}.{}", i, key), value);
+                    }
+                }
+                true => {
+                    // Skip stateless layers in state dict to avoid empty keys
+                    continue;
+                }
             }
         }
         state
@@ -34,17 +42,21 @@ impl Module for Sequential {
     fn load_state_dict(&mut self, state: &StateDict) {
         for (i, layer) in self.layers.iter_mut().enumerate() {
             let prefix = format!("{}.", i);
-            // Filter keys for this layer
+
+            // Collect matching keys for this layer
             let mut sub_state = StateDict::new();
-            for (key, value) in state {
+            let mut matched_keys = 0;
+
+            for (key, value) in state.iter() {
                 if key.starts_with(&prefix) {
                     let sub_key = &key[prefix.len()..];
                     if !sub_key.is_empty() {
                         sub_state.insert(sub_key.to_string(), value.clone());
+                        matched_keys += 1;
                     }
                 }
             }
-            if !sub_state.is_empty() {
+            if matched_keys > 0 {
                 layer.load_state_dict(&sub_state);
             }
         }

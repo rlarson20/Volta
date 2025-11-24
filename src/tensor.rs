@@ -79,6 +79,14 @@ impl RawTensor {
             shape.iter().product::<usize>(),
             "Data length must match shape"
         );
+        // Additional validation for reasonable tensor sizes
+        let total_size = shape.iter().product::<usize>();
+        assert!(total_size > 0, "Cannot create tensor with zero elements");
+        assert!(
+            total_size <= 100_000_000,
+            "Tensor too large (>100M elements) - check for memory issues"
+        );
+
         let raw = RawTensor {
             data,
             shape: shape.to_vec(),
@@ -377,7 +385,11 @@ impl RawTensor {
     /// Move tensor to device (Currently only CPU supported)
     pub fn to_device(self_t: &Tensor, device: Device) -> Tensor {
         // Placeholder for future GPU backend
-        if matches!(device, Device::CPU) {
+        if device.is_cpu() {
+            self_t.clone()
+        } else if device.is_gpu() {
+            // For now, just warn and return CPU tensor
+            eprintln!("Warning: GPU device requested but not yet supported. Using CPU instead.");
             self_t.clone()
         } else {
             unimplemented!("GPU/Metal backends not yet implemented")

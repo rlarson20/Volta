@@ -365,6 +365,10 @@ impl RawTensor {
         let out_shape = Self::broadcast_shape(&shape_a, &shape_b);
 
         // Broadcast inputs to output shape
+        // Check for reasonable sizes to prevent memory issues
+        let out_size: usize = out_shape.iter().product();
+        assert!(out_size > 0, "Invalid broadcast result size");
+
         let bc_data_a = Self::broadcast_to(&data_a, &shape_a, &out_shape);
         let bc_data_b = Self::broadcast_to(&data_b, &shape_b, &out_shape);
 

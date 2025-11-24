@@ -76,11 +76,19 @@ impl Conv2d {
         let (kh, kw) = kernel;
         let (sh, sw) = stride;
 
+        // Check for reasonable parameters to prevent memory issues
+        assert!(height >= kh && width >= kw, "Input smaller than kernel");
+        assert!(
+            kh > 0 && kw > 0 && sh > 0 && sw > 0,
+            "Invalid kernel/stride parameters"
+        );
+
         // Calculate output dimensions
         let h_out = (height - kh) / sh + 1;
         let w_out = (width - kw) / sw + 1;
 
         // Output shape: (B*H_out*W_out, C*K*K)
+        assert!(h_out > 0 && w_out > 0, "Invalid output dimensions");
         let rows = batch * h_out * w_out;
         let cols = channels * kh * kw;
         let mut result = vec![0.0; rows * cols];
@@ -131,8 +139,17 @@ impl Conv2d {
         out
     }
 
-    /// Col2im: Inverse of im2col, used for computing input gradients
     fn col2im(
+        col: &[f32],
+        output_shape: &[usize], // (B, C, H, W)
+        kernel: (usize, usize),
+        stride: (usize, usize),
+    ) -> Vec<f32> {
+        Self::col2im_with_params(col, output_shape, kernel, stride)
+    }
+
+    /// Col2im: Inverse of im2col, used for computing input gradients
+    fn col2im_with_params(
         col: &[f32],
         output_shape: &[usize], // (B, C, H, W)
         kernel: (usize, usize),

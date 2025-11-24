@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // 3. Set up the Optimizer
     // We'll use Adam, a popular and effective optimizer.
-    let mut opt = Adam::new(model.parameters(), 0.05, (0.9, 0.999), 1e-8);
+    let mut opt = Adam::new(model.parameters(), 0.05, (0.9, 0.999), 1e-8, 0.0);
     let epochs = 201;
 
     // 4. The Training Loop

@@ -5,13 +5,20 @@ pub struct Adam {
     lr: f32,
     betas: (f32, f32),
     eps: f32,
+    weight_decay: f32,
     m: Vec<Vec<f32>>, // 1st moment
     v: Vec<Vec<f32>>, // 2nd moment
     t: usize,         // timestep
 }
 
 impl Adam {
-    pub fn new(params: Vec<Tensor>, lr: f32, betas: (f32, f32), eps: f32) -> Self {
+    pub fn new(
+        params: Vec<Tensor>,
+        lr: f32,
+        betas: (f32, f32),
+        eps: f32,
+        weight_decay: f32,
+    ) -> Self {
         let m = params
             .iter()
             .map(|p| vec![0.0; p.borrow().data.len()])
@@ -25,6 +32,7 @@ impl Adam {
             lr,
             betas,
             eps,
+            weight_decay,
             m,
             v,
             t: 0,
@@ -43,11 +51,20 @@ impl Adam {
         for (i, param) in self.params.iter().enumerate() {
             let mut p = param.borrow_mut();
             if let Some(grad) = &p.grad {
+                // Apply weight decay: grad = grad + weight_decay * param
+                let mut active_grad = grad.clone();
+                if self.weight_decay != 0.0 {
+                    for (g, theta) in active_grad.iter_mut().zip(p.data.iter()) {
+                        *g += self.weight_decay * *theta;
+                    }
+                }
+
                 // Update biased moments
-                for j in 0..grad.len() {
-                    self.m[i][j] = self.betas.0 * self.m[i][j] + (1.0 - self.betas.0) * grad[j];
+                for j in 0..active_grad.len() {
+                    self.m[i][j] =
+                        self.betas.0 * self.m[i][j] + (1.0 - self.betas.0) * active_grad[j];
                     self.v[i][j] =
-                        self.betas.1 * self.v[i][j] + (1.0 - self.betas.1) * grad[j].powi(2);
+                        self.betas.1 * self.v[i][j] + (1.0 - self.betas.1) * active_grad[j].powi(2);
                 }
 
                 // Bias correction

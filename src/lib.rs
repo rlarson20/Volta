@@ -23,6 +23,7 @@ pub mod tensor;
 // Re-export main types for easy access
 pub use autograd::GradFn;
 pub use device::Device;
+pub use nn::layers::Dropout;
 pub use nn::layers::flatten::Flatten;
 pub use nn::{Adam, BatchNorm2d, Conv2d, Linear, MaxPool2d, Module, ReLU, SGD, Sequential};
 pub use tensor::{RawTensor, Tensor, TensorOps};
@@ -30,16 +31,14 @@ pub use tensor::{RawTensor, Tensor, TensorOps};
 // Main entry points
 
 pub use tensor::{
-    check_gradients, check_gradients_simple, cross_entropy_loss, max_dim, mse_loss, new_tensor,
-    ones, rand, randn, softmax, sum_dim, zeros,
+    DataLoader, check_gradients, check_gradients_simple, cross_entropy_loss, max_dim, mse_loss,
+    new_tensor, ones, rand, randn, softmax, sum_dim, zeros,
 };
 
 pub use ops::{
     BinaryGradFn, BinaryOp, MatMulGradFn, MaxReduceGradFn, MeanGradFn, MovementGradFn, MovementOp,
     MulAccGradFn, ReduceOp, SumGradFn, TernaryOp, UnaryGradFn, UnaryOp, WhereGradFn,
 };
-
-pub use tensor::DataLoader;
 
 // ===== TESTS =====
 //
@@ -60,6 +59,29 @@ mod tests {
         let c = a.add(&b);
         c.backward();
 
+        assert_eq!(a.grad(), Some(vec![1.0]));
+        assert_eq!(b.grad(), Some(vec![1.0]));
+    }
+
+    #[test]
+    fn test_enhanced_device_safety() {
+        let a = RawTensor::new(vec![2.0], &[1], true);
+        let b = RawTensor::new(vec![3.0], &[1], true);
+        let c = a.add(&b);
+        c.backward();
+
+        // Test device handling safety
+        let cpu_device = Device::CPU;
+        assert!(cpu_device.is_cpu());
+        assert!(!cpu_device.is_gpu());
+        assert_eq!(cpu_device.name(), "CPU");
+
+        let gpu_device = Device::GPU("CUDA".to_string());
+        assert!(!gpu_device.is_cpu());
+        assert!(gpu_device.is_gpu());
+        assert_eq!(gpu_device.name(), "CUDA");
+
+        // Test that tensor operations still work
         assert_eq!(a.grad(), Some(vec![1.0]));
         assert_eq!(b.grad(), Some(vec![1.0]));
     }
@@ -965,8 +987,8 @@ mod misc_tests {
         let model = Sequential::new(vec![Box::new(layer)]);
 
         let params = model.parameters();
-        // more aggressive learning rate
-        let mut opt = Adam::new(params, 0.5, (0.9, 0.999), 1e-8);
+        // more aggressive learning rate, no weight decay
+        let mut opt = Adam::new(params, 0.5, (0.9, 0.999), 1e-8, 0.0);
 
         let mut losses = vec![];
         for _ in 0..50 {
@@ -1005,7 +1027,7 @@ mod misc_tests {
             let params = model.parameters();
 
             if use_adam {
-                let mut opt = Adam::new(params, 0.05, (0.9, 0.999), 1e-8);
+                let mut opt = Adam::new(params, 0.05, (0.9, 0.999), 1e-8, 0.0);
                 for _ in 0..50 {
                     opt.zero_grad();
                     let pred = model.forward(&x).reshape(&[4]);
@@ -1014,7 +1036,7 @@ mod misc_tests {
                     opt.step();
                 }
             } else {
-                let mut opt = SGD::new(params, 0.01, 0.0);
+                let mut opt = SGD::new(params, 0.01, 0.0, 0.0);
                 for _ in 0..50 {
                     opt.zero_grad();
                     let pred = model.forward(&x).reshape(&[4]);
@@ -1085,7 +1107,7 @@ mod misc_tests {
 
         let model = Sequential::new(vec![Box::new(Linear::new(4, 2, true))]);
 
-        let mut opt = SGD::new(model.parameters(), 0.1, 0.0);
+        let mut opt = SGD::new(model.parameters(), 0.1, 0.0, 0.0);
 
         for epoch in 0..2 {
             let loader = DataLoader::new(data.clone(), targets.clone(), &[4], &[1], 3, false);
@@ -1251,6 +1273,49 @@ mod axis_reduce_tests {
         // Gradients should exist and have correct shape
         assert_eq!(logits.grad().unwrap().len(), 4);
     }
+    #[test]
+    fn test_dropout_train_eval() {
+        let mut dropout = Dropout::new(0.5);
+        let x = RawTensor::ones(&[1000]);
+
+        // Train mode: roughly 50% should be zero, others scaled by 2
+        dropout.train(true);
+        let y = dropout.forward(&x);
+        let y_data = &y.borrow().data;
+        let num_zeros = y_data.iter().filter(|&&v| v == 0.0).count();
+
+        // Statistical check (allow some variance)
+        assert!(
+            num_zeros > 400 && num_zeros < 600,
+            "Dropout ratio off: {}",
+            num_zeros
+        );
+
+        // Check scaling: non-zeros should be 2.0
+        let non_zeros_correct = y_data.iter().all(|&v| v == 0.0 || v == 2.0);
+        assert!(non_zeros_correct, "Dropout scaling incorrect");
+
+        // Eval mode: identity
+        dropout.eval();
+        let y_eval = dropout.forward(&x);
+        let eval_correct = y_eval.borrow().data.iter().all(|&v| v == 1.0);
+        assert!(eval_correct, "Dropout eval mode should be identity");
+    }
+
+    #[test]
+    fn test_weight_decay_sgd() {
+        let w = RawTensor::new(vec![1.0], &[1], true);
+        // SGD with 0.1 decay. Grad = 0.
+        // Step should be: w = w - lr * (grad + decay * w) = 1.0 - 0.1 * (0 + 0.1 * 1.0) = 0.99
+        let mut opt = SGD::new(vec![w.clone()], 0.1, 0.0, 0.1);
+
+        w.borrow_mut().grad = Some(vec![0.0]); // Artificial zero gradient
+        opt.step();
+
+        let new_val = w.borrow().data[0];
+        approx::assert_relative_eq!(new_val, 0.99, epsilon = 1e-6);
+    }
+
     #[test]
     fn test_mean_dim() {
         // [2, 3]
