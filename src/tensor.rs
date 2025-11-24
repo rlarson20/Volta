@@ -130,13 +130,31 @@ impl RawTensor {
             .collect();
         Self::new(data, shape, false)
     }
-    //TODO: implement ACTUAL He initialization
-    //which is better for ReLU using networks
-    //
-    //whereas Xavier samples each element in W^(l) from the fan-in/out,
-    //He uses a sample from N(0, 2/n_{l-1})
-    pub fn he_initialization(_shape: &[usize]) -> Tensor {
-        todo!("Need a deeper review before I add this.")
+
+    /// He (Kaiming) normal initialization suited for ReLU networks.
+    ///
+    /// Draws samples from `N(0, sqrt(2 / fan_in))` where `fan_in`
+    /// is the number of input connections.
+    pub fn he_initialization(shape: &[usize]) -> Tensor {
+        assert!(
+            !shape.is_empty(),
+            "He initialization requires at least one dimension"
+        );
+
+        let fan_in = match shape.len() {
+            1 => shape[0],
+            2 => shape[0],                    // Linear weights: [in, out]
+            _ => shape[1..].iter().product(), // Conv weights: [out, in, kH, kW, ...]
+        };
+        assert!(fan_in > 0, "fan_in must be positive for He initialization");
+
+        let std = (2.0 / fan_in as f32).sqrt();
+        let normal = Normal::new(0.0, std).expect("valid He std");
+        let mut rng = rand::rng();
+        let size: usize = shape.iter().product();
+        let data: Vec<f32> = (0..size).map(|_| normal.sample(&mut rng)).collect();
+
+        Self::new(data, shape, false)
     }
 }
 
@@ -909,4 +927,27 @@ where
     F: Fn(&Tensor) -> Tensor,
 {
     RawTensor::check_gradients_simple(tensor, loss_fn)
+}
+
+#[cfg(test)]
+mod tensor_tests {
+    use super::*;
+
+    #[test]
+    fn test_he_initialization_linear_shape() {
+        let t = RawTensor::he_initialization(&[64, 32]);
+        let b = t.borrow();
+        assert_eq!(b.shape, vec![64, 32]);
+        assert_eq!(b.data.len(), 64 * 32);
+        assert!(b.data.iter().any(|v| v.abs() > 0.0));
+    }
+
+    #[test]
+    fn test_he_initialization_conv_shape() {
+        let t = RawTensor::he_initialization(&[16, 3, 3, 3]);
+        let b = t.borrow();
+        assert_eq!(b.shape, vec![16, 3, 3, 3]);
+        assert_eq!(b.data.len(), 16 * 3 * 3 * 3);
+        assert!(b.data.iter().any(|v| v.abs() > 0.0));
+    }
 }
