@@ -933,7 +933,7 @@ mod misc_tests {
     #[test]
     fn test_adam_converges_faster() {
         // Robust test: Learn identity y=x with badly scaled gradients
-        // Problem: y = 100*x.
+        // Problem: y = 2*x.
         // SGD struggles with scaling differences if not tuned perfectly.
         // Adam adapts per-parameter learning rates.
 
