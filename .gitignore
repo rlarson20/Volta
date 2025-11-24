@@ -1,6 +1,5 @@
 /target
 
-references/*
 *.md
 *.txt
 !README.md
