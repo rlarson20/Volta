@@ -13,23 +13,22 @@ This project is an educational endeavor to demystify the inner workings of moder
 - **Dynamic Computation Graph:** Build and backpropagate through graphs on the fly, just like PyTorch.
 - **Reverse-Mode Autodiff:** A powerful `backward()` method for efficient end-to-end gradient calculation.
 - **Rich Tensor Operations:** A comprehensive set of unary, binary, reduction, and matrix operations via an ergonomic `TensorOps` trait.
-- **NumPy-style Broadcasting:** Sophisticated support for operations on tensors with different shapes.
-- **Neural Network Primitives:** High-level `nn::Module` trait with `Linear`, `Conv2d`, `MaxPool2d`, `ReLU`, and `Sequential` layers for building models.
-- **Classic Optimizers:** Includes `SGD` (with momentum) and `Adam` for model training.
-- **Model Persistence:** Save and load `Linear` layer weights to a compact binary format using `bincode`.
+- **Broadcasting:** Full NumPy-style broadcasting support for arithmetic operations.
+- **Neural Network Layers:** `Linear`, `Conv2d`, `MaxPool2d`, `Flatten`, `ReLU`, `Sigmoid`, `Tanh`.
+- **Optimizers:** `SGD` (w/ Momentum), `Adam` (w/ bias correction), and `Muon` (Momentum Orthogonal).
+- **IO System:** Save and load model weights (state dicts) via `bincode`.
 - **BLAS Acceleration (macOS):** Optional performance boost for matrix multiplication via Apple's Accelerate framework.
 - **Validation-Focused:** Includes a robust numerical gradient checker to ensure the correctness of all implemented operations.
 
 ## Project Status
 
-This library is **training-ready for small to medium-sized feedforward neural networks (MLPs)**. It has a correct and well-tested autograd engine.
+This library is functional for training MLPs and CNNs on CPU. It features a verified autograd engine and correctly implemented `im2col` convolutions.
 
-- ✅ **What's Working:** Full autograd engine, MLPs, optimizers, `DataLoader`, loss functions, and saving/loading of individual `Linear` layers. The test suite includes over 65 tests validating gradient correctness.
+- ✅ **What's Working:** Autograd, Conv2d/Linear layers, Optimizers (including Muon), DataLoaders, Serialization.
 - ⚠️ **What's in Progress:** Performance is not yet a primary focus. While BLAS acceleration is available for macOS matrix multiplication, most operations use naive loops.
 - ❌ **What's Missing:**
   - **GPU Support:** Currently CPU-only.
-  - **Convolutional Layers:** `Conv2d` is not yet implemented, blocking CNN-based tasks.
-  - **Full Model Serialization:** Only individual `Linear` layers can be saved/loaded, not entire `Sequential` models.
+  - **Normalization:** `BatchNorm` and `LayerNorm` are not yet implemented.
 
 ## Installation
 
@@ -49,12 +48,14 @@ For a significant performance boost in matrix multiplication on macOS, enable th
 volta = { version = "0.1.0", features = ["accelerate"] }
 ```
 
-## Quick Start: Training an MLP
+## Examples:
 
-Here's how to define a simple Multi-Layer Perceptron (MLP), train it on synthetic data, and save a layer's weights.
+### Training an MLP
+
+Here's how to define a simple Multi-Layer Perceptron (MLP), train it on synthetic data, and save the model.
 
 ```rust
-use volta::{nn::*, tensor::*, Adam, Sequential, TensorOps};
+use volta::{nn::*, tensor::*, Adam, Sequential, TensorOps, io};
 
 fn main() {
     // 1. Define a simple model: 2 -> 8 -> 1
@@ -66,10 +67,10 @@ fn main() {
 
     // 2. Create synthetic data
     let x_data = vec![0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0];
-    let x = new_tensor::new(x_data, &[4, 2], false);
+    let x = new_tensor(x_data, &[4, 2], false); // Batch size 4, 2 features
 
     let y_data = vec![0.0, 1.0, 1.0, 0.0];
-    let y = new_tensor::new(y_data, &[4, 1], false);
+    let y = new_tensor(y_data, &[4], false); // Flattened targets
 
     // 3. Set up the optimizer
     let params = model.parameters();
@@ -77,10 +78,10 @@ fn main() {
 
     // 4. Training loop
     println!("Training a simple MLP to learn XOR...");
-    for epoch in 0..=100 {
+    for epoch in 0..=300 {
         optimizer.zero_grad();
 
-        let pred = model.forward(&x);
+        let pred = model.forward(&x).reshape(&[4]); //alignment
         let loss = mse_loss(&pred, &y);
 
         if epoch % 20 == 0 {
@@ -90,28 +91,56 @@ fn main() {
         loss.backward();
         optimizer.step();
     }
-    println!("Training complete.");
+    // 5. Save and Load State Dict
+    let state = model.state_dict();
+    io::save_state_dict(&state, "model.bin").expect("Failed to save");
 
-    // 5. Save the weights of the first linear layer
-    // Note: We need to downcast the trait object to access the concrete type's methods.
-    if let Some(first_layer) = model.layers[0]
-        .as_any()
-        .downcast_ref::<Linear>()
-    {
-        println!("\nSaving first layer weights to 'layer1.bin'...");
-        first_layer.save("layer1.bin").unwrap();
-    }
+    // Verify loading
+    let mut new_model = Sequential::new(vec![
+        Box::new(Linear::new(2, 8, true)),
+        Box::new(ReLU),
+        Box::new(Linear::new(8, 1, true)),
+    ]);
+    let loaded_state = io::load_state_dict("model.bin").expect("Failed to load");
+    new_model.load_state_dict(&loaded_state);
 
-    // 6. Load the weights into a new layer
-    let mut new_layer = Linear::new(2, 8, true);
-    println!("Loading weights into a new layer from 'layer1.bin'.");
-    new_layer.load("layer1.bin").unwrap();
+}
+```
 
-    // Verify forward pass is the same
-    let y1 = model.layers[0].forward(&x);
-    let y2 = new_layer.forward(&x);
-    assert_eq!(y1.borrow().data, y2.borrow().data);
-    println!("Verification successful: Loaded layer produces identical output.");
+### LeNet-style CNN training on CPU
+
+The following utilizes the current API to define a training-ready CNN.
+
+```rust
+use volta::{Sequential, Conv2d, MaxPool2d, Flatten, Linear, ReLU, new_tensor, Adam};
+use volta::nn::Module;
+
+fn main() {
+    // 1. Define Model
+    let model = Sequential::new(vec![
+        // Input: 1x28x28
+        Box::new(Conv2d::new(1, 6, 5, 1, 2, true)), // Padding 2
+        Box::new(ReLU),
+        Box::new(MaxPool2d::new(2, 2, 0)),
+        // Feature map size here: 6x14x14
+        Box::new(Flatten::new()),
+        Box::new(Linear::new(6 * 14 * 14, 10, true)),
+    ]);
+
+    // 2. Data & Optimizer
+    let input = volta::randn(&[4, 1, 28, 28]); // Batch 4
+    let target = volta::randn(&[4, 10]);       // Dummy targets
+    let params = model.parameters();
+    let mut optim = Adam::new(params, 1e-3, (0.9, 0.999), 1e-8);
+
+    // 3. Training Step
+    optim.zero_grad();
+    let output = model.forward(&input);
+    let loss = volta::mse_loss(&output, &target);
+    loss.backward();
+    optim.step();
+
+    println!("Loss: {:?}", loss.borrow().data[0]);
 }
 ```
 
@@ -122,7 +151,8 @@ The library is designed around a few core concepts:
 - **`Tensor`**: The central data structure, an `Rc<RefCell<RawTensor>>`, which holds data, shape, and gradient information. It allows for a mutable, shared structure to build the computation graph.
 - **`TensorOps`**: A trait implemented for `Tensor` that provides the ergonomic, user-facing API for all operations (e.g., `tensor.add(&other)`, `tensor.matmul(&weights)`).
 - **`nn::Module`**: A trait for building neural network layers (`Linear`, `ReLU`) and composing them into larger models (`Sequential`). It standardizes the `forward()` pass and parameter collection.
-- **Optimizers (`Adam`, `SGD`)**: Structures that take a list of model parameters and update their weights based on computed gradients during `step()`.
+- **Optimizers (`Adam`, `SGD`, `Muon`)**: Structures that take a list of model parameters and update their weights based on computed gradients during `step()`.
+- **Vision Support:** Implemented `Conv2d` and `MaxPool2d` layers to unlock the ability to build and train Convolutional Neural Networks (CNNs).
 
 ## Running the Test Suite
 
@@ -144,10 +174,15 @@ _Note: One test, `misc_tests::test_adam_vs_sgd`, is known to be flaky as it depe
 
 The next major steps for Volta are focused on expanding its capabilities to handle more complex models and improving performance.
 
-1.  **Full Model Serialization:** Implement `save`/`load` for `Sequential` containers to persist entire models, not just individual layers.
-2.  **Vision Support:** Implement `Conv2d` and `MaxPool2d` layers to unlock the ability to build and train Convolutional Neural Networks (CNNs).
-3.  **GPU Acceleration:** Integrate a backend for GPU computation (e.g., `wgpu` for cross-platform support or direct `metal` bindings for macOS) to drastically speed up training.
-4.  **Performance Optimization:** Implement SIMD for element-wise operations and further integrate optimized BLAS routines.
+1.  **Vision Support:** Implement `Conv2d` and `MaxPool2d` layers to unlock the ability to build and train Convolutional Neural Networks (CNNs).
+2.  **GPU Acceleration:** Integrate a backend for GPU computation (e.g., `wgpu` for cross-platform support or direct `metal` bindings for macOS) to drastically speed up training.
+3.  **Performance Optimization:** Implement SIMD for element-wise operations and further integrate optimized BLAS routines.
+
+### Outstanding Issues
+
+- **Device Argument Ignored**: The `Device::GPU` enum variant exists in `src/device.rs`, but passing it to `to_device` in `src/tensor.rs` causes a panic/unimplemented error.
+- **Serialization Fragility**: `Sequential` relies on string-key matching for `state_dict` (e.g., "0.weight"). Renaming layers or changing architecture depth will break loading without helpful error messages.
+- **Performance**: `im2col` implementation in `src/nn/layers/conv.rs` materializes the entire matrix in memory. Large batch sizes or high-resolution images will easily OOM even on high-end machines.
 
 ## Contributing
 
