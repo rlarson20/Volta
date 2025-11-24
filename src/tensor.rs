@@ -374,6 +374,16 @@ impl RawTensor {
         out
     }
 
+    /// Move tensor to device (Currently only CPU supported)
+    pub fn to_device(self_t: &Tensor, device: Device) -> Tensor {
+        // Placeholder for future GPU backend
+        if matches!(device, Device::CPU) {
+            self_t.clone()
+        } else {
+            unimplemented!("GPU/Metal backends not yet implemented")
+        }
+    }
+
     /// Max along a specific axis
     ///
     /// Returns maximum value along dimension and stores indices for backward pass.
@@ -632,6 +642,7 @@ pub trait TensorOps {
     fn pad(&self, padding: &[(usize, usize)]) -> Tensor;
     fn shrink(&self, ranges: &[(usize, usize)]) -> Tensor;
     fn stride_op(&self, strides: &[usize]) -> Tensor;
+    fn to_device(&self, device: Device) -> Tensor;
 
     //Matmul
     fn matmul(&self, other: &Tensor) -> Tensor;
@@ -744,6 +755,10 @@ impl TensorOps for Tensor {
     }
     fn stride_op(&self, strides: &[usize]) -> Tensor {
         RawTensor::stride_op(self, strides)
+    }
+
+    fn to_device(&self, device: Device) -> Tensor {
+        RawTensor::to_device(self, device)
     }
 
     fn matmul(&self, other: &Tensor) -> Tensor {
