@@ -47,7 +47,7 @@ ask-status model:
 	@echo "Asking!"
 	-cargo build &> err.txt
 	-cargo test &> tests.txt
-	files-to-prompt Cargo.toml src/ err.txt tests.txt responses/o3-deep-research-plan.md responses/status-report.md > responses/context.md
+	files-to-prompt Cargo.toml src/ err.txt tests.txt  responses/status-report.md > responses/context.md
 	cat responses/context.md | llm --model "openrouter/{{model}}" --system "`cat sys-prompts/status-sys-prompt.md`" > responses/status-report.md
 	@echo "Finished!"
 
@@ -58,6 +58,6 @@ ask model:
 	@echo "Asking!"
 	-cargo build &> err.txt
 	-cargo test &> tests.txt
-	files-to-prompt Cargo.toml src/ err.txt tests.txt responses/o3-deep-research-plan.md responses/status-report.md > responses/context.md
+	files-to-prompt Cargo.toml src/ err.txt tests.txt  responses/status-report.md > responses/context.md
 	cat responses/context.md | llm --model "openrouter/{{model}}" --system "`cat sys-prompts/sys-prompt.md`" > responses/recommendations.md
 	@echo "Finished!"
