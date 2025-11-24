@@ -28,7 +28,6 @@ This library is functional for training MLPs and CNNs on CPU. It features a veri
 - ⚠️ **What's in Progress:** Performance is not yet a primary focus. While BLAS acceleration is available for macOS matrix multiplication, most operations use naive loops.
 - ❌ **What's Missing:**
   - **GPU Support:** Currently CPU-only.
-  - **Normalization:** `BatchNorm` and `LayerNorm` are not yet implemented.
 
 ## Installation
 
@@ -36,7 +35,7 @@ Add Volta to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-volta = "0.1.0" # Replace with the latest version
+volta = "0.1.0"
 ```
 
 ### Enabling BLAS on macOS

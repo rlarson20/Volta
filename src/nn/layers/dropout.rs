@@ -38,16 +38,17 @@ impl Module for Dropout {
         let size: usize = shape.iter().product();
 
         // Generate mask: 1 with prob (1-p), 0 with prob p
-        let mut rng = rand::rng();
-        let mask_data: Vec<f32> = (0..size)
-            .map(|_| {
-                if rng.random::<f32>() < keep_prob {
-                    scale
-                } else {
-                    0.0
-                }
-            })
-            .collect();
+        let mask_data: Vec<f32> = crate::tensor::with_rng(|rng| {
+            (0..size)
+                .map(|_| {
+                    if rng.random::<f32>() < keep_prob {
+                        scale
+                    } else {
+                        0.0
+                    }
+                })
+                .collect()
+        });
 
         let mask = RawTensor::new(mask_data, &shape, false).to_device(device);
 

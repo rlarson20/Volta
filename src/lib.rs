@@ -31,8 +31,8 @@ pub use tensor::{RawTensor, Tensor, TensorOps};
 // Main entry points
 
 pub use tensor::{
-    DataLoader, check_gradients, check_gradients_simple, cross_entropy_loss, max_dim, mse_loss,
-    new_tensor, ones, rand, randn, softmax, sum_dim, zeros,
+    DataLoader, check_gradients, check_gradients_simple, cross_entropy_loss, manual_seed, max_dim,
+    mse_loss, new_tensor, ones, rand, randn, softmax, sum_dim, zeros,
 };
 
 pub use ops::{
@@ -1011,6 +1011,7 @@ mod misc_tests {
     }
     #[test]
     fn test_adam_vs_sgd() {
+        crate::manual_seed(42); //set for repro
         // Same setup, train two models
         fn train_model(use_adam: bool) -> f32 {
             let x_data = vec![0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0];

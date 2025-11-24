@@ -1,6 +1,8 @@
 use crate::autograd::GradFn;
 use crate::device::Device;
 use rand::Rng;
+use rand::SeedableRng;
+use rand::rngs::StdRng;
 use rand_distr::{Distribution, Normal};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -35,6 +37,34 @@ pub struct RawTensor {
     pub grad_fn: Option<Box<dyn GradFn>>, //func to compute grad, if result of op
     pub parents: Vec<Tensor>,             //refs to parent tensor on graph
     pub device: Device,                   //cpu/gpu
+}
+
+// ===== RNG HELPERS =====
+
+thread_local! {
+    static GLOBAL_RNG: RefCell<Option<StdRng>> = const { RefCell::new(None) };
+}
+
+/// Set the seed for the thread-local random number generator
+pub fn manual_seed(seed: u64) {
+    GLOBAL_RNG.with(|rng| {
+        *rng.borrow_mut() = Some(StdRng::seed_from_u64(seed));
+    });
+}
+
+/// Run a closure with the current RNG (ThreadRng or specific StdRng)
+pub(crate) fn with_rng<F, T>(f: F) -> T
+where
+    F: FnOnce(&mut dyn rand::RngCore) -> T,
+{
+    GLOBAL_RNG.with(|rng_cell| {
+        let mut borrow = rng_cell.borrow_mut();
+        if let Some(rng) = borrow.as_mut() {
+            f(rng)
+        } else {
+            f(&mut rand::rng())
+        }
+    })
 }
 
 impl Clone for RawTensor {
@@ -111,16 +141,15 @@ impl RawTensor {
     /// Create a tensor with random values uniformly distributed in [0, 1)
     pub fn rand(shape: &[usize]) -> Tensor {
         let size = shape.iter().product();
-        let mut rng = rand::rng();
-        let data: Vec<f32> = (0..size).map(|_| rng.random::<f32>()).collect();
+        let data: Vec<f32> = with_rng(|rng| (0..size).map(|_| rng.random::<f32>()).collect());
         Self::new(data, shape, false)
     }
     /// Create a tensor with values from standard normal distribution N(0, 1)
     pub fn randn(shape: &[usize]) -> Tensor {
         let size = shape.iter().product();
         let normal = Normal::new(0.0, 1.0).unwrap();
-        let mut rng = rand::rng();
-        let data: Vec<f32> = (0..size).map(|_| normal.sample(&mut rng)).collect();
+        let data: Vec<f32> = with_rng(|rng| (0..size).map(|_| normal.sample(rng)).collect());
+
         Self::new(data, shape, false)
     }
     /// Xavier uniform initialization
@@ -133,9 +162,12 @@ impl RawTensor {
         let fan_in = shape[0];
         let fan_out = shape[1];
         let limit = (6.0 / (fan_in + fan_out) as f32).sqrt();
-        let data: Vec<f32> = (0..fan_in * fan_out)
-            .map(|_| rand::rng().random_range(-limit..limit))
-            .collect();
+        let data: Vec<f32> = with_rng(|rng| {
+            (0..fan_in * fan_out)
+                .map(|_| rng.random_range(-limit..limit))
+                .collect()
+        });
+
         Self::new(data, shape, false)
     }
 
@@ -158,9 +190,8 @@ impl RawTensor {
 
         let std = (2.0 / fan_in as f32).sqrt();
         let normal = Normal::new(0.0, std).expect("valid He std");
-        let mut rng = rand::rng();
         let size: usize = shape.iter().product();
-        let data: Vec<f32> = (0..size).map(|_| normal.sample(&mut rng)).collect();
+        let data: Vec<f32> = with_rng(|rng| (0..size).map(|_| normal.sample(rng)).collect());
 
         Self::new(data, shape, false)
     }
@@ -175,8 +206,9 @@ impl RawTensor {
     }
 
     pub fn cross_entropy_loss(logits: &Tensor, targets: &Tensor) -> Tensor {
-        let softmax = Self::softmax(logits, 1);
-        let log_probs = softmax.log();
+        // Use log_softmax for numerical stability
+        let log_probs = Self::log_softmax(logits, 1);
+
         // -sum(targets * log_probs, dim=1).mean()
         let prod = targets.elem_mul(&log_probs);
         let sum = Self::sum_dim(&prod, 1, false);
@@ -477,6 +509,18 @@ impl RawTensor {
         let sum_exp = Self::sum_dim(&exp_x, dim, true);
         exp_x.div(&sum_exp)
     }
+    /// LogSoftmax along a specific axis (numerically stable)
+    /// log(exp(x_i) / sum(exp(x_j))) = x_i - log(sum(exp(x_j)))
+    /// Uses LogSumExp trick: log(sum(exp(x))) = m + log(sum(exp(x-m)))
+    pub fn log_softmax(self_t: &Tensor, dim: usize) -> Tensor {
+        let max = Self::max_dim(self_t, dim, true);
+        let shifted = self_t.sub(&max);
+        let exp_x = shifted.exp();
+        let sum_exp = Self::sum_dim(&exp_x, dim, true);
+        let log_sum = sum_exp.log();
+        let log_sum_plus_max = log_sum.add(&max);
+        self_t.sub(&log_sum_plus_max)
+    }
 
     /// Mean along a specific axis
     ///
@@ -671,6 +715,7 @@ pub trait TensorOps {
 
     // Softmax
     fn softmax(&self, dim: usize) -> Tensor;
+    fn log_softmax(&self, dim: usize) -> Tensor;
 }
 
 impl TensorOps for Tensor {
@@ -797,6 +842,9 @@ impl TensorOps for Tensor {
     }
     fn softmax(&self, dim: usize) -> Tensor {
         RawTensor::softmax(self, dim)
+    }
+    fn log_softmax(&self, dim: usize) -> Tensor {
+        RawTensor::log_softmax(self, dim)
     }
 }
 
