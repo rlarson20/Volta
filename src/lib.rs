@@ -487,6 +487,36 @@ mod misc_tests {
         assert_eq!(z.borrow().data[0], 3.0);
         assert_eq!(z.borrow().data[7], 3.0);
     }
+    #[test]
+    #[allow(clippy::identity_op)]
+    //Allow identity op to make the example clearer
+    fn test_batched_matmul_broadcasting() {
+        // (2, 1, 2, 3) @ (1, 2, 3, 1) -> (2, 2, 2, 1)
+        // Checks if batch dims [2, 1] and [1, 2] broadcast to [2, 2]
+
+        let a_data = vec![1.0; 2 * 1 * 2 * 3]; // 12 elements, all 1s
+        let b_data = vec![2.0; 1 * 2 * 3 * 1]; // 6 elements, all 2s
+
+        let a = RawTensor::new(a_data, &[2, 1, 2, 3], true);
+        let b = RawTensor::new(b_data, &[1, 2, 3, 1], true);
+
+        let c = a.matmul(&b);
+
+        // Output shape should be [2, 2, 2, 1]
+        assert_eq!(c.borrow().shape, vec![2, 2, 2, 1]);
+
+        // Values: Row (1,1,1) dot Col (2,2,2) = 3*2 = 6
+        assert_eq!(c.borrow().data[0], 6.0);
+
+        let loss = c.sum();
+        loss.backward();
+
+        // Gradient check
+        // C sum is 8 elements * 6.0 = 48.0
+        // A grad should capture broadcasted dims
+        assert!(a.grad().is_some());
+        assert!(b.grad().is_some());
+    }
 
     #[test]
     fn test_matmul_matrix_vector_backward() {
