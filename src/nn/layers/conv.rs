@@ -298,6 +298,7 @@ mod conv2d_tests {
     }
 
     #[test]
+    //CARE: can sometimes fail as well, need to fix
     fn test_conv2d_gradient() {
         // Use smaller input for more stable numerical gradient checking
         let conv = Conv2d::new(2, 4, 3, 1, 1, true);
