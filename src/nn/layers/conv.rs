@@ -41,7 +41,7 @@ impl Conv2d {
         padding: usize,
         use_bias: bool,
     ) -> Self {
-        let w = RawTensor::randn(&[out_ch, in_ch, kernel, kernel]);
+        let w = RawTensor::he_initialization(&[out_ch, in_ch, kernel, kernel]);
         w.borrow_mut().requires_grad = true;
         let b = if use_bias {
             let b = RawTensor::zeros(&[out_ch]);
