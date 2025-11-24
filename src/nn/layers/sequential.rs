@@ -49,6 +49,11 @@ impl Module for Sequential {
             }
         }
     }
+    fn train(&mut self, mode: bool) {
+        for layer in &mut self.layers {
+            layer.train(mode);
+        }
+    }
 }
 
 impl Sequential {

@@ -14,18 +14,6 @@ pub use reduce::{MaxReduceGradFn, MeanGradFn, ReduceOp, SumGradFn};
 pub use ternary::{MulAccGradFn, TernaryOp, WhereGradFn};
 pub use unary::{UnaryGradFn, UnaryOp};
 
-/// Load operations: tensor creation without computation graph
-///
-/// These are "leaf" operations that don't have gradients to backpropagate.
-pub enum LoadOp {
-    Empty,      // Allocate uninitialized
-    Rand,       // Random uniform [0,1)
-    Const,      // Filled with constant
-    From,       // From Vec<f32>
-    Contiguous, // Ensure contiguous memory
-    Custom,     // User-defined
-}
-
 // ===== LOAD OPERATIONS =====
 // DONT KNOW WHERE LOADS GO
 //other methods to add:

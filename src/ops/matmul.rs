@@ -43,7 +43,6 @@ impl RawTensor {
     /// Raw matrix multiplication: (m,k) @ (k,n) -> (m,n)
     /// Uses naive O(mnk) algorithm. For production, use optimized BLAS.
     pub fn matmul_raw(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
-        //TODO: read up more on how the cfg and features stuff works in Rust
         #[cfg(all(feature = "accelerate", target_os = "macos"))]
         {
             unsafe extern "C" {
@@ -88,15 +87,25 @@ impl RawTensor {
         }
         #[cfg(not(all(feature = "accelerate", target_os = "macos")))]
         {
+            // Use matrixmultiply crate for portable performance
             let mut result = vec![0.0; m * n];
-            for i in 0..m {
-                for j in 0..n {
-                    let mut sum = 0.0;
-                    for p in 0..k {
-                        sum += a[i * k + p] * b[p * n + j];
-                    }
-                    result[i * n + j] = sum;
-                }
+            unsafe {
+                matrixmultiply::sgemm(
+                    m,
+                    k,
+                    n,
+                    1.0,
+                    a.as_ptr(),
+                    k as isize,
+                    1,
+                    b.as_ptr(),
+                    n as isize,
+                    1,
+                    0.0,
+                    result.as_mut_ptr(),
+                    n as isize,
+                    1,
+                );
             }
             result
         }

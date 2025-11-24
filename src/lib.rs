@@ -24,7 +24,7 @@ pub mod tensor;
 pub use autograd::GradFn;
 pub use device::Device;
 pub use nn::layers::flatten::Flatten;
-pub use nn::{Adam, Conv2d, Linear, MaxPool2d, Module, ReLU, SGD, Sequential};
+pub use nn::{Adam, BatchNorm2d, Conv2d, Linear, MaxPool2d, Module, ReLU, SGD, Sequential};
 pub use tensor::{RawTensor, Tensor, TensorOps};
 
 // Main entry points
@@ -35,8 +35,8 @@ pub use tensor::{
 };
 
 pub use ops::{
-    BinaryGradFn, BinaryOp, LoadOp, MatMulGradFn, MaxReduceGradFn, MeanGradFn, MovementGradFn,
-    MovementOp, MulAccGradFn, ReduceOp, SumGradFn, TernaryOp, UnaryGradFn, UnaryOp, WhereGradFn,
+    BinaryGradFn, BinaryOp, MatMulGradFn, MaxReduceGradFn, MeanGradFn, MovementGradFn, MovementOp,
+    MulAccGradFn, ReduceOp, SumGradFn, TernaryOp, UnaryGradFn, UnaryOp, WhereGradFn,
 };
 
 pub use tensor::DataLoader;
@@ -1124,10 +1124,25 @@ mod misc_tests {
 
         #[cfg(not(all(feature = "accelerate", target_os = "macos")))]
         assert!(
-            duration.as_millis() > 50,
-            "Naive should be >50ms, got {:?}",
+            duration.as_millis() < 55,
+            "Optimized fallback should be <55ms, got {:?}",
             duration
         );
+    }
+    #[test]
+    fn test_batchnorm_working() {
+        let mut bn = BatchNorm2d::new(3);
+        let x = RawTensor::randn(&[2, 3, 4, 4]);
+
+        // Training mode
+        bn.train(true);
+        let y = bn.forward(&x);
+        assert_eq!(y.borrow().shape, vec![2, 3, 4, 4]);
+
+        // Eval mode
+        bn.eval();
+        let y2 = bn.forward(&x);
+        assert_eq!(y2.borrow().shape, vec![2, 3, 4, 4]);
     }
 }
 

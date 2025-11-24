@@ -4,7 +4,7 @@ use crate::tensor::Tensor;
 pub mod layers;
 pub mod optim;
 
-pub use layers::{Conv2d, Linear, MaxPool2d, ReLU, Sequential};
+pub use layers::{BatchNorm2d, Conv2d, Linear, MaxPool2d, ReLU, Sequential};
 pub use optim::{Adam, Muon, SGD};
 
 pub trait Module {
@@ -19,5 +19,11 @@ pub trait Module {
         for p in self.parameters() {
             p.borrow_mut().grad = None;
         }
+    }
+    /// Switch between training and evaluation modes.
+    /// Important for layers like BatchNorm and Dropout.
+    fn train(&mut self, _mode: bool) {}
+    fn eval(&mut self) {
+        self.train(false);
     }
 }
