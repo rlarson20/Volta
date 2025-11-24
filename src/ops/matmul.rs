@@ -1,6 +1,26 @@
 use crate::autograd::GradFn;
 use crate::{RawTensor, Tensor};
 
+// ===== TRANSPOSE GRADIENT =====
+
+/// Gradient function for 2D transpose
+///
+/// Transpose is its own inverse: (A^T)^T = A
+/// So the gradient just transposes back.
+pub struct TransposeGradFn;
+
+impl GradFn for TransposeGradFn {
+    fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
+        let transposed = RawTensor::transpose_2d(&out_grad.data, &out_grad.shape);
+        let new_shape = vec![out_grad.shape[1], out_grad.shape[0]];
+        vec![Some(RawTensor::new(transposed, &new_shape, false))]
+    }
+
+    fn clone_box(&self) -> Box<dyn GradFn> {
+        Box::new(TransposeGradFn)
+    }
+}
+
 // ===== MATRIX MULTIPLICATION =====
 
 impl RawTensor {
@@ -260,7 +280,7 @@ impl RawTensor {
         if req_grad {
             out.borrow_mut().parents = vec![self_t.clone()];
             // Use movement grad with inverse permutation [1,0]
-            out.borrow_mut().grad_fn = Some(Box::new(MatMulGradFn));
+            out.borrow_mut().grad_fn = Some(Box::new(TransposeGradFn));
         }
         out
     }

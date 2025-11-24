@@ -812,6 +812,19 @@ mod misc_tests {
     }
 
     #[test]
+    fn test_gradcheck_transpose() {
+        // Test standalone transpose gradient
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], true);
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let y = t.transpose();
+            // Multiply by some weights to make gradient non-uniform
+            let w = RawTensor::new(vec![0.5, 1.0, 1.5, 2.0, 2.5, 3.0], &[3, 2], false);
+            y.elem_mul(&w).sum()
+        });
+        assert!(passed, "Transpose gradient check failed");
+    }
+
+    #[test]
     fn test_gradcheck_pad() {
         let x = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], true);
         let passed = RawTensor::check_gradients_simple(&x, |t| {
