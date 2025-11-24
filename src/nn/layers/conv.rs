@@ -305,13 +305,14 @@ mod conv2d_tests {
         let x = RawTensor::randn(&[1, 2, 6, 6]);
         x.borrow_mut().requires_grad = true;
 
-        // Use custom tolerance for conv2d due to numerical precision in complex ops
-        // The tolerance is higher than other ops because conv involves multiple
-        // reshape/permute operations which accumulate numerical errors
+        // Convolution is affine in its inputs, but each loss evaluation sums tens of thousands
+        // of f32 multiply-adds (im2col + GEMM). With ε=1e-2 the central-difference estimator
+        // was dominated by round-off (~1e-5) and produced ~3% relative error. Increasing ε
+        // lowers that amplification without changing the true derivative.
         let (max_err, mean_err, passed) = RawTensor::check_gradients(
             &x,
             |t| conv.forward(t).sum(),
-            1e-2, // epsilon
+            5e-2, // epsilon, less cancellation noise for heavy Conv2d graphs
             2e-2, // tolerance (relaxed for conv's numerical complexity)
         );
 
