@@ -7,7 +7,7 @@ impl RawTensor {
     /// Transpose a 2D matrix
     ///
     /// For shape [m, n], produces shape [n, m]
-    fn transpose_2d(data: &[f32], shape: &[usize]) -> Vec<f32> {
+    pub(crate) fn transpose_2d(data: &[f32], shape: &[usize]) -> Vec<f32> {
         assert_eq!(shape.len(), 2, "Transpose expects 2D shape");
         let (m, n) = (shape[0], shape[1]);
         let mut result = vec![0.0; m * n];

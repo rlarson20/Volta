@@ -1,3 +1,4 @@
+use crate::io::StateDict;
 use crate::nn::Module;
 use crate::tensor::{Tensor, TensorOps};
 
@@ -36,6 +37,14 @@ impl Module for Flatten {
 
     fn parameters(&self) -> Vec<Tensor> {
         vec![]
+    }
+
+    fn state_dict(&self) -> StateDict {
+        StateDict::new()
+    }
+
+    fn load_state_dict(&mut self, _state: &StateDict) {
+        // Stateless
     }
 }
 
