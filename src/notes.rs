@@ -5,9 +5,6 @@
 //
 // - **Blockers:**
 //
-//   - `CrossEntropyLoss` requires `softmax`, which in turn requires `exp`, `sum`, and `div`. The base components exist, but they must be assembled correctly.
-//   - Building convolutional neural networks (CNNs) is blocked on implementing `Conv2d`, which is a significant effort involving complex, multi-dimensional movement ops (like `im2col` or sliding window views) and a large matrix multiplication.
-//
 // - **Risky Areas:**
 //   - **Performance:** All operations currently use naive `Vec<f32>` loops and extensive cloning. While correct, this is slow. The next performance bottleneck will be `matmul`. Integrating a BLAS library (like Apple's Accelerate for macOS) is a high-leverage optimization but requires `unsafe` FFI calls that can be a source of bugs.
 //   - **API Ergonomics:** The `Rc<RefCell<RawTensor>>` pattern is simple but verbose. As the API grows, managing borrows and `_mut` calls can become cumbersome. A future refactor might explore a more ergonomic API, but this risks significant breaking changes. For now, correctness is paramount.
