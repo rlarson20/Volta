@@ -271,12 +271,17 @@ impl Module for Conv2d {
 
     fn load_state_dict(&mut self, state: &StateDict) {
         if let Some(w) = state.get("weight") {
-            self.weight = w.to_tensor(true);
+            let mut t = self.weight.borrow_mut();
+            t.data = w.data.clone();
+            t.shape = w.shape.clone();
         }
         if let Some(b) = state.get("bias")
             && self.bias.is_some()
         {
-            self.bias = Some(b.to_tensor(true));
+            let bias_tensor = self.bias.as_ref().unwrap();
+            let mut t = bias_tensor.borrow_mut();
+            t.data = b.data.clone();
+            t.shape = b.shape.clone();
         }
     }
 }
