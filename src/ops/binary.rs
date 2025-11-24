@@ -246,7 +246,7 @@ impl RawTensor {
     ///
     /// This repeats values along dimensions where from_shape is 1
     /// and to_shape is larger.
-    fn broadcast_to(data: &[f32], from_shape: &[usize], to_shape: &[usize]) -> Vec<f32> {
+    pub(crate) fn broadcast_to(data: &[f32], from_shape: &[usize], to_shape: &[usize]) -> Vec<f32> {
         if from_shape == to_shape {
             return data.to_vec();
         }
@@ -285,7 +285,7 @@ impl RawTensor {
     /// During backward pass, if a dimension was broadcast from size 1 to size N,
     /// we need to sum the gradients over that dimension to get the gradient
     /// for the original size-1 dimension.
-    fn sum_over_broadcast_dims(
+    pub(crate) fn sum_over_broadcast_dims(
         grad: &[f32],
         grad_shape: &[usize],
         target_shape: &[usize],

@@ -190,11 +190,6 @@ impl RawTensor {
                     rank_a >= 3 && rank_b >= 3,
                     "Batched matmul requires rank >= 3"
                 );
-                assert_eq!(
-                    shape_a[..rank_a - 2],
-                    shape_b[..rank_b - 2],
-                    "Batch dimensions must match"
-                );
 
                 let m = shape_a[rank_a - 2];
                 let k = shape_a[rank_a - 1];
@@ -202,7 +197,23 @@ impl RawTensor {
                 let n = shape_b[rank_b - 1];
                 assert_eq!(k, k2, "Matmul dimension mismatch in batch");
 
-                let batch_count: usize = shape_a[..rank_a - 2].iter().product();
+                // 1. Broadcast batch dimensions
+                let batch_a = &shape_a[..rank_a - 2];
+                let batch_b = &shape_b[..rank_b - 2];
+                let batch_out = Self::broadcast_shape(batch_a, batch_b);
+
+                // 2. Expand inputs to broadcasted batch shape
+                // Target shapes for A: [*batch_out, m, k]
+                let mut target_a = batch_out.clone();
+                target_a.extend_from_slice(&[m, k]);
+                let data_a_expanded = Self::broadcast_to(&data_a, &shape_a, &target_a);
+
+                let mut target_b = batch_out.clone();
+                target_b.extend_from_slice(&[k, n]);
+                let data_b_expanded = Self::broadcast_to(&data_b, &shape_b, &target_b);
+
+                let batch_count: usize = batch_out.iter().product();
+
                 let mut result_data = Vec::with_capacity(batch_count * m * n);
 
                 let stride_a = m * k;
@@ -211,14 +222,14 @@ impl RawTensor {
                 for b in 0..batch_count {
                     let start_a = b * stride_a;
                     let start_b = b * stride_b;
-                    let slice_a = &data_a[start_a..start_a + stride_a];
-                    let slice_b = &data_b[start_b..start_b + stride_b];
+                    let slice_a = &data_a_expanded[start_a..start_a + stride_a];
+                    let slice_b = &data_b_expanded[start_b..start_b + stride_b];
 
                     let chunk_result = Self::matmul_raw(slice_a, slice_b, m, k, n);
                     result_data.extend_from_slice(&chunk_result);
                 }
 
-                let mut out_shape = shape_a[..rank_a - 2].to_vec();
+                let mut out_shape = batch_out;
                 out_shape.push(m);
                 out_shape.push(n);
 
@@ -330,23 +341,43 @@ impl GradFn for MatMulGradFn {
                     let k = x.shape[rank - 1];
                     let n = y.shape[rank - 1]; // y is (B, K, N)
 
-                    let batch_count: usize = x.shape[..rank - 2].iter().product();
+                    // Batch dimensions of output
+                    let batch_dims_out = &out_grad.shape[..out_grad.shape.len() - 2];
+                    let batch_count: usize = batch_dims_out.iter().product();
+
+                    // We need y broadcasted to match out_grad's batch dims + [K, N]
+                    let mut target_y_shape = batch_dims_out.to_vec();
+                    target_y_shape.extend_from_slice(&[k, n]);
+                    let y_data_expanded =
+                        RawTensor::broadcast_to(&y.data, &y.shape, &target_y_shape);
+
                     let stride_out = m * n;
                     let stride_y = k * n;
 
-                    let mut grad_data = Vec::with_capacity(batch_count * m * k);
+                    let mut grad_data_expanded = Vec::with_capacity(batch_count * m * k);
 
                     for b in 0..batch_count {
                         let out_slice = &out_grad.data[b * stride_out..(b + 1) * stride_out];
-                        let y_slice = &y.data[b * stride_y..(b + 1) * stride_y];
+                        let y_slice = &y_data_expanded[b * stride_y..(b + 1) * stride_y];
                         // Transpose y_slice (K, N) -> (N, K)
                         // But for matmul_raw we need (M,N) @ (N,K) -> (M,K)
                         // We can use transpose_2d helper on the slice
                         let y_t = RawTensor::transpose_2d(y_slice, &[k, n]);
                         let chunk = RawTensor::matmul_raw(out_slice, &y_t, m, n, k);
-                        grad_data.extend_from_slice(&chunk);
+                        grad_data_expanded.extend_from_slice(&chunk);
                     }
-                    Some(RawTensor::new(grad_data, &x.shape, false))
+                    // Reduce gradients if x was broadcast
+                    // grad_data_expanded has shape [*batch_out, m, k]
+                    let mut grad_x_full_shape = batch_dims_out.to_vec();
+                    grad_x_full_shape.extend_from_slice(&[m, k]);
+
+                    let grad_reduced = RawTensor::sum_over_broadcast_dims(
+                        &grad_data_expanded,
+                        &grad_x_full_shape,
+                        &x.shape,
+                    );
+
+                    Some(RawTensor::new(grad_reduced, &x.shape, false))
                 }
             }
         } else {
@@ -406,21 +437,40 @@ impl GradFn for MatMulGradFn {
                     let k = x.shape[rank - 1];
                     let n = y.shape[rank - 1];
 
-                    let batch_count: usize = x.shape[..rank - 2].iter().product();
+                    let batch_dims_out = &out_grad.shape[..out_grad.shape.len() - 2];
+                    let batch_count: usize = batch_dims_out.iter().product();
+
+                    // Expand X to match output batch dims
+                    let mut target_x_shape = batch_dims_out.to_vec();
+                    target_x_shape.extend_from_slice(&[m, k]);
+                    let x_data_expanded =
+                        RawTensor::broadcast_to(&x.data, &x.shape, &target_x_shape);
+
                     let stride_x = m * k;
                     let stride_out = m * n;
 
-                    let mut grad_data = Vec::with_capacity(batch_count * k * n);
+                    let mut grad_data_expanded = Vec::with_capacity(batch_count * k * n);
 
                     for b in 0..batch_count {
-                        let x_slice = &x.data[b * stride_x..(b + 1) * stride_x];
+                        let x_slice = &x_data_expanded[b * stride_x..(b + 1) * stride_x];
                         let out_slice = &out_grad.data[b * stride_out..(b + 1) * stride_out];
                         let x_t = RawTensor::transpose_2d(x_slice, &[m, k]);
                         // (K, M) @ (M, N) -> (K, N)
                         let chunk = RawTensor::matmul_raw(&x_t, out_slice, k, m, n);
-                        grad_data.extend_from_slice(&chunk);
+                        grad_data_expanded.extend_from_slice(&chunk);
                     }
-                    Some(RawTensor::new(grad_data, &y.shape, false))
+
+                    // Reduce gradients if y was broadcast
+                    let mut grad_y_full_shape = batch_dims_out.to_vec();
+                    grad_y_full_shape.extend_from_slice(&[k, n]);
+
+                    let grad_reduced = RawTensor::sum_over_broadcast_dims(
+                        &grad_data_expanded,
+                        &grad_y_full_shape,
+                        &y.shape,
+                    );
+
+                    Some(RawTensor::new(grad_reduced, &y.shape, false))
                 }
             }
         } else {
