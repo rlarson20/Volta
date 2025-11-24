@@ -437,6 +437,23 @@ impl RawTensor {
         let sum_exp = Self::sum_dim(&exp_x, dim, true);
         exp_x.div(&sum_exp)
     }
+
+    /// Mean along a specific axis
+    ///
+    /// Implemented as sum_dim(dim) / size(dim)
+    pub fn mean_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
+        let (shape, _req_grad) = {
+            let t = self_t.borrow();
+            (t.shape.clone(), t.requires_grad)
+        };
+        assert!(dim < shape.len(), "Dimension out of bounds");
+
+        let n = shape[dim] as f32;
+        let sum = Self::sum_dim(self_t, dim, keepdim);
+        let div_tensor = Self::new(vec![n], &[1], false);
+
+        sum.div(&div_tensor)
+    }
 }
 
 // ===== NUMERICAL GRADIENT CHECKING =====
@@ -609,6 +626,7 @@ pub trait TensorOps {
     // Axis reductions
     fn sum_dim(&self, dim: usize, keepdim: bool) -> Tensor;
     fn max_dim(&self, dim: usize, keepdim: bool) -> Tensor;
+    fn mean_dim(&self, dim: usize, keepdim: bool) -> Tensor;
 
     // Softmax
     fn softmax(&self, dim: usize) -> Tensor;
@@ -728,6 +746,9 @@ impl TensorOps for Tensor {
     }
     fn max_dim(&self, dim: usize, keepdim: bool) -> Tensor {
         RawTensor::max_dim(self, dim, keepdim)
+    }
+    fn mean_dim(&self, dim: usize, keepdim: bool) -> Tensor {
+        RawTensor::mean_dim(self, dim, keepdim)
     }
     fn softmax(&self, dim: usize) -> Tensor {
         RawTensor::softmax(self, dim)

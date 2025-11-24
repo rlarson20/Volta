@@ -181,10 +181,54 @@ impl RawTensor {
                 }
                 out
             }
-            _ => panic!(
-                "Matmul not supported for shapes: {:?} @ {:?}",
-                shape_a, shape_b
-            ),
+            _ => {
+                // Batched MatMul: (B, M, K) @ (B, K, N) -> (B, M, N)
+                // We require strict matching of batch dimensions for now.
+                let rank_a = shape_a.len();
+                let rank_b = shape_b.len();
+                assert!(
+                    rank_a >= 3 && rank_b >= 3,
+                    "Batched matmul requires rank >= 3"
+                );
+                assert_eq!(
+                    shape_a[..rank_a - 2],
+                    shape_b[..rank_b - 2],
+                    "Batch dimensions must match"
+                );
+
+                let m = shape_a[rank_a - 2];
+                let k = shape_a[rank_a - 1];
+                let k2 = shape_b[rank_b - 2];
+                let n = shape_b[rank_b - 1];
+                assert_eq!(k, k2, "Matmul dimension mismatch in batch");
+
+                let batch_count: usize = shape_a[..rank_a - 2].iter().product();
+                let mut result_data = Vec::with_capacity(batch_count * m * n);
+
+                let stride_a = m * k;
+                let stride_b = k * n;
+
+                for b in 0..batch_count {
+                    let start_a = b * stride_a;
+                    let start_b = b * stride_b;
+                    let slice_a = &data_a[start_a..start_a + stride_a];
+                    let slice_b = &data_b[start_b..start_b + stride_b];
+
+                    let chunk_result = Self::matmul_raw(slice_a, slice_b, m, k, n);
+                    result_data.extend_from_slice(&chunk_result);
+                }
+
+                let mut out_shape = shape_a[..rank_a - 2].to_vec();
+                out_shape.push(m);
+                out_shape.push(n);
+
+                let out = Self::new(result_data, &out_shape, req_a || req_b);
+                if out.borrow().requires_grad {
+                    out.borrow_mut().parents = vec![self_t.clone(), other.clone()];
+                    out.borrow_mut().grad_fn = Some(Box::new(MatMulGradFn));
+                }
+                out
+            }
         }
     }
 
@@ -277,7 +321,33 @@ impl GradFn for MatMulGradFn {
                     let grad_data: Vec<f32> = y.data.iter().map(|&v| og * v).collect();
                     Some(RawTensor::new(grad_data, &x.shape, false))
                 }
-                _ => None,
+                _ => {
+                    // Batched case: (B, M, K) @ (B, K, N) -> (B, M, N)
+                    // dL/dx = dL/dz @ y^T
+                    // Performed batch-wise
+                    let rank = x.shape.len();
+                    let m = x.shape[rank - 2];
+                    let k = x.shape[rank - 1];
+                    let n = y.shape[rank - 1]; // y is (B, K, N)
+
+                    let batch_count: usize = x.shape[..rank - 2].iter().product();
+                    let stride_out = m * n;
+                    let stride_y = k * n;
+
+                    let mut grad_data = Vec::with_capacity(batch_count * m * k);
+
+                    for b in 0..batch_count {
+                        let out_slice = &out_grad.data[b * stride_out..(b + 1) * stride_out];
+                        let y_slice = &y.data[b * stride_y..(b + 1) * stride_y];
+                        // Transpose y_slice (K, N) -> (N, K)
+                        // But for matmul_raw we need (M,N) @ (N,K) -> (M,K)
+                        // We can use transpose_2d helper on the slice
+                        let y_t = RawTensor::transpose_2d(y_slice, &[k, n]);
+                        let chunk = RawTensor::matmul_raw(out_slice, &y_t, m, n, k);
+                        grad_data.extend_from_slice(&chunk);
+                    }
+                    Some(RawTensor::new(grad_data, &x.shape, false))
+                }
             }
         } else {
             None
@@ -328,7 +398,30 @@ impl GradFn for MatMulGradFn {
                     let grad_data: Vec<f32> = x.data.iter().map(|&u| og * u).collect();
                     Some(RawTensor::new(grad_data, &y.shape, false))
                 }
-                _ => None,
+                _ => {
+                    // Batched case: (B, M, K) @ (B, K, N) -> (B, M, N)
+                    // dL/dy = x^T @ dL/dz
+                    let rank = y.shape.len();
+                    let m = x.shape[rank - 2];
+                    let k = x.shape[rank - 1];
+                    let n = y.shape[rank - 1];
+
+                    let batch_count: usize = x.shape[..rank - 2].iter().product();
+                    let stride_x = m * k;
+                    let stride_out = m * n;
+
+                    let mut grad_data = Vec::with_capacity(batch_count * k * n);
+
+                    for b in 0..batch_count {
+                        let x_slice = &x.data[b * stride_x..(b + 1) * stride_x];
+                        let out_slice = &out_grad.data[b * stride_out..(b + 1) * stride_out];
+                        let x_t = RawTensor::transpose_2d(x_slice, &[m, k]);
+                        // (K, M) @ (M, N) -> (K, N)
+                        let chunk = RawTensor::matmul_raw(&x_t, out_slice, k, m, n);
+                        grad_data.extend_from_slice(&chunk);
+                    }
+                    Some(RawTensor::new(grad_data, &y.shape, false))
+                }
             }
         } else {
             None
