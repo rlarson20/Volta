@@ -201,6 +201,7 @@ mod tests {
     }
 
     #[test]
+    //CARE: sometimes fails grad check, need to investigate why
     fn test_maxpool2d_gradcheck() {
         let pool = MaxPool2d::new(2, 2, 0);
         let x = RawTensor::randn(&[1, 1, 4, 4]);
