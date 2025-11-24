@@ -51,15 +51,46 @@ impl RawTensor {
             }
         }
 
-        // DFS-based topological traversal
-        let mut stack = vec![tensor_ref.clone()];
+        // Use a topological sort to ensure we process nodes only after
+        // ALL their consumers have contributed gradients.
+        // A simple visited set in naive DFS is insufficient for "diamond" graphs
+        // (nodes that are reachable via multiple paths).
+
+        let mut topo_order = Vec::new();
         let mut visited = HashSet::new();
 
-        while let Some(tensor) = stack.pop() {
-            // Use raw pointer for HashSet (Rc doesn't impl Hash)
-            if !visited.insert(tensor.as_ptr()) {
-                continue;
+        // 1. Build topological order (post-order DFS)
+        // We simulate recursion with a stack to avoid recursion limit issues on deep graphs
+        enum Action {
+            Visit(Tensor),
+            PostVisit(Tensor),
+        }
+        let mut recursion_stack = vec![Action::Visit(tensor_ref.clone())];
+
+        while let Some(action) = recursion_stack.pop() {
+            match action {
+                Action::Visit(t) => {
+                    if visited.contains(&t.as_ptr()) {
+                        continue;
+                    }
+                    visited.insert(t.as_ptr());
+                    // Push post-visit marker
+                    recursion_stack.push(Action::PostVisit(t.clone()));
+                    // Push children (parents in backward graph) to visit
+                    let parents = t.borrow().parents.clone();
+                    for parent in parents {
+                        recursion_stack.push(Action::Visit(parent));
+                    }
+                }
+                Action::PostVisit(t) => {
+                    topo_order.push(t);
+                }
             }
+        }
+
+        // 2. Process in reverse topological order (consumers before producers)
+        // topo_order has [leaf, ..., root]. We reverse to get [root, ..., leaf].
+        for tensor in topo_order.into_iter().rev() {
             let (grad_fn, parents, grad_data, shape) = {
                 let t = tensor.borrow();
                 (
@@ -69,7 +100,8 @@ impl RawTensor {
                     t.shape.clone(),
                 )
             };
-            // If this node has a gradient function, backpropagate
+
+            // If this node has a gradient function and gradients, backpropagate
             if let Some(grad_fn) = grad_fn
                 && let Some(grad_out_data) = grad_data
             {
@@ -82,6 +114,7 @@ impl RawTensor {
                     parents: vec![],
                     device: Device::CPU,
                 };
+
                 // Compute gradients for parent tensors
                 let parent_grads = grad_fn.backward(&grad_out, &parents);
 
@@ -99,11 +132,6 @@ impl RawTensor {
                             for (accum, &new) in existing.iter_mut().zip(g_data.iter()) {
                                 *accum += new;
                             }
-                        }
-                        // Add to stack if it has grad_fn (not a leaf)
-                        if parent.grad_fn.is_some() {
-                            drop(parent);
-                            stack.push(parent_ref.clone());
                         }
                     }
                 }
