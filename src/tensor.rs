@@ -244,6 +244,7 @@ impl GradFn for SumDimGradFn {
         let _strides = RawTensor::compute_strides(&self.input_shape);
         let grad_strides = RawTensor::compute_strides(&expanded_shape);
 
+        #[allow(clippy::needless_range_loop)]
         for i in 0..size {
             // Get input coordinates
             let mut coords = vec![0; self.input_shape.len()];
@@ -365,6 +366,7 @@ impl RawTensor {
         let out_strides = Self::compute_strides(&out_shape);
 
         // Sum over the target dimension
+        #[allow(clippy::needless_range_loop)]
         for i in 0..data.len() {
             // Convert linear index to coordinates
             let mut coords = vec![0; shape.len()];
@@ -452,6 +454,7 @@ impl RawTensor {
         let _strides = Self::compute_strides(&shape);
         let out_strides = Self::compute_strides(&out_shape);
 
+        #[allow(clippy::needless_range_loop)]
         for i in 0..data.len() {
             let mut coords = vec![0; shape.len()];
             let mut rem = i;

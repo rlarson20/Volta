@@ -45,6 +45,7 @@ impl Adam {
         }
     }
 
+    #[allow(clippy::needless_range_loop)]
     pub fn step(&mut self) {
         self.t += 1;
         for (i, param) in self.params.iter().enumerate() {

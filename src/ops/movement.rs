@@ -376,6 +376,7 @@ impl RawTensor {
         let old_strides = Self::compute_strides(&old_shape);
         let new_strides = Self::compute_strides(new_shape);
 
+        #[allow(clippy::needless_range_loop)]
         for i in 0..new_size {
             let mut old_idx = 0;
             let mut rem = i;
