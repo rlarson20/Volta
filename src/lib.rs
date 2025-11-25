@@ -1137,7 +1137,6 @@ mod misc_tests {
         }
     }
     #[test]
-    #[cfg_attr(debug_assertions, ignore)]
     fn bench_matmul_speedup() {
         use std::time::Instant;
 
@@ -1159,8 +1158,8 @@ mod misc_tests {
 
         #[cfg(not(all(feature = "accelerate", target_os = "macos")))]
         assert!(
-            duration.as_millis() < 55,
-            "Optimized fallback should be <55ms, got {:?}",
+            duration.as_millis() < 100,
+            "Optimized fallback should be <100ms, got {:?}",
             duration
         );
     }

@@ -1,6 +1,8 @@
 # Volta ⚡
 
-[![Build Status](https://img.shields.io/github/actions/workflow/status/rlarson20/volta/rust.yml?branch=main)](https://github.com/rlarson20/volta/actions)
+<small>A PyTorch-like deep learning framework in pure Rust</small>
+
+[![Build Status](https://img.shields.io/github/actions/workflow/status/rlarson20/volta/ci.yml?branch=main)](https://github.com/rlarson20/volta/actions)
 [![Crates.io](https://img.shields.io/crates/v/volta.svg)](https://crates.io/crates/volta)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -11,13 +13,13 @@ This project is an educational endeavor to demystify the inner workings of moder
 ## Key Features
 
 - **Dynamic Computation Graph:** Build and backpropagate through graphs on the fly, just like PyTorch.
-- **Reverse-Mode Autodiff:** A powerful `backward()` method for efficient end-to-end gradient calculation.
+- **Reverse-Mode Autodiff:** Efficient reverse-mode automatic differentiation with topological sorting.
 - **Rich Tensor Operations:** A comprehensive set of unary, binary, reduction, and matrix operations via an ergonomic `TensorOps` trait.
 - **Broadcasting:** Full NumPy-style broadcasting support for arithmetic operations.
-- **Neural Network Layers:** `Linear`, `Conv2d`, `MaxPool2d`, `Flatten`, `ReLU`, `Sigmoid`, `Tanh`.
-- **Optimizers:** `SGD` (w/ Momentum), `Adam` (w/ bias correction), and `Muon` (Momentum Orthogonal).
+- **Neural Network Layers:** `Linear`, `Conv2d`, `MaxPool2d`, `Flatten`, `ReLU`, `Sigmoid`, `Tanh`, `Dropout`, `BatchNorm2d`.
+- **Optimizers:** `SGD` (momentum + weight decay), `Adam` (bias-corrected + weight decay), and experimental `Muon`.
 - **IO System:** Save and load model weights (state dicts) via `bincode`.
-- **BLAS Acceleration (macOS):** Optional performance boost for matrix multiplication via Apple's Accelerate framework.
+- **BLAS Acceleration (macOS):** Optional acceleration for matrix multiplication via Apple's Accelerate framework.
 - **Validation-Focused:** Includes a robust numerical gradient checker to ensure the correctness of all implemented operations.
 
 ## Project Status
@@ -26,8 +28,9 @@ This library is functional for training MLPs and CNNs on CPU. It features a veri
 
 - ✅ **What's Working:** Autograd, Conv2d/Linear layers, Optimizers (including Muon), DataLoaders, Serialization.
 - ⚠️ **What's in Progress:** Performance is not yet a primary focus. While BLAS acceleration is available for macOS matrix multiplication, most operations use naive loops.
+- ⚠️ **GPU Support:** Experimental GPU support (WIP) via the "gpu" feature. The main API remains CPU-only and using GPU device operations may panic or fall back to CPU with warnings.
 - ❌ **What's Missing:**
-  - **GPU Support:** Currently CPU-only.
+  - Production-ready GPU integration, distributed training, learning-rate schedulers, recurrent/transformer layers.
 
 ## Installation
 
@@ -151,7 +154,7 @@ The library is designed around a few core concepts:
 - **`TensorOps`**: A trait implemented for `Tensor` that provides the ergonomic, user-facing API for all operations (e.g., `tensor.add(&other)`, `tensor.matmul(&weights)`).
 - **`nn::Module`**: A trait for building neural network layers (`Linear`, `ReLU`) and composing them into larger models (`Sequential`). It standardizes the `forward()` pass and parameter collection.
 - **Optimizers (`Adam`, `SGD`, `Muon`)**: Structures that take a list of model parameters and update their weights based on computed gradients during `step()`.
-- **Vision Support:** Implemented `Conv2d` and `MaxPool2d` layers to unlock the ability to build and train Convolutional Neural Networks (CNNs).
+- **Vision Support:** `Conv2d` uses im2col + GEMM, `MaxPool2d` with gradient support, plus `BatchNorm2d` and `Dropout`.
 
 ## Running the Test Suite
 
@@ -167,19 +170,14 @@ To run tests with BLAS acceleration enabled (on macOS):
 cargo test --features accelerate -- --nocapture
 ```
 
-_Note: One test, `misc_tests::test_adam_vs_sgd`, is known to be flaky as it depends on the random seed and convergence speed. It may occasionally fail._
-
 ## Roadmap
 
 The next major steps for Volta are focused on expanding its capabilities to handle more complex models and improving performance.
 
-1.  **Vision Support:** Implement `Conv2d` and `MaxPool2d` layers to unlock the ability to build and train Convolutional Neural Networks (CNNs).
-2.  **GPU Acceleration:** Integrate a backend for GPU computation (e.g., `wgpu` for cross-platform support or direct `metal` bindings for macOS) to drastically speed up training.
-3.  **Performance Optimization:** Implement SIMD for element-wise operations and further integrate optimized BLAS routines.
+1.  **Performance Optimization:** Implement SIMD for element-wise operations and further integrate optimized BLAS routines.
 
 ### Outstanding Issues
 
-- **Device Argument Ignored**: The `Device::GPU` enum variant exists in `src/device.rs`, but passing it to `to_device` in `src/tensor.rs` causes a panic/unimplemented error.
 - **Serialization Fragility**: `Sequential` relies on string-key matching for `state_dict` (e.g., "0.weight"). Renaming layers or changing architecture depth will break loading without helpful error messages.
 - **Performance**: `im2col` implementation in `src/nn/layers/conv.rs` materializes the entire matrix in memory. Large batch sizes or high-resolution images will easily OOM even on high-end machines.
 
