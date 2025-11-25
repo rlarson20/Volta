@@ -258,6 +258,21 @@ mod ternary_tests {
         assert_eq!(x.grad(), Some(vec![1.0, 0.0])); // grad flows where cond=1
         assert_eq!(y.grad(), Some(vec![0.0, 1.0])); // grad flows where cond=0
     }
+
+    #[test]
+    fn test_where_broadcast_backward() {
+        // condition shape (2,1), true branch (2,3), false branch (1,3)
+        let cond = RawTensor::new(vec![1.0, 0.0], &[2, 1], false);
+        let true_branch = RawTensor::new(vec![10.0, 11.0, 12.0, 20.0, 21.0, 22.0], &[2, 3], true);
+        let false_branch = RawTensor::new(vec![1.0, 2.0, 3.0], &[1, 3], true);
+        let out = cond.where_op(&true_branch, &false_branch);
+        let loss = out.sum();
+        loss.backward();
+
+        // Gradients: first row picks true branch, second row picks false branch
+        assert_eq!(true_branch.grad(), Some(vec![1.0, 1.0, 1.0, 0.0, 0.0, 0.0]));
+        assert_eq!(false_branch.grad(), Some(vec![1.0, 1.0, 1.0]));
+    }
 }
 
 #[cfg(test)]
@@ -1148,19 +1163,19 @@ mod misc_tests {
         let duration = start.elapsed();
 
         println!("256x256 matmul: {:?}", duration);
+        let max_duration_ms: u128 = if cfg!(all(feature = "accelerate", target_os = "macos")) {
+            if cfg!(debug_assertions) { 50 } else { 10 }
+        } else if cfg!(debug_assertions) {
+            250
+        } else {
+            100
+        };
 
-        #[cfg(all(feature = "accelerate", target_os = "macos"))]
         assert!(
-            duration.as_millis() < 10,
-            "BLAS should be <10ms, got {:?}",
-            duration
-        );
-
-        #[cfg(not(all(feature = "accelerate", target_os = "macos")))]
-        assert!(
-            duration.as_millis() < 100,
-            "Optimized fallback should be <100ms, got {:?}",
-            duration
+            duration.as_millis() < max_duration_ms,
+            "Matmul took {:?} (> {}ms threshold for this build configuration)",
+            duration,
+            max_duration_ms
         );
     }
     #[test]

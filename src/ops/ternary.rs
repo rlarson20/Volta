@@ -63,45 +63,57 @@ impl GradFn for MulAccGradFn {
 
 /// Gradient function for Where (conditional selection)
 ///
-/// Gradient flows through the branch that was selected.
-/// The condition tensor itself is not differentiable.
+/// Gradients flow through the branch that was selected, and must be reduced
+/// along any dimensions that were broadcast.
 pub struct WhereGradFn {
-    condition: Vec<f32>,
+    condition: Vec<f32>,     // broadcasted condition (matches out_grad shape)
+    true_shape: Vec<usize>,  // original shape of the "true" branch
+    false_shape: Vec<usize>, // original shape of the "false" branch
 }
+
 impl GradFn for WhereGradFn {
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
-        let x_requires = parents[0].borrow().requires_grad;
-        let y_requires = parents[1].borrow().requires_grad;
+        let true_parent = parents[0].borrow();
+        let false_parent = parents[1].borrow();
+        let needs_true = true_parent.requires_grad;
+        let needs_false = false_parent.requires_grad;
+        drop(true_parent);
+        drop(false_parent);
 
-        let grad_x = if x_requires {
-            let data = out_grad
-                .data
-                .iter()
-                .zip(&self.condition)
-                .map(|(&g, &c)| if c != 0.0 { g } else { 0.0 })
-                .collect();
-            Some(RawTensor::new(data, &out_grad.shape, false))
-        } else {
-            None
-        };
+        let mut grad_true = None;
+        if needs_true {
+            let mut data = vec![0.0; out_grad.data.len()];
+            for (i, (&g, &c)) in out_grad.data.iter().zip(&self.condition).enumerate() {
+                if c != 0.0 {
+                    data[i] = g;
+                }
+            }
+            let reduced =
+                RawTensor::sum_over_broadcast_dims(&data, &out_grad.shape, &self.true_shape);
+            grad_true = Some(RawTensor::new(reduced, &self.true_shape, false));
+        }
 
-        let grad_y = if y_requires {
-            let data = out_grad
-                .data
-                .iter()
-                .zip(&self.condition)
-                .map(|(&g, &c)| if c == 0.0 { g } else { 0.0 })
-                .collect();
-            Some(RawTensor::new(data, &out_grad.shape, false))
-        } else {
-            None
-        };
+        let mut grad_false = None;
+        if needs_false {
+            let mut data = vec![0.0; out_grad.data.len()];
+            for (i, (&g, &c)) in out_grad.data.iter().zip(&self.condition).enumerate() {
+                if c == 0.0 {
+                    data[i] = g;
+                }
+            }
+            let reduced =
+                RawTensor::sum_over_broadcast_dims(&data, &out_grad.shape, &self.false_shape);
+            grad_false = Some(RawTensor::new(reduced, &self.false_shape, false));
+        }
 
-        vec![grad_x, grad_y]
+        vec![grad_true, grad_false]
     }
+
     fn clone_box(&self) -> Box<dyn GradFn> {
         Box::new(WhereGradFn {
             condition: self.condition.clone(),
+            true_shape: self.true_shape.clone(),
+            false_shape: self.false_shape.clone(),
         })
     }
 }
@@ -111,65 +123,78 @@ impl GradFn for WhereGradFn {
 impl RawTensor {
     /// Apply ternary operations (3 inputs, 1 output)
     pub fn ternary_op(x: &Tensor, y: &Tensor, z: &Tensor, op: TernaryOp) -> Tensor {
-        let (data_x, shape_x, req_x) = {
-            let s = x.borrow();
-            (s.data.clone(), s.shape.clone(), s.requires_grad)
-        };
-        let (data_y, shape_y, req_y) = {
-            let s = y.borrow();
-            (s.data.clone(), s.shape.clone(), s.requires_grad)
-        };
-        let (data_z, shape_z, req_z) = {
-            let s = z.borrow();
-            (s.data.clone(), s.shape.clone(), s.requires_grad)
-        };
-        assert_eq!(shape_x, shape_y, "Ternary op requires matching shapes");
-        assert_eq!(shape_x, shape_z, "Ternary op requires matching shapes");
-
-        let (result_data, grad_fn, requires_grad): (Vec<f32>, Box<dyn GradFn>, bool) = match op {
+        match op {
             TernaryOp::MulAcc => {
-                // x * y + z
-                let data = data_x
+                let (data_x, shape_x, req_x) = {
+                    let s = x.borrow();
+                    (s.data.clone(), s.shape.clone(), s.requires_grad)
+                };
+                let (data_y, _, req_y) = {
+                    let s = y.borrow();
+                    (s.data.clone(), s.shape.clone(), s.requires_grad)
+                };
+                let (data_z, _, req_z) = {
+                    let s = z.borrow();
+                    (s.data.clone(), s.shape.clone(), s.requires_grad)
+                };
+                assert_eq!(shape_x, y.borrow().shape, "MulAcc requires matching shapes");
+                assert_eq!(shape_x, z.borrow().shape, "MulAcc requires matching shapes");
+
+                let result_data = data_x
                     .iter()
                     .zip(&data_y)
                     .zip(&data_z)
                     .map(|((a, b), c)| a * b + c)
-                    .collect();
-                (data, Box::new(MulAccGradFn), req_x || req_y || req_z)
+                    .collect::<Vec<_>>();
+
+                let out = Self::new(result_data, &shape_x, req_x || req_y || req_z);
+                if out.borrow().requires_grad {
+                    out.borrow_mut().parents = vec![x.clone(), y.clone(), z.clone()];
+                    out.borrow_mut().grad_fn = Some(Box::new(MulAccGradFn));
+                }
+                out
             }
             TernaryOp::Where => {
-                // x is condition, y is true branch, z is false branch
-                // x[i] != 0 ? y[i] : z[i]
-                // Conditional selection: x ? y : z
-                // x is condition (nonzero = true), y is true branch, z is false branch
+                // x = condition, y = true branch, z = false branch
+                let (cond_data, cond_shape) = {
+                    let s = x.borrow();
+                    (s.data.clone(), s.shape.clone())
+                };
+                let (true_data, true_shape, true_req) = {
+                    let s = y.borrow();
+                    (s.data.clone(), s.shape.clone(), s.requires_grad)
+                };
+                let (false_data, false_shape, false_req) = {
+                    let s = z.borrow();
+                    (s.data.clone(), s.shape.clone(), s.requires_grad)
+                };
 
-                let data = data_x
+                let tmp_shape = Self::broadcast_shape(&cond_shape, &true_shape);
+                let out_shape = Self::broadcast_shape(&tmp_shape, &false_shape);
+
+                let cond_bc = Self::broadcast_to(&cond_data, &cond_shape, &out_shape);
+                let true_bc = Self::broadcast_to(&true_data, &true_shape, &out_shape);
+                let false_bc = Self::broadcast_to(&false_data, &false_shape, &out_shape);
+
+                let result_data = cond_bc
                     .iter()
-                    .zip(&data_y)
-                    .zip(&data_z)
-                    .map(|((c, a), b)| if *c != 0.0 { *a } else { *b })
-                    .collect();
-                (
-                    data,
-                    Box::new(WhereGradFn {
-                        condition: data_x.clone(),
-                    }),
-                    req_y || req_z,
-                )
+                    .zip(&true_bc)
+                    .zip(&false_bc)
+                    .map(|((&c, &t), &f)| if c != 0.0 { t } else { f })
+                    .collect::<Vec<_>>();
+
+                let out = Self::new(result_data, &out_shape, true_req || false_req);
+                if out.borrow().requires_grad {
+                    out.borrow_mut().parents = vec![y.clone(), z.clone()];
+                    out.borrow_mut().grad_fn = Some(Box::new(WhereGradFn {
+                        condition: cond_bc,
+                        true_shape,
+                        false_shape,
+                    }));
+                }
+                out
             }
-        };
-
-        let out = Self::new(result_data, &shape_x, requires_grad);
-
-        if out.borrow().requires_grad {
-            let parents = match op {
-                TernaryOp::MulAcc => vec![x.clone(), y.clone(), z.clone()],
-                TernaryOp::Where => vec![y.clone(), z.clone()], // condition is not a parent
-            };
-            out.borrow_mut().parents = parents;
-            out.borrow_mut().grad_fn = Some(grad_fn);
         }
-        out
     }
 
     pub fn mulacc(x: &Tensor, y: &Tensor, z: &Tensor) -> Tensor {
