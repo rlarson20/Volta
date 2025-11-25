@@ -13,6 +13,17 @@
 //! dynamic computation graphs. Each tensor operation creates new tensors and stores gradient
 //! functions that know how to backpropagate through that operation.
 
+#[cfg(feature = "gpu")]
+pub mod gpu;
+
+pub mod storage;
+
+// Add to re-exports:
+pub use storage::Storage;
+
+#[cfg(feature = "gpu")]
+pub use gpu::{GpuBuffer, GpuContext, get_gpu_context, is_gpu_available};
+
 pub mod autograd;
 pub mod device;
 pub mod io;
@@ -1126,6 +1137,7 @@ mod misc_tests {
         }
     }
     #[test]
+    #[cfg_attr(debug_assertions, ignore)]
     fn bench_matmul_speedup() {
         use std::time::Instant;
 
