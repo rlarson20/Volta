@@ -24,7 +24,7 @@ pub type Tensor = Rc<RefCell<RawTensor>>;
 /// Fields:
 /// - `data`: flat Vec<f32> of actual values (row-major order)
 /// - `shape`: dimensions, e.g. [batch, channels, height, width]
-/// - `grad`: accumulated gradient (Some if requires_grad, None otherwise)
+/// - `grad`: accumulated gradient (Some if `requires_grad`, None otherwise)
 /// - `requires_grad`: whether to track gradients for this tensor
 /// - `grad_fn`: function to compute parent gradients during backward
 /// - `parents`: input tensors that this tensor depends on
@@ -52,7 +52,7 @@ pub fn manual_seed(seed: u64) {
     });
 }
 
-/// Run a closure with the current RNG (ThreadRng or specific StdRng)
+/// Run a closure with the current RNG (`ThreadRng` or specific `StdRng`)
 pub(crate) fn with_rng<F, T>(f: F) -> T
 where
     F: FnOnce(&mut dyn rand::RngCore) -> T,
@@ -102,7 +102,7 @@ impl RawTensor {
     /// * `requires_grad` - Whether to track gradients for backpropagation
     ///
     /// # Panics
-    /// Panics if data.len() != shape.product()
+    /// Panics if `data.len()` != `shape.product()`
     pub fn new(data: Vec<f32>, shape: &[usize], requires_grad: bool) -> Tensor {
         assert_eq!(
             data.len(),
@@ -155,7 +155,7 @@ impl RawTensor {
     /// Xavier uniform initialization
     ///
     /// Samples weights uniformly from [-limit, limit] where
-    /// limit = sqrt(6 / (fan_in + fan_out))
+    /// limit = sqrt(6 / (`fan_in` + `fan_out`))
     ///
     /// This helps maintain gradient variance across layers.
     pub fn xavier_uniform(shape: &[usize]) -> Tensor {
@@ -171,7 +171,7 @@ impl RawTensor {
         Self::new(data, shape, false)
     }
 
-    /// He (Kaiming) normal initialization suited for ReLU networks.
+    /// He (Kaiming) normal initialization suited for `ReLU` networks.
     ///
     /// Draws samples from `N(0, sqrt(2 / fan_in))` where `fan_in`
     /// is the number of input connections.
@@ -218,7 +218,7 @@ impl RawTensor {
 
 // ===== SOFTMAX & AXIS REDUCTIONS =====
 
-/// Gradient for sum_dim: broadcast ones back to input shape
+/// Gradient for `sum_dim`: broadcast ones back to input shape
 struct SumDimGradFn {
     input_shape: Vec<usize>,
     dim: usize,
@@ -278,7 +278,7 @@ impl GradFn for SumDimGradFn {
     }
 }
 
-/// Gradient for max_dim: sparse gradient to max elements only
+/// Gradient for `max_dim`: sparse gradient to max elements only
 struct MaxDimGradFn {
     input_shape: Vec<usize>,
     max_indices: Vec<usize>, // linear indices of max elements
@@ -340,9 +340,9 @@ impl RawTensor {
     /// * `keepdim` - If true, keep reduced dimension as size 1
     ///
     /// # Examples
-    /// let x = Tensor::new(vec![1,2,3,4,5,6], &[2,3], true);
-    /// x.sum_dim(1, false) // -> [6, 15] shape [2]
-    /// x.sum_dim(1, true)  // -> [[6], [15]] shape [2,1]
+    /// let x = `Tensor::new(vec`![1,2,3,4,5,6], &[2,3], true);
+    /// `x.sum_dim(1`, false) // -> [6, 15] shape [2]
+    /// `x.sum_dim(1`, true)  // -> [[6], [15]] shape [2,1]
     pub fn sum_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
         let (data, shape, req_grad) = {
             let s = self_t.borrow();
@@ -509,9 +509,9 @@ impl RawTensor {
         let sum_exp = Self::sum_dim(&exp_x, dim, true);
         exp_x.div(&sum_exp)
     }
-    /// LogSoftmax along a specific axis (numerically stable)
-    /// log(exp(x_i) / sum(exp(x_j))) = x_i - log(sum(exp(x_j)))
-    /// Uses LogSumExp trick: log(sum(exp(x))) = m + log(sum(exp(x-m)))
+    /// `LogSoftmax` along a specific axis (numerically stable)
+    /// `log(exp(x_i)` / `sum(exp(x_j))`) = `x_i` - `log(sum(exp(x_j)))`
+    /// Uses `LogSumExp` trick: log(sum(exp(x))) = m + log(sum(exp(x-m)))
     pub fn log_softmax(self_t: &Tensor, dim: usize) -> Tensor {
         let max = Self::max_dim(self_t, dim, true);
         let shifted = self_t.sub(&max);
@@ -524,7 +524,7 @@ impl RawTensor {
 
     /// Mean along a specific axis
     ///
-    /// Implemented as sum_dim(dim) / size(dim)
+    /// Implemented as `sum_dim(dim)` / size(dim)
     pub fn mean_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
         let (shape, _req_grad) = {
             let t = self_t.borrow();
@@ -547,7 +547,7 @@ impl RawTensor {
     ///
     /// For each parameter, we compute:
     ///
-    /// Analytical gradient: What our backward() computes
+    /// Analytical gradient: What our `backward()` computes
     /// Numerical gradient: (f(x+ε) - f(x-ε)) / (2ε)
     ///
     /// The central difference formula is more accurate than forward difference.
@@ -559,7 +559,7 @@ impl RawTensor {
     /// * `tolerance` - Maximum acceptable relative error (typically 1e-3 to 1e-2)
     ///
     /// # Returns
-    /// (max_error, mean_error, passed)
+    /// (`max_error`, `mean_error`, passed)
     pub fn check_gradients<F>(
         tensor: &Tensor,
         loss_fn: F,

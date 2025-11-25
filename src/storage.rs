@@ -11,7 +11,7 @@ use crate::device::Device;
 /// Storage backend for tensor data
 ///
 /// This enum allows tensors to store their data either on CPU (as a Vec<f32>)
-/// or on GPU (as a GpuBuffer). Operations automatically handle the right backend.
+/// or on GPU (as a `GpuBuffer`). Operations automatically handle the right backend.
 #[derive(Clone)]
 pub enum Storage {
     /// CPU storage - data lives in main memory

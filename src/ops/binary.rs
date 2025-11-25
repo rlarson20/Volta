@@ -4,7 +4,7 @@ use crate::{RawTensor, Tensor};
 /// Binary operations: two inputs, one output
 ///
 /// Broadcasting is automatically handled for compatible shapes.
-/// Non-differentiable operations (Mod, Cmplt) return tensors with requires_grad=false.
+/// Non-differentiable operations (Mod, Cmplt) return tensors with `requires_grad=false`.
 #[derive(Clone, Copy)]
 pub enum BinaryOp {
     Add,   // x + y
@@ -199,7 +199,7 @@ impl GradFn for BinaryGradFn {
 
 // ===== BINARY OPERATIONS =====
 impl RawTensor {
-    /// Compute broadcast shape following NumPy broadcasting rules
+    /// Compute broadcast shape following `NumPy` broadcasting rules
     ///
     /// Rules:
     /// 1. Align shapes from the right (trailing dimensions)
@@ -244,8 +244,8 @@ impl RawTensor {
 
     /// Broadcast data from one shape to another
     ///
-    /// This repeats values along dimensions where from_shape is 1
-    /// and to_shape is larger.
+    /// This repeats values along dimensions where `from_shape` is 1
+    /// and `to_shape` is larger.
     pub(crate) fn broadcast_to(data: &[f32], from_shape: &[usize], to_shape: &[usize]) -> Vec<f32> {
         if from_shape == to_shape {
             return data.to_vec();

@@ -8,7 +8,7 @@ pub enum TernaryOp {
     Where,  // condition ? x : y (masked selection)
 }
 
-/// Gradient function for MulAcc (fused multiply-add)
+/// Gradient function for `MulAcc` (fused multiply-add)
 ///
 /// z = x*y + w has gradients:
 /// - ∂z/∂x = y

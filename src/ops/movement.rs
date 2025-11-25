@@ -407,7 +407,7 @@ impl RawTensor {
     /// Pad tensor with zeros
     ///
     /// # Arguments
-    /// * `padding` - For each dimension, (left_pad, right_pad)
+    /// * `padding` - For each dimension, (`left_pad`, `right_pad`)
     pub fn pad(self_t: &Tensor, padding: &[(usize, usize)]) -> Tensor {
         let (data, old_shape, req_grad) = {
             let s = self_t.borrow();
@@ -582,7 +582,7 @@ impl RawTensor {
 
     /// Subsample tensor with specified strides
     ///
-    /// Similar to slicing with step: array[::2] takes every other element
+    /// Similar to slicing with step: array[`::2`] takes every other element
     pub fn stride_op(self_t: &Tensor, strides: &[usize]) -> Tensor {
         let (data, old_shape, req_grad) = {
             let s = self_t.borrow();

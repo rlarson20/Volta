@@ -15,7 +15,7 @@ use crate::{RawTensor, Tensor};
 /// - Cos: d(cos(x))/dx = -sin(x)
 /// - Tanh: d(tanh(x))/dx = 1 - tanh²(x)
 /// - Sigmoid: d(σ(x))/dx = σ(x)·(1-σ(x))
-/// - ReLU: d(max(0,x))/dx = x > 0 ? 1 : 0
+/// - `ReLU`: d(max(0,x))/dx = x > 0 ? 1 : 0
 #[derive(Clone, Copy)]
 pub enum UnaryOp {
     Neg,

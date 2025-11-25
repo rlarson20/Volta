@@ -59,7 +59,7 @@ impl Conv2d {
         }
     }
 
-    /// Im2col: Convert (B, C, H, W) → (B*H_out*W_out, C*K*K) matrix
+    /// Im2col: Convert (B, C, H, W) → (B*`H_out`*`W_out`, C*K*K) matrix
     /// Each row contains a flattened receptive field
     fn im2col(x: &Tensor, kernel: (usize, usize), stride: (usize, usize)) -> Tensor {
         let (data, shape, requires_grad) = {

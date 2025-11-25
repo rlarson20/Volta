@@ -2,7 +2,7 @@ use crate::io::StateDict;
 use crate::nn::Module;
 use crate::tensor::{Tensor, TensorOps};
 
-/// Flattens the input tensor into a 2D tensor (batch_size, remaining_features).
+/// Flattens the input tensor into a 2D tensor (`batch_size`, `remaining_features`).
 ///
 /// Assumes the first dimension is the batch dimension and flattens all subsequent dimensions.
 /// Input shape: (B, D1, D2, ...)

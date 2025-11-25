@@ -42,7 +42,7 @@ impl Muon {
         }
     }
 
-    /// Newton-Schulz iteration: X_{k+1} = 0.5 * X_k * (3I - X_k^T * X_k)
+    /// Newton-Schulz iteration: X_{k+1} = 0.5 * `X_k` * (3I - `X_k^T` * `X_k`)
     ///
     /// Operated on flattened (M, N) matrices.
     fn newton_schulz(&self, g: &mut [f32], rows: usize, cols: usize) {

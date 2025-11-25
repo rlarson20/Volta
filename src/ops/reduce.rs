@@ -63,7 +63,7 @@ impl GradFn for MaxReduceGradFn {
 
 /// Gradient function for Mean reduction
 ///
-/// Each element gets gradient / num_elements.
+/// Each element gets gradient / `num_elements`.
 pub struct MeanGradFn {
     input_shape: Vec<usize>,
 }

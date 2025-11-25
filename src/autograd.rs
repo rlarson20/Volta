@@ -11,7 +11,7 @@ use std::collections::HashSet;
 /// - `out_grad`: gradient of loss w.r.t. this operation's output
 /// - `parents`: the input tensors to this operation
 ///
-/// Returns: vector of gradients w.r.t. each parent (Some if requires_grad, None otherwise)
+/// Returns: vector of gradients w.r.t. each parent (Some if `requires_grad`, None otherwise)
 pub trait GradFn {
     /// Compute gradients for parent tensors given output gradient
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>>;
@@ -27,10 +27,10 @@ impl RawTensor {
     /// This implements reverse-mode automatic differentiation:
     /// 1. Initialize this tensor's gradient to 1 (assumes it's a scalar loss)
     /// 2. Traverse the computation graph backwards (topological sort via DFS)
-    /// 3. For each node, call its grad_fn to compute parent gradients
+    /// 3. For each node, call its `grad_fn` to compute parent gradients
     /// 4. Accumulate gradients in each parent tensor
     ///
-    /// Uses a HashSet to track visited nodes and avoid recomputation.
+    /// Uses a `HashSet` to track visited nodes and avoid recomputation.
     pub fn backward(tensor_ref: &Tensor) {
         let tensor = tensor_ref.borrow();
         assert!(

@@ -21,7 +21,7 @@ pub trait Module {
         }
     }
     /// Switch between training and evaluation modes.
-    /// Important for layers like BatchNorm and Dropout.
+    /// Important for layers like `BatchNorm` and Dropout.
     fn train(&mut self, _mode: bool) {}
     fn eval(&mut self) {
         self.train(false);

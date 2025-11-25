@@ -6,7 +6,7 @@ use crate::tensor::{RawTensor, Tensor, TensorOps};
 /// 2D max pooling layer
 ///
 /// Accepts tensors shaped (batch, channels, height, width) and downsamples each
-/// spatial window to its maximum value, similar to PyTorch's `nn.MaxPool2d`.
+/// spatial window to its maximum value, similar to `PyTorch`'s `nn.MaxPool2d`.
 pub struct MaxPool2d {
     kernel: (usize, usize),
     stride: (usize, usize),

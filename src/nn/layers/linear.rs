@@ -5,7 +5,7 @@ use crate::tensor::{RawTensor, Tensor, TensorOps};
 /// Fully-connected (dense/linear) layer
 ///
 /// Computes: y = xW + b
-/// where x is (batch, in_features), W is (in_features, out_features), b is (out_features)
+/// where x is (batch, `in_features`), W is (`in_features`, `out_features`), b is (`out_features`)
 pub struct Linear {
     pub weight: Tensor,
     pub bias: Option<Tensor>,
