@@ -262,7 +262,6 @@ impl RawTensor {
         let to_strides = Self::compute_strides(to_shape);
 
         // For each output position, compute corresponding input position
-        #[allow(clippy::needless_range_loop)]
         for i in 0..to_size {
             let mut from_idx = 0;
             let mut remainder = i;
