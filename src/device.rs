@@ -28,8 +28,7 @@ impl Device {
     pub fn name(&self) -> &str {
         match self {
             Device::CPU => "CPU",
-            Device::GPU(name) => name.as_str(),
-            Device::Metal(name) => name.as_str(),
+            Device::GPU(name) | Device::Metal(name) => name.as_str(),
         }
     }
 }
