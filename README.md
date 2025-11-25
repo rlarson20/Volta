@@ -35,7 +35,7 @@ Add Volta to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-volta = "0.1.0"
+volta = "0.2.0"
 ```
 
 ### Enabling BLAS on macOS
@@ -44,7 +44,7 @@ For a significant performance boost in matrix multiplication on macOS, enable th
 
 ```toml
 [dependencies]
-volta = { version = "0.1.0", features = ["accelerate"] }
+volta = { version = "0.2.0", features = ["accelerate"] }
 ```
 
 ## Examples:
