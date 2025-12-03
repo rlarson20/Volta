@@ -41,7 +41,7 @@ impl RawTensor {
 
     // Helper: raw matmul computation
     /// Raw matrix multiplication: (m,k) @ (k,n) -> (m,n)
-    /// Uses naive O(mnk) algorithm. For production, use optimized BLAS.
+    /// Uses cblas_sgemm on macOS, matrixmultiply::sgemm elsewhere
     pub fn matmul_raw(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
         #[cfg(all(feature = "accelerate", target_os = "macos"))]
         {
