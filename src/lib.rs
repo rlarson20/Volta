@@ -329,6 +329,22 @@ mod misc_tests {
         assert_eq!(b.grad(), Some(vec![1.0, 1.0]));
     }
 
+    #[test]
+    fn test_tensor_zero_grad() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], true);
+        let loss = x.sum();
+        loss.backward();
+
+        assert!(x.grad().is_some());
+
+        x.zero_grad();
+        assert!(x.grad().is_none());
+
+        let rewind = x.sum();
+        rewind.backward();
+        assert_eq!(x.grad(), Some(vec![1.0, 1.0, 1.0]));
+    }
+
     // ===== BROADCASTING TESTS =====
 
     #[test]

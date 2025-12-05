@@ -652,7 +652,17 @@ impl RawTensor {
     }
 }
 
-// OR WHERE TRAIT API GOES
+impl RawTensor {
+    /// Clear any cached gradient on this tensor.
+    ///
+    /// This mirrors `Module::zero_grad` but works on individual tensors so
+    /// training loops that own raw tensors (not wrapped in modules) can
+    /// reset gradients before a new backward pass.
+    pub fn zero_grad(self_t: &Tensor) {
+        self_t.borrow_mut().grad = None;
+    }
+}
+
 // ===== TRAIT-BASED API =====
 
 /// Public trait for tensor operations
@@ -707,6 +717,7 @@ pub trait TensorOps {
     //Gradient ops
     fn backward(&self);
     fn grad(&self) -> Option<Vec<f32>>;
+    fn zero_grad(&self);
 
     // Axis reductions
     fn sum_dim(&self, dim: usize, keepdim: bool) -> Tensor;
@@ -830,6 +841,9 @@ impl TensorOps for Tensor {
     }
     fn grad(&self) -> Option<Vec<f32>> {
         self.borrow().grad.clone()
+    }
+    fn zero_grad(&self) {
+        RawTensor::zero_grad(self)
     }
     fn sum_dim(&self, dim: usize, keepdim: bool) -> Tensor {
         RawTensor::sum_dim(self, dim, keepdim)
