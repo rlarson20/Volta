@@ -76,7 +76,7 @@ fn main() {
 
     // 3. Set up the optimizer
     let params = model.parameters();
-    let mut optimizer = Adam::new(params, 0.1, (0.9, 0.999), 1e-8);
+    let mut optimizer = Adam::new(params, 0.1, (0.9, 0.999), 1e-8, 0.0);
 
     // 4. Training loop
     println!("Training a simple MLP to learn XOR...");
@@ -133,7 +133,7 @@ fn main() {
     let input = volta::randn(&[4, 1, 28, 28]); // Batch 4
     let target = volta::randn(&[4, 10]);       // Dummy targets
     let params = model.parameters();
-    let mut optim = Adam::new(params, 1e-3, (0.9, 0.999), 1e-8);
+    let mut optim = Adam::new(params, 1e-3, (0.9, 0.999), 1e-8, 0.0);
 
     // 3. Training Step
     optim.zero_grad();
