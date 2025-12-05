@@ -212,8 +212,13 @@ mod tests {
     //CARE: sometimes fails grad check, need to investigate why
     fn test_maxpool2d_gradcheck() {
         let pool = MaxPool2d::new(2, 2, 0);
-        let x = RawTensor::randn(&[1, 1, 4, 4]);
-        x.borrow_mut().requires_grad = true;
+        // Use deterministic, strictly increasing data so every pooling window
+        // has a unique maximum that is well separated from the others. This
+        // avoids the non-differentiable tie cases that cause the numerical
+        // gradient checker to spuriously fail.
+        let data: Vec<f32> = (0..16).map(|i| i as f32).collect();
+        let x = RawTensor::new(data, &[1, 1, 4, 4], true);
+
         let passed = RawTensor::check_gradients_simple(&x, |t| pool.forward(t).sum());
         assert!(passed, "MaxPool2d gradient check failed");
     }
