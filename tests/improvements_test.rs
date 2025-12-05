@@ -1,4 +1,36 @@
+use std::cell::Cell;
+use std::rc::Rc;
+use volta::io::{StateDict, TensorData};
 use volta::*;
+
+struct CountingModule {
+    counter: Rc<Cell<usize>>,
+}
+
+impl Module for CountingModule {
+    fn forward(&self, x: &Tensor) -> Tensor {
+        x.clone()
+    }
+
+    fn parameters(&self) -> Vec<Tensor> {
+        vec![]
+    }
+
+    fn state_dict(&self) -> StateDict {
+        self.counter.set(self.counter.get() + 1);
+        let mut state = StateDict::new();
+        state.insert(
+            "dummy".to_string(),
+            TensorData {
+                data: vec![1.0],
+                shape: vec![1],
+            },
+        );
+        state
+    }
+
+    fn load_state_dict(&mut self, _state: &StateDict) {}
+}
 
 #[test]
 fn test_device_safety_improvements() {
@@ -73,6 +105,22 @@ fn test_sequential_serialization_improvements() {
             "State dict keys should contain layer index"
         );
     }
+}
+
+#[test]
+fn test_sequential_state_dict_calls_layer_once() {
+    let counter = Rc::new(Cell::new(0));
+    let layer = CountingModule {
+        counter: counter.clone(),
+    };
+    let model = Sequential::new(vec![Box::new(layer)]);
+
+    let _ = model.state_dict();
+    assert_eq!(
+        counter.get(),
+        1,
+        "Each layer's state_dict should be invoked exactly once"
+    );
 }
 
 #[test]

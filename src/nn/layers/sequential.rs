@@ -23,17 +23,13 @@ impl Module for Sequential {
     fn state_dict(&self) -> StateDict {
         let mut state = StateDict::new();
         for (i, layer) in self.layers.iter().enumerate() {
-            match layer.state_dict().is_empty() {
-                false => {
-                    let sub_state = layer.state_dict();
-                    for (key, value) in sub_state {
-                        state.insert(format!("{}.{}", i, key), value);
-                    }
-                }
-                true => {
-                    // Skip stateless layers in state dict to avoid empty keys
-                    continue;
-                }
+            let sub_state = layer.state_dict();
+            if sub_state.is_empty() {
+                continue;
+            }
+
+            for (key, value) in sub_state {
+                state.insert(format!("{}.{}", i, key), value);
             }
         }
         state
