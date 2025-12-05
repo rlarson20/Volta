@@ -4,7 +4,8 @@
 //! transferring data between CPU and GPU.
 
 use super::get_gpu_context;
-use bytemuck::{Pod, Zeroable};
+use std::sync::mpsc;
+use std::time::Duration;
 
 /// A buffer that lives on the GPU
 ///
@@ -99,17 +100,29 @@ impl GpuBuffer {
         // Map the staging buffer and read the data
         let buffer_slice = staging_buffer.slice(..);
 
-        // This is async, but we need to block
-        let (tx, rx) = std::sync::mpsc::channel();
+        // This is async, but we can synchronously block because the GPU feature pulls in pollster.
+
+        let (sender, receiver) = mpsc::channel();
         buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-            tx.send(result).unwrap();
+            sender
+                .send(result)
+                .expect("map_async callback receiver dropped");
         });
 
-        // Wait for the GPU to finish
-        ctx.device().poll(wgpu::Maintain::Wait);
-        rx.recv().unwrap().expect("Failed to map buffer");
+        // Wait for the GPU to complete the mapping operation.
+        ctx.device()
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(Duration::from_secs(5)),
+            })
+            .expect("Failed to poll device");
 
+        receiver
+            .recv()
+            .expect("map_async result channel closed")
+            .expect("Failed to map buffer");
         // Read the data
+
         let data = buffer_slice.get_mapped_range();
         let result: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
 

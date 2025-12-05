@@ -91,7 +91,7 @@ impl GpuKernels {
 
             // Dispatch workgroups
             // Each workgroup processes 256 elements (defined in shader)
-            let workgroup_count = (a.len() as u32 + 255) / 256;
+            let workgroup_count = (a.len() as u32).div_ceil(256);
             compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
         }
 
@@ -148,7 +148,7 @@ impl GpuKernels {
             compute_pass.set_pipeline(pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
-            let workgroup_count = (input.len() as u32 + 255) / 256;
+            let workgroup_count = (input.len() as u32).div_ceil(256);
             compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
         }
 
@@ -229,8 +229,8 @@ impl GpuKernels {
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
             // Dispatch one workgroup per 16x16 tile of the output
-            let workgroups_x = (n as u32 + 15) / 16;
-            let workgroups_y = (m as u32 + 15) / 16;
+            let workgroups_x = (n as u32).div_ceil(16);
+            let workgroups_y = (m as u32).div_ceil(16);
             compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
         }
 

@@ -4,7 +4,7 @@
 //! that can be backed by either CPU memory or GPU buffers.
 
 #[cfg(feature = "gpu")]
-use crate::gpu::{GpuBuffer, GpuKernels, is_gpu_available};
+use crate::gpu::{GpuBuffer, is_gpu_available};
 
 use crate::device::Device;
 
@@ -58,7 +58,10 @@ impl Storage {
         match self {
             Storage::Cpu(data) => data,
             #[cfg(feature = "gpu")]
-            Storage::Gpu { buffer, cpu_cache } => {
+            Storage::Gpu {
+                buffer: _,
+                cpu_cache,
+            } => {
                 // If we have a cache, use it
                 // Otherwise, we'd need interior mutability to populate it
                 // For now, panic - the user should call to_vec() first

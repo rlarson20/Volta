@@ -3,8 +3,6 @@
 //! The GpuContext holds the wgpu device and queue, which are needed
 //! for all GPU operations. Think of it as your "connection" to the GPU.
 
-use std::sync::Arc;
-
 /// Manages the GPU device, queue, and compiled compute pipelines
 pub struct GpuContext {
     /// The GPU device - represents the actual hardware
@@ -73,24 +71,24 @@ impl GpuContext {
                 force_fallback_adapter: false,
             })
             .await
-            .ok_or("No suitable GPU adapter found")?;
+            .map_err(|e| format!("No suitable GPU adapter found: {e}"))?;
 
         let adapter_info = adapter.get_info();
 
         // Step 3: Request a device (logical connection to the GPU)
+
+        let device_descriptor = wgpu::DeviceDescriptor {
+            label: Some("Volta GPU Device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::default(),
+            memory_hints: wgpu::MemoryHints::Performance,
+            ..Default::default()
+        };
+
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("Volta GPU Device"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
-                    memory_hints: wgpu::MemoryHints::Performance,
-                },
-                None,
-            )
+            .request_device(&device_descriptor)
             .await
             .map_err(|e| format!("Failed to create device: {}", e))?;
-
         // Step 4: Compile all our compute shaders
         let pipelines = Self::create_pipelines(&device)?;
 
