@@ -1,4 +1,5 @@
 // src/layers/conv.rs
+use crate::Storage;
 use crate::autograd::GradFn;
 use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
@@ -289,7 +290,7 @@ impl Module for Conv2d {
     fn load_state_dict(&mut self, state: &StateDict) {
         if let Some(w) = state.get("weight") {
             let mut t = self.weight.borrow_mut();
-            t.data = w.data.clone();
+            t.data = Storage::cpu(w.data.clone());
             t.shape = w.shape.clone();
         }
         if let Some(b) = state.get("bias")
@@ -297,7 +298,7 @@ impl Module for Conv2d {
         {
             let bias_tensor = self.bias.as_ref().unwrap();
             let mut t = bias_tensor.borrow_mut();
-            t.data = b.data.clone();
+            t.data = Storage::cpu(b.data.clone());
             t.shape = b.shape.clone();
         }
     }

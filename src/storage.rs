@@ -3,14 +3,17 @@
 //! This module provides a unified interface for tensor data storage
 //! that can be backed by either CPU memory or GPU buffers.
 
+use crate::device::Device;
 #[cfg(feature = "gpu")]
 use crate::gpu::{GpuBuffer, is_gpu_available};
-
-use crate::device::Device;
+use std::ops::{
+    Deref, DerefMut, Index, IndexMut, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo,
+    RangeToInclusive,
+};
 
 /// Storage backend for tensor data
 ///
-/// This enum allows tensors to store their data either on CPU (as a Vec<f32>)
+/// This enum allows tensors to store their data either on CPU (as a `Vec<f32>`)
 /// or on GPU (as a `GpuBuffer`). Operations automatically handle the right backend.
 #[derive(Clone)]
 pub enum Storage {
@@ -81,7 +84,7 @@ impl Storage {
         }
     }
 
-    /// Convert to Vec<f32> (triggers GPU->CPU transfer if needed)
+    /// Convert to `Vec<f32>` (triggers GPU->CPU transfer if needed)
     pub fn to_vec(&self) -> Vec<f32> {
         match self {
             Storage::Cpu(data) => data.clone(),
@@ -145,6 +148,124 @@ impl Storage {
             Storage::Gpu { buffer, .. } => Some(buffer.as_ref()),
             _ => None,
         }
+    }
+}
+
+impl Storage {
+    pub fn iter(&self) -> std::slice::Iter<'_, f32> {
+        self.as_slice().iter()
+    }
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, f32> {
+        self.as_mut_slice()
+            .expect("Mutable iteration not supported for GPU storage")
+            .iter_mut()
+    }
+}
+
+impl Deref for Storage {
+    type Target = [f32];
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+impl DerefMut for Storage {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.as_mut_slice()
+            .expect("Mutable access not supported for GPU storage")
+    }
+}
+
+impl Index<usize> for Storage {
+    type Output = f32;
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.as_slice()[index]
+    }
+}
+
+impl IndexMut<usize> for Storage {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self
+            .as_mut_slice()
+            .expect("Mutable access not supported for GPU storage")[index]
+    }
+}
+
+impl Index<Range<usize>> for Storage {
+    type Output = [f32];
+    fn index(&self, range: Range<usize>) -> &Self::Output {
+        &self.as_slice()[range]
+    }
+}
+
+impl Index<RangeFrom<usize>> for Storage {
+    type Output = [f32];
+    fn index(&self, range: RangeFrom<usize>) -> &Self::Output {
+        &self.as_slice()[range]
+    }
+}
+
+impl Index<RangeTo<usize>> for Storage {
+    type Output = [f32];
+    fn index(&self, range: RangeTo<usize>) -> &Self::Output {
+        &self.as_slice()[range]
+    }
+}
+
+impl Index<RangeToInclusive<usize>> for Storage {
+    type Output = [f32];
+    fn index(&self, range: RangeToInclusive<usize>) -> &Self::Output {
+        &self.as_slice()[range]
+    }
+}
+
+impl Index<RangeInclusive<usize>> for Storage {
+    type Output = [f32];
+    fn index(&self, range: RangeInclusive<usize>) -> &Self::Output {
+        &self.as_slice()[range]
+    }
+}
+
+impl Index<RangeFull> for Storage {
+    type Output = [f32];
+    fn index(&self, _range: RangeFull) -> &Self::Output {
+        self.as_slice()
+    }
+}
+
+impl<'a> IntoIterator for &'a Storage {
+    type Item = &'a f32;
+    type IntoIter = std::slice::Iter<'a, f32>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_slice().iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut Storage {
+    type Item = &'a mut f32;
+    type IntoIter = std::slice::IterMut<'a, f32>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_mut_slice()
+            .expect("Mutable iteration not supported for GPU storage")
+            .iter_mut()
+    }
+}
+
+impl PartialEq for Storage {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
+impl PartialEq<Vec<f32>> for Storage {
+    fn eq(&self, other: &Vec<f32>) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
+impl PartialEq<Storage> for Vec<f32> {
+    fn eq(&self, other: &Storage) -> bool {
+        self.as_slice() == other.as_slice()
     }
 }
 

@@ -17,7 +17,7 @@ impl TensorData {
     pub fn from_tensor(t: &Tensor) -> Self {
         let borrowed = t.borrow();
         TensorData {
-            data: borrowed.data.clone(),
+            data: borrowed.data.to_vec(),
             shape: borrowed.shape.clone(),
         }
     }

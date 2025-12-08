@@ -46,7 +46,7 @@ impl GradFn for MulAccGradFn {
 
         let grad_z = if parents[2].borrow().requires_grad {
             Some(RawTensor::new(
-                out_grad.data.clone(),
+                out_grad.data.to_vec(),
                 &out_grad.shape,
                 false,
             ))

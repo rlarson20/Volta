@@ -9,7 +9,7 @@ use std::time::Duration;
 
 /// A buffer that lives on the GPU
 ///
-/// This is analogous to a Vec<f32> but the data lives in GPU memory.
+/// This is analogous to a `Vec<f32>` but the data lives in GPU memory.
 /// We need to explicitly copy data to/from the CPU.
 pub struct GpuBuffer {
     /// The actual GPU buffer

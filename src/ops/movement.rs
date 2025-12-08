@@ -30,7 +30,7 @@ impl GradFn for MovementGradFn {
         let grad_tensor = match &self.op {
             MovementOp::Reshape { .. } => {
                 // Reshape back to original shape
-                RawTensor::new(out_grad.data.clone(), &self.original_shape, false)
+                RawTensor::new(out_grad.data.to_vec(), &self.original_shape, false)
             }
             MovementOp::Permute { axes } => {
                 // Invert the permutation to restore original order
@@ -39,7 +39,7 @@ impl GradFn for MovementGradFn {
                     inverse_axes[ax] = i;
                 }
                 // Permute gradient back
-                let grad_t = RawTensor::new(out_grad.data.clone(), &out_grad.shape, false);
+                let grad_t = RawTensor::new(out_grad.data.to_vec(), &out_grad.shape, false);
                 let result = RawTensor::permute_impl(&grad_t, &inverse_axes);
                 return vec![Some(result)];
             }
@@ -257,7 +257,7 @@ impl RawTensor {
         let new_size: usize = new_shape.iter().product();
         assert_eq!(old_size, new_size, "Cannot reshape: size mismatch");
 
-        let out = Self::new(data, new_shape, req_grad);
+        let out = Self::new(data.to_vec(), new_shape, req_grad);
 
         if req_grad {
             out.borrow_mut().parents = vec![self_t.clone()];
@@ -582,7 +582,7 @@ impl RawTensor {
 
     /// Subsample tensor with specified strides
     ///
-    /// Similar to slicing with step: array[`::2`] takes every other element
+    /// Similar to slicing with step: array\[`::2`\] takes every other element
     pub fn stride_op(self_t: &Tensor, strides: &[usize]) -> Tensor {
         let (data, old_shape, req_grad) = {
             let s = self_t.borrow();

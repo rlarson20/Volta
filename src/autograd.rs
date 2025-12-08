@@ -1,4 +1,5 @@
 use crate::device::Device;
+use crate::storage::Storage;
 use crate::tensor::{RawTensor, Tensor};
 use std::collections::HashSet;
 
@@ -47,7 +48,7 @@ impl RawTensor {
                 } else {
                     tensor.data.len()
                 };
-                tensor.grad = Some(vec![1.0; grad_size]);
+                tensor.grad = Some(Storage::cpu(vec![1.0; grad_size]));
             }
         }
 
@@ -122,14 +123,15 @@ impl RawTensor {
                 for (parent_grad, parent_ref) in parent_grads.into_iter().zip(parents.iter()) {
                     if let Some(g) = parent_grad {
                         let mut parent = parent_ref.borrow_mut();
-                        let g_data = g.borrow().data.clone();
-
-                        // Initialize or accumulate gradient
+                        let g_values = g.borrow().data.to_vec();
                         if parent.grad.is_none() {
-                            parent.grad = Some(g_data)
+                            parent.grad = Some(Storage::cpu(g_values));
                         } else {
                             let existing = parent.grad.as_mut().unwrap();
-                            for (accum, &new) in existing.iter_mut().zip(g_data.iter()) {
+                            let slice = existing
+                                .as_mut_slice()
+                                .expect("Gradient accumulation only supported on CPU storage");
+                            for (accum, &new) in slice.iter_mut().zip(&g_values) {
                                 *accum += new;
                             }
                         }

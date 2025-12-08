@@ -1,5 +1,6 @@
 use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
+use crate::storage::Storage;
 use crate::tensor::{RawTensor, Tensor, TensorOps};
 
 pub struct BatchNorm2d {
@@ -152,24 +153,25 @@ impl Module for BatchNorm2d {
     }
 
     fn load_state_dict(&mut self, state: &StateDict) {
+        //TODO: refactor to use match-case since that'd pretty obviously work here
         if let Some(t) = state.get("gamma") {
             let mut b = self.gamma.borrow_mut();
-            b.data = t.data.clone();
+            b.data = Storage::cpu(t.data.clone());
             b.shape = t.shape.clone();
         }
         if let Some(t) = state.get("beta") {
             let mut b = self.beta.borrow_mut();
-            b.data = t.data.clone();
+            b.data = Storage::cpu(t.data.clone());
             b.shape = t.shape.clone();
         }
         if let Some(t) = state.get("running_mean") {
             let mut b = self.running_mean.borrow_mut();
-            b.data = t.data.clone();
+            b.data = Storage::cpu(t.data.clone());
             b.shape = t.shape.clone();
         }
         if let Some(t) = state.get("running_var") {
             let mut b = self.running_var.borrow_mut();
-            b.data = t.data.clone();
+            b.data = Storage::cpu(t.data.clone());
             b.shape = t.shape.clone();
         }
     }

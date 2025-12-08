@@ -154,13 +154,14 @@ impl Muon {
 mod tests {
     use super::*;
     use crate::RawTensor;
+    use crate::Storage;
 
     #[test]
     fn test_muon_step() {
         // Simple test: Ensure parameters change after a step
         let x = RawTensor::new(vec![1.0, -1.0, 0.5, 0.5], &[2, 2], true);
         // Artificial gradient
-        x.borrow_mut().grad = Some(vec![0.1, 0.1, -0.1, -0.1]);
+        x.borrow_mut().grad = Some(Storage::cpu(vec![0.1, 0.1, -0.1, -0.1]));
 
         let mut opt = Muon::new(vec![x.clone()], 0.1, 0.9, true, 5);
 
@@ -172,7 +173,7 @@ mod tests {
         assert_ne!(data_before, data_after);
 
         // Verify Newton-Schulz didn't explode values (regularization property)
-        for v in data_after {
+        for v in data_after.iter() {
             assert!(v.abs() < 2.0);
         }
     }

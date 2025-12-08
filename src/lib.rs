@@ -1286,8 +1286,9 @@ mod axis_reduce_tests {
         let y = RawTensor::softmax(&x, 1);
 
         // Each row should sum to 1.0
-        let row0_sum: f32 = y.borrow().data[0..3].iter().sum();
-        let row1_sum: f32 = y.borrow().data[3..6].iter().sum();
+        let data = y.borrow();
+        let row0_sum: f32 = data.data[0..3].iter().sum();
+        let row1_sum: f32 = data.data[3..6].iter().sum();
 
         approx::assert_relative_eq!(row0_sum, 1.0, epsilon = 1e-6);
         approx::assert_relative_eq!(row1_sum, 1.0, epsilon = 1e-6);
@@ -1352,7 +1353,7 @@ mod axis_reduce_tests {
         // Step should be: w = w - lr * (grad + decay * w) = 1.0 - 0.1 * (0 + 0.1 * 1.0) = 0.99
         let mut opt = SGD::new(vec![w.clone()], 0.1, 0.0, 0.1);
 
-        w.borrow_mut().grad = Some(vec![0.0]); // Artificial zero gradient
+        w.borrow_mut().grad = Some(Storage::cpu(vec![0.0])); // Artificial zero gradient
         opt.step();
 
         let new_val = w.borrow().data[0];

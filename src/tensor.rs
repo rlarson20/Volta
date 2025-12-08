@@ -1,3 +1,4 @@
+use crate::Storage;
 use crate::autograd::GradFn;
 use crate::device::Device;
 use rand::Rng;
@@ -22,7 +23,7 @@ pub type Tensor = Rc<RefCell<RawTensor>>;
 ///
 /// This is wrapped in `Rc<RefCell<>>` to create the public `Tensor` type.
 /// Fields:
-/// - `data`: flat Vec<f32> of actual values (row-major order)
+/// - `data`: CPU: flat `Vec<f32>` of actual values (row-major order), GPU: `Arc<GpuBuffer>`
 /// - `shape`: dimensions, e.g. [batch, channels, height, width]
 /// - `grad`: accumulated gradient (Some if `requires_grad`, None otherwise)
 /// - `requires_grad`: whether to track gradients for this tensor
@@ -30,9 +31,9 @@ pub type Tensor = Rc<RefCell<RawTensor>>;
 /// - `parents`: input tensors that this tensor depends on
 /// - `device`: where computation happens (CPU/GPU)
 pub struct RawTensor {
-    pub data: Vec<f32>,         // flat data vec, len = prod shape dims
-    pub shape: Vec<usize>,      //tensor dims, eg [B,C,H,W]
-    pub grad: Option<Vec<f32>>, //grad w.r.t tensor data, None if req_grad == false
+    pub data: Storage,         // Storage enum
+    pub shape: Vec<usize>,     //tensor dims, eg [B,C,H,W]
+    pub grad: Option<Storage>, //grad w.r.t tensor data, None if req_grad == false
     pub requires_grad: bool,
     pub grad_fn: Option<Box<dyn GradFn>>, //func to compute grad, if result of op
     pub parents: Vec<Tensor>,             //refs to parent tensor on graph
@@ -118,7 +119,7 @@ impl RawTensor {
         );
 
         let raw = RawTensor {
-            data,
+            data: Storage::Cpu(data),
             shape: shape.to_vec(),
             grad: None,
             requires_grad,
@@ -340,9 +341,9 @@ impl RawTensor {
     /// * `keepdim` - If true, keep reduced dimension as size 1
     ///
     /// # Examples
-    /// let x = `Tensor::new(vec`![1,2,3,4,5,6], &[2,3], true);
-    /// `x.sum_dim(1`, false) // -> [6, 15] shape [2]
-    /// `x.sum_dim(1`, true)  // -> [[6], [15]] shape [2,1]
+    /// let x = `Tensor::new(vec`![1,2,3,4,5,6], &\[2,3\], true);
+    /// `x.sum_dim(1`, false) // -> [6, 15] shape \[2\]
+    /// `x.sum_dim(1`, true)  // -> [\[6\], \[15\]] shape \[2,1\]
     pub fn sum_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
         let (data, shape, req_grad) = {
             let s = self_t.borrow();
@@ -585,13 +586,13 @@ impl RawTensor {
             //f(x + epsilon)
             let mut data_plus = original_data.clone();
             data_plus[i] += epsilon;
-            let tensor_plus = RawTensor::new(data_plus, &original_shape, requires_grad);
+            let tensor_plus = RawTensor::new(data_plus.to_vec(), &original_shape, requires_grad);
             let loss_plus = loss_fn(&tensor_plus);
             let val_plus = loss_plus.borrow().data[0];
 
             let mut data_minus = original_data.clone();
             data_minus[i] -= epsilon;
-            let tensor_minus = RawTensor::new(data_minus, &original_shape, requires_grad);
+            let tensor_minus = RawTensor::new(data_minus.to_vec(), &original_shape, requires_grad);
             let loss_minus = loss_fn(&tensor_minus);
             let val_minus = loss_minus.borrow().data[0];
             //central diff
@@ -840,7 +841,7 @@ impl TensorOps for Tensor {
         RawTensor::backward(self)
     }
     fn grad(&self) -> Option<Vec<f32>> {
-        self.borrow().grad.clone()
+        self.borrow().grad.as_ref().map(|g| g.to_vec())
     }
     fn zero_grad(&self) {
         RawTensor::zero_grad(self)

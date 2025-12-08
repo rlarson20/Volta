@@ -91,7 +91,7 @@ impl GradFn for MeanGradFn {
 impl RawTensor {
     /// Apply a reduction operation that collapses tensor to scalar
     ///
-    /// All reduction ops produce a shape [1] output.
+    /// All reduction ops produce a shape \[1\] output.
     pub fn reduce_op(self_t: &Tensor, op: ReduceOp) -> Tensor {
         let (data, shape, req_grad) = {
             let s = self_t.borrow();
