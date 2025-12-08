@@ -417,18 +417,38 @@ impl RawTensor {
         out
     }
 
-    /// Move tensor to device (Currently only CPU supported)
+    /// Move tensor data to a different device.
+    ///
+    /// - `data` is moved via `Storage::to_device`.
+    /// - Gradients remain on CPU storage for now, since the autograd engine and
+    ///   all gradient accumulation logic are CPU-only.
+    /// - Autograd metadata (`requires_grad`, `grad_fn`, `parents`) is preserved,
+    ///   so the returned tensor participates in the same computation graph.
     pub fn to_device(self_t: &Tensor, device: Device) -> Tensor {
-        // Placeholder for future GPU backend
-        if device.is_cpu() {
-            self_t.clone()
-        } else if device.is_gpu() {
-            // For now, just warn and return CPU tensor
-            eprintln!("Warning: GPU device requested but not yet supported. Using CPU instead.");
-            self_t.clone()
-        } else {
-            unimplemented!("GPU/Metal backends not yet implemented")
+        // Fast path: already on requested device
+        {
+            let t = self_t.borrow();
+            if t.device == device {
+                return self_t.clone();
+            }
         }
+
+        let t = self_t.borrow();
+
+        let new_data = t.data.to_device(&device);
+        // Keep gradients on CPU for now – backward and accumulation are CPU-only.
+        let new_grad = t.grad.clone();
+
+        let new_tensor = RawTensor {
+            data: new_data,
+            shape: t.shape.clone(),
+            grad: new_grad,
+            requires_grad: t.requires_grad,
+            grad_fn: t.grad_fn.as_ref().map(|gf| gf.clone_box()),
+            parents: t.parents.clone(),
+            device,
+        };
+        Rc::new(RefCell::new(new_tensor))
     }
 
     /// Max along a specific axis

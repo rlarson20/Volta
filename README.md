@@ -28,7 +28,7 @@ This library is functional for training MLPs and CNNs on CPU. It features a veri
 
 - ✅ **What's Working:** Autograd, Conv2d/Linear layers, Optimizers (including Muon), DataLoaders, Serialization.
 - ⚠️ **What's in Progress:** Performance is not yet a primary focus. While BLAS acceleration is available for macOS matrix multiplication, most operations use naive loops.
-- ⚠️ **GPU Support:** Experimental GPU support (WIP) via the "gpu" feature. The main API remains CPU-only and using GPU device operations may panic or fall back to CPU with warnings.
+- ⚠️ **GPU Support:** Experimental GPU support (WIP) via the `gpu` feature. The main `Tensor` API currently executes all operations on CPU; GPU is exposed through the low-level `volta::gpu` module. Calling `tensor.to_device(Device::GPU("...".into()))` will move the underlying storage when possible, but computations and autograd are still on CPU at this point.
 - ❌ **What's Missing:**
   - Production-ready GPU integration, distributed training, learning-rate schedulers, recurrent/transformer layers.
 
