@@ -3,6 +3,18 @@ check:
 	cargo build
 	cargo test
 
+
+ask-gpu model:
+	@echo "Cleaning!"
+	-rm err.txt tests.txt
+	-rm responses/context.md
+	@echo "Asking!"
+	-cargo build &> err.txt
+	-cargo test &> tests.txt
+	files-to-prompt Cargo.toml src/ tests/ err.txt tests.txt responses/claude-on-gpu-integration.md responses/status-report.md README.md > responses/context.md
+	cat responses/context.md | llm --model "openrouter/{{model}}" --system "`cat sys-prompts/gpu-sys-prompt.md`" -o reasoning_effort high > responses/gpu-recommendations.md
+	nvim responses/gpu-recommendations.md
+
 ask-codex:
 	@echo "Cleaning!"
 	-rm err.txt tests.txt
