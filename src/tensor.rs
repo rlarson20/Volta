@@ -59,12 +59,14 @@ where
     F: FnOnce(&mut dyn rand::RngCore) -> T,
 {
     GLOBAL_RNG.with(|rng_cell| {
-        let mut borrow = rng_cell.borrow_mut();
-        if let Some(rng) = borrow.as_mut() {
-            f(rng)
-        } else {
-            f(&mut rand::rng())
+        if let Ok(mut borrow) = rng_cell.try_borrow_mut()
+            && let Some(rng) = borrow.as_mut()
+        {
+            return f(rng);
         }
+
+        // Fallback to thread RNG (not reproducible but safe)
+        f(&mut rand::rng())
     })
 }
 
