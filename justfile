@@ -38,7 +38,7 @@ ask-readme model:
 	@echo "Finished!"
 
 
-ask-custom model prompt:
+ask-custom model prompt filename:
 	@echo "Cleaning!"
 	-rm err.txt tests.txt
 	-rm responses/context.md
@@ -46,7 +46,7 @@ ask-custom model prompt:
 	-cargo build &> err.txt
 	-cargo test &> tests.txt
 	files-to-prompt Cargo.toml src/ tests/ err.txt tests.txt responses/status-report.md README.md > responses/context.md
-	cat responses/context.md | llm --model "openrouter/{{model}}" --system "{{prompt}}" > responses/custom-resp.md
+	cat responses/context.md | llm --model "openrouter/{{model}}" --system "{{prompt}}" > responses/{{filename}}.md
 	@echo "Finished!"
 
 
