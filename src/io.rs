@@ -1,3 +1,4 @@
+use crate::nn::Module;
 use crate::tensor::Tensor;
 use bincode::{Decode, Encode, config};
 use std::collections::BTreeMap;
@@ -84,6 +85,22 @@ pub fn diff_state_dict(expected: &StateDict, loaded: &StateDict) -> StateDictDif
         }
     }
 
+    diff
+}
+
+/// Load a state dict and report which keys were missing/unexpected or mismatched.
+///
+/// This helper computes the diff between what the module currently expects
+/// (`module.state_dict()`) and what was provided before delegating to
+/// `module.load_state_dict`. It is safe to call even when some keys are missing,
+/// since we inspect the diff up front.
+pub fn load_state_dict_checked<M: Module + ?Sized>(
+    module: &mut M,
+    state: &StateDict,
+) -> StateDictDiff {
+    let expected = module.state_dict();
+    let diff = diff_state_dict(&expected, state);
+    module.load_state_dict(state);
     diff
 }
 

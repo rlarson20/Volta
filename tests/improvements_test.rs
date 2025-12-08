@@ -1,6 +1,6 @@
 use std::cell::Cell;
 use std::rc::Rc;
-use volta::io::{StateDict, TensorData};
+use volta::io::{StateDict, TensorData, load_state_dict_checked};
 use volta::*;
 
 struct CountingModule {
@@ -120,6 +120,61 @@ fn test_sequential_state_dict_calls_layer_once() {
         counter.get(),
         1,
         "Each layer's state_dict should be invoked exactly once"
+    );
+}
+
+#[test]
+fn test_load_state_dict_checked_reports_differences() {
+    let mut model = Sequential::new(vec![
+        Box::new(Linear::new(2, 3, true)),
+        Box::new(ReLU),
+        Box::new(Linear::new(3, 1, true)),
+    ]);
+
+    let mut corrupted_state = model.state_dict();
+    corrupted_state.remove("0.bias");
+    corrupted_state.insert(
+        "unexpected".to_string(),
+        TensorData {
+            data: vec![0.0],
+            shape: vec![1],
+        },
+    );
+    if let Some(weight) = corrupted_state.get_mut("0.weight") {
+        weight.shape = vec![3, 2]; // shape mismatch while keeping data length = 6
+        weight.data = vec![0.0; 6];
+    }
+
+    let diff = load_state_dict_checked(&mut model, &corrupted_state);
+
+    assert!(
+        diff.missing_keys.contains(&"0.bias".to_string()),
+        "Missing keys should be reported"
+    );
+    assert!(
+        diff.unexpected_keys.contains(&"unexpected".to_string()),
+        "Unexpected keys should be reported"
+    );
+    let has_shape_mismatch = diff.shape_mismatches.iter().any(|(key, expected, loaded)| {
+        key == "0.weight" && expected == &vec![2, 3] && loaded == &vec![3, 2]
+    });
+    assert!(has_shape_mismatch, "Shape mismatches should be reported");
+}
+
+#[test]
+fn test_load_state_dict_checked_returns_empty_for_matching_state() {
+    let mut model = Sequential::new(vec![
+        Box::new(Linear::new(2, 3, true)),
+        Box::new(ReLU),
+        Box::new(Linear::new(3, 1, true)),
+    ]);
+
+    let state = model.state_dict();
+    let diff = load_state_dict_checked(&mut model, &state);
+
+    assert!(
+        diff.is_empty(),
+        "No diff should be reported when state dict matches"
     );
 }
 
