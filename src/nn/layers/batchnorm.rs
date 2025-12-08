@@ -153,26 +153,21 @@ impl Module for BatchNorm2d {
     }
 
     fn load_state_dict(&mut self, state: &StateDict) {
-        //TODO: refactor to use match-case since that'd pretty obviously work here
-        if let Some(t) = state.get("gamma") {
-            let mut b = self.gamma.borrow_mut();
-            b.data = Storage::cpu(t.data.clone());
-            b.shape = t.shape.clone();
-        }
-        if let Some(t) = state.get("beta") {
-            let mut b = self.beta.borrow_mut();
-            b.data = Storage::cpu(t.data.clone());
-            b.shape = t.shape.clone();
-        }
-        if let Some(t) = state.get("running_mean") {
-            let mut b = self.running_mean.borrow_mut();
-            b.data = Storage::cpu(t.data.clone());
-            b.shape = t.shape.clone();
-        }
-        if let Some(t) = state.get("running_var") {
-            let mut b = self.running_var.borrow_mut();
-            b.data = Storage::cpu(t.data.clone());
-            b.shape = t.shape.clone();
+        // Create a list of tuples mapping the string key to the specific tensor
+        let params = [
+            ("gamma", &self.gamma),
+            ("beta", &self.beta),
+            ("running_mean", &self.running_mean),
+            ("running_var", &self.running_var),
+        ];
+
+        for (key, tensor) in params {
+            if let Some(t) = state.get(key) {
+                let mut b = tensor.borrow_mut();
+                // Logic defined exactly once
+                b.data = Storage::cpu(t.data.clone());
+                b.shape = t.shape.clone();
+            }
         }
     }
 }
