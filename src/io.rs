@@ -13,6 +13,30 @@ pub struct TensorData {
     pub shape: Vec<usize>,
 }
 
+/// Summary of differences between two state dicts.
+///
+/// Intended for debugging and tooling: `expected` is usually taken from
+/// `model.state_dict()`, and `loaded` is what was deserialized or passed in.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct StateDictDiff {
+    /// Keys that exist in `expected` but are missing from `loaded`.
+    pub missing_keys: Vec<String>,
+    /// Keys that exist in `loaded` but not in `expected`.
+    pub unexpected_keys: Vec<String>,
+    /// Keys present in both, but with differing shapes:
+    /// `(key, expected_shape, loaded_shape)`.
+    pub shape_mismatches: Vec<(String, Vec<usize>, Vec<usize>)>,
+}
+
+impl StateDictDiff {
+    /// Returns true if there are no missing, unexpected, or shape‑mismatched keys.
+    pub fn is_empty(&self) -> bool {
+        self.missing_keys.is_empty()
+            && self.unexpected_keys.is_empty()
+            && self.shape_mismatches.is_empty()
+    }
+}
+
 impl TensorData {
     pub fn from_tensor(t: &Tensor) -> Self {
         let borrowed = t.borrow();
@@ -25,6 +49,42 @@ impl TensorData {
     pub fn to_tensor(&self, requires_grad: bool) -> Tensor {
         crate::RawTensor::new(self.data.clone(), &self.shape, requires_grad)
     }
+}
+
+/// Compute a diff between an "expected" and a "loaded" state dict.
+///
+/// Typical usage:
+/// - `expected` = `model.state_dict()` from the current architecture
+/// - `loaded`   = state loaded from disk or another model
+///
+/// This function **does not mutate any tensors** and is purely informational.
+pub fn diff_state_dict(expected: &StateDict, loaded: &StateDict) -> StateDictDiff {
+    let mut diff = StateDictDiff::default();
+
+    // 1. Missing keys and shape mismatches
+    for (key, expected_td) in expected.iter() {
+        match loaded.get(key) {
+            None => diff.missing_keys.push(key.clone()),
+            Some(actual_td) => {
+                if expected_td.shape != actual_td.shape {
+                    diff.shape_mismatches.push((
+                        key.clone(),
+                        expected_td.shape.clone(),
+                        actual_td.shape.clone(),
+                    ));
+                }
+            }
+        }
+    }
+
+    // 2. Unexpected keys present only in `loaded`
+    for key in loaded.keys() {
+        if !expected.contains_key(key) {
+            diff.unexpected_keys.push(key.clone());
+        }
+    }
+
+    diff
 }
 
 pub fn save_state_dict(state: &StateDict, path: &str) -> Result<()> {
@@ -85,5 +145,47 @@ mod io_tests {
         for (t1, t2) in p1.iter().zip(p2.iter()) {
             assert_eq!(t1.borrow().data, t2.borrow().data);
         }
+    }
+
+    #[test]
+    fn test_state_dict_diff_reports_mismatches() {
+        // Simple Linear layer: expected state dict has "weight" and "bias".
+        let layer = Linear::new(2, 3, true);
+        let expected = layer.state_dict();
+
+        // Start from a clone and deliberately introduce:
+        // - one missing key ("bias"),
+        // - one unexpected key ("extra"),
+        // - one shape mismatch on "weight".
+        let mut loaded = expected.clone();
+
+        // Remove "bias" to make it a missing key.
+        loaded.remove("bias");
+
+        // Add an unexpected key.
+        loaded.insert(
+            "extra".to_string(),
+            TensorData {
+                data: vec![0.0],
+                shape: vec![1],
+            },
+        );
+
+        // Corrupt the shape of "weight".
+        if let Some(td) = loaded.get_mut("weight") {
+            td.shape = vec![999];
+        }
+
+        let diff = diff_state_dict(&expected, &loaded);
+        assert!(!diff.is_empty());
+
+        assert!(diff.missing_keys.contains(&"bias".to_string()));
+        assert!(diff.unexpected_keys.contains(&"extra".to_string()));
+
+        assert!(
+            diff.shape_mismatches
+                .iter()
+                .any(|(k, _exp, _act)| k == "weight")
+        );
     }
 }
