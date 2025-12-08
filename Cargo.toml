@@ -32,6 +32,15 @@ path = "examples/gpu.rs"
 name = "showcase"
 path = "examples/showcase.rs"
 
+
+[[example]]
+name = "readme1"
+path = "examples/readme-1.rs"
+
+[[example]]
+name = "readme2"
+path = "examples/readme-2.rs"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 blas-src = { version = "0.14", features = ["accelerate"], optional = true }
 

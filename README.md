@@ -69,10 +69,10 @@ fn main() {
 
     // 2. Create synthetic data
     let x_data = vec![0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0];
-    let x = new_tensor(x_data, &[4, 2], false); // Batch size 4, 2 features
+    let x = RawTensor::new(x_data, &[4, 2], false); // Batch size 4, 2 features
 
     let y_data = vec![0.0, 1.0, 1.0, 0.0];
-    let y = new_tensor(y_data, &[4], false); // Flattened targets
+    let y = RawTensor::new(y_data, &[4], false); // Flattened targets
 
     // 3. Set up the optimizer
     let params = model.parameters();
@@ -114,8 +114,9 @@ fn main() {
 The following utilizes the current API to define a training-ready CNN.
 
 ```rust
-use volta::{Sequential, Conv2d, MaxPool2d, Flatten, Linear, ReLU, new_tensor, Adam};
+use volta::{Sequential, Conv2d, MaxPool2d, Flatten, Linear, ReLU, Adam};
 use volta::nn::Module;
+use volta::TensorOps;
 
 fn main() {
     // 1. Define Model
