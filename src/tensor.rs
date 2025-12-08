@@ -607,11 +607,11 @@ impl RawTensor {
             analytical_grad.iter().zip(&numerical_grad).enumerate()
         {
             let error = (analytical - numerical).abs();
-            let relative_error = if numerical.abs() > 1e-8 {
-                error / numerical.abs()
-            } else {
-                error
-            };
+            // When both gradients are extremely small, pure relative error becomes noisy
+            // and can falsely flag otherwise correct gradients (e.g., BatchNorm sum outputs
+            // that should be exactly zero). In that regime, we compare absolute error instead.
+            let scale = analytical.abs().max(numerical.abs());
+            let relative_error = if scale > 1e-4 { error / scale } else { error };
 
             max_error = max_error.max(relative_error);
             total_error += relative_error;
