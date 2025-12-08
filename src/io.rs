@@ -2,6 +2,7 @@ use crate::nn::Module;
 use crate::tensor::Tensor;
 use bincode::{Decode, Encode, config};
 use std::collections::BTreeMap;
+use std::fmt;
 use std::fs::File;
 use std::io::{Error, Read, Result, Write};
 
@@ -35,6 +36,38 @@ impl StateDictDiff {
         self.missing_keys.is_empty()
             && self.unexpected_keys.is_empty()
             && self.shape_mismatches.is_empty()
+    }
+}
+
+impl fmt::Display for StateDictDiff {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_empty() {
+            return write!(f, "StateDictDiff(empty)");
+        }
+
+        let mut sections = Vec::new();
+
+        if !self.missing_keys.is_empty() {
+            sections.push(format!("missing: {}", self.missing_keys.join(", ")));
+        }
+
+        if !self.unexpected_keys.is_empty() {
+            sections.push(format!("unexpected: {}", self.unexpected_keys.join(", ")));
+        }
+
+        if !self.shape_mismatches.is_empty() {
+            let entries = self
+                .shape_mismatches
+                .iter()
+                .map(|(key, expected, loaded)| {
+                    format!("{} (expected {:?}, found {:?})", key, expected, loaded)
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            sections.push(format!("shape mismatches: {}", entries));
+        }
+
+        write!(f, "StateDictDiff {{ {} }}", sections.join("; "))
     }
 }
 
@@ -204,5 +237,21 @@ mod io_tests {
                 .iter()
                 .any(|(k, _exp, _act)| k == "weight")
         );
+    }
+    #[test]
+    fn test_state_dict_diff_display() {
+        let mut diff = StateDictDiff::default();
+        diff.missing_keys.push("0.bias".into());
+        diff.unexpected_keys.push("extra".into());
+        diff.shape_mismatches
+            .push(("0.weight".into(), vec![2, 3], vec![3, 2]));
+
+        let message = diff.to_string();
+        assert!(message.contains("missing: 0.bias"));
+        assert!(message.contains("unexpected: extra"));
+        assert!(message.contains("shape mismatches:"));
+        assert!(message.contains("0.weight"));
+        assert!(message.contains("[2, 3]"));
+        assert!(message.contains("[3, 2]"));
     }
 }
