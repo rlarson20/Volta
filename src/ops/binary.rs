@@ -252,6 +252,15 @@ impl RawTensor {
         }
 
         let to_size: usize = to_shape.iter().product();
+        const MAX_ALLOC: usize = 100_000_000;
+        assert!(
+            to_size <= MAX_ALLOC,
+            "Broadcast would create tensor with {} elements (max: {}). Check shapes {:?} -> {:?}",
+            to_size,
+            MAX_ALLOC,
+            from_shape,
+            to_shape
+        );
         let mut result = vec![0.0; to_size];
 
         // Pad from_shape with leading 1s to match rank

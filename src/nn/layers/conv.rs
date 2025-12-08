@@ -92,7 +92,17 @@ impl Conv2d {
         assert!(h_out > 0 && w_out > 0, "Invalid output dimensions");
         let rows = batch * h_out * w_out;
         let cols = channels * kh * kw;
-        let mut result = vec![0.0; rows * cols];
+
+        const MAX_ALLOC: usize = 100_000_000; // Maximum allowed allocation
+        let total_elements = rows * cols;
+        if total_elements > MAX_ALLOC {
+            panic!(
+                "im2col would create tensor with {} elements (max: {}). Input shape: {:?}, kernel: {:?}, stride: {:?}",
+                total_elements, MAX_ALLOC, shape, kernel, stride
+            );
+        }
+
+        let mut result = vec![0.0; total_elements];
 
         // For each output position, extract and flatten the receptive field
         for b in 0..batch {
@@ -140,17 +150,8 @@ impl Conv2d {
         out
     }
 
-    fn col2im(
-        col: &[f32],
-        output_shape: &[usize], // (B, C, H, W)
-        kernel: (usize, usize),
-        stride: (usize, usize),
-    ) -> Vec<f32> {
-        Self::col2im_with_params(col, output_shape, kernel, stride)
-    }
-
     /// Col2im: Inverse of im2col, used for computing input gradients
-    fn col2im_with_params(
+    fn col2im(
         col: &[f32],
         output_shape: &[usize], // (B, C, H, W)
         kernel: (usize, usize),

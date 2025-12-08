@@ -370,6 +370,16 @@ impl RawTensor {
         }
 
         let new_size: usize = new_shape.iter().product();
+        const MAX_ALLOC: usize = 100_000_000;
+        assert!(
+            new_size <= MAX_ALLOC,
+            "Expand would create tensor with {} elements (max: {}). Check shapes {:?} -> {:?}",
+            new_size,
+            MAX_ALLOC,
+            old_shape,
+            new_shape
+        );
+
         let mut result = vec![0.0; new_size];
 
         // Broadcast by repeating values
@@ -427,6 +437,15 @@ impl RawTensor {
             .collect();
 
         let new_size: usize = new_shape.iter().product();
+        const MAX_ALLOC: usize = 100_000_000;
+        assert!(
+            new_size <= MAX_ALLOC,
+            "Expand would create tensor with {} elements (max: {}). Check shapes {:?} -> {:?}",
+            new_size,
+            MAX_ALLOC,
+            old_shape,
+            new_shape
+        );
         let mut result = vec![0.0; new_size];
 
         // Copy old data into padded positions
