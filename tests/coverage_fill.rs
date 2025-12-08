@@ -4,21 +4,6 @@ use volta::{
     nn::{BatchNorm2d, Module, SGD},
 };
 
-// FIX: doesn't always happen (one in ~8 runs), but still annoying
-// failures:
-// test_batchnorm_gradient_check
-// test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.06s
-// Gradient mismatch at index 0: analytical=-2.980232e-7, numerical=1.311302e-4, error=1.002273e0
-// Gradient mismatch at index 8: analytical=-2.980232e-7, numerical=1.192093e-4, error=1.002500e0
-// Gradient mismatch at index 25: analytical=2.980232e-7, numerical=-1.043081e-4, error=1.002857e0
-// Gradient mismatch at index 26: analytical=2.980232e-7, numerical=1.132488e-4, error=9.973684e-1
-// Gradient mismatch at index 34: analytical=-2.980232e-7, numerical=-1.192093e-4, error=9.975000e-1
-// Gradient mismatch at index 43: analytical=-2.980232e-7, numerical=1.192093e-4, error=1.002500e0
-// Gradient mismatch at index 59: analytical=2.980232e-7, numerical=-1.430511e-4, error=1.002083e0
-// Gradient mismatch at index 60: analytical=2.980232e-7, numerical=-1.162291e-4, error=1.002564e0
-// Gradient check FAILED: max_error=1.002857e0, mean_error=1.251816e-1
-// thread 'test_batchnorm_gradient_check' (83138801) panicked at tests/coverage_fill.rs:18:5:
-// BatchNorm2d numerical gradient check failed
 #[test]
 fn test_batchnorm_gradient_check() {
     // Report indicated BatchNorm gradient paths were uncovered.
