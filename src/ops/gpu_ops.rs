@@ -3,9 +3,9 @@
 //! This module provides GPU implementations of tensor operations.
 //! These are called automatically when tensors are on GPU storage.
 
-use crate::gpu::{GpuBuffer, GpuKernels};
+use crate::RawTensor;
+use crate::gpu::GpuKernels;
 use crate::storage::Storage;
-use crate::{RawTensor, Tensor};
 #[cfg(feature = "gpu")]
 use std::sync::Arc;
 
@@ -72,6 +72,7 @@ impl RawTensor {
     }
 
     /// GPU-accelerated matrix multiplication
+    #[allow(dead_code)]
     #[cfg(feature = "gpu")]
     pub(crate) fn gpu_matmul(
         a: &Storage,
