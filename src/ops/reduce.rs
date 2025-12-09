@@ -93,9 +93,14 @@ impl RawTensor {
     ///
     /// All reduction ops produce a shape \[1\] output.
     pub fn reduce_op(self_t: &Tensor, op: ReduceOp) -> Tensor {
-        let (data, shape, req_grad) = {
+        let (data, shape, req_grad, device) = {
             let s = self_t.borrow();
-            (s.data.clone(), s.shape.clone(), s.requires_grad)
+            (
+                s.data.clone(),
+                s.shape.clone(),
+                s.requires_grad,
+                s.device.clone(),
+            )
         };
 
         let (result_val, grad_fn): (f32, Box<dyn GradFn>) = match op {
@@ -135,7 +140,16 @@ impl RawTensor {
             }
         };
 
+        // Start with a CPU scalar and then place it on the same logical device
+        // as the input tensor. The actual reduction is still computed on CPU
+        // (using the CPU cache) for now; only the storage placement is
+        // device‑aware.
         let out = Self::new(vec![result_val], &[1], req_grad);
+        {
+            let mut ob = out.borrow_mut();
+            ob.data = ob.data.to_device(&device);
+            ob.device = device;
+        }
 
         if out.borrow().requires_grad {
             out.borrow_mut().parents = vec![self_t.clone()];

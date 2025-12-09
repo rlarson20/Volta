@@ -26,6 +26,39 @@ fn test_tensor_gpu_unary_add_binary_smoke() {
 
 #[test]
 #[cfg(feature = "gpu")]
+fn test_tensor_gpu_sum_output_device_and_grad_on_gpu() {
+    use volta::gpu::is_gpu_available;
+    use volta::{Device, RawTensor, TensorOps};
+
+    if !is_gpu_available() {
+        return;
+    }
+
+    let dev = Device::GPU("TestDevice".to_string());
+    let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], true).to_device(dev.clone());
+
+    let loss = x.sum();
+    {
+        let lb = loss.borrow();
+        assert!(
+            lb.device.is_gpu(),
+            "sum() output should remain on the same GPU device as the input"
+        );
+    }
+
+    loss.backward();
+
+    let xb = x.borrow();
+    let grad_storage = xb.grad.as_ref().expect("Gradient for input missing");
+    assert!(
+        grad_storage.is_gpu(),
+        "Expected input gradient to live on GPU"
+    );
+    assert_eq!(grad_storage.to_vec(), vec![1.0, 1.0, 1.0, 1.0]);
+}
+
+#[test]
+#[cfg(feature = "gpu")]
 fn test_tensor_gpu_matmul_matches_cpu() {
     use volta::gpu::is_gpu_available;
     use volta::{Device, RawTensor, TensorOps};
