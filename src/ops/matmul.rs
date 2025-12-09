@@ -1,5 +1,7 @@
 use crate::autograd::GradFn;
 use crate::{RawTensor, Tensor};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 // ===== TRANSPOSE GRADIENT =====
 
@@ -119,13 +121,23 @@ impl RawTensor {
     /// - (n,) @ (n,p) -> (p,)    [vector-matrix]
     /// - (n,) @ (n,) -> scalar   [dot product]
     pub fn matmul(self_t: &Tensor, other: &Tensor) -> Tensor {
-        let (data_a, shape_a, req_a) = {
+        let (data_a, shape_a, req_a, dev_a) = {
             let s = self_t.borrow();
-            (s.data.clone(), s.shape.clone(), s.requires_grad)
+            (
+                s.data.clone(),
+                s.shape.clone(),
+                s.requires_grad,
+                s.device.clone(),
+            )
         };
-        let (data_b, shape_b, req_b) = {
+        let (data_b, shape_b, req_b, dev_b) = {
             let o = other.borrow();
-            (o.data.clone(), o.shape.clone(), o.requires_grad)
+            (
+                o.data.clone(),
+                o.shape.clone(),
+                o.requires_grad,
+                o.device.clone(),
+            )
         };
 
         // Handle different cases
@@ -140,6 +152,35 @@ impl RawTensor {
                     m, n, n2, p
                 );
 
+                // If both inputs live on the same GPU device, try the GPU path first.
+                // Fallback to the existing CPU implementation if anything fails.
+                #[cfg(feature = "gpu")]
+                {
+                    if dev_a.is_gpu() && dev_b.is_gpu() && dev_a == dev_b {
+                        if let Some(storage) = Self::gpu_matmul(&data_a, &data_b, m, n, p) {
+                            let requires_grad = req_a || req_b;
+                            let out = Rc::new(RefCell::new(RawTensor {
+                                data: storage,
+                                shape: vec![m, p],
+                                grad: None,
+                                requires_grad,
+                                grad_fn: None,
+                                parents: vec![self_t.clone(), other.clone()],
+                                device: dev_a.clone(),
+                            }));
+                            if requires_grad {
+                                out.borrow_mut().grad_fn = Some(Box::new(MatMulGradFn));
+                            }
+                            return out;
+                        } else {
+                            eprintln!(
+                                "Warning: GPU matmul requested but failed; falling back to CPU"
+                            );
+                        }
+                    }
+                }
+
+                // CPU fallback: BLAS/Accelerate or matrixmultiply on host data.
                 let result_data = Self::matmul_raw(&data_a, &data_b, m, n, p);
                 let out = Self::new(result_data, &[m, p], req_a || req_b);
 
