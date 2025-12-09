@@ -113,3 +113,152 @@ fn test_tensor_gpu_matmul_backward_consistent_with_cpu() {
         );
     }
 }
+
+#[test]
+#[cfg(feature = "gpu")]
+fn test_tensor_gpu_mulacc_matches_cpu_and_grad() {
+    use volta::gpu::is_gpu_available;
+    use volta::{Device, RawTensor, TensorOps};
+
+    if !is_gpu_available() {
+        return;
+    }
+
+    let dev = Device::GPU("TestDevice".to_string());
+
+    // Simple 1D tensors with requires_grad = true so we can compare gradients.
+    let x_cpu = RawTensor::new(vec![1.0, 2.0, -3.0], &[3], true);
+    let y_cpu = RawTensor::new(vec![0.5, -1.0, 4.0], &[3], true);
+    let z_cpu = RawTensor::new(vec![0.1, 0.2, 0.3], &[3], true);
+
+    let x_gpu = x_cpu.to_device(dev.clone());
+    let y_gpu = y_cpu.to_device(dev.clone());
+    let z_gpu = z_cpu.to_device(dev.clone());
+
+    // Forward: out = x * y + z
+    let out_cpu = x_cpu.mulacc(&y_cpu, &z_cpu);
+    let out_gpu = x_gpu.mulacc(&y_gpu, &z_gpu);
+
+    // Compare forward values.
+    let out_gpu_cpu = out_gpu.to_device(Device::CPU);
+    let f_cpu = out_cpu.borrow().data.to_vec();
+    let f_gpu = out_gpu_cpu.borrow().data.to_vec();
+    assert_eq!(f_cpu.len(), f_gpu.len());
+    for (i, (c, g)) in f_cpu.iter().zip(f_gpu.iter()).enumerate() {
+        assert!(
+            (c - g).abs() < 1e-5,
+            "MulAcc forward CPU/GPU mismatch at {i}: cpu={c}, gpu={g}"
+        );
+    }
+
+    // Backward: compare gradients w.r.t x.
+    out_cpu.sum().backward();
+    out_gpu.sum().backward();
+
+    let gx_cpu = x_cpu.grad().unwrap();
+    let gx_gpu = x_gpu.borrow().grad.as_ref().unwrap().to_vec();
+    assert_eq!(gx_cpu.len(), gx_gpu.len());
+    for (i, (c, g)) in gx_cpu.iter().zip(gx_gpu.iter()).enumerate() {
+        assert!(
+            (c - g).abs() < 1e-4,
+            "MulAcc grad dL/dx CPU/GPU mismatch at {i}: cpu={c}, gpu={g}"
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "gpu")]
+fn test_tensor_gpu_unary_relu_matches_cpu() {
+    use volta::gpu::is_gpu_available;
+    use volta::{Device, RawTensor, TensorOps};
+
+    if !is_gpu_available() {
+        return;
+    }
+
+    let dev = Device::GPU("TestDevice".to_string());
+
+    let x_cpu = RawTensor::randn(&[16]);
+    let x_gpu = x_cpu.to_device(dev.clone());
+
+    let y_cpu = x_cpu.relu();
+    let y_gpu = x_gpu.relu().to_device(Device::CPU);
+
+    let cpu_vals = y_cpu.borrow().data.to_vec();
+    let gpu_vals = y_gpu.borrow().data.to_vec();
+
+    assert_eq!(cpu_vals.len(), gpu_vals.len());
+    for (i, (c, g)) in cpu_vals.iter().zip(gpu_vals.iter()).enumerate() {
+        assert!(
+            (c - g).abs() < 1e-5,
+            "ReLU CPU/GPU mismatch at index {i}: cpu={c}, gpu={g}"
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "gpu")]
+fn test_tensor_gpu_binary_basic_matches_cpu() {
+    use volta::gpu::is_gpu_available;
+    use volta::{Device, RawTensor, TensorOps};
+
+    if !is_gpu_available() {
+        return;
+    }
+
+    let dev = Device::GPU("TestDevice".to_string());
+
+    let a_cpu = RawTensor::new(vec![1.0, -2.0, 3.5, 4.0], &[4], false);
+    let b_cpu = RawTensor::new(vec![0.5, 2.0, -1.0, 8.0], &[4], false);
+
+    let a_gpu = a_cpu.to_device(dev.clone());
+    let b_gpu = b_cpu.to_device(dev.clone());
+
+    // add
+    let add_cpu = a_cpu.add(&b_cpu);
+    let add_gpu = a_gpu.add(&b_gpu).to_device(Device::CPU);
+    let add_c = add_cpu.borrow().data.to_vec();
+    let add_g = add_gpu.borrow().data.to_vec();
+    for (i, (c, g)) in add_c.iter().zip(add_g.iter()).enumerate() {
+        assert!(
+            (c - g).abs() < 1e-5,
+            "add CPU/GPU mismatch at index {i}: cpu={c}, gpu={g}"
+        );
+    }
+
+    // sub
+    let sub_cpu = a_cpu.sub(&b_cpu);
+    let sub_gpu = a_gpu.sub(&b_gpu).to_device(Device::CPU);
+    let sub_c = sub_cpu.borrow().data.to_vec();
+    let sub_g = sub_gpu.borrow().data.to_vec();
+    for (i, (c, g)) in sub_c.iter().zip(sub_g.iter()).enumerate() {
+        assert!(
+            (c - g).abs() < 1e-5,
+            "sub CPU/GPU mismatch at index {i}: cpu={c}, gpu={g}"
+        );
+    }
+
+    // mul
+    let mul_cpu = a_cpu.elem_mul(&b_cpu);
+    let mul_gpu = a_gpu.elem_mul(&b_gpu).to_device(Device::CPU);
+    let mul_c = mul_cpu.borrow().data.to_vec();
+    let mul_g = mul_gpu.borrow().data.to_vec();
+    for (i, (c, g)) in mul_c.iter().zip(mul_g.iter()).enumerate() {
+        assert!(
+            (c - g).abs() < 1e-5,
+            "mul CPU/GPU mismatch at index {i}: cpu={c}, gpu={g}"
+        );
+    }
+
+    // div
+    let div_cpu = a_cpu.div(&b_cpu);
+    let div_gpu = a_gpu.div(&b_gpu).to_device(Device::CPU);
+    let div_c = div_cpu.borrow().data.to_vec();
+    let div_g = div_gpu.borrow().data.to_vec();
+    for (i, (c, g)) in div_c.iter().zip(div_g.iter()).enumerate() {
+        assert!(
+            (c - g).abs() < 1e-5,
+            "div CPU/GPU mismatch at index {i}: cpu={c}, gpu={g}"
+        );
+    }
+}
