@@ -1,5 +1,7 @@
 use crate::autograd::GradFn;
 use crate::{RawTensor, Tensor};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// Unary operations: single input, single output
 ///
@@ -133,6 +135,21 @@ impl GradFn for UnaryGradFn {
         Box::new(UnaryGradFn { op: self.op })
     }
 }
+// Map a `UnaryOp` to the corresponding GPU kernel name, if supported.
+#[cfg(feature = "gpu")]
+fn unary_kernel_name(op: UnaryOp) -> Option<&'static str> {
+    match op {
+        UnaryOp::Neg => Some("neg"),
+        UnaryOp::Exp => Some("exp"),
+        UnaryOp::Log => Some("log"),
+        UnaryOp::Tanh => Some("tanh"),
+        UnaryOp::Sigmoid => Some("sigmoid"),
+        UnaryOp::ReLU => Some("relu"),
+        UnaryOp::Sqrt => Some("sqrt"),
+        // TODO: No GPU kernels yet for these; keep them on CPU.
+        UnaryOp::Recip | UnaryOp::Exp2 | UnaryOp::Log2 | UnaryOp::Sin | UnaryOp::Cos => None,
+    }
+}
 
 // ===== UNARY OPERATIONS =====
 impl RawTensor {
@@ -141,11 +158,44 @@ impl RawTensor {
     /// This is the unified implementation for all unary ops.
     /// Creates a new tensor and sets up gradient tracking if needed.
     pub fn unary_op(t: &Tensor, op: UnaryOp) -> Tensor {
-        let (data, shape, req) = {
+        let (data, shape, req, device) = {
             let s = t.borrow();
-            (s.data.clone(), s.shape.clone(), s.requires_grad)
+            (
+                s.data.clone(),
+                s.shape.clone(),
+                s.requires_grad,
+                s.device.clone(),
+            )
         };
-        let result = data
+
+        // Fast path: if the tensor already lives on GPU and we have a matching
+        // kernel, try to execute the op there.
+        #[cfg(feature = "gpu")]
+        {
+            if device.is_gpu()
+                && let Some(kernel) = unary_kernel_name(op)
+                && let Some(storage) = RawTensor::gpu_unary(&data, kernel)
+            {
+                let out = Rc::new(RefCell::new(RawTensor {
+                    data: storage,
+                    shape: shape.clone(),
+                    grad: None,
+                    requires_grad: req,
+                    grad_fn: None,
+                    parents: vec![t.clone()],
+                    device,
+                }));
+
+                if req {
+                    out.borrow_mut().grad_fn = Some(Box::new(UnaryGradFn { op }));
+                }
+                return out;
+            }
+        }
+
+        // CPU fallback (or when GPU feature is disabled / kernel missing).
+        let host_data = data.to_vec();
+        let result: Vec<f32> = host_data
             .iter()
             .map(|&x| match op {
                 UnaryOp::Neg => -x,
@@ -172,6 +222,7 @@ impl RawTensor {
         }
         out
     }
+
     // Convenience methods for each unary operation
     pub fn neg(t: &Tensor) -> Tensor {
         Self::unary_op(t, UnaryOp::Neg)

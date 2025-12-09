@@ -1,5 +1,6 @@
 // Operation enums and trait implementations
 pub mod binary;
+pub mod gpu_ops;
 pub mod matmul;
 pub mod movement;
 pub mod reduce;

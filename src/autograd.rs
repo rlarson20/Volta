@@ -1,4 +1,3 @@
-use crate::device::Device;
 use crate::storage::Storage;
 use crate::tensor::{RawTensor, Tensor};
 use std::collections::HashSet;
@@ -48,7 +47,10 @@ impl RawTensor {
                 } else {
                     tensor.data.len()
                 };
-                tensor.grad = Some(Storage::cpu(vec![1.0; grad_size]));
+                // Initialize grad on the same device as this tensor's data
+                let base = Storage::cpu(vec![1.0; grad_size]);
+                let grad_storage = base.to_device(&tensor.device);
+                tensor.grad = Some(grad_storage);
             }
         }
 
@@ -91,17 +93,18 @@ impl RawTensor {
 
         // 2. Process in reverse topological order (consumers before producers)
         // topo_order has [leaf, ..., root]. We reverse to get [root, ..., leaf].
+
         for tensor in topo_order.into_iter().rev() {
-            let (grad_fn, parents, grad_data, shape) = {
+            let (grad_fn, parents, grad_data, shape, device) = {
                 let t = tensor.borrow();
                 (
                     t.grad_fn.as_ref().map(|gf| gf.clone_box()),
                     t.parents.clone(),
                     t.grad.clone(),
                     t.shape.clone(),
+                    t.device.clone(),
                 )
             };
-
             // If this node has a gradient function and gradients, backpropagate
             if let Some(grad_fn) = grad_fn
                 && let Some(grad_out_data) = grad_data
@@ -113,7 +116,7 @@ impl RawTensor {
                     requires_grad: false,
                     grad_fn: None,
                     parents: vec![],
-                    device: Device::CPU,
+                    device,
                 };
 
                 // Compute gradients for parent tensors
@@ -123,21 +126,57 @@ impl RawTensor {
                 for (parent_grad, parent_ref) in parent_grads.into_iter().zip(parents.iter()) {
                     if let Some(g) = parent_grad {
                         let mut parent = parent_ref.borrow_mut();
-                        let g_values = g.borrow().data.to_vec();
-                        if parent.grad.is_none() {
-                            parent.grad = Some(Storage::cpu(g_values));
-                        } else {
-                            let existing = parent.grad.as_mut().unwrap();
-                            let slice = existing
-                                .as_mut_slice()
-                                .expect("Gradient accumulation only supported on CPU storage");
-                            for (accum, &new) in slice.iter_mut().zip(&g_values) {
-                                *accum += new;
+                        let parent_device = parent.device.clone();
+
+                        // Move this gradient contribution onto the parent's device.
+                        let new_grad_storage = {
+                            let g_borrow = g.borrow();
+                            g_borrow.data.to_device(&parent_device)
+                        };
+
+                        match parent.grad {
+                            None => {
+                                // First contribution: just store it (already on correct device).
+                                parent.grad = Some(new_grad_storage);
+                            }
+                            Some(ref mut existing) => {
+                                RawTensor::accumulate_grad(existing, new_grad_storage);
                             }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+impl RawTensor {
+    /// Add a gradient contribution to an existing gradient storage, preferring GPU accumulation.
+    fn accumulate_grad(existing: &mut Storage, new_grad: Storage) {
+        #[cfg(feature = "gpu")]
+        {
+            if existing.is_gpu() && new_grad.is_gpu() {
+                if let Some(sum) = RawTensor::gpu_add(existing, &new_grad) {
+                    *existing = sum;
+                    return;
+                }
+                eprintln!(
+                    "Warning: GPU gradient accumulation failed; falling back to CPU accumulation"
+                );
+            }
+        }
+
+        // CPU fallback: both storages are synced to CPU for element-wise addition.
+        let mut accum = existing.to_vec();
+        let add = new_grad.to_vec();
+        assert_eq!(
+            accum.len(),
+            add.len(),
+            "Gradient size mismatch during accumulation"
+        );
+        for (a, b) in accum.iter_mut().zip(add.iter()) {
+            *a += *b;
+        }
+        *existing = Storage::cpu(accum);
     }
 }

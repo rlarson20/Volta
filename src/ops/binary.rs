@@ -1,5 +1,9 @@
 use crate::autograd::GradFn;
+use crate::device::Device;
+use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// Binary operations: two inputs, one output
 ///
@@ -14,6 +18,51 @@ pub enum BinaryOp {
     Max,   // max(x, y) (element-wise)
     Mod,   // x % y (non-differentiable)
     Cmplt, // x < y ? 1 : 0 (non-differentiable)
+}
+
+impl RawTensor {
+    #[cfg(feature = "gpu")]
+    fn try_gpu_binary_result(
+        self_t: &Tensor,
+        other: &Tensor,
+        op: BinaryOp,
+    ) -> Option<(Vec<usize>, Storage, Device)> {
+        // Only these ops have GPU kernels at the moment.
+        match op {
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {}
+            _ => return None,
+        }
+
+        let (shape_a, device_a, storage_a) = {
+            let a = self_t.borrow();
+            (a.shape.clone(), a.device.clone(), a.data.clone())
+        };
+        let (shape_b, device_b, storage_b) = {
+            let b = other.borrow();
+            (b.shape.clone(), b.device.clone(), b.data.clone())
+        };
+
+        // Both tensors must be on the same GPU device.
+        if !device_a.is_gpu() || !device_b.is_gpu() || device_a != device_b {
+            return None;
+        }
+
+        // Broadcasting on GPU is not yet implemented; fall back to CPU when
+        // shapes differ.
+        if shape_a != shape_b {
+            return None;
+        }
+
+        let storage = match op {
+            BinaryOp::Add => RawTensor::gpu_add(&storage_a, &storage_b)?,
+            BinaryOp::Sub => RawTensor::gpu_sub(&storage_a, &storage_b)?,
+            BinaryOp::Mul => RawTensor::gpu_mul(&storage_a, &storage_b)?,
+            BinaryOp::Div => RawTensor::gpu_div(&storage_a, &storage_b)?,
+            _ => unreachable!(),
+        };
+
+        Some((shape_a, storage, device_a))
+    }
 }
 
 /// Gradient function for binary operations
@@ -370,7 +419,35 @@ impl RawTensor {
             (o.data.clone(), o.shape.clone(), o.requires_grad)
         };
 
-        // Compute broadcast shape
+        // Mod and Cmplt are non-differentiable
+        let requires_grad = match op {
+            BinaryOp::Mod | BinaryOp::Cmplt => false,
+            _ => req_a || req_b,
+        };
+
+        // If both operands are already on the same GPU and we have a matching
+        // kernel, try to perform the operation there and fall back to CPU
+        // otherwise.
+        #[cfg(feature = "gpu")]
+        {
+            if let Some((shape, storage, device)) = Self::try_gpu_binary_result(self_t, other, op) {
+                let out = Rc::new(RefCell::new(RawTensor {
+                    data: storage,
+                    shape,
+                    grad: None,
+                    requires_grad,
+                    grad_fn: None,
+                    parents: vec![self_t.clone(), other.clone()],
+                    device,
+                }));
+                if requires_grad {
+                    out.borrow_mut().grad_fn = Some(Box::new(BinaryGradFn { op }));
+                }
+                return out;
+            }
+        }
+
+        // CPU path: compute broadcast shape and perform the operation on host data.
         let out_shape = Self::broadcast_shape(&shape_a, &shape_b);
 
         // Broadcast inputs to output shape
@@ -400,12 +477,6 @@ impl RawTensor {
                 }
             })
             .collect();
-
-        // Mod and Cmplt are non-differentiable
-        let requires_grad = match op {
-            BinaryOp::Mod | BinaryOp::Cmplt => false,
-            _ => req_a || req_b,
-        };
 
         let out = Self::new(result_data, &out_shape, requires_grad);
 
