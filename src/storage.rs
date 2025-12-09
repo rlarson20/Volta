@@ -122,7 +122,7 @@ impl Storage {
     pub fn to_device(&self, device: &Device) -> Self {
         match device {
             Device::CPU => Storage::Cpu(self.to_vec()),
-            Device::GPU(_) | Device::Metal(_) => {
+            Device::GPU(_) => {
                 #[cfg(feature = "gpu")]
                 {
                     if is_gpu_available() {

@@ -3,14 +3,12 @@ use std::fmt;
 
 /// Compute device for tensor operations
 ///
-/// Currently only CPU is implemented. GPU would require integration
-/// with CUDA/OpenCL, and Metal is for Apple Silicon.
+/// In progress adding GPU support with wgpu.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub enum Device {
     #[default]
     CPU,
     GPU(String),
-    Metal(String),
 }
 
 impl Device {
@@ -28,7 +26,7 @@ impl Device {
     pub fn name(&self) -> &str {
         match self {
             Device::CPU => "CPU",
-            Device::GPU(name) | Device::Metal(name) => name.as_str(),
+            Device::GPU(name) => name.as_str(),
         }
     }
 }
