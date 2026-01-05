@@ -295,3 +295,78 @@ fn test_tensor_gpu_binary_basic_matches_cpu() {
         );
     }
 }
+
+#[test]
+#[cfg(feature = "gpu")]
+fn test_tensor_gpu_sum_dim_device_and_grad_on_gpu() {
+    use volta::gpu::is_gpu_available;
+    use volta::{Device, RawTensor, TensorOps};
+
+    if !is_gpu_available() {
+        return;
+    }
+
+    let dev = Device::GPU("TestDevice".to_string());
+    let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], true).to_device(dev.clone());
+
+    // Sum over last dim: [[1,2],[3,4]] -> [3,7]
+    let y = x.sum_dim(1, false);
+    {
+        let yb = y.borrow();
+        assert!(
+            yb.device.is_gpu(),
+            "sum_dim output should remain on the same GPU device as the input"
+        );
+        assert_eq!(yb.shape, vec![2]);
+        assert_eq!(yb.data.to_vec(), vec![3.0, 7.0]);
+    }
+
+    y.backward();
+
+    let xb = x.borrow();
+    let grad_storage = xb.grad.as_ref().expect("Gradient for input missing");
+    assert!(
+        grad_storage.is_gpu(),
+        "Expected input gradient for sum_dim to live on GPU"
+    );
+    // Each input element contributes once to the corresponding row sum.
+    assert_eq!(grad_storage.to_vec(), vec![1.0, 1.0, 1.0, 1.0]);
+}
+
+#[test]
+#[cfg(feature = "gpu")]
+fn test_tensor_gpu_max_dim_device_and_grad_on_gpu() {
+    use volta::gpu::is_gpu_available;
+    use volta::{Device, RawTensor, TensorOps};
+
+    if !is_gpu_available() {
+        return;
+    }
+
+    let dev = Device::GPU("TestDevice".to_string());
+    // Shape [2,3]
+    let x =
+        RawTensor::new(vec![1.0, 5.0, 3.0, 2.0, 8.0, 4.0], &[2, 3], true).to_device(dev.clone());
+
+    let y = x.max_dim(1, false);
+    {
+        let yb = y.borrow();
+        assert!(
+            yb.device.is_gpu(),
+            "max_dim output should remain on the same GPU device as the input"
+        );
+        assert_eq!(yb.shape, vec![2]);
+        assert_eq!(yb.data.to_vec(), vec![5.0, 8.0]);
+    }
+
+    y.backward();
+
+    let xb = x.borrow();
+    let grad_storage = xb.grad.as_ref().expect("Gradient for input missing");
+    assert!(
+        grad_storage.is_gpu(),
+        "Expected input gradient for max_dim to live on GPU"
+    );
+    // Only max elements get gradient: indices (0,1) and (1,1).
+    assert_eq!(grad_storage.to_vec(), vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0]);
+}

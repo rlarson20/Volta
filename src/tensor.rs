@@ -347,7 +347,7 @@ impl RawTensor {
     /// `x.sum_dim(1`, false) // -> [6, 15] shape \[2\]
     /// `x.sum_dim(1`, true)  // -> [\[6\], \[15\]] shape \[2,1\]
     pub fn sum_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
-        let (data, shape, req_grad) = {
+        let (data, shape, req_grad, device) = {
             let s = self_t.borrow();
             assert!(
                 dim < s.shape.len(),
@@ -355,7 +355,12 @@ impl RawTensor {
                 dim,
                 s.shape
             );
-            (s.data.clone(), s.shape.clone(), s.requires_grad)
+            (
+                s.data.clone(),
+                s.shape.clone(),
+                s.requires_grad,
+                s.device.clone(),
+            )
         };
 
         let _dim_size = shape[dim];
@@ -405,6 +410,12 @@ impl RawTensor {
         };
 
         let out = Self::new(result, &final_shape, req_grad);
+        // Place the reduction result on the same logical device as the input.
+        {
+            let mut ob = out.borrow_mut();
+            ob.data = ob.data.to_device(&device);
+            ob.device = device;
+        }
 
         if req_grad {
             out.borrow_mut().parents = vec![self_t.clone()];
@@ -455,7 +466,7 @@ impl RawTensor {
     ///
     /// Returns maximum value along dimension and stores indices for backward pass.
     pub fn max_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
-        let (data, shape, req_grad) = {
+        let (data, shape, req_grad, device) = {
             let s = self_t.borrow();
             assert!(
                 dim < s.shape.len(),
@@ -463,7 +474,12 @@ impl RawTensor {
                 dim,
                 s.shape
             );
-            (s.data.clone(), s.shape.clone(), s.requires_grad)
+            (
+                s.data.clone(),
+                s.shape.clone(),
+                s.requires_grad,
+                s.device.clone(),
+            )
         };
 
         let _dim_size = shape[dim];
@@ -512,6 +528,12 @@ impl RawTensor {
         };
 
         let out = Self::new(result, &final_shape, req_grad);
+        // Ensure the max result lives on the same logical device as the input.
+        {
+            let mut ob = out.borrow_mut();
+            ob.data = ob.data.to_device(&device);
+            ob.device = device;
+        }
 
         if req_grad {
             out.borrow_mut().parents = vec![self_t.clone()];
@@ -549,9 +571,9 @@ impl RawTensor {
     ///
     /// Implemented as `sum_dim(dim)` / size(dim)
     pub fn mean_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
-        let (shape, _req_grad) = {
+        let (shape, device) = {
             let t = self_t.borrow();
-            (t.shape.clone(), t.requires_grad)
+            (t.shape.clone(), t.device.clone())
         };
         assert!(dim < shape.len(), "Dimension out of bounds");
 
@@ -559,7 +581,9 @@ impl RawTensor {
         let sum = Self::sum_dim(self_t, dim, keepdim);
         let div_tensor = Self::new(vec![n], &[1], false);
 
-        sum.div(&div_tensor)
+        let mean = sum.div(&div_tensor);
+        // Keep mean result on same device as input
+        Self::to_device(&mean, device)
     }
 }
 
