@@ -4,7 +4,7 @@ use crate::tensor::Tensor;
 pub mod layers;
 pub mod optim;
 
-pub use layers::{BatchNorm2d, Conv2d, Linear, MaxPool2d, ReLU, Sequential};
+pub use layers::{BatchNorm2d, Conv2d, Linear, MaxPool2d, ReLU, Sequential, Sigmoid, Tanh};
 pub use optim::{Adam, Muon, SGD};
 
 pub trait Module {

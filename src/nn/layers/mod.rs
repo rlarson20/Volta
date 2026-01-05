@@ -6,6 +6,8 @@ pub mod linear;
 pub mod maxpool;
 pub mod relu;
 pub mod sequential;
+pub mod sigmoid;
+pub mod tanh;
 
 pub use batchnorm::BatchNorm2d;
 pub use conv::Conv2d;
@@ -15,3 +17,5 @@ pub use linear::Linear;
 pub use maxpool::MaxPool2d;
 pub use relu::ReLU;
 pub use sequential::Sequential;
+pub use sigmoid::Sigmoid;
+pub use tanh::Tanh;
