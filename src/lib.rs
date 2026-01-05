@@ -31,6 +31,7 @@ pub mod io;
 pub mod nn;
 pub mod ops;
 pub mod tensor;
+pub mod utils;
 
 // Re-export main types for easy access
 pub use autograd::GradFn;
@@ -50,6 +51,7 @@ pub use tensor::{
 };
 
 pub use data::{load_mnist_images, load_mnist_labels, normalize, to_one_hot};
+pub use utils::ProgressBar;
 
 pub use ops::{
     BinaryGradFn, BinaryOp, MatMulGradFn, MaxReduceGradFn, MeanGradFn, MovementGradFn, MovementOp,
