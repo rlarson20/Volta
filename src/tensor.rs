@@ -261,6 +261,55 @@ impl RawTensor {
         let half = RawTensor::new(vec![0.5], &[1], false);
         sum_terms.sum().elem_mul(&half).neg()
     }
+
+    /// Binary Cross Entropy loss
+    ///
+    /// BCE(y, y_hat) = -mean(y * log(y_hat) + (1-y) * log(1-y_hat))
+    ///
+    /// # Arguments
+    /// * `pred` - Predicted probabilities (should be in [0, 1], typically from sigmoid)
+    /// * `target` - Target labels (0 or 1)
+    ///
+    /// # Note
+    /// Predictions should be passed through sigmoid before calling this.
+    /// For numerical stability with logits, use `bce_with_logits_loss` instead.
+    pub fn bce_loss(pred: &Tensor, target: &Tensor) -> Tensor {
+        // y * log(y_hat)
+        let log_pred = pred.log();
+        let term1 = target.elem_mul(&log_pred);
+
+        // (1-y) * log(1-y_hat)
+        let one = RawTensor::ones(&target.borrow().shape);
+        let one_minus_target = one.sub(target);
+        let one_minus_pred = RawTensor::ones(&pred.borrow().shape).sub(pred);
+        let log_one_minus_pred = one_minus_pred.log();
+        let term2 = one_minus_target.elem_mul(&log_one_minus_pred);
+
+        // -mean(term1 + term2)
+        term1.add(&term2).mean().neg()
+    }
+
+    /// Binary Cross Entropy with logits (numerically stable)
+    ///
+    /// Combines sigmoid and BCE in a numerically stable way.
+    /// Formula: log(1 + exp(x)) - x*y
+    ///
+    /// # Arguments
+    /// * `logits` - Raw network outputs (before sigmoid)
+    /// * `target` - Target labels (0 or 1)
+    pub fn bce_with_logits_loss(logits: &Tensor, target: &Tensor) -> Tensor {
+        // log(1 + exp(x))
+        let exp_logits = logits.exp();
+        let one = RawTensor::ones(&logits.borrow().shape);
+        let one_plus_exp = one.add(&exp_logits);
+        let log_term = one_plus_exp.log();
+
+        // x * y
+        let xy_term = logits.elem_mul(target);
+
+        // log(1 + exp(x)) - x*y
+        log_term.sub(&xy_term).mean()
+    }
 }
 
 // ===== SOFTMAX & AXIS REDUCTIONS =====
@@ -1062,6 +1111,14 @@ pub fn nll_loss(log_probs: &Tensor, targets: &Tensor) -> Tensor {
 
 pub fn kl_divergence_gaussian(mu: &Tensor, logvar: &Tensor) -> Tensor {
     RawTensor::kl_divergence_gaussian(mu, logvar)
+}
+
+pub fn bce_loss(pred: &Tensor, target: &Tensor) -> Tensor {
+    RawTensor::bce_loss(pred, target)
+}
+
+pub fn bce_with_logits_loss(logits: &Tensor, target: &Tensor) -> Tensor {
+    RawTensor::bce_with_logits_loss(logits, target)
 }
 
 // Axis reductions

@@ -39,17 +39,17 @@ pub use device::Device;
 pub use nn::layers::Dropout;
 pub use nn::layers::flatten::Flatten;
 pub use nn::{
-    Adam, BatchNorm2d, Conv2d, LSTMCell, Linear, MaxPool2d, Module, ReLU, SGD, Sequential, Sigmoid,
-    Tanh,
+    Adam, BatchNorm2d, Conv2d, ConvTranspose2d, LSTMCell, Linear, MaxPool2d, Module, ReLU, SGD,
+    Sequential, Sigmoid, Tanh,
 };
 pub use tensor::{RawTensor, Tensor, TensorOps};
 
 // Main entry points
 
 pub use tensor::{
-    DataLoader, check_gradients, check_gradients_simple, cross_entropy_loss,
-    kl_divergence_gaussian, manual_seed, max_dim, mse_loss, new_tensor, nll_loss, ones, rand,
-    randn, randn_like, softmax, sum_dim, zeros,
+    DataLoader, bce_loss, bce_with_logits_loss, check_gradients, check_gradients_simple,
+    cross_entropy_loss, kl_divergence_gaussian, manual_seed, max_dim, mse_loss, new_tensor,
+    nll_loss, ones, rand, randn, randn_like, softmax, sum_dim, zeros,
 };
 
 pub use data::{load_mnist_images, load_mnist_labels, normalize, to_one_hot};

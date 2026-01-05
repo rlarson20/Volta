@@ -1,5 +1,6 @@
 pub mod batchnorm;
 pub mod conv;
+pub mod conv_transpose;
 pub mod dropout;
 pub mod flatten;
 pub mod linear;
@@ -12,6 +13,7 @@ pub mod tanh;
 
 pub use batchnorm::BatchNorm2d;
 pub use conv::Conv2d;
+pub use conv_transpose::ConvTranspose2d;
 pub use dropout::Dropout;
 pub use flatten::Flatten;
 pub use linear::Linear;
