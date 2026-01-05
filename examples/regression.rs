@@ -1,4 +1,4 @@
-use volta::{Linear, Module, RawTensor, SGD, Sequential, TensorOps};
+use volta::{Linear, Module, ProgressBar, RawTensor, SGD, Sequential, TensorOps};
 
 fn main() {
     println!("=== Polynomial Regression Example ===\n");
@@ -37,7 +37,10 @@ fn main() {
     println!("Target function: y = -x^3 + x\n");
 
     // Training loop
-    for epoch in 0..1000 {
+    let num_epochs = 1000;
+    let mut progress = ProgressBar::new(num_epochs, "Training");
+
+    for epoch in 0..num_epochs {
         optimizer.zero_grad();
 
         let pred = model.forward(&x);
@@ -46,9 +49,11 @@ fn main() {
         loss.backward();
         optimizer.step();
 
-        if epoch % 100 == 0 {
+        progress.update(epoch + 1);
+
+        if epoch % 100 == 99 {
             let loss_val = loss.borrow().data[0];
-            println!("Epoch {:4}: Loss = {:.6}", epoch, loss_val);
+            println!(" Loss = {:.6}", loss_val);
         }
     }
 
