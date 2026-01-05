@@ -217,6 +217,16 @@ impl RawTensor {
         let sum = Self::sum_dim(&prod, 1, false);
         sum.neg().mean()
     }
+
+    /// Negative log likelihood loss
+    /// Takes log-probabilities and one-hot targets
+    /// Equivalent to cross_entropy but expects pre-computed log probabilities
+    pub fn nll_loss(log_probs: &Tensor, targets: &Tensor) -> Tensor {
+        // -sum(targets * log_probs, dim=1).mean()
+        let prod = targets.elem_mul(log_probs);
+        let sum = Self::sum_dim(&prod, 1, false);
+        sum.neg().mean()
+    }
 }
 
 // ===== SOFTMAX & AXIS REDUCTIONS =====
@@ -1006,6 +1016,10 @@ pub fn mse_loss(pred: &Tensor, target: &Tensor) -> Tensor {
 
 pub fn cross_entropy_loss(logits: &Tensor, targets: &Tensor) -> Tensor {
     RawTensor::cross_entropy_loss(logits, targets)
+}
+
+pub fn nll_loss(log_probs: &Tensor, targets: &Tensor) -> Tensor {
+    RawTensor::nll_loss(log_probs, targets)
 }
 
 // Axis reductions
