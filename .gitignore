@@ -8,3 +8,6 @@
 .aider*
 
 *.bin
+
+# Data files
+data/mnist/

@@ -47,8 +47,9 @@ pub use tensor::{RawTensor, Tensor, TensorOps};
 // Main entry points
 
 pub use tensor::{
-    DataLoader, check_gradients, check_gradients_simple, cross_entropy_loss, manual_seed, max_dim,
-    mse_loss, new_tensor, nll_loss, ones, rand, randn, softmax, sum_dim, zeros,
+    DataLoader, check_gradients, check_gradients_simple, cross_entropy_loss,
+    kl_divergence_gaussian, manual_seed, max_dim, mse_loss, new_tensor, nll_loss, ones, rand,
+    randn, randn_like, softmax, sum_dim, zeros,
 };
 
 pub use data::{load_mnist_images, load_mnist_labels, normalize, to_one_hot};

@@ -155,6 +155,13 @@ impl RawTensor {
 
         Self::new(data, shape, false)
     }
+
+    /// Create a tensor filled with random values from N(0, 1) with the same shape as the input
+    pub fn randn_like(tensor: &Tensor) -> Tensor {
+        let shape = tensor.borrow().shape.clone();
+        Self::randn(&shape)
+    }
+
     /// Xavier uniform initialization
     ///
     /// Samples weights uniformly from [-limit, limit] where
@@ -226,6 +233,33 @@ impl RawTensor {
         let prod = targets.elem_mul(log_probs);
         let sum = Self::sum_dim(&prod, 1, false);
         sum.neg().mean()
+    }
+
+    /// KL divergence between N(mu, sigma) and N(0, 1)
+    ///
+    /// Used in VAE loss: KL(q(z|x) || p(z))
+    /// Formula: -0.5 * sum(1 + logvar - mu^2 - exp(logvar))
+    ///
+    /// # Arguments
+    /// * `mu` - Mean of learned distribution
+    /// * `logvar` - Log variance of learned distribution
+    pub fn kl_divergence_gaussian(mu: &Tensor, logvar: &Tensor) -> Tensor {
+        // 1 + logvar
+        let one = RawTensor::ones(&mu.borrow().shape);
+        let term1 = one.add(logvar);
+
+        // mu^2
+        let mu_sq = mu.elem_mul(mu);
+
+        // exp(logvar)
+        let var = logvar.exp();
+
+        // 1 + logvar - mu^2 - exp(logvar)
+        let sum_terms = term1.sub(&mu_sq).sub(&var);
+
+        // -0.5 * sum(...)
+        let half = RawTensor::new(vec![0.5], &[1], false);
+        sum_terms.sum().elem_mul(&half).neg()
     }
 }
 
@@ -1009,6 +1043,10 @@ pub fn randn(shape: &[usize]) -> Tensor {
     RawTensor::randn(shape)
 }
 
+pub fn randn_like(tensor: &Tensor) -> Tensor {
+    RawTensor::randn_like(tensor)
+}
+
 // Loss functions
 pub fn mse_loss(pred: &Tensor, target: &Tensor) -> Tensor {
     RawTensor::mse_loss(pred, target)
@@ -1020,6 +1058,10 @@ pub fn cross_entropy_loss(logits: &Tensor, targets: &Tensor) -> Tensor {
 
 pub fn nll_loss(log_probs: &Tensor, targets: &Tensor) -> Tensor {
     RawTensor::nll_loss(log_probs, targets)
+}
+
+pub fn kl_divergence_gaussian(mu: &Tensor, logvar: &Tensor) -> Tensor {
+    RawTensor::kl_divergence_gaussian(mu, logvar)
 }
 
 // Axis reductions
