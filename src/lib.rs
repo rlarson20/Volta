@@ -25,6 +25,7 @@ pub use storage::Storage;
 pub use gpu::{GpuBuffer, GpuContext, get_gpu_context, is_gpu_available};
 
 pub mod autograd;
+pub mod data;
 pub mod device;
 pub mod io;
 pub mod nn;
@@ -45,6 +46,8 @@ pub use tensor::{
     DataLoader, check_gradients, check_gradients_simple, cross_entropy_loss, manual_seed, max_dim,
     mse_loss, new_tensor, ones, rand, randn, softmax, sum_dim, zeros,
 };
+
+pub use data::{load_mnist_images, load_mnist_labels, normalize, to_one_hot};
 
 pub use ops::{
     BinaryGradFn, BinaryOp, MatMulGradFn, MaxReduceGradFn, MeanGradFn, MovementGradFn, MovementOp,
