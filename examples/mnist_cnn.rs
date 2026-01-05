@@ -1,7 +1,7 @@
 use std::path::Path;
 use volta::{
-    Conv2d, DataLoader, Dropout, Flatten, Linear, MaxPool2d, Module, RawTensor, ReLU, SGD,
-    Sequential, TensorOps, load_mnist_images, load_mnist_labels, to_one_hot,
+    Conv2d, DataLoader, Dropout, Flatten, Linear, MaxPool2d, Module, ProgressBar, RawTensor, ReLU,
+    SGD, Sequential, TensorOps, load_mnist_images, load_mnist_labels, to_one_hot,
 };
 
 fn main() {
@@ -92,11 +92,17 @@ fn main() {
     // Training
     model.train(true);
     let num_epochs = 10;
+    let total_batches = num_samples / batch_size;
 
     for epoch in 0..num_epochs {
         dataloader.reset();
         let mut epoch_loss = 0.0;
         let mut num_batches = 0;
+
+        let mut progress = ProgressBar::new(
+            total_batches,
+            &format!("Epoch {:2}/{}", epoch + 1, num_epochs),
+        );
 
         for (batch_x, batch_y) in &mut dataloader {
             optimizer.zero_grad();
@@ -107,15 +113,11 @@ fn main() {
 
             epoch_loss += loss.borrow().data[0];
             num_batches += 1;
+            progress.update(num_batches);
         }
 
         let avg_loss = epoch_loss / num_batches as f32;
-        println!(
-            "Epoch {:2}/{}: Loss = {:.6}",
-            epoch + 1,
-            num_epochs,
-            avg_loss
-        );
+        println!(" Loss = {:.6}", avg_loss);
     }
 
     // Test accuracy
@@ -125,6 +127,7 @@ fn main() {
 
     let mut total_correct = 0;
     let mut total_samples = 0;
+    let mut progress = ProgressBar::new(total_batches, "Testing");
 
     for (test_x, test_y) in &mut dataloader {
         let output = model.forward(&test_x);
@@ -148,7 +151,9 @@ fn main() {
             }
             total_samples += 1;
         }
+        progress.inc();
     }
+    println!();
 
     let accuracy = total_correct as f32 / total_samples as f32 * 100.0;
     println!(
