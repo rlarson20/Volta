@@ -39,7 +39,8 @@ pub use device::Device;
 pub use nn::layers::Dropout;
 pub use nn::layers::flatten::Flatten;
 pub use nn::{
-    Adam, BatchNorm2d, Conv2d, Linear, MaxPool2d, Module, ReLU, SGD, Sequential, Sigmoid, Tanh,
+    Adam, BatchNorm2d, Conv2d, LSTMCell, Linear, MaxPool2d, Module, ReLU, SGD, Sequential, Sigmoid,
+    Tanh,
 };
 pub use tensor::{RawTensor, Tensor, TensorOps};
 
