@@ -19,10 +19,14 @@ rand = "0.9.2"
 rand_distr = "0.5.1"
 matrixmultiply = "0.3.10"
 
+# Dtype support
+half = { version = "2.7.1", features = ["bytemuck"] }
+bytemuck = { version = "1.24.0", features = ["derive"] }
+
 # GPU support
 wgpu = { version = "27.0.1", optional = true }
-bytemuck = { version = "1.24.0", features = ["derive"], optional = true }
 pollster = { version = "0.4.0", optional = true }
+safetensors = "0.7.0"
 
 [[example]]
 name = "gpu"
@@ -47,4 +51,4 @@ blas-src = { version = "0.14", features = ["accelerate"], optional = true }
 [features]
 default = ["gpu", "accelerate"]
 accelerate = ["blas-src"]
-gpu = ["wgpu", "pollster", "bytemuck"]
+gpu = ["wgpu", "pollster"]

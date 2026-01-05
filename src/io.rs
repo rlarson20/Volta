@@ -1,10 +1,14 @@
+use crate::dtype::DType;
 use crate::nn::Module;
+use crate::storage::Storage;
 use crate::tensor::Tensor;
 use bincode::{Decode, Encode, config};
+use safetensors::SafeTensors;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::File;
 use std::io::{Error, Read, Result, Write};
+use std::path::Path;
 
 pub type StateDict = BTreeMap<String, TensorData>;
 
@@ -152,6 +156,185 @@ pub fn load_state_dict(path: &str) -> Result<StateDict> {
     Ok(state)
 }
 
+// ========== SafeTensors Support ==========
+
+/// Convert SafeTensors dtype to Volta DType
+fn safetensors_dtype_to_volta(dtype: safetensors::Dtype) -> DType {
+    match dtype {
+        safetensors::Dtype::F16 => DType::F16,
+        safetensors::Dtype::BF16 => DType::BF16,
+        safetensors::Dtype::F32 => DType::F32,
+        safetensors::Dtype::F64 => DType::F64,
+        safetensors::Dtype::I32 => DType::I32,
+        safetensors::Dtype::I64 => DType::I64,
+        safetensors::Dtype::U8 => DType::U8,
+        safetensors::Dtype::BOOL => DType::Bool,
+        _ => DType::F32, // Fallback for unsupported types
+    }
+}
+
+/// Convert Volta DType to SafeTensors dtype
+fn volta_dtype_to_safetensors(dtype: DType) -> safetensors::Dtype {
+    match dtype {
+        DType::F16 => safetensors::Dtype::F16,
+        DType::BF16 => safetensors::Dtype::BF16,
+        DType::F32 => safetensors::Dtype::F32,
+        DType::F64 => safetensors::Dtype::F64,
+        DType::I32 => safetensors::Dtype::I32,
+        DType::I64 => safetensors::Dtype::I64,
+        DType::U8 => safetensors::Dtype::U8,
+        DType::Bool => safetensors::Dtype::BOOL,
+    }
+}
+
+/// Load a SafeTensors file into a StateDict (converts all tensors to f32)
+///
+/// This is the simplest API for loading pretrained models. All tensors are
+/// converted to f32 to match the existing StateDict format.
+///
+/// For native dtype loading, use `load_safetensors_raw()`.
+pub fn load_safetensors<P: AsRef<Path>>(path: P) -> Result<StateDict> {
+    let mut file = File::open(path)?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+
+    let tensors = SafeTensors::deserialize(&buffer)
+        .map_err(|e| Error::other(format!("SafeTensors parse error: {}", e)))?;
+
+    let mut state_dict = StateDict::new();
+
+    for (name, tensor) in tensors.tensors() {
+        let shape: Vec<usize> = tensor.shape().to_vec();
+        let dtype = safetensors_dtype_to_volta(tensor.dtype());
+
+        // Create Storage from raw bytes and convert to f32
+        let storage = Storage::from_bytes(tensor.data().to_vec(), dtype);
+        let f32_data = storage.to_f32_vec();
+
+        state_dict.insert(
+            name.to_string(),
+            TensorData {
+                data: f32_data,
+                shape,
+            },
+        );
+    }
+
+    Ok(state_dict)
+}
+
+/// Tensor data with native dtype support for SafeTensors
+#[derive(Clone)]
+pub struct TypedTensorData {
+    /// Raw bytes of tensor data
+    pub data: Vec<u8>,
+    /// Shape of the tensor
+    pub shape: Vec<usize>,
+    /// Data type
+    pub dtype: DType,
+}
+
+impl TypedTensorData {
+    /// Convert to f32 TensorData
+    pub fn to_tensor_data(&self) -> TensorData {
+        let storage = Storage::from_bytes(self.data.clone(), self.dtype);
+        TensorData {
+            data: storage.to_f32_vec(),
+            shape: self.shape.clone(),
+        }
+    }
+
+    /// Create a Storage with native dtype
+    pub fn to_storage(&self) -> Storage {
+        Storage::from_bytes(self.data.clone(), self.dtype)
+    }
+
+    /// Get number of elements
+    pub fn numel(&self) -> usize {
+        self.shape.iter().product()
+    }
+}
+
+/// Load a SafeTensors file with native dtypes preserved
+///
+/// Returns a map of tensor names to TypedTensorData, preserving the original
+/// dtype (F16, BF16, etc.) without conversion.
+pub fn load_safetensors_raw<P: AsRef<Path>>(path: P) -> Result<BTreeMap<String, TypedTensorData>> {
+    let mut file = File::open(path)?;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+
+    let tensors = SafeTensors::deserialize(&buffer)
+        .map_err(|e| Error::other(format!("SafeTensors parse error: {}", e)))?;
+
+    let mut result = BTreeMap::new();
+
+    for (name, tensor) in tensors.tensors() {
+        result.insert(
+            name.to_string(),
+            TypedTensorData {
+                data: tensor.data().to_vec(),
+                shape: tensor.shape().to_vec(),
+                dtype: safetensors_dtype_to_volta(tensor.dtype()),
+            },
+        );
+    }
+
+    Ok(result)
+}
+
+/// Save a StateDict to SafeTensors format
+///
+/// All tensors are saved as F32 since StateDict uses f32.
+pub fn save_safetensors<P: AsRef<Path>>(state: &StateDict, path: P) -> Result<()> {
+    use safetensors::tensor::{Dtype, TensorView};
+
+    let tensors: Vec<(String, TensorView<'_>)> = state
+        .iter()
+        .map(|(name, td)| {
+            let view =
+                TensorView::new(Dtype::F32, td.shape.clone(), bytemuck::cast_slice(&td.data))
+                    .expect("Failed to create TensorView");
+            (name.clone(), view)
+        })
+        .collect();
+
+    let bytes = safetensors::tensor::serialize(tensors, None)
+        .map_err(|e| Error::other(format!("SafeTensors serialize error: {}", e)))?;
+
+    let mut file = File::create(path)?;
+    file.write_all(&bytes)?;
+    Ok(())
+}
+
+/// Save typed tensor data to SafeTensors format with native dtypes
+pub fn save_safetensors_typed<P: AsRef<Path>>(
+    tensors: &BTreeMap<String, TypedTensorData>,
+    path: P,
+) -> Result<()> {
+    use safetensors::tensor::TensorView;
+
+    let tensor_views: Vec<(String, TensorView<'_>)> = tensors
+        .iter()
+        .map(|(name, td)| {
+            let view = TensorView::new(
+                volta_dtype_to_safetensors(td.dtype),
+                td.shape.clone(),
+                &td.data,
+            )
+            .expect("Failed to create TensorView");
+            (name.clone(), view)
+        })
+        .collect();
+
+    let bytes = safetensors::tensor::serialize(tensor_views, None)
+        .map_err(|e| Error::other(format!("SafeTensors serialize error: {}", e)))?;
+
+    let mut file = File::create(path)?;
+    file.write_all(&bytes)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod io_tests {
     use super::*;
@@ -253,5 +436,92 @@ mod io_tests {
         assert!(message.contains("0.weight"));
         assert!(message.contains("[2, 3]"));
         assert!(message.contains("[3, 2]"));
+    }
+
+    #[test]
+    fn test_safetensors_roundtrip() {
+        let model = Sequential::new(vec![
+            Box::new(Linear::new(2, 3, true)),
+            Box::new(ReLU),
+            Box::new(Linear::new(3, 1, true)),
+        ]);
+
+        let path = std::env::temp_dir().join("test_safetensors.safetensors");
+
+        // Save to SafeTensors
+        let state = model.state_dict();
+        save_safetensors(&state, &path).unwrap();
+
+        // Load from SafeTensors
+        let loaded_state = load_safetensors(&path).unwrap();
+
+        // Verify keys match
+        assert_eq!(state.len(), loaded_state.len());
+        for (key, td) in state.iter() {
+            let loaded_td = loaded_state.get(key).expect("Key should exist");
+            assert_eq!(td.shape, loaded_td.shape);
+            // Check data (with small tolerance for f32 roundtrip)
+            for (a, b) in td.data.iter().zip(loaded_td.data.iter()) {
+                assert!((a - b).abs() < 1e-6, "Data mismatch for key {}", key);
+            }
+        }
+    }
+
+    #[test]
+    fn test_safetensors_raw_dtypes() {
+        use crate::DType;
+
+        // Create typed tensor data
+        let mut tensors = BTreeMap::new();
+
+        // F32 tensor
+        let f32_data: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0];
+        tensors.insert(
+            "f32_tensor".to_string(),
+            TypedTensorData {
+                data: bytemuck::cast_slice(&f32_data).to_vec(),
+                shape: vec![2, 2],
+                dtype: DType::F32,
+            },
+        );
+
+        // F16 tensor
+        let f16_data: Vec<half::f16> = [1.0, 2.0, 3.0, 4.0]
+            .iter()
+            .map(|&x| half::f16::from_f32(x))
+            .collect();
+        tensors.insert(
+            "f16_tensor".to_string(),
+            TypedTensorData {
+                data: bytemuck::cast_slice(&f16_data).to_vec(),
+                shape: vec![2, 2],
+                dtype: DType::F16,
+            },
+        );
+
+        let path = std::env::temp_dir().join("test_typed.safetensors");
+
+        // Save with native dtypes
+        save_safetensors_typed(&tensors, &path).unwrap();
+
+        // Load with native dtypes
+        let loaded = load_safetensors_raw(&path).unwrap();
+
+        // Verify dtypes are preserved
+        assert_eq!(loaded.get("f32_tensor").unwrap().dtype, DType::F32);
+        assert_eq!(loaded.get("f16_tensor").unwrap().dtype, DType::F16);
+
+        // Verify shapes
+        assert_eq!(loaded.get("f32_tensor").unwrap().shape, vec![2, 2]);
+        assert_eq!(loaded.get("f16_tensor").unwrap().shape, vec![2, 2]);
+
+        // Verify data conversion
+        let f32_loaded = loaded.get("f32_tensor").unwrap().to_storage().to_f32_vec();
+        assert_eq!(f32_loaded, f32_data);
+
+        let f16_loaded = loaded.get("f16_tensor").unwrap().to_storage().to_f32_vec();
+        for (a, b) in f16_loaded.iter().zip([1.0f32, 2.0, 3.0, 4.0].iter()) {
+            assert!((a - b).abs() < 0.01, "F16 conversion mismatch");
+        }
     }
 }

@@ -60,6 +60,7 @@ impl ConvTranspose2d {
     /// * `kernel` - Kernel size
     /// * `stride` - Stride
     /// * `padding` - Padding
+    #[allow(clippy::too_many_arguments)]
     fn col2im_transpose(
         col: &[f32],
         batch: usize,

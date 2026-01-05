@@ -121,7 +121,7 @@ impl RawTensor {
         );
 
         let raw = RawTensor {
-            data: Storage::Cpu(data),
+            data: Storage::cpu(data),
             shape: shape.to_vec(),
             grad: None,
             requires_grad,

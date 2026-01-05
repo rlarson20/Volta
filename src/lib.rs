@@ -16,9 +16,11 @@
 #[cfg(feature = "gpu")]
 pub mod gpu;
 
+pub mod dtype;
 pub mod storage;
 
 // Add to re-exports:
+pub use dtype::DType;
 pub use storage::Storage;
 
 #[cfg(feature = "gpu")]
@@ -53,6 +55,10 @@ pub use tensor::{
 };
 
 pub use data::{load_mnist_images, load_mnist_labels, normalize, to_one_hot};
+pub use io::{
+    TypedTensorData, load_safetensors, load_safetensors_raw, save_safetensors,
+    save_safetensors_typed,
+};
 pub use utils::ProgressBar;
 
 pub use ops::{

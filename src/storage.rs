@@ -1,104 +1,346 @@
 //! Tensor storage abstraction
 //!
 //! This module provides a unified interface for tensor data storage
-//! that can be backed by either CPU memory or GPU buffers.
+//! that can be backed by either CPU memory or GPU buffers, with support
+//! for multiple data types (f16, bf16, f32, f64, etc.).
 
 use crate::device::Device;
+use crate::dtype::DType;
 #[cfg(feature = "gpu")]
 use crate::gpu::{GpuBuffer, is_gpu_available};
+use bytemuck::{cast_slice, cast_slice_mut};
+use half::{bf16, f16};
 use std::ops::{
-    Deref, DerefMut, Index, IndexMut, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo,
-    RangeToInclusive,
+    Index, IndexMut, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo, RangeToInclusive,
 };
 
 /// Storage backend for tensor data
 ///
-/// This enum allows tensors to store their data either on CPU (as a `Vec<f32>`)
-/// or on GPU (as a `GpuBuffer`). Operations automatically handle the right backend.
+/// This enum allows tensors to store their data either on CPU (as a byte buffer)
+/// or on GPU (as a GpuBuffer). The dtype field indicates how to interpret the bytes.
 #[derive(Clone)]
 pub enum Storage {
-    /// CPU storage - data lives in main memory
-    Cpu(Vec<f32>),
+    /// CPU storage - data lives in main memory as raw bytes
+    Cpu { data: Vec<u8>, dtype: DType },
 
     /// GPU storage - data lives in GPU memory
     #[cfg(feature = "gpu")]
     Gpu {
         /// The GPU buffer (wrapped in Arc for cheap cloning)
         buffer: std::sync::Arc<GpuBuffer>,
+        /// Data type
+        dtype: DType,
         /// Cached CPU copy (for operations that need CPU access)
-        /// This is lazily populated when needed
-        cpu_cache: Option<Vec<f32>>,
+        cpu_cache: Option<Vec<u8>>,
     },
 }
 
 impl Storage {
-    /// Create new CPU storage from data
+    // ========== Constructors ==========
+
+    /// Create new CPU storage from f32 data (default dtype)
     pub fn cpu(data: Vec<f32>) -> Self {
-        Storage::Cpu(data)
+        let bytes: Vec<u8> = cast_slice(&data).to_vec();
+        Storage::Cpu {
+            data: bytes,
+            dtype: DType::F32,
+        }
     }
 
-    /// Create new GPU storage from data (falls back to CPU if GPU unavailable)
+    /// Create new CPU storage from f32 data with explicit dtype
+    pub fn cpu_f32(data: Vec<f32>) -> Self {
+        Self::cpu(data)
+    }
+
+    /// Create new CPU storage from f64 data
+    pub fn cpu_f64(data: Vec<f64>) -> Self {
+        let bytes: Vec<u8> = cast_slice(&data).to_vec();
+        Storage::Cpu {
+            data: bytes,
+            dtype: DType::F64,
+        }
+    }
+
+    /// Create new CPU storage from f16 data
+    pub fn cpu_f16(data: Vec<f16>) -> Self {
+        let bytes: Vec<u8> = cast_slice(&data).to_vec();
+        Storage::Cpu {
+            data: bytes,
+            dtype: DType::F16,
+        }
+    }
+
+    /// Create new CPU storage from bf16 data
+    pub fn cpu_bf16(data: Vec<bf16>) -> Self {
+        let bytes: Vec<u8> = cast_slice(&data).to_vec();
+        Storage::Cpu {
+            data: bytes,
+            dtype: DType::BF16,
+        }
+    }
+
+    /// Create new CPU storage from raw bytes with a specific dtype
+    pub fn from_bytes(data: Vec<u8>, dtype: DType) -> Self {
+        assert!(
+            data.len().is_multiple_of(dtype.size_of()),
+            "Byte length {} is not divisible by dtype size {}",
+            data.len(),
+            dtype.size_of()
+        );
+        Storage::Cpu { data, dtype }
+    }
+
+    /// Create new GPU storage from f32 data (falls back to CPU if GPU unavailable)
     #[cfg(feature = "gpu")]
     pub fn gpu(data: Vec<f32>) -> Self {
         if let Some(buffer) = GpuBuffer::from_slice(&data) {
+            let bytes: Vec<u8> = cast_slice(&data).to_vec();
             Storage::Gpu {
                 buffer: std::sync::Arc::new(buffer),
-                cpu_cache: Some(data), // Keep original data as cache
+                dtype: DType::F32,
+                cpu_cache: Some(bytes),
             }
         } else {
-            // Fall back to CPU
-            Storage::Cpu(data)
+            Self::cpu(data)
         }
     }
 
     #[cfg(not(feature = "gpu"))]
     pub fn gpu(data: Vec<f32>) -> Self {
-        Storage::Cpu(data)
+        Self::cpu(data)
     }
 
-    /// Get data as a slice (may trigger GPU->CPU transfer)
-    pub fn as_slice(&self) -> &[f32] {
+    // ========== Dtype Access ==========
+
+    /// Get the data type of this storage
+    pub fn dtype(&self) -> DType {
         match self {
-            Storage::Cpu(data) => data,
+            Storage::Cpu { dtype, .. } => *dtype,
+            #[cfg(feature = "gpu")]
+            Storage::Gpu { dtype, .. } => *dtype,
+        }
+    }
+
+    // ========== F32 Access (Backward Compatible) ==========
+
+    /// Get data as f32 slice. Only valid if dtype is F32.
+    /// Panics if dtype is not F32.
+    pub fn as_f32_slice(&self) -> &[f32] {
+        match self {
+            Storage::Cpu { data, dtype } => {
+                assert_eq!(*dtype, DType::F32, "Storage dtype is {:?}, not F32", dtype);
+                cast_slice(data)
+            }
             #[cfg(feature = "gpu")]
             Storage::Gpu {
-                buffer: _,
-                cpu_cache,
+                cpu_cache, dtype, ..
             } => {
-                // If we have a cache, use it
-                // Otherwise, we'd need interior mutability to populate it
-                // For now, panic - the user should call to_vec() first
-                cpu_cache
-                    .as_ref()
-                    .expect("GPU buffer needs to_vec() call before slice access")
+                assert_eq!(*dtype, DType::F32, "Storage dtype is {:?}, not F32", dtype);
+                cast_slice(
+                    cpu_cache
+                        .as_ref()
+                        .expect("GPU buffer needs sync before slice access"),
+                )
             }
         }
     }
 
-    /// Get data as a mutable slice (only works for CPU storage)
+    /// Get data as mutable f32 slice. Only valid if dtype is F32.
+    pub fn as_f32_slice_mut(&mut self) -> Option<&mut [f32]> {
+        match self {
+            Storage::Cpu { data, dtype } => {
+                if *dtype == DType::F32 {
+                    Some(cast_slice_mut(data))
+                } else {
+                    None
+                }
+            }
+            #[cfg(feature = "gpu")]
+            Storage::Gpu { .. } => None,
+        }
+    }
+
+    /// Backward compatible: get data as slice (assumes F32)
+    pub fn as_slice(&self) -> &[f32] {
+        self.as_f32_slice()
+    }
+
+    /// Backward compatible: get data as mutable slice (assumes F32)
     pub fn as_mut_slice(&mut self) -> Option<&mut [f32]> {
+        self.as_f32_slice_mut()
+    }
+
+    // ========== Other Dtype Access ==========
+
+    /// Get data as f64 slice. Only valid if dtype is F64.
+    pub fn as_f64_slice(&self) -> Option<&[f64]> {
         match self {
-            Storage::Cpu(data) => Some(data),
+            Storage::Cpu { data, dtype } if *dtype == DType::F64 => Some(cast_slice(data)),
             #[cfg(feature = "gpu")]
-            Storage::Gpu { .. } => None, // Can't mutate GPU data directly
+            Storage::Gpu {
+                cpu_cache, dtype, ..
+            } if *dtype == DType::F64 => cpu_cache.as_ref().map(|c| cast_slice(c.as_slice())),
+            _ => None,
         }
     }
 
-    /// Convert to `Vec<f32>` (triggers GPU->CPU transfer if needed)
-    pub fn to_vec(&self) -> Vec<f32> {
+    /// Get data as f16 slice. Only valid if dtype is F16.
+    pub fn as_f16_slice(&self) -> Option<&[f16]> {
         match self {
-            Storage::Cpu(data) => data.clone(),
+            Storage::Cpu { data, dtype } if *dtype == DType::F16 => Some(cast_slice(data)),
             #[cfg(feature = "gpu")]
-            Storage::Gpu { buffer, cpu_cache } => {
-                cpu_cache.clone().unwrap_or_else(|| buffer.to_vec())
+            Storage::Gpu {
+                cpu_cache, dtype, ..
+            } if *dtype == DType::F16 => cpu_cache.as_ref().map(|c| cast_slice(c.as_slice())),
+            _ => None,
+        }
+    }
+
+    /// Get data as bf16 slice. Only valid if dtype is BF16.
+    pub fn as_bf16_slice(&self) -> Option<&[bf16]> {
+        match self {
+            Storage::Cpu { data, dtype } if *dtype == DType::BF16 => Some(cast_slice(data)),
+            #[cfg(feature = "gpu")]
+            Storage::Gpu {
+                cpu_cache, dtype, ..
+            } if *dtype == DType::BF16 => cpu_cache.as_ref().map(|c| cast_slice(c.as_slice())),
+            _ => None,
+        }
+    }
+
+    /// Get raw bytes
+    pub fn as_bytes(&self) -> &[u8] {
+        match self {
+            Storage::Cpu { data, .. } => data,
+            #[cfg(feature = "gpu")]
+            Storage::Gpu { cpu_cache, .. } => cpu_cache
+                .as_ref()
+                .expect("GPU buffer needs sync before byte access"),
+        }
+    }
+
+    // ========== Conversion ==========
+
+    /// Convert to Vec<f32> (always works, may involve conversion)
+    pub fn to_f32_vec(&self) -> Vec<f32> {
+        match self.dtype() {
+            DType::F32 => self.as_f32_slice().to_vec(),
+            DType::F64 => self
+                .as_f64_slice()
+                .unwrap()
+                .iter()
+                .map(|&x| x as f32)
+                .collect(),
+            DType::F16 => self
+                .as_f16_slice()
+                .unwrap()
+                .iter()
+                .map(|x| x.to_f32())
+                .collect(),
+            DType::BF16 => self
+                .as_bf16_slice()
+                .unwrap()
+                .iter()
+                .map(|x| x.to_f32())
+                .collect(),
+            DType::I32 => {
+                let bytes = self.as_bytes();
+                let ints: &[i32] = cast_slice(bytes);
+                ints.iter().map(|&x| x as f32).collect()
+            }
+            DType::I64 => {
+                let bytes = self.as_bytes();
+                let ints: &[i64] = cast_slice(bytes);
+                ints.iter().map(|&x| x as f32).collect()
+            }
+            DType::U8 => {
+                let bytes = self.as_bytes();
+                bytes.iter().map(|&x| x as f32).collect()
+            }
+            DType::Bool => {
+                let bytes = self.as_bytes();
+                bytes
+                    .iter()
+                    .map(|&x| if x != 0 { 1.0 } else { 0.0 })
+                    .collect()
             }
         }
     }
 
-    /// Get the length
+    /// Backward compatible: convert to Vec<f32>
+    pub fn to_vec(&self) -> Vec<f32> {
+        self.to_f32_vec()
+    }
+
+    /// Convert storage to a different dtype
+    pub fn to_dtype(&self, target: DType) -> Storage {
+        if self.dtype() == target {
+            return self.clone();
+        }
+
+        // First convert to f32 as intermediate
+        let f32_data = self.to_f32_vec();
+
+        // Then convert to target dtype
+        match target {
+            DType::F32 => Storage::cpu(f32_data),
+            DType::F64 => {
+                let data: Vec<f64> = f32_data.iter().map(|&x| x as f64).collect();
+                Storage::cpu_f64(data)
+            }
+            DType::F16 => {
+                let data: Vec<f16> = f32_data.iter().map(|&x| f16::from_f32(x)).collect();
+                Storage::cpu_f16(data)
+            }
+            DType::BF16 => {
+                let data: Vec<bf16> = f32_data.iter().map(|&x| bf16::from_f32(x)).collect();
+                Storage::cpu_bf16(data)
+            }
+            DType::I32 => {
+                let data: Vec<i32> = f32_data.iter().map(|&x| x as i32).collect();
+                let bytes: Vec<u8> = cast_slice(&data).to_vec();
+                Storage::Cpu {
+                    data: bytes,
+                    dtype: DType::I32,
+                }
+            }
+            DType::I64 => {
+                let data: Vec<i64> = f32_data.iter().map(|&x| x as i64).collect();
+                let bytes: Vec<u8> = cast_slice(&data).to_vec();
+                Storage::Cpu {
+                    data: bytes,
+                    dtype: DType::I64,
+                }
+            }
+            DType::U8 => {
+                let data: Vec<u8> = f32_data
+                    .iter()
+                    .map(|&x| x.clamp(0.0, 255.0) as u8)
+                    .collect();
+                Storage::Cpu {
+                    data,
+                    dtype: DType::U8,
+                }
+            }
+            DType::Bool => {
+                let data: Vec<u8> = f32_data
+                    .iter()
+                    .map(|&x| if x != 0.0 { 1 } else { 0 })
+                    .collect();
+                Storage::Cpu {
+                    data,
+                    dtype: DType::Bool,
+                }
+            }
+        }
+    }
+
+    // ========== Length and Properties ==========
+
+    /// Get the number of elements
     pub fn len(&self) -> usize {
         match self {
-            Storage::Cpu(data) => data.len(),
+            Storage::Cpu { data, dtype } => data.len() / dtype.size_of(),
             #[cfg(feature = "gpu")]
             Storage::Gpu { buffer, .. } => buffer.len(),
         }
@@ -112,7 +354,7 @@ impl Storage {
     /// Check if this is GPU storage
     pub fn is_gpu(&self) -> bool {
         match self {
-            Storage::Cpu(_) => false,
+            Storage::Cpu { .. } => false,
             #[cfg(feature = "gpu")]
             Storage::Gpu { .. } => true,
         }
@@ -121,21 +363,28 @@ impl Storage {
     /// Move to a specific device
     pub fn to_device(&self, device: &Device) -> Self {
         match device {
-            Device::CPU => Storage::Cpu(self.to_vec()),
+            Device::CPU => {
+                let data = self.as_bytes().to_vec();
+                Storage::Cpu {
+                    data,
+                    dtype: self.dtype(),
+                }
+            }
             Device::GPU(_) | Device::Metal(_) => {
                 #[cfg(feature = "gpu")]
                 {
                     if is_gpu_available() {
-                        Storage::gpu(self.to_vec())
+                        // Convert to f32 for GPU (GPU ops are f32 only for now)
+                        Storage::gpu(self.to_f32_vec())
                     } else {
                         eprintln!("Warning: GPU requested but not available, using CPU");
-                        Storage::Cpu(self.to_vec())
+                        self.clone()
                     }
                 }
                 #[cfg(not(feature = "gpu"))]
                 {
                     eprintln!("Warning: GPU feature not enabled, using CPU");
-                    Storage::Cpu(self.to_vec())
+                    self.clone()
                 }
             }
         }
@@ -151,85 +400,92 @@ impl Storage {
     }
 }
 
+// ========== Iterator Support (F32 only for backward compat) ==========
+
 impl Storage {
     pub fn iter(&self) -> std::slice::Iter<'_, f32> {
-        self.as_slice().iter()
+        self.as_f32_slice().iter()
     }
+
     pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, f32> {
-        self.as_mut_slice()
-            .expect("Mutable iteration not supported for GPU storage")
+        self.as_f32_slice_mut()
+            .expect("Mutable iteration requires F32 CPU storage")
             .iter_mut()
     }
 }
 
-impl Deref for Storage {
+// ========== Deref implementations (F32 only for backward compat) ==========
+
+impl std::ops::Deref for Storage {
     type Target = [f32];
     fn deref(&self) -> &Self::Target {
-        self.as_slice()
+        self.as_f32_slice()
     }
 }
 
-impl DerefMut for Storage {
+impl std::ops::DerefMut for Storage {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.as_mut_slice()
-            .expect("Mutable access not supported for GPU storage")
+        self.as_f32_slice_mut()
+            .expect("Mutable deref requires F32 CPU storage")
     }
 }
+
+// ========== Index implementations (F32 only for backward compat) ==========
 
 impl Index<usize> for Storage {
     type Output = f32;
     fn index(&self, index: usize) -> &Self::Output {
-        &self.as_slice()[index]
+        &self.as_f32_slice()[index]
     }
 }
 
 impl IndexMut<usize> for Storage {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self
-            .as_mut_slice()
-            .expect("Mutable access not supported for GPU storage")[index]
+            .as_f32_slice_mut()
+            .expect("Mutable access requires F32 CPU storage")[index]
     }
 }
 
 impl Index<Range<usize>> for Storage {
     type Output = [f32];
     fn index(&self, range: Range<usize>) -> &Self::Output {
-        &self.as_slice()[range]
+        &self.as_f32_slice()[range]
     }
 }
 
 impl Index<RangeFrom<usize>> for Storage {
     type Output = [f32];
     fn index(&self, range: RangeFrom<usize>) -> &Self::Output {
-        &self.as_slice()[range]
+        &self.as_f32_slice()[range]
     }
 }
 
 impl Index<RangeTo<usize>> for Storage {
     type Output = [f32];
     fn index(&self, range: RangeTo<usize>) -> &Self::Output {
-        &self.as_slice()[range]
+        &self.as_f32_slice()[range]
     }
 }
 
 impl Index<RangeToInclusive<usize>> for Storage {
     type Output = [f32];
     fn index(&self, range: RangeToInclusive<usize>) -> &Self::Output {
-        &self.as_slice()[range]
+        &self.as_f32_slice()[range]
     }
 }
 
 impl Index<RangeInclusive<usize>> for Storage {
     type Output = [f32];
     fn index(&self, range: RangeInclusive<usize>) -> &Self::Output {
-        &self.as_slice()[range]
+        &self.as_f32_slice()[range]
     }
 }
 
 impl Index<RangeFull> for Storage {
     type Output = [f32];
     fn index(&self, _range: RangeFull) -> &Self::Output {
-        self.as_slice()
+        self.as_f32_slice()
     }
 }
 
@@ -237,7 +493,7 @@ impl<'a> IntoIterator for &'a Storage {
     type Item = &'a f32;
     type IntoIter = std::slice::Iter<'a, f32>;
     fn into_iter(self) -> Self::IntoIter {
-        self.as_slice().iter()
+        self.as_f32_slice().iter()
     }
 }
 
@@ -245,36 +501,116 @@ impl<'a> IntoIterator for &'a mut Storage {
     type Item = &'a mut f32;
     type IntoIter = std::slice::IterMut<'a, f32>;
     fn into_iter(self) -> Self::IntoIter {
-        self.as_mut_slice()
-            .expect("Mutable iteration not supported for GPU storage")
+        self.as_f32_slice_mut()
+            .expect("Mutable iteration requires F32 CPU storage")
             .iter_mut()
     }
 }
 
+// ========== Comparison ==========
+
 impl PartialEq for Storage {
     fn eq(&self, other: &Self) -> bool {
-        self.as_slice() == other.as_slice()
+        if self.dtype() != other.dtype() {
+            return false;
+        }
+        self.as_bytes() == other.as_bytes()
     }
 }
 
 impl PartialEq<Vec<f32>> for Storage {
     fn eq(&self, other: &Vec<f32>) -> bool {
-        self.as_slice() == other.as_slice()
+        if self.dtype() != DType::F32 {
+            return false;
+        }
+        self.as_f32_slice() == other.as_slice()
     }
 }
 
 impl PartialEq<Storage> for Vec<f32> {
     fn eq(&self, other: &Storage) -> bool {
-        self.as_slice() == other.as_slice()
+        other == self
     }
 }
 
 impl std::fmt::Debug for Storage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Storage::Cpu(data) => write!(f, "Storage::Cpu({} elements)", data.len()),
+            Storage::Cpu { data, dtype } => {
+                write!(
+                    f,
+                    "Storage::Cpu({} elements, {})",
+                    data.len() / dtype.size_of(),
+                    dtype
+                )
+            }
             #[cfg(feature = "gpu")]
-            Storage::Gpu { buffer, .. } => write!(f, "Storage::Gpu({} elements)", buffer.len()),
+            Storage::Gpu { buffer, dtype, .. } => {
+                write!(f, "Storage::Gpu({} elements, {})", buffer.len(), dtype)
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_storage_f32() {
+        let data = vec![1.0f32, 2.0, 3.0, 4.0];
+        let storage = Storage::cpu(data.clone());
+
+        assert_eq!(storage.dtype(), DType::F32);
+        assert_eq!(storage.len(), 4);
+        assert_eq!(storage.as_f32_slice(), &data);
+        assert_eq!(storage[0], 1.0);
+        assert_eq!(storage[3], 4.0);
+    }
+
+    #[test]
+    fn test_storage_f16() {
+        let data: Vec<f16> = vec![1.0, 2.0, 3.0, 4.0]
+            .into_iter()
+            .map(f16::from_f32)
+            .collect();
+        let storage = Storage::cpu_f16(data.clone());
+
+        assert_eq!(storage.dtype(), DType::F16);
+        assert_eq!(storage.len(), 4);
+        assert_eq!(storage.as_f16_slice().unwrap(), &data);
+
+        // Test conversion to f32
+        let f32_vec = storage.to_f32_vec();
+        assert_eq!(f32_vec.len(), 4);
+        assert!((f32_vec[0] - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_storage_conversion() {
+        let data = vec![1.0f32, 2.0, 3.0, 4.0];
+        let storage = Storage::cpu(data);
+
+        // Convert to f16
+        let f16_storage = storage.to_dtype(DType::F16);
+        assert_eq!(f16_storage.dtype(), DType::F16);
+        assert_eq!(f16_storage.len(), 4);
+
+        // Convert back to f32
+        let f32_storage = f16_storage.to_dtype(DType::F32);
+        assert_eq!(f32_storage.dtype(), DType::F32);
+        let recovered = f32_storage.to_f32_vec();
+        assert!((recovered[0] - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_storage_from_bytes() {
+        let data = vec![1.0f32, 2.0, 3.0, 4.0];
+        let bytes: Vec<u8> = cast_slice(&data).to_vec();
+
+        let storage = Storage::from_bytes(bytes, DType::F32);
+        assert_eq!(storage.dtype(), DType::F32);
+        assert_eq!(storage.len(), 4);
+        assert_eq!(storage.as_f32_slice(), &data);
     }
 }
