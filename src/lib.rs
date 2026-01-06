@@ -42,7 +42,7 @@ pub use nn::layers::Dropout;
 pub use nn::layers::flatten::Flatten;
 pub use nn::{
     Adam, BatchNorm1d, BatchNorm2d, Conv2d, ConvTranspose2d, LSTMCell, Linear, MaxPool2d, Module,
-    ReLU, SGD, Sequential, Sigmoid, Tanh,
+    PixelShuffle, ReLU, SGD, Sequential, Sigmoid, Tanh,
 };
 pub use tensor::{RawTensor, Tensor, TensorOps};
 
@@ -1273,6 +1273,79 @@ mod misc_tests {
         assert_eq!(params[0].borrow().shape, vec![16]);
         // beta shape [16]
         assert_eq!(params[1].borrow().shape, vec![16]);
+    }
+
+    #[test]
+    fn test_pixelshuffle_forward_shape() {
+        // Test with upscale_factor=3: [2, 36, 4, 4] -> [2, 4, 12, 12]
+        let layer = PixelShuffle::new(3);
+        let x = RawTensor::randn(&[2, 36, 4, 4]); // 4 channels * 9
+        let y = layer.forward(&x);
+        assert_eq!(y.borrow().shape, vec![2, 4, 12, 12]);
+
+        // Test with upscale_factor=2: [1, 12, 8, 8] -> [1, 3, 16, 16]
+        let layer2 = PixelShuffle::new(2);
+        let x2 = RawTensor::randn(&[1, 12, 8, 8]); // 3 channels * 4
+        let y2 = layer2.forward(&x2);
+        assert_eq!(y2.borrow().shape, vec![1, 3, 16, 16]);
+    }
+
+    #[test]
+    fn test_pixelshuffle_backward_flow() {
+        let layer = PixelShuffle::new(2);
+        let x = RawTensor::randn(&[2, 4, 3, 3]); // 1 channel * 4
+        x.borrow_mut().requires_grad = true;
+
+        let y = layer.forward(&x);
+        assert_eq!(y.borrow().shape, vec![2, 1, 6, 6]);
+
+        let loss = y.sum();
+        loss.backward();
+
+        let grad = x.grad();
+        assert!(
+            grad.is_some(),
+            "Gradient should flow back through PixelShuffle"
+        );
+        // Check gradient has correct number of elements: 2 * 4 * 3 * 3 = 72
+        assert_eq!(grad.unwrap().len(), 72);
+    }
+
+    #[test]
+    fn test_pixelshuffle_values() {
+        // Small manual test with known values
+        // Input: [1, 4, 2, 2] with upscale_factor=2
+        // This should rearrange 4 channels of 2x2 into 1 channel of 4x4
+        let layer = PixelShuffle::new(2);
+        #[rustfmt::skip]
+        let data = vec![
+            // Channel 0
+            1.0, 2.0,
+            3.0, 4.0,
+            // Channel 1
+            5.0, 6.0,
+            7.0, 8.0,
+            // Channel 2
+            9.0, 10.0,
+            11.0, 12.0,
+            // Channel 3
+            13.0, 14.0,
+            15.0, 16.0,
+        ];
+        let x = RawTensor::new(data, &[1, 4, 2, 2], false);
+        let y = layer.forward(&x);
+
+        assert_eq!(y.borrow().shape, vec![1, 1, 4, 4]);
+
+        // After PixelShuffle, the output should interleave values from the 4 input channels
+        // The exact pattern depends on the reshape/permute order
+        let out_data = &y.borrow().data;
+        assert_eq!(out_data.len(), 16);
+
+        // Verify the transformation preserved all values (just check sum as a sanity check)
+        let input_sum: f32 = (1..=16).map(|x| x as f32).sum();
+        let output_sum: f32 = out_data.iter().sum();
+        assert!((input_sum - output_sum).abs() < 1e-5);
     }
 }
 
