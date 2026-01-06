@@ -41,8 +41,8 @@ pub use device::Device;
 pub use nn::layers::Dropout;
 pub use nn::layers::flatten::Flatten;
 pub use nn::{
-    Adam, BatchNorm1d, BatchNorm2d, Conv2d, ConvTranspose2d, LSTMCell, Linear, MaxPool2d, Module,
-    PixelShuffle, ReLU, SGD, Sequential, Sigmoid, Tanh,
+    Adam, BatchNorm1d, BatchNorm2d, Conv2d, ConvTranspose2d, Embedding, LSTMCell, Linear,
+    MaxPool2d, Module, PixelShuffle, ReLU, SGD, Sequential, Sigmoid, Tanh,
 };
 pub use tensor::{RawTensor, Tensor, TensorOps};
 
@@ -1346,6 +1346,72 @@ mod misc_tests {
         let input_sum: f32 = (1..=16).map(|x| x as f32).sum();
         let output_sum: f32 = out_data.iter().sum();
         assert!((input_sum - output_sum).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_embedding_forward_shape() {
+        let embedding = Embedding::new(100, 32);
+        let indices = vec![5, 12, 7, 99];
+        let output = embedding.forward(&indices);
+        assert_eq!(output.borrow().shape, vec![4, 32]);
+    }
+
+    #[test]
+    fn test_embedding_backward_flow() {
+        let embedding = Embedding::new(50, 16);
+        let indices = vec![3, 10, 3]; // Note: repeated index 3
+        let output = embedding.forward(&indices);
+
+        // Sum and backward
+        let loss = output.sum();
+        loss.backward();
+
+        // Check that weight has gradients
+        let grad = embedding.weight.grad();
+        assert!(grad.is_some(), "Weight should have gradients");
+
+        let grad_data = grad.unwrap();
+        // Each embedding contributes 1.0 per dimension from sum
+        // Index 3 appears twice, so should have accumulated grad of 2.0 per dim
+        let grad_at_idx3_sum: f32 = (0..16).map(|d| grad_data[3 * 16 + d]).sum();
+        let expected_sum = 2.0 * 16.0; // 2 occurrences * 16 dimensions
+        assert!(
+            (grad_at_idx3_sum - expected_sum).abs() < 1e-4,
+            "Expected accumulated grad sum {}, got {}",
+            expected_sum,
+            grad_at_idx3_sum
+        );
+    }
+
+    #[test]
+    fn test_embedding_gradient_accumulation() {
+        let embedding = Embedding::new(10, 4);
+        let indices = vec![2, 5, 2, 2]; // Index 2 appears 3 times
+        let output = embedding.forward(&indices);
+
+        let loss = output.sum();
+        loss.backward();
+
+        let grad = embedding.weight.grad().unwrap();
+        // Index 2 should have grad of 3.0 per dimension (appears 3 times)
+        for d in 0..4 {
+            let grad_val = grad[2 * 4 + d];
+            assert!(
+                (grad_val - 3.0).abs() < 1e-5,
+                "Expected grad 3.0 for index 2, got {}",
+                grad_val
+            );
+        }
+
+        // Index 5 should have grad of 1.0 per dimension (appears once)
+        for d in 0..4 {
+            let grad_val = grad[5 * 4 + d];
+            assert!(
+                (grad_val - 1.0).abs() < 1e-5,
+                "Expected grad 1.0 for index 5, got {}",
+                grad_val
+            );
+        }
     }
 }
 
