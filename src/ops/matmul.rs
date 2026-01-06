@@ -120,8 +120,10 @@ impl RawTensor {
     /// - (m,n) @ (n,) -> (m,)    [matrix-vector]
     /// - (n,) @ (n,p) -> (p,)    [vector-matrix]
     /// - (n,) @ (n,) -> scalar   [dot product]
+    // TODO: since i updated the device stuff, fix the unused vars since it'll probably be
+    // relevant somewhere
     pub fn matmul(self_t: &Tensor, other: &Tensor) -> Tensor {
-        let (data_a, shape_a, req_a, dev_a) = {
+        let (data_a, shape_a, req_a, _dev_a) = {
             let s = self_t.borrow();
             (
                 s.data.clone(),
@@ -130,7 +132,7 @@ impl RawTensor {
                 s.device.clone(),
             )
         };
-        let (data_b, shape_b, req_b, dev_b) = {
+        let (data_b, shape_b, req_b, _dev_b) = {
             let o = other.borrow();
             (
                 o.data.clone(),
@@ -156,7 +158,7 @@ impl RawTensor {
                 // Fallback to the existing CPU implementation if anything fails.
                 #[cfg(feature = "gpu")]
                 {
-                    if dev_a.is_gpu() && dev_b.is_gpu() && dev_a == dev_b {
+                    if let Some(device) = RawTensor::common_gpu_device(&[self_t, other]) {
                         if let Some(storage) = Self::gpu_matmul(&data_a, &data_b, m, n, p) {
                             let requires_grad = req_a || req_b;
                             let out = Rc::new(RefCell::new(RawTensor {
@@ -166,7 +168,7 @@ impl RawTensor {
                                 requires_grad,
                                 grad_fn: None,
                                 parents: vec![self_t.clone(), other.clone()],
-                                device: dev_a.clone(),
+                                device: device.clone(),
                             }));
                             if requires_grad {
                                 out.borrow_mut().grad_fn = Some(Box::new(MatMulGradFn));

@@ -172,7 +172,7 @@ impl RawTensor {
         // kernel, try to execute the op there.
         #[cfg(feature = "gpu")]
         {
-            if device.is_gpu()
+            if RawTensor::common_gpu_device(&[t]).is_some()
                 && let Some(kernel) = unary_kernel_name(op)
                 && let Some(storage) = RawTensor::gpu_unary(&data, kernel)
             {

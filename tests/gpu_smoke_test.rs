@@ -231,6 +231,31 @@ fn test_tensor_gpu_unary_relu_matches_cpu() {
 
 #[test]
 #[cfg(feature = "gpu")]
+fn test_tensor_gpu_mixed_device_binary_fallbacks_to_cpu() {
+    use volta::{Device, is_gpu_available};
+    use volta::{RawTensor, TensorOps};
+
+    if !is_gpu_available() {
+        return;
+    }
+
+    let dev = Device::GPU("TestDevice".to_string());
+    let a = RawTensor::new(vec![1.0, 2.0], &[2], false).to_device(dev.clone());
+    let b = RawTensor::new(vec![3.0, 4.0], &[2], false);
+
+    let z = a.add(&b);
+    {
+        let zb = z.borrow();
+        assert!(
+            zb.device.is_cpu(),
+            "Mixed device binary ops should fall back to CPU storage"
+        );
+        assert_eq!(zb.data.to_vec(), vec![4.0, 6.0]);
+    }
+}
+
+#[test]
+#[cfg(feature = "gpu")]
 fn test_tensor_gpu_binary_basic_matches_cpu() {
     use volta::gpu::is_gpu_available;
     use volta::{Device, RawTensor, TensorOps};

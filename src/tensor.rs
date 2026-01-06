@@ -200,6 +200,27 @@ impl RawTensor {
     }
 }
 
+#[cfg(feature = "gpu")]
+impl RawTensor {
+    /// Return the GPU device shared by `tensors` if every tensor lives on the same GPU.
+    ///
+    /// This avoids accidentally invoking GPU kernels when inputs are on mixed devices.
+    pub(crate) fn common_gpu_device(tensors: &[&Tensor]) -> Option<Device> {
+        let first = tensors.first()?;
+        let first_device = first.borrow().device.clone();
+        if !first_device.is_gpu() {
+            return None;
+        }
+        for tensor in tensors.iter().skip(1) {
+            let device = tensor.borrow().device.clone();
+            if device != first_device {
+                return None;
+            }
+        }
+        Some(first_device)
+    }
+}
+
 // ===== LOSS FUNCTIONS =====
 impl RawTensor {
     pub fn mse_loss(pred: &Tensor, target: &Tensor) -> Tensor {

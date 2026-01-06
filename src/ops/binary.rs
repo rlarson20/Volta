@@ -430,7 +430,10 @@ impl RawTensor {
         // otherwise.
         #[cfg(feature = "gpu")]
         {
-            if let Some((shape, storage, device)) = Self::try_gpu_binary_result(self_t, other, op) {
+            if RawTensor::common_gpu_device(&[self_t, other]).is_some()
+                && let Some((shape, storage, device)) =
+                    Self::try_gpu_binary_result(self_t, other, op)
+            {
                 let out = Rc::new(RefCell::new(RawTensor {
                     data: storage,
                     shape,
