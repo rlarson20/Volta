@@ -10,6 +10,8 @@ use std::fs::File;
 use std::io::{Error, Read, Result, Write};
 use std::path::Path;
 
+pub mod mapping;
+
 pub type StateDict = BTreeMap<String, TensorData>;
 
 // Serializable representation of tensor data
@@ -333,6 +335,54 @@ pub fn save_safetensors_typed<P: AsRef<Path>>(
     let mut file = File::create(path)?;
     file.write_all(&bytes)?;
     Ok(())
+}
+
+/// Load a state dict from a file and apply transformations
+///
+/// This is a convenience wrapper around `load_state_dict` that applies
+/// a StateDictMapper transformation before returning the result.
+///
+/// # Example
+/// ```no_run
+/// use volta::io::{load_state_dict_with_mapping, mapping::StateDictMapper};
+///
+/// let mapper = StateDictMapper::new()
+///     .strip_prefix("model.")
+///     .transpose_pattern("weight");
+///
+/// let state = load_state_dict_with_mapping("model.bin", &mapper)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub fn load_state_dict_with_mapping<P: AsRef<Path>>(
+    path: P,
+    mapper: &mapping::StateDictMapper,
+) -> Result<StateDict> {
+    let state = load_state_dict(path.as_ref().to_str().unwrap())?;
+    Ok(mapper.map(state))
+}
+
+/// Load a safetensors file and apply transformations
+///
+/// This is a convenience wrapper around `load_safetensors` that applies
+/// a StateDictMapper transformation before returning the result.
+///
+/// # Example
+/// ```no_run
+/// use volta::io::{load_safetensors_with_mapping, mapping::StateDictMapper};
+///
+/// let mapper = StateDictMapper::new()
+///     .rename("fc1.weight", "encoder.weight")
+///     .transpose("encoder.weight");
+///
+/// let state = load_safetensors_with_mapping("pytorch_model.safetensors", &mapper)?;
+/// # Ok::<(), std::io::Error>(())
+/// ```
+pub fn load_safetensors_with_mapping<P: AsRef<Path>>(
+    path: P,
+    mapper: &mapping::StateDictMapper,
+) -> Result<StateDict> {
+    let state = load_safetensors(path)?;
+    Ok(mapper.map(state))
 }
 
 #[cfg(test)]

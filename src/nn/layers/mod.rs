@@ -10,6 +10,7 @@ pub mod maxpool;
 pub mod pixelshuffle;
 pub mod relu;
 pub mod sequential;
+pub mod sequential_builder;
 pub mod sigmoid;
 pub mod tanh;
 
@@ -25,5 +26,6 @@ pub use maxpool::MaxPool2d;
 pub use pixelshuffle::PixelShuffle;
 pub use relu::ReLU;
 pub use sequential::Sequential;
+pub use sequential_builder::SequentialBuilder;
 pub use sigmoid::Sigmoid;
 pub use tanh::Tanh;

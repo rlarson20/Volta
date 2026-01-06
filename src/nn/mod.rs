@@ -6,7 +6,7 @@ pub mod optim;
 
 pub use layers::{
     BatchNorm1d, BatchNorm2d, Conv2d, ConvTranspose2d, Dropout, Embedding, Flatten, LSTMCell,
-    Linear, MaxPool2d, PixelShuffle, ReLU, Sequential, Sigmoid, Tanh,
+    Linear, MaxPool2d, PixelShuffle, ReLU, Sequential, SequentialBuilder, Sigmoid, Tanh,
 };
 pub use optim::{Adam, Muon, SGD};
 
