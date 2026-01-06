@@ -11,7 +11,7 @@ use crate::nn::{Module, Sequential};
 /// // Create a Sequential with named layers
 /// let model = Sequential::builder()
 ///     .add_named("encoder", Box::new(Linear::new(784, 128, true)))
-///     .add(Box::new(ReLU))  // Unnamed activation
+///     .add_unnamed(Box::new(ReLU))  // Unnamed activation
 ///     .add_named("decoder", Box::new(Linear::new(128, 10, true)))
 ///     .build();
 /// ```
@@ -30,7 +30,7 @@ impl SequentialBuilder {
     /// Add an unnamed layer to the sequence
     ///
     /// The layer will be assigned a numeric index in the state dict
-    pub fn add(mut self, layer: Box<dyn Module>) -> Self {
+    pub fn add_unnamed(mut self, layer: Box<dyn Module>) -> Self {
         self.entries.push(LayerEntry { name: None, layer });
         self
     }
@@ -82,8 +82,8 @@ mod tests {
     #[test]
     fn test_builder_unnamed() {
         let model = SequentialBuilder::new()
-            .add(Box::new(Linear::new(2, 3, true)))
-            .add(Box::new(ReLU))
+            .add_unnamed(Box::new(Linear::new(2, 3, true)))
+            .add_unnamed(Box::new(ReLU))
             .build();
 
         assert_eq!(model.len(), 2);
@@ -109,7 +109,7 @@ mod tests {
     fn test_builder_mixed() {
         let model = SequentialBuilder::new()
             .add_named("fc1", Box::new(Linear::new(2, 3, true)))
-            .add(Box::new(ReLU))
+            .add_unnamed(Box::new(ReLU))
             .add_named("fc2", Box::new(Linear::new(3, 1, true)))
             .build();
 

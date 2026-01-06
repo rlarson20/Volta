@@ -1675,7 +1675,7 @@ mod axis_reduce_tests {
         // Create Volta model with named layers
         let mut model = Sequential::builder()
             .add_named("encoder", Box::new(Linear::new(2, 3, true)))
-            .add(Box::new(ReLU))
+            .add_unnamed(Box::new(ReLU))
             .add_named("decoder", Box::new(Linear::new(3, 1, true)))
             .build();
 

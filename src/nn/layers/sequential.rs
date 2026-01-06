@@ -115,7 +115,7 @@ impl Sequential {
     pub fn get_named(&self, name: &str) -> Option<&dyn Module> {
         self.layers
             .iter()
-            .find(|e| e.name.as_ref().map_or(false, |n| n == name))
+            .find(|e| e.name.as_ref().is_some_and(|n| n == name))
             .map(|e| &*e.layer)
     }
 
@@ -124,7 +124,7 @@ impl Sequential {
     /// Returns None if no layer with the given name exists
     pub fn get_named_mut(&mut self, name: &str) -> Option<&mut (dyn Module + '_)> {
         for entry in &mut self.layers {
-            if entry.name.as_ref().map_or(false, |n| n == name) {
+            if entry.name.as_ref().is_some_and(|n| n == name) {
                 return Some(&mut *entry.layer);
             }
         }

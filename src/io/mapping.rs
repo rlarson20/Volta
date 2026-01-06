@@ -7,7 +7,7 @@ use crate::io::StateDict;
 ///
 /// # Examples
 ///
-/// ```
+/// ```no_run
 /// use volta::io::{load_safetensors, mapping::StateDictMapper};
 ///
 /// // Load PyTorch weights with key renaming and transposition
@@ -20,8 +20,9 @@ use crate::io::StateDict;
 /// let volta_state = mapper.map(pytorch_state);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
+pub type TransformationBox = Box<dyn Fn(&mut StateDict)>;
 pub struct StateDictMapper {
-    transformations: Vec<Box<dyn Fn(&mut StateDict)>>,
+    transformations: Vec<TransformationBox>,
 }
 
 impl StateDictMapper {
@@ -134,21 +135,21 @@ impl StateDictMapper {
 
         self.transformations
             .push(Box::new(move |state: &mut StateDict| {
-                if let Some(tensor_data) = state.get_mut(&key) {
-                    if tensor_data.shape.len() == 2 {
-                        let [rows, cols] = [tensor_data.shape[0], tensor_data.shape[1]];
-                        let mut transposed = vec![0.0; rows * cols];
+                if let Some(tensor_data) = state.get_mut(&key)
+                    && tensor_data.shape.len() == 2
+                {
+                    let [rows, cols] = [tensor_data.shape[0], tensor_data.shape[1]];
+                    let mut transposed = vec![0.0; rows * cols];
 
-                        // Transpose row-major layout: [R, C] -> [C, R]
-                        for i in 0..rows {
-                            for j in 0..cols {
-                                transposed[j * rows + i] = tensor_data.data[i * cols + j];
-                            }
+                    // Transpose row-major layout: [R, C] -> [C, R]
+                    for i in 0..rows {
+                        for j in 0..cols {
+                            transposed[j * rows + i] = tensor_data.data[i * cols + j];
                         }
-
-                        tensor_data.data = transposed;
-                        tensor_data.shape = vec![cols, rows];
                     }
+
+                    tensor_data.data = transposed;
+                    tensor_data.shape = vec![cols, rows];
                 }
             }));
         self
@@ -169,20 +170,20 @@ impl StateDictMapper {
                     .collect();
 
                 for key in matching_keys {
-                    if let Some(tensor_data) = state.get_mut(&key) {
-                        if tensor_data.shape.len() == 2 {
-                            let [rows, cols] = [tensor_data.shape[0], tensor_data.shape[1]];
-                            let mut transposed = vec![0.0; rows * cols];
+                    if let Some(tensor_data) = state.get_mut(&key)
+                        && tensor_data.shape.len() == 2
+                    {
+                        let [rows, cols] = [tensor_data.shape[0], tensor_data.shape[1]];
+                        let mut transposed = vec![0.0; rows * cols];
 
-                            for i in 0..rows {
-                                for j in 0..cols {
-                                    transposed[j * rows + i] = tensor_data.data[i * cols + j];
-                                }
+                        for i in 0..rows {
+                            for j in 0..cols {
+                                transposed[j * rows + i] = tensor_data.data[i * cols + j];
                             }
-
-                            tensor_data.data = transposed;
-                            tensor_data.shape = vec![cols, rows];
                         }
+
+                        tensor_data.data = transposed;
+                        tensor_data.shape = vec![cols, rows];
                     }
                 }
             }));
@@ -263,7 +264,7 @@ pub fn load_pytorch_linear_weights(state: StateDict) -> StateDict {
 /// * `model_prefix` - The prefix to strip (e.g., "model", "bert", "transformer")
 pub fn load_huggingface_weights(state: StateDict, model_prefix: &str) -> StateDict {
     StateDictMapper::new()
-        .strip_prefix(&format!("{}.", model_prefix))
+        .strip_prefix(format!("{}.", model_prefix))
         .transpose_pattern("weight")
         .map(state)
 }
@@ -294,13 +295,15 @@ pub fn create_key_mapping(mappings: Vec<(&str, &str)>) -> StateDictMapper {
 /// Strips a prefix and keeps only those keys.
 pub fn load_partial(state: StateDict, prefix: &str) -> StateDict {
     StateDictMapper::new()
-        .strip_prefix(&format!("{}.", prefix))
+        .strip_prefix(format!("{}.", prefix))
         .map(state)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::io::TensorData;
+    use std::collections::BTreeMap;
 
     fn create_test_state() -> StateDict {
         let mut state = BTreeMap::new();
