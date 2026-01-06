@@ -11,7 +11,7 @@ pub mod sequential;
 pub mod sigmoid;
 pub mod tanh;
 
-pub use batchnorm::BatchNorm2d;
+pub use batchnorm::{BatchNorm1d, BatchNorm2d};
 pub use conv::Conv2d;
 pub use conv_transpose::ConvTranspose2d;
 pub use dropout::Dropout;

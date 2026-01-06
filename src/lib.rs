@@ -41,8 +41,8 @@ pub use device::Device;
 pub use nn::layers::Dropout;
 pub use nn::layers::flatten::Flatten;
 pub use nn::{
-    Adam, BatchNorm2d, Conv2d, ConvTranspose2d, LSTMCell, Linear, MaxPool2d, Module, ReLU, SGD,
-    Sequential, Sigmoid, Tanh,
+    Adam, BatchNorm1d, BatchNorm2d, Conv2d, ConvTranspose2d, LSTMCell, Linear, MaxPool2d, Module,
+    ReLU, SGD, Sequential, Sigmoid, Tanh,
 };
 pub use tensor::{RawTensor, Tensor, TensorOps};
 
@@ -1219,10 +1219,60 @@ mod misc_tests {
         let y = bn.forward(&x);
         assert_eq!(y.borrow().shape, vec![2, 3, 4, 4]);
 
-        // Eval mode
-        bn.eval();
+        // Test mode
+        bn.train(false);
         let y2 = bn.forward(&x);
         assert_eq!(y2.borrow().shape, vec![2, 3, 4, 4]);
+    }
+
+    #[test]
+    fn test_batchnorm1d_forward_shape() {
+        let bn = BatchNorm1d::new(32);
+        let x = RawTensor::randn(&[8, 32]); // batch=8, features=32
+        let y = bn.forward(&x);
+        assert_eq!(y.borrow().shape, vec![8, 32]);
+    }
+
+    #[test]
+    fn test_batchnorm1d_train_vs_test_mode() {
+        let mut bn = BatchNorm1d::new(4);
+
+        // Training mode - run a few batches to populate running stats
+        bn.train(true);
+        for _ in 0..5 {
+            let x = RawTensor::randn(&[16, 4]);
+            let _ = bn.forward(&x);
+        }
+
+        // Now test that test mode uses different stats
+        let test_input = RawTensor::randn(&[8, 4]);
+        bn.train(true);
+        let y_train = bn.forward(&test_input);
+
+        bn.train(false);
+        let y_test = bn.forward(&test_input);
+
+        // Outputs should differ because train mode uses batch stats
+        // while test mode uses running stats
+        let train_data = &y_train.borrow().data;
+        let test_data = &y_test.borrow().data;
+        let differs = train_data
+            .iter()
+            .zip(test_data.iter())
+            .any(|(a, b)| (a - b).abs() > 1e-5);
+        assert!(differs, "Train and test outputs should differ");
+    }
+
+    #[test]
+    fn test_batchnorm1d_parameters() {
+        let bn = BatchNorm1d::new(16);
+        let params = bn.parameters();
+        // Should have gamma and beta
+        assert_eq!(params.len(), 2);
+        // gamma shape [16]
+        assert_eq!(params[0].borrow().shape, vec![16]);
+        // beta shape [16]
+        assert_eq!(params[1].borrow().shape, vec![16]);
     }
 }
 
