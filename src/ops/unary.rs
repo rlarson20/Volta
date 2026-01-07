@@ -146,8 +146,11 @@ fn unary_kernel_name(op: UnaryOp) -> Option<&'static str> {
         UnaryOp::Sigmoid => Some("sigmoid"),
         UnaryOp::ReLU => Some("relu"),
         UnaryOp::Sqrt => Some("sqrt"),
-        // TODO: No GPU kernels yet for these; keep them on CPU.
-        UnaryOp::Recip | UnaryOp::Exp2 | UnaryOp::Log2 | UnaryOp::Sin | UnaryOp::Cos => None,
+        UnaryOp::Recip => Some("recip"),
+        UnaryOp::Exp2 => Some("exp2"),
+        UnaryOp::Log2 => Some("log2"),
+        UnaryOp::Sin => Some("sin"),
+        UnaryOp::Cos => Some("cos"),
     }
 }
 

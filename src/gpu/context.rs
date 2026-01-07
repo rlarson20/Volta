@@ -34,6 +34,11 @@ pub struct ComputePipelines {
     pub sigmoid: wgpu::ComputePipeline,
     pub tanh: wgpu::ComputePipeline,
     pub sqrt: wgpu::ComputePipeline,
+    pub recip: wgpu::ComputePipeline,
+    pub exp2: wgpu::ComputePipeline,
+    pub log2: wgpu::ComputePipeline,
+    pub sin: wgpu::ComputePipeline,
+    pub cos: wgpu::ComputePipeline,
 
     // Reductions
     pub sum_reduce: wgpu::ComputePipeline,
@@ -170,6 +175,11 @@ impl GpuContext {
             sigmoid: create_pipeline(&unary_shader, "sigmoid", "Sigmoid Pipeline"),
             tanh: create_pipeline(&unary_shader, "tanh_op", "Tanh Pipeline"),
             sqrt: create_pipeline(&unary_shader, "sqrt_op", "Sqrt Pipeline"),
+            recip: create_pipeline(&unary_shader, "recip", "Recip Pipeline"),
+            exp2: create_pipeline(&unary_shader, "exp2_op", "Exp2 Pipeline"),
+            log2: create_pipeline(&unary_shader, "log2_op", "Log2 Pipeline"),
+            sin: create_pipeline(&unary_shader, "sin_op", "Sin Pipeline"),
+            cos: create_pipeline(&unary_shader, "cos_op", "Cos Pipeline"),
 
             // Reductions
             sum_reduce: create_pipeline(&reduce_shader, "sum_reduce", "Sum Reduce Pipeline"),

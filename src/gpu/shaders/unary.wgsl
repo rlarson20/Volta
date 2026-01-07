@@ -59,3 +59,43 @@ fn sqrt_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
         result[idx] = sqrt(input[idx]);
     }
 }
+
+@compute @workgroup_size(256)
+fn recip(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let idx = global_id.x;
+    if (idx < arrayLength(&input)) {
+        result[idx] = 1.0 / input[idx];
+    }
+}
+
+@compute @workgroup_size(256)
+fn exp2_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let idx = global_id.x;
+    if (idx < arrayLength(&input)) {
+        result[idx] = pow(2.0, input[idx]);
+    }
+}
+
+@compute @workgroup_size(256)
+fn log2_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let idx = global_id.x;
+    if (idx < arrayLength(&input)) {
+        result[idx] = log2(input[idx]);
+    }
+}
+
+@compute @workgroup_size(256)
+fn sin_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let idx = global_id.x;
+    if (idx < arrayLength(&input)) {
+        result[idx] = sin(input[idx]);
+    }
+}
+
+@compute @workgroup_size(256)
+fn cos_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let idx = global_id.x;
+    if (idx < arrayLength(&input)) {
+        result[idx] = cos(input[idx]);
+    }
+}

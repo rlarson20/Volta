@@ -8,3 +8,5 @@
 .aider*
 
 *.bin
+node_modules
+data

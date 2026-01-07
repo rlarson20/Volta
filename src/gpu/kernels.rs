@@ -114,6 +114,11 @@ impl GpuKernels {
             "sigmoid" => &ctx.pipelines().sigmoid,
             "tanh" => &ctx.pipelines().tanh,
             "sqrt" => &ctx.pipelines().sqrt,
+            "recip" => &ctx.pipelines().recip,
+            "exp2" => &ctx.pipelines().exp2,
+            "log2" => &ctx.pipelines().log2,
+            "sin" => &ctx.pipelines().sin,
+            "cos" => &ctx.pipelines().cos,
             _ => panic!("Unknown unary op: {}", op),
         };
 
