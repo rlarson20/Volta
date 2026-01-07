@@ -47,14 +47,14 @@ impl GradFn for MovementGradFn {
                 // Sum gradient over dimensions that were expanded (broadcast)
                 let mut grad_data = vec![0.0; self.original_shape.iter().product()];
                 let old_strides = RawTensor::compute_strides(&self.original_shape);
-                let new_strides = RawTensor::compute_strides(new_shape);
+                let _new_strides = RawTensor::compute_strides(new_shape);
 
                 for i in 0..out_grad.data.len() {
                     let mut old_idx = 0;
                     let mut rem = i;
                     for j in (0..new_shape.len()).rev() {
-                        let coord = rem / new_strides[j];
-                        rem %= new_strides[j];
+                        let coord = rem % new_shape[j];
+                        rem /= new_shape[j];
                         // If this dimension was size 1, don't advance the index
                         if self.original_shape[j] != 1 {
                             old_idx += coord * old_strides[j];
@@ -284,9 +284,10 @@ impl RawTensor {
 
         let new_shape: Vec<usize> = axes.iter().map(|&i| shape[i]).collect();
         let old_strides = Self::compute_strides(&shape);
-        let _new_strides: Vec<usize> = axes.iter().map(|&i| old_strides[i]).collect();
-
         let mut new_data = vec![0.0; data.len()];
+
+        // CPU implementation (GPU shader needs debugging)
+        let cpu_data = data.to_vec();
 
         // Helper: convert linear index to coordinates
         fn index_to_coords(idx: usize, shape: &[usize]) -> Vec<usize> {
@@ -312,7 +313,7 @@ impl RawTensor {
                 old_coords[ax] = new_coords[i];
             }
             let old_idx = coords_to_index(&old_coords, &old_strides);
-            *val = data[old_idx];
+            *val = cpu_data[old_idx];
         }
         Self::new(new_data, &new_shape, false)
     }
@@ -380,24 +381,26 @@ impl RawTensor {
             new_shape
         );
 
+        // CPU implementation (GPU shader needs debugging)
         let mut result = vec![0.0; new_size];
+        let cpu_data = data.to_vec();
 
         // Broadcast by repeating values
         let old_strides = Self::compute_strides(&old_shape);
-        let new_strides = Self::compute_strides(new_shape);
+        let _new_strides = Self::compute_strides(new_shape);
 
         #[allow(clippy::needless_range_loop)]
         for i in 0..new_size {
             let mut old_idx = 0;
             let mut rem = i;
             for j in (0..new_shape.len()).rev() {
-                let coord = rem / new_strides[j];
-                rem %= new_strides[j];
+                let coord = rem % new_shape[j];
+                rem /= new_shape[j];
                 if old_shape[j] != 1 {
                     old_idx += coord * old_strides[j];
                 }
             }
-            result[i] = data[old_idx];
+            result[i] = cpu_data[old_idx];
         }
 
         let out = Self::new(result, new_shape, req_grad);
@@ -446,7 +449,10 @@ impl RawTensor {
             old_shape,
             new_shape
         );
+
+        // CPU implementation (GPU shader needs debugging)
         let mut result = vec![0.0; new_size];
+        let cpu_data = data.to_vec();
 
         // Copy old data into padded positions
         let old_strides = Self::compute_strides(&old_shape);
@@ -489,7 +495,7 @@ impl RawTensor {
 
         pad_recursive(
             &mut result,
-            &data,
+            &cpu_data,
             0,
             &old_shape,
             &new_shape,
@@ -531,8 +537,11 @@ impl RawTensor {
         );
 
         let new_shape: Vec<usize> = ranges.iter().map(|(start, end)| end - start).collect();
+
+        // CPU implementation (GPU shader needs debugging)
         let new_size: usize = new_shape.iter().product();
         let mut result = vec![0.0; new_size];
+        let cpu_data = data.to_vec();
 
         let old_strides = Self::compute_strides(&old_shape);
         let new_strides = Self::compute_strides(&new_shape);
@@ -574,7 +583,7 @@ impl RawTensor {
 
         shrink_recursive(
             &mut result,
-            &data,
+            &cpu_data,
             0,
             &old_shape,
             &new_shape,
@@ -620,8 +629,10 @@ impl RawTensor {
             .map(|(d, s)| d.div_ceil(*s))
             .collect();
 
+        // CPU implementation (GPU shader needs debugging)
         let new_size: usize = new_shape.iter().product();
         let mut result = vec![0.0; new_size];
+        let cpu_data = data.to_vec();
 
         let old_strides_mem = Self::compute_strides(&old_shape);
         let new_strides_mem = Self::compute_strides(&new_shape);
@@ -663,7 +674,7 @@ impl RawTensor {
 
         stride_recursive(
             &mut result,
-            &data,
+            &cpu_data,
             0,
             &old_shape,
             &new_shape,

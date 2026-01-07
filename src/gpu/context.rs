@@ -48,6 +48,13 @@ pub struct ComputePipelines {
     pub max_reduce: wgpu::ComputePipeline,
     pub mean_reduce: wgpu::ComputePipeline,
 
+    // Movement operations
+    pub permute: wgpu::ComputePipeline,
+    pub expand: wgpu::ComputePipeline,
+    pub pad: wgpu::ComputePipeline,
+    pub shrink: wgpu::ComputePipeline,
+    pub stride: wgpu::ComputePipeline,
+
     // Matrix multiplication (this is the big one for ML!)
     pub matmul: wgpu::ComputePipeline,
 }
@@ -153,6 +160,11 @@ impl GpuContext {
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/matmul.wgsl").into()),
         });
 
+        let movement_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Movement Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/movement.wgsl").into()),
+        });
+
         // Helper to create a compute pipeline
         let create_pipeline = |shader: &wgpu::ShaderModule, entry_point: &str, label: &str| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -193,6 +205,13 @@ impl GpuContext {
             sum_reduce: create_pipeline(&reduce_shader, "sum_reduce", "Sum Reduce Pipeline"),
             max_reduce: create_pipeline(&reduce_shader, "max_reduce", "Max Reduce Pipeline"),
             mean_reduce: create_pipeline(&reduce_shader, "mean_reduce", "Mean Reduce Pipeline"),
+
+            // Movement operations
+            permute: create_pipeline(&movement_shader, "permute", "Permute Pipeline"),
+            expand: create_pipeline(&movement_shader, "expand", "Expand Pipeline"),
+            pad: create_pipeline(&movement_shader, "pad", "Pad Pipeline"),
+            shrink: create_pipeline(&movement_shader, "shrink", "Shrink Pipeline"),
+            stride: create_pipeline(&movement_shader, "stride", "Stride Pipeline"),
 
             // Matrix multiplication
             matmul: create_pipeline(&matmul_shader, "matmul", "MatMul Pipeline"),

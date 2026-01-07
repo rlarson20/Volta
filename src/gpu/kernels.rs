@@ -24,6 +24,19 @@ pub struct ReduceParams {
     pub _padding: [u32; 3],
 }
 
+/// Parameters for movement operations
+/// Must match the MovementParams struct in movement.wgsl
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct MovementParams {
+    pub old_shape: [u32; 4],
+    pub new_shape: [u32; 4],
+    pub op_params: [u32; 4], // Operation-specific (permute axes, strides, etc.)
+    pub rank: u32,
+    pub padding2: u32, // Packed padding for dims 2,3
+    pub _padding: [u32; 2],
+}
+
 /// Run a reduction operation that returns a scalar f32 value
 fn reduce_scalar(input: &GpuBuffer, pipeline: &wgpu::ComputePipeline) -> Option<f32> {
     let ctx = get_gpu_context()?;
@@ -327,6 +340,214 @@ impl GpuKernels {
         let ctx = get_gpu_context()?;
         reduce_scalar(input, &ctx.pipelines().mean_reduce)
     }
+
+    /// Permute tensor axes
+    pub fn permute(
+        input: &GpuBuffer,
+        old_shape: &[usize],
+        new_shape: &[usize],
+        axes: &[usize],
+    ) -> Option<GpuBuffer> {
+        let ctx = get_gpu_context()?;
+        let output_size = new_shape.iter().product::<usize>();
+        let result = GpuBuffer::zeros(output_size)?;
+
+        let params = MovementParams {
+            old_shape: pad_to_u32_4(old_shape),
+            new_shape: pad_to_u32_4(new_shape),
+            op_params: pad_to_u32_4(axes),
+            rank: old_shape.len() as u32,
+            padding2: 0,
+            _padding: [0, 0],
+        };
+
+        movement_op(input, result, &params, &ctx.pipelines().permute)
+    }
+
+    /// Expand (broadcast) tensor to larger shape
+    pub fn expand(
+        input: &GpuBuffer,
+        old_shape: &[usize],
+        new_shape: &[usize],
+    ) -> Option<GpuBuffer> {
+        let ctx = get_gpu_context()?;
+        let output_size = new_shape.iter().product::<usize>();
+        let result = GpuBuffer::zeros(output_size)?;
+
+        // For expand, op_params represents which dimensions were broadcast (size 1 -> N)
+        let mut broadcast_flags = [0u32; 4];
+        for (i, (&old, &new)) in old_shape.iter().zip(new_shape).enumerate() {
+            broadcast_flags[i] = if old == 1 && new > 1 { 1 } else { 0 };
+        }
+
+        let params = MovementParams {
+            old_shape: pad_to_u32_4(old_shape),
+            new_shape: pad_to_u32_4(new_shape),
+            op_params: broadcast_flags,
+            rank: old_shape.len() as u32,
+            padding2: 0,
+            _padding: [0, 0],
+        };
+
+        movement_op(input, result, &params, &ctx.pipelines().expand)
+    }
+
+    /// Pad tensor with zeros
+    pub fn pad(
+        input: &GpuBuffer,
+        old_shape: &[usize],
+        new_shape: &[usize],
+        padding: &[(usize, usize)],
+    ) -> Option<GpuBuffer> {
+        let ctx = get_gpu_context()?;
+        let output_size = new_shape.iter().product::<usize>();
+        let result = GpuBuffer::zeros(output_size)?;
+
+        // Pack padding into op_params (left1, right1, left2, right2)
+        let mut pad_params = [0u32; 4];
+        for (i, &(left, right)) in padding.iter().take(2).enumerate() {
+            pad_params[i * 2] = left as u32;
+            pad_params[i * 2 + 1] = right as u32;
+        }
+
+        // Note: For dimensions > 2, padding is currently not fully supported in shader
+        // The shader uses op_params for first 2 dims and padding2 would need to pack more
+        let padding2: u32 = 0; // Currently unused - would pack dims 3,4 padding
+
+        let params = MovementParams {
+            old_shape: pad_to_u32_4(old_shape),
+            new_shape: pad_to_u32_4(new_shape),
+            op_params: pad_params,
+            rank: old_shape.len() as u32,
+            padding2,
+            _padding: [0, 0],
+        };
+
+        movement_op(input, result, &params, &ctx.pipelines().pad)
+    }
+
+    /// Shrink tensor to subregion
+    pub fn shrink(
+        input: &GpuBuffer,
+        old_shape: &[usize],
+        new_shape: &[usize],
+        ranges: &[(usize, usize)],
+    ) -> Option<GpuBuffer> {
+        let ctx = get_gpu_context()?;
+        let output_size = new_shape.iter().product::<usize>();
+        let result = GpuBuffer::zeros(output_size)?;
+
+        // op_params contains range starts - convert to usize first
+        let starts: Vec<usize> = ranges.iter().map(|(start, _)| *start).collect();
+
+        let params = MovementParams {
+            old_shape: pad_to_u32_4(old_shape),
+            new_shape: pad_to_u32_4(new_shape),
+            op_params: pad_to_u32_4(&starts),
+            rank: old_shape.len() as u32,
+            padding2: 0,
+            _padding: [0, 0],
+        };
+
+        movement_op(input, result, &params, &ctx.pipelines().shrink)
+    }
+
+    /// Stride (subsample) tensor
+    pub fn stride(
+        input: &GpuBuffer,
+        old_shape: &[usize],
+        new_shape: &[usize],
+        strides: &[usize],
+    ) -> Option<GpuBuffer> {
+        let ctx = get_gpu_context()?;
+        let output_size = new_shape.iter().product::<usize>();
+        let result = GpuBuffer::zeros(output_size)?;
+
+        let params = MovementParams {
+            old_shape: pad_to_u32_4(old_shape),
+            new_shape: pad_to_u32_4(new_shape),
+            op_params: pad_to_u32_4(strides),
+            rank: old_shape.len() as u32,
+            padding2: 0,
+            _padding: [0, 0],
+        };
+
+        movement_op(input, result, &params, &ctx.pipelines().stride)
+    }
+}
+
+/// Helper to pad a slice to exactly 4 u32 values
+fn pad_to_u32_4(values: &[usize]) -> [u32; 4] {
+    let mut result = [0u32; 4];
+    for (i, &v) in values.iter().take(4).enumerate() {
+        result[i] = v as u32;
+    }
+    result
+}
+
+/// Run a movement operation with parameters
+fn movement_op(
+    input: &GpuBuffer,
+    result: GpuBuffer,
+    params: &MovementParams,
+    pipeline: &wgpu::ComputePipeline,
+) -> Option<GpuBuffer> {
+    let ctx = get_gpu_context()?;
+
+    // Create uniform buffer with parameters
+    let params_buffer = ctx
+        .device()
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Movement Params"),
+            contents: bytemuck::bytes_of(params),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+    let bind_group_layout = pipeline.get_bind_group_layout(0);
+    let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Movement Bind Group"),
+        layout: &bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: input.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: result.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: params_buffer.as_entire_binding(),
+            },
+        ],
+    });
+
+    let mut encoder = ctx
+        .device()
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Movement Encoder"),
+        });
+
+    {
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Movement Pass"),
+            timestamp_writes: None,
+        });
+
+        compute_pass.set_pipeline(pipeline);
+        compute_pass.set_bind_group(0, &bind_group, &[]);
+
+        let output_size =
+            params.new_shape[0] * params.new_shape[1] * params.new_shape[2] * params.new_shape[3];
+        let workgroup_count = output_size.div_ceil(256);
+        compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
+    }
+
+    ctx.queue().submit(Some(encoder.finish()));
+
+    // Return the result buffer (now filled by GPU computation)
+    Some(result)
 }
 
 use wgpu::util::DeviceExt;

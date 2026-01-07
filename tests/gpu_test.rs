@@ -114,4 +114,46 @@ mod gpu_tests {
         let grad_vals = grad_storage.to_vec();
         assert_eq!(grad_vals, vec![2.0]);
     }
+
+    #[test]
+    fn test_gpu_movement_ops() {
+        if !gpu::is_gpu_available() {
+            println!("Skipping GPU movement ops test - no GPU available");
+            return;
+        }
+
+        let device = Device::GPU("TestDevice".to_string());
+
+        // Note: GPU movement kernels are in progress (shader debugging needed)
+        // For now, these work via CPU fallback which is correct (memory-bound ops)
+
+        // Test permute (transpose 2D) - uses CPU fallback for now
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false).to_device(device.clone());
+        let x_t = x.permute(&[1, 0]);
+        assert_eq!(x_t.borrow().shape, vec![2, 2]);
+        assert_eq!(x_t.borrow().data.to_vec(), vec![1.0, 3.0, 2.0, 4.0]);
+
+        // Test expand (broadcast)
+        let y = RawTensor::new(vec![1.0, 2.0], &[1, 2], false).to_device(device.clone());
+        let y_expanded = y.expand(&[3, 2]);
+        assert_eq!(y_expanded.borrow().shape, vec![3, 2]);
+        assert_eq!(
+            y_expanded.borrow().data.to_vec(),
+            vec![1.0, 2.0, 1.0, 2.0, 1.0, 2.0]
+        );
+
+        // Test shrink (slice)
+        let z = RawTensor::new((0..16).map(|i| i as f32).collect(), &[4, 4], false)
+            .to_device(device.clone());
+        let z_shrunk = z.shrink(&[(1, 3), (1, 3)]);
+        assert_eq!(z_shrunk.borrow().shape, vec![2, 2]);
+        assert_eq!(z_shrunk.borrow().data.to_vec(), vec![5.0, 6.0, 9.0, 10.0]);
+
+        // Test stride (subsample)
+        let w = RawTensor::new((0..16).map(|i| i as f32).collect(), &[4, 4], false)
+            .to_device(device.clone());
+        let w_strided = w.stride_op(&[2, 2]);
+        assert_eq!(w_strided.borrow().shape, vec![2, 2]);
+        assert_eq!(w_strided.borrow().data.to_vec(), vec![0.0, 2.0, 8.0, 10.0]);
+    }
 }

@@ -16,13 +16,12 @@
 #[cfg(feature = "gpu")]
 pub mod gpu;
 
-pub mod storage;
-
-// Add to re-exports:
-pub use storage::Storage;
-
 #[cfg(feature = "gpu")]
 pub use gpu::{GpuBuffer, GpuContext, get_gpu_context, is_gpu_available};
+
+pub mod storage;
+
+pub use storage::Storage;
 
 pub mod autograd;
 pub mod device;

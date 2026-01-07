@@ -184,6 +184,100 @@ impl RawTensor {
             cpu_cache,
         })
     }
+
+    /// GPU-accelerated permute operation
+    #[cfg(feature = "gpu")]
+    #[allow(dead_code)]
+    pub(crate) fn gpu_permute(
+        data: &Storage,
+        old_shape: &[usize],
+        new_shape: &[usize],
+        axes: &[usize],
+    ) -> Option<Storage> {
+        let buf = data.gpu_buffer()?;
+        let result = GpuKernels::permute(buf, old_shape, new_shape, axes)?;
+        let cpu_cache = Some(result.to_vec());
+
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            cpu_cache,
+        })
+    }
+
+    /// GPU-accelerated expand (broadcast) operation
+    #[cfg(feature = "gpu")]
+    #[allow(dead_code)]
+    pub(crate) fn gpu_expand(
+        data: &Storage,
+        old_shape: &[usize],
+        new_shape: &[usize],
+    ) -> Option<Storage> {
+        let buf = data.gpu_buffer()?;
+        let result = GpuKernels::expand(buf, old_shape, new_shape)?;
+        let cpu_cache = Some(result.to_vec());
+
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            cpu_cache,
+        })
+    }
+
+    /// GPU-accelerated pad operation
+    #[cfg(feature = "gpu")]
+    #[allow(dead_code)]
+    pub(crate) fn gpu_pad(
+        data: &Storage,
+        old_shape: &[usize],
+        new_shape: &[usize],
+        padding: &[(usize, usize)],
+    ) -> Option<Storage> {
+        let buf = data.gpu_buffer()?;
+        let result = GpuKernels::pad(buf, old_shape, new_shape, padding)?;
+        let cpu_cache = Some(result.to_vec());
+
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            cpu_cache,
+        })
+    }
+
+    /// GPU-accelerated shrink operation
+    #[cfg(feature = "gpu")]
+    #[allow(dead_code)]
+    pub(crate) fn gpu_shrink(
+        data: &Storage,
+        old_shape: &[usize],
+        new_shape: &[usize],
+        ranges: &[(usize, usize)],
+    ) -> Option<Storage> {
+        let buf = data.gpu_buffer()?;
+        let result = GpuKernels::shrink(buf, old_shape, new_shape, ranges)?;
+        let cpu_cache = Some(result.to_vec());
+
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            cpu_cache,
+        })
+    }
+
+    /// GPU-accelerated stride operation
+    #[cfg(feature = "gpu")]
+    #[allow(dead_code)]
+    pub(crate) fn gpu_stride(
+        data: &Storage,
+        old_shape: &[usize],
+        new_shape: &[usize],
+        strides: &[usize],
+    ) -> Option<Storage> {
+        let buf = data.gpu_buffer()?;
+        let result = GpuKernels::stride(buf, old_shape, new_shape, strides)?;
+        let cpu_cache = Some(result.to_vec());
+
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            cpu_cache,
+        })
+    }
 }
 
 #[cfg(all(test, feature = "gpu"))]

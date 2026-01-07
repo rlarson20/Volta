@@ -131,6 +131,33 @@ impl RawTensor {
         };
         Rc::new(RefCell::new(raw))
     }
+
+    /// Create a new tensor from Storage and shape (internal use for GPU ops)
+    #[allow(dead_code)]
+    pub(crate) fn new_with_storage(
+        data: crate::storage::Storage,
+        shape: &[usize],
+        device: Device,
+        requires_grad: bool,
+    ) -> Tensor {
+        assert_eq!(
+            data.len(),
+            shape.iter().product::<usize>(),
+            "Data length must match shape"
+        );
+
+        let raw = RawTensor {
+            data,
+            shape: shape.to_vec(),
+            grad: None,
+            requires_grad,
+            grad_fn: None,
+            parents: vec![],
+            device,
+        };
+        Rc::new(RefCell::new(raw))
+    }
+
     /// Create a tensor filled with zeros
     pub fn zeros(shape: &[usize]) -> Tensor {
         let size = shape.iter().product();
