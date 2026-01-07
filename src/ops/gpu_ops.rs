@@ -71,6 +71,51 @@ impl RawTensor {
         })
     }
 
+    /// GPU-accelerated element-wise maximum
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_max(a: &Storage, b: &Storage) -> Option<Storage> {
+        let buf_a = a.gpu_buffer()?;
+        let buf_b = b.gpu_buffer()?;
+
+        let result = GpuKernels::binary_op(buf_a, buf_b, "max")?;
+        let cpu_cache = Some(result.to_vec());
+
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            cpu_cache,
+        })
+    }
+
+    /// GPU-accelerated element-wise modulo
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_mod(a: &Storage, b: &Storage) -> Option<Storage> {
+        let buf_a = a.gpu_buffer()?;
+        let buf_b = b.gpu_buffer()?;
+
+        let result = GpuKernels::binary_op(buf_a, buf_b, "mod")?;
+        let cpu_cache = Some(result.to_vec());
+
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            cpu_cache,
+        })
+    }
+
+    /// GPU-accelerated element-wise less-than comparison
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_cmplt(a: &Storage, b: &Storage) -> Option<Storage> {
+        let buf_a = a.gpu_buffer()?;
+        let buf_b = b.gpu_buffer()?;
+
+        let result = GpuKernels::binary_op(buf_a, buf_b, "cmplt")?;
+        let cpu_cache = Some(result.to_vec());
+
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            cpu_cache,
+        })
+    }
+
     /// GPU-accelerated matrix multiplication
     #[allow(dead_code)]
     #[cfg(feature = "gpu")]

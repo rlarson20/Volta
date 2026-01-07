@@ -28,9 +28,17 @@ impl RawTensor {
         op: BinaryOp,
     ) -> Option<(Vec<usize>, Storage, Device)> {
         // Only these ops have GPU kernels at the moment.
-        match op {
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {}
-            _ => return None,
+        if !matches!(
+            op,
+            BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::Div
+                | BinaryOp::Max
+                | BinaryOp::Mod
+                | BinaryOp::Cmplt
+        ) {
+            return None;
         }
 
         let (shape_a, device_a, storage_a) = {
@@ -58,7 +66,9 @@ impl RawTensor {
             BinaryOp::Sub => RawTensor::gpu_sub(&storage_a, &storage_b)?,
             BinaryOp::Mul => RawTensor::gpu_mul(&storage_a, &storage_b)?,
             BinaryOp::Div => RawTensor::gpu_div(&storage_a, &storage_b)?,
-            _ => unreachable!(),
+            BinaryOp::Max => RawTensor::gpu_max(&storage_a, &storage_b)?,
+            BinaryOp::Mod => RawTensor::gpu_mod(&storage_a, &storage_b)?,
+            BinaryOp::Cmplt => RawTensor::gpu_cmplt(&storage_a, &storage_b)?,
         };
 
         Some((shape_a, storage, device_a))

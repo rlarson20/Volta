@@ -49,6 +49,9 @@ impl GpuKernels {
             "sub" => &ctx.pipelines().sub,
             "mul" => &ctx.pipelines().mul,
             "div" => &ctx.pipelines().div,
+            "max" => &ctx.pipelines().max,
+            "mod" => &ctx.pipelines().mod_op,
+            "cmplt" => &ctx.pipelines().cmplt,
             _ => panic!("Unknown binary op: {}", op),
         };
 

@@ -25,6 +25,9 @@ pub struct ComputePipelines {
     pub sub: wgpu::ComputePipeline,
     pub mul: wgpu::ComputePipeline,
     pub div: wgpu::ComputePipeline,
+    pub max: wgpu::ComputePipeline,
+    pub mod_op: wgpu::ComputePipeline,
+    pub cmplt: wgpu::ComputePipeline,
 
     // Unary operations
     pub neg: wgpu::ComputePipeline,
@@ -166,6 +169,9 @@ impl GpuContext {
             sub: create_pipeline(&elementwise_shader, "sub", "Sub Pipeline"),
             mul: create_pipeline(&elementwise_shader, "mul", "Mul Pipeline"),
             div: create_pipeline(&elementwise_shader, "div", "Div Pipeline"),
+            max: create_pipeline(&elementwise_shader, "max_elem", "Max Pipeline"),
+            mod_op: create_pipeline(&elementwise_shader, "mod_op", "Mod Pipeline"),
+            cmplt: create_pipeline(&elementwise_shader, "cmplt", "Cmplt Pipeline"),
 
             // Unary ops
             neg: create_pipeline(&unary_shader, "neg", "Neg Pipeline"),
