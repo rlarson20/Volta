@@ -116,6 +116,39 @@ impl RawTensor {
         })
     }
 
+    /// GPU-accelerated sum reduction - returns the scalar sum
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_sum_reduce(data: &Storage) -> Option<f32> {
+        let buf = data.gpu_buffer()?;
+        GpuKernels::sum(buf)
+    }
+
+    /// GPU-accelerated max reduction - returns (max_value, max_index)
+    /// Uses GPU to find max value, then CPU to find the index
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_max_reduce(data: &Storage) -> Option<(f32, usize)> {
+        let buf = data.gpu_buffer()?;
+        let max_val = GpuKernels::max(buf)?;
+
+        // Find the index of the max value on CPU (using cached data)
+        let cpu_data = data.to_vec();
+        let max_idx = cpu_data
+            .iter()
+            .enumerate()
+            .find(|&(_, v)| (v - max_val).abs() < 1e-6)
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+
+        Some((max_val, max_idx))
+    }
+
+    /// GPU-accelerated mean reduction - returns the scalar mean
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_mean_reduce(data: &Storage) -> Option<f32> {
+        let buf = data.gpu_buffer()?;
+        GpuKernels::mean(buf)
+    }
+
     /// GPU-accelerated matrix multiplication
     #[allow(dead_code)]
     #[cfg(feature = "gpu")]

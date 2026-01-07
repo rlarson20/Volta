@@ -45,6 +45,8 @@ pub struct ComputePipelines {
 
     // Reductions
     pub sum_reduce: wgpu::ComputePipeline,
+    pub max_reduce: wgpu::ComputePipeline,
+    pub mean_reduce: wgpu::ComputePipeline,
 
     // Matrix multiplication (this is the big one for ML!)
     pub matmul: wgpu::ComputePipeline,
@@ -189,6 +191,8 @@ impl GpuContext {
 
             // Reductions
             sum_reduce: create_pipeline(&reduce_shader, "sum_reduce", "Sum Reduce Pipeline"),
+            max_reduce: create_pipeline(&reduce_shader, "max_reduce", "Max Reduce Pipeline"),
+            mean_reduce: create_pipeline(&reduce_shader, "mean_reduce", "Mean Reduce Pipeline"),
 
             // Matrix multiplication
             matmul: create_pipeline(&matmul_shader, "matmul", "MatMul Pipeline"),

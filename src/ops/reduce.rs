@@ -105,7 +105,23 @@ impl RawTensor {
 
         let (result_val, grad_fn): (f32, Box<dyn GradFn>) = match op {
             ReduceOp::Sum => {
-                let sum: f32 = data.iter().sum();
+                // Try GPU first if available
+                let sum: f32 = if device.is_gpu() {
+                    #[cfg(feature = "gpu")]
+                    {
+                        if let Some(result) = RawTensor::gpu_sum_reduce(&data) {
+                            result
+                        } else {
+                            data.iter().sum()
+                        }
+                    }
+                    #[cfg(not(feature = "gpu"))]
+                    {
+                        data.iter().sum()
+                    }
+                } else {
+                    data.iter().sum()
+                };
                 (
                     sum,
                     Box::new(SumGradFn {
@@ -114,12 +130,41 @@ impl RawTensor {
                 )
             }
             ReduceOp::Max => {
-                let (max_val, max_idx) = data
-                    .iter()
-                    .enumerate()
-                    .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-                    .map(|(idx, &val)| (val, idx))
-                    .unwrap();
+                // Try GPU first if available
+                let (max_val, max_idx) = if device.is_gpu() {
+                    #[cfg(feature = "gpu")]
+                    {
+                        if let Some(result) = RawTensor::gpu_max_reduce(&data) {
+                            result
+                        } else {
+                            let (max_val, max_idx) = data
+                                .iter()
+                                .enumerate()
+                                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                                .map(|(idx, &val)| (val, idx))
+                                .unwrap();
+                            (max_val, max_idx)
+                        }
+                    }
+                    #[cfg(not(feature = "gpu"))]
+                    {
+                        let (max_val, max_idx) = data
+                            .iter()
+                            .enumerate()
+                            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                            .map(|(idx, &val)| (val, idx))
+                            .unwrap();
+                        (max_val, max_idx)
+                    }
+                } else {
+                    let (max_val, max_idx) = data
+                        .iter()
+                        .enumerate()
+                        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                        .map(|(idx, &val)| (val, idx))
+                        .unwrap();
+                    (max_val, max_idx)
+                };
                 (
                     max_val,
                     Box::new(MaxReduceGradFn {
@@ -129,8 +174,26 @@ impl RawTensor {
                 )
             }
             ReduceOp::Mean => {
-                let sum: f32 = data.iter().sum();
-                let mean_val = sum / (data.len() as f32);
+                // Try GPU first if available
+                let mean_val: f32 = if device.is_gpu() {
+                    #[cfg(feature = "gpu")]
+                    {
+                        if let Some(result) = RawTensor::gpu_mean_reduce(&data) {
+                            result
+                        } else {
+                            let sum: f32 = data.iter().sum();
+                            sum / (data.len() as f32)
+                        }
+                    }
+                    #[cfg(not(feature = "gpu"))]
+                    {
+                        let sum: f32 = data.iter().sum();
+                        sum / (data.len() as f32)
+                    }
+                } else {
+                    let sum: f32 = data.iter().sum();
+                    sum / (data.len() as f32)
+                };
                 (
                     mean_val,
                     Box::new(MeanGradFn {
@@ -141,9 +204,7 @@ impl RawTensor {
         };
 
         // Start with a CPU scalar and then place it on the same logical device
-        // as the input tensor. The actual reduction is still computed on CPU
-        // (using the CPU cache) for now; only the storage placement is
-        // device‑aware.
+        // as the input tensor. The reduction computation may have happened on GPU.
         let out = Self::new(vec![result_val], &[1], req_grad);
         {
             let mut ob = out.borrow_mut();

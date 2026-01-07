@@ -24,6 +24,69 @@ pub struct ReduceParams {
     pub _padding: [u32; 3],
 }
 
+/// Run a reduction operation that returns a scalar f32 value
+fn reduce_scalar(input: &GpuBuffer, pipeline: &wgpu::ComputePipeline) -> Option<f32> {
+    let ctx = get_gpu_context()?;
+    let result_buffer = GpuBuffer::zeros(1)?;
+
+    // Create uniform buffer with input size (pad to 32 bytes for wgpu min uniform buffer size)
+    // Shader only reads first 4 u32s, but buffer must be at least 32 bytes
+    let params = [input.len() as u32, 0, 0, 0];
+    let mut padded_params = [0u32; 8];
+    padded_params[..4].copy_from_slice(&params);
+    let params_buffer = ctx
+        .device()
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Params Buffer"),
+            contents: bytemuck::bytes_of(&padded_params),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+    // Create bind group
+    let bind_group_layout = pipeline.get_bind_group_layout(0);
+    let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Reduce Bind Group"),
+        layout: &bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: input.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: result_buffer.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: params_buffer.as_entire_binding(),
+            },
+        ],
+    });
+
+    // Create command encoder and dispatch
+    let mut encoder = ctx
+        .device()
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Reduce Encoder"),
+        });
+
+    {
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Reduce Pass"),
+            timestamp_writes: None,
+        });
+
+        compute_pass.set_pipeline(pipeline);
+        compute_pass.set_bind_group(0, &bind_group, &[]);
+        compute_pass.dispatch_workgroups(1, 1, 1);
+    }
+
+    ctx.queue().submit(Some(encoder.finish()));
+
+    // Read back the result
+    Some(result_buffer.to_vec()[0])
+}
+
 /// High-level interface for GPU kernel execution
 pub struct GpuKernels;
 
@@ -249,10 +312,20 @@ impl GpuKernels {
 
     /// Sum all elements in a buffer
     pub fn sum(input: &GpuBuffer) -> Option<f32> {
-        // For simplicity, we'll do reduction on CPU for now
-        // A proper GPU reduction is more complex (requires multiple passes)
-        let data = input.to_vec();
-        Some(data.iter().sum())
+        let ctx = get_gpu_context()?;
+        reduce_scalar(input, &ctx.pipelines().sum_reduce)
+    }
+
+    /// Find the maximum value in a buffer
+    pub fn max(input: &GpuBuffer) -> Option<f32> {
+        let ctx = get_gpu_context()?;
+        reduce_scalar(input, &ctx.pipelines().max_reduce)
+    }
+
+    /// Compute the mean of all elements in a buffer
+    pub fn mean(input: &GpuBuffer) -> Option<f32> {
+        let ctx = get_gpu_context()?;
+        reduce_scalar(input, &ctx.pipelines().mean_reduce)
     }
 }
 
