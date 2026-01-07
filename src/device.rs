@@ -29,6 +29,35 @@ impl Device {
             Device::GPU(name) => name.as_str(),
         }
     }
+
+    /// Get the default GPU device.
+    ///
+    /// Returns `Some(Device::GPU)` if GPU is available, `None` otherwise.
+    /// The GPU name comes from the initialized GPU context.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # #[cfg(feature = "gpu")]
+    /// # {
+    /// use volta::Device;
+    ///
+    /// if let Some(gpu) = Device::gpu() {
+    ///     println!("Using GPU: {}", gpu.name());
+    /// } else {
+    ///     println!("GPU not available, using CPU");
+    /// }
+    /// # }
+    /// ```
+    #[cfg(feature = "gpu")]
+    pub fn gpu() -> Option<Self> {
+        crate::gpu::get_gpu_context().map(|ctx| Device::GPU(ctx.device_name().to_string()))
+    }
+
+    /// When GPU feature is disabled, gpu() always returns None
+    #[cfg(not(feature = "gpu"))]
+    pub fn gpu() -> Option<Self> {
+        None
+    }
 }
 
 impl fmt::Display for Device {

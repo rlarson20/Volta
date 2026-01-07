@@ -1382,3 +1382,98 @@ mod axis_reduce_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod gpu_tests {
+    use super::*;
+
+    #[test]
+    fn test_device_gpu_returns_none_when_disabled() {
+        // When gpu feature is disabled, Device::gpu() should return None
+        let gpu = Device::gpu();
+        if cfg!(feature = "gpu") {
+            // If GPU is available, gpu() should return Some device
+            // We can't guarantee GPU is available on all systems
+            if is_gpu_available() {
+                assert!(gpu.is_some());
+                assert!(gpu.unwrap().is_gpu());
+            }
+        } else {
+            // Without gpu feature, should always be None
+            assert!(gpu.is_none());
+        }
+    }
+
+    #[test]
+    fn test_to_device_cpu_to_cpu() {
+        let t = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], false);
+        let t_cpu = t.to_device(Device::CPU);
+
+        // Same device should return same tensor (fast path)
+        assert_eq!(t_cpu.borrow().device, Device::CPU);
+        assert_eq!(t_cpu.borrow().data.to_vec(), vec![1.0, 2.0, 3.0]);
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn test_to_device_cpu_to_gpu() {
+        if !is_gpu_available() {
+            return; // Skip test if GPU not available
+        }
+
+        let t = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
+        let gpu_device = Device::gpu().expect("GPU should be available");
+        let t_gpu = t.to_device(gpu_device.clone());
+
+        // Device should be GPU
+        assert!(t_gpu.borrow().device.is_gpu());
+        assert_eq!(t_gpu.borrow().device.name(), gpu_device.name());
+
+        // Data should be preserved
+        assert_eq!(t_gpu.borrow().data.to_vec(), vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(t_gpu.borrow().shape, vec![2, 2]);
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn test_to_device_gpu_to_cpu() {
+        if !is_gpu_available() {
+            return; // Skip test if GPU not available
+        }
+
+        let gpu_device = Device::gpu().expect("GPU should be available");
+        let t = RawTensor::new(vec![5.0, 6.0, 7.0], &[3], false);
+        let t_gpu = t.to_device(gpu_device.clone());
+
+        // Move back to CPU
+        let t_cpu = t_gpu.to_device(Device::CPU);
+
+        assert!(t_cpu.borrow().device.is_cpu());
+        assert_eq!(t_cpu.borrow().data.to_vec(), vec![5.0, 6.0, 7.0]);
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn test_to_device_preserves_autograd_metadata() {
+        if !is_gpu_available() {
+            return; // Skip test if GPU not available
+        }
+
+        // Create a simple computation graph
+        let a = RawTensor::new(vec![2.0], &[1], true);
+        let b = RawTensor::new(vec![3.0], &[1], true);
+        let c = a.add(&b);
+
+        // Move result to GPU
+        let gpu_device = Device::gpu().expect("GPU should be available");
+        let c_gpu = c.to_device(gpu_device);
+
+        // Autograd metadata should be preserved
+        assert!(c_gpu.borrow().requires_grad);
+        assert!(!c_gpu.borrow().parents.is_empty());
+        assert!(c_gpu.borrow().grad_fn.is_some());
+
+        // Note: Gradients are still computed on CPU
+        // This is a known limitation documented in to_device()
+    }
+}
