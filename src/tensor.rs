@@ -411,38 +411,28 @@ impl RawTensor {
             )
         };
 
-        let _dim_size = shape[dim];
+        let dim_size = shape[dim];
         let mut out_shape = shape.clone();
         out_shape[dim] = 1; // intermediate shape before squeeze
         let out_size: usize = out_shape.iter().product();
         let mut result = vec![0.0; out_size];
 
-        // Compute strides for indexing
-        let _strides = Self::compute_strides(&shape);
-        let out_strides = Self::compute_strides(&out_shape);
+        // Optimized stride-based reduction: O(1) per element instead of O(rank) coordinate conversion
+        // View data as: [outer_size, dim_size, inner_size] where we sum over dim_size
+        let outer_size: usize = shape[..dim].iter().product();
+        let inner_size: usize = shape[dim + 1..].iter().product();
 
-        // Sum over the target dimension
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..data.len() {
-            // Convert linear index to coordinates
-            let mut coords = vec![0; shape.len()];
-            let mut rem = i;
-            for (d, &dim_sz) in shape.iter().enumerate().rev() {
-                coords[d] = rem % dim_sz;
-                rem /= dim_sz;
+        // Sum over the target dimension using stride arithmetic
+        for outer in 0..outer_size {
+            for inner in 0..inner_size {
+                let out_idx = outer * inner_size + inner;
+                let mut sum = 0.0;
+                for k in 0..dim_size {
+                    let in_idx = outer * dim_size * inner_size + k * inner_size + inner;
+                    sum += data[in_idx];
+                }
+                result[out_idx] = sum;
             }
-
-            // Zero out the target dimension for output indexing
-            let mut out_coords = coords.clone();
-            out_coords[dim] = 0;
-
-            // Convert output coords to linear index
-            let out_idx: usize = out_coords
-                .iter()
-                .zip(&out_strides)
-                .map(|(c, s)| c * s)
-                .sum();
-            result[out_idx] += data[i];
         }
 
         // Squeeze dimension if keepdim=false
@@ -530,7 +520,7 @@ impl RawTensor {
             )
         };
 
-        let _dim_size = shape[dim];
+        let dim_size = shape[dim];
         let mut out_shape = shape.clone();
         out_shape[dim] = 1;
         let out_size: usize = out_shape.iter().product();
@@ -538,29 +528,22 @@ impl RawTensor {
         let mut result = vec![f32::NEG_INFINITY; out_size];
         let mut max_indices = vec![0; out_size]; // track which index won
 
-        let _strides = Self::compute_strides(&shape);
-        let out_strides = Self::compute_strides(&out_shape);
+        // Optimized stride-based reduction: O(1) per element instead of O(rank) coordinate conversion
+        // View data as: [outer_size, dim_size, inner_size] where we find max over dim_size
+        let outer_size: usize = shape[..dim].iter().product();
+        let inner_size: usize = shape[dim + 1..].iter().product();
 
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..data.len() {
-            let mut coords = vec![0; shape.len()];
-            let mut rem = i;
-            for (d, &dim_sz) in shape.iter().enumerate().rev() {
-                coords[d] = rem % dim_sz;
-                rem /= dim_sz;
-            }
-
-            let mut out_coords = coords.clone();
-            out_coords[dim] = 0;
-            let out_idx: usize = out_coords
-                .iter()
-                .zip(&out_strides)
-                .map(|(c, s)| c * s)
-                .sum();
-
-            if data[i] > result[out_idx] {
-                result[out_idx] = data[i];
-                max_indices[out_idx] = i; // store linear index of max element
+        // Find max over the target dimension using stride arithmetic
+        for outer in 0..outer_size {
+            for inner in 0..inner_size {
+                let out_idx = outer * inner_size + inner;
+                for k in 0..dim_size {
+                    let in_idx = outer * dim_size * inner_size + k * inner_size + inner;
+                    if data[in_idx] > result[out_idx] {
+                        result[out_idx] = data[in_idx];
+                        max_indices[out_idx] = in_idx; // store linear index of max element
+                    }
+                }
             }
         }
 

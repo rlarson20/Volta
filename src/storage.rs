@@ -6,6 +6,8 @@
 use crate::device::Device;
 #[cfg(feature = "gpu")]
 use crate::gpu::{GpuBuffer, is_gpu_available};
+#[cfg(feature = "gpu")]
+use std::cell::RefCell;
 use std::ops::{
     Deref, DerefMut, Index, IndexMut, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo,
     RangeToInclusive,
@@ -15,7 +17,6 @@ use std::ops::{
 ///
 /// This enum allows tensors to store their data either on CPU (as a `Vec<f32>`)
 /// or on GPU (as a `GpuBuffer`). Operations automatically handle the right backend.
-#[derive(Clone)]
 pub enum Storage {
     /// CPU storage - data lives in main memory
     Cpu(Vec<f32>),
@@ -26,9 +27,22 @@ pub enum Storage {
         /// The GPU buffer (wrapped in Arc for cheap cloning)
         buffer: std::sync::Arc<GpuBuffer>,
         /// Cached CPU copy (for operations that need CPU access)
-        /// This is lazily populated when needed
-        cpu_cache: Option<Vec<f32>>,
+        /// Uses RefCell for lazy population - populated on first CPU access
+        cpu_cache: RefCell<Option<Vec<f32>>>,
     },
+}
+
+impl Clone for Storage {
+    fn clone(&self) -> Self {
+        match self {
+            Storage::Cpu(data) => Storage::Cpu(data.clone()),
+            #[cfg(feature = "gpu")]
+            Storage::Gpu { buffer, cpu_cache } => Storage::Gpu {
+                buffer: buffer.clone(),
+                cpu_cache: RefCell::new(cpu_cache.borrow().clone()),
+            },
+        }
+    }
 }
 
 impl Storage {
@@ -43,7 +57,7 @@ impl Storage {
         if let Some(buffer) = GpuBuffer::from_slice(&data) {
             Storage::Gpu {
                 buffer: std::sync::Arc::new(buffer),
-                cpu_cache: Some(data), // Keep original data as cache
+                cpu_cache: RefCell::new(Some(data)), // Keep original data as cache
             }
         } else {
             // Fall back to CPU
@@ -56,21 +70,29 @@ impl Storage {
         Storage::Cpu(data)
     }
 
-    /// Get data as a slice (may trigger GPU->CPU transfer)
+    /// Get data as a slice (triggers GPU->CPU transfer on first access)
+    ///
+    /// For GPU storage, this lazily populates the CPU cache on first access.
+    /// Subsequent calls return the cached data without GPU transfer.
     pub fn as_slice(&self) -> &[f32] {
         match self {
             Storage::Cpu(data) => data,
             #[cfg(feature = "gpu")]
-            Storage::Gpu {
-                buffer: _,
-                cpu_cache,
-            } => {
-                // If we have a cache, use it
-                // Otherwise, we'd need interior mutability to populate it
-                // For now, panic - the user should call to_vec() first
-                cpu_cache
-                    .as_ref()
-                    .expect("GPU buffer needs to_vec() call before slice access")
+            Storage::Gpu { buffer, cpu_cache } => {
+                // Ensure cache is populated (lazy transfer from GPU)
+                {
+                    let mut cache = cpu_cache.borrow_mut();
+                    if cache.is_none() {
+                        *cache = Some(buffer.to_vec());
+                    }
+                }
+                // SAFETY: cache is now populated and never cleared.
+                // We use as_ptr() to get a reference that outlives the RefCell borrow.
+                // This is safe because:
+                // 1. The cache is Some(Vec) after the block above
+                // 2. We never clear the cache once populated
+                // 3. The Vec inside is stable (won't move/reallocate)
+                unsafe { (*cpu_cache.as_ptr()).as_ref().unwrap().as_slice() }
             }
         }
     }
@@ -90,7 +112,17 @@ impl Storage {
             Storage::Cpu(data) => data.clone(),
             #[cfg(feature = "gpu")]
             Storage::Gpu { buffer, cpu_cache } => {
-                cpu_cache.clone().unwrap_or_else(|| buffer.to_vec())
+                // Check if cache exists, if not fetch from GPU
+                let cache = cpu_cache.borrow();
+                if let Some(ref data) = *cache {
+                    data.clone()
+                } else {
+                    drop(cache);
+                    // Populate cache for future use
+                    let data = buffer.to_vec();
+                    *cpu_cache.borrow_mut() = Some(data.clone());
+                    data
+                }
             }
         }
     }

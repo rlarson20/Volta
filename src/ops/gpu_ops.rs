@@ -7,6 +7,8 @@ use crate::RawTensor;
 use crate::gpu::GpuKernels;
 use crate::storage::Storage;
 #[cfg(feature = "gpu")]
+use std::cell::RefCell;
+#[cfg(feature = "gpu")]
 use std::sync::Arc;
 
 impl RawTensor {
@@ -18,12 +20,11 @@ impl RawTensor {
 
         let result = GpuKernels::binary_op(buf_a, buf_b, "add")?;
 
-        // Populate cpu_cache so later CPU-style access (as_slice / iter) is safe.
-        let cpu_cache = Some(result.to_vec());
-
+        // Return GPU storage without eager CPU transfer.
+        // CPU access requires explicit to_vec() call.
         Some(Storage::Gpu {
             buffer: Arc::new(result),
-            cpu_cache,
+            cpu_cache: RefCell::new(None),
         })
     }
 
@@ -34,10 +35,9 @@ impl RawTensor {
         let buf_b = b.gpu_buffer()?;
 
         let result = GpuKernels::binary_op(buf_a, buf_b, "sub")?;
-        let cpu_cache = Some(result.to_vec());
         Some(Storage::Gpu {
             buffer: Arc::new(result),
-            cpu_cache,
+            cpu_cache: RefCell::new(None),
         })
     }
 
@@ -48,11 +48,9 @@ impl RawTensor {
         let buf_b = b.gpu_buffer()?;
 
         let result = GpuKernels::binary_op(buf_a, buf_b, "mul")?;
-        let cpu_cache = Some(result.to_vec());
-
         Some(Storage::Gpu {
             buffer: Arc::new(result),
-            cpu_cache,
+            cpu_cache: RefCell::new(None),
         })
     }
 
@@ -63,11 +61,9 @@ impl RawTensor {
         let buf_b = b.gpu_buffer()?;
 
         let result = GpuKernels::binary_op(buf_a, buf_b, "div")?;
-        let cpu_cache = Some(result.to_vec());
-
         Some(Storage::Gpu {
             buffer: Arc::new(result),
-            cpu_cache,
+            cpu_cache: RefCell::new(None),
         })
     }
 
@@ -78,11 +74,9 @@ impl RawTensor {
         let buf_b = b.gpu_buffer()?;
 
         let result = GpuKernels::binary_op(buf_a, buf_b, "max")?;
-        let cpu_cache = Some(result.to_vec());
-
         Some(Storage::Gpu {
             buffer: Arc::new(result),
-            cpu_cache,
+            cpu_cache: RefCell::new(None),
         })
     }
 
@@ -93,11 +87,9 @@ impl RawTensor {
         let buf_b = b.gpu_buffer()?;
 
         let result = GpuKernels::binary_op(buf_a, buf_b, "mod")?;
-        let cpu_cache = Some(result.to_vec());
-
         Some(Storage::Gpu {
             buffer: Arc::new(result),
-            cpu_cache,
+            cpu_cache: RefCell::new(None),
         })
     }
 
@@ -108,11 +100,9 @@ impl RawTensor {
         let buf_b = b.gpu_buffer()?;
 
         let result = GpuKernels::binary_op(buf_a, buf_b, "cmplt")?;
-        let cpu_cache = Some(result.to_vec());
-
         Some(Storage::Gpu {
             buffer: Arc::new(result),
-            cpu_cache,
+            cpu_cache: RefCell::new(None),
         })
     }
 
@@ -163,11 +153,9 @@ impl RawTensor {
         let buf_b = b.gpu_buffer()?;
 
         let result = GpuKernels::matmul(buf_a, buf_b, m, k, n)?;
-        let cpu_cache = Some(result.to_vec());
-
         Some(Storage::Gpu {
             buffer: Arc::new(result),
-            cpu_cache,
+            cpu_cache: RefCell::new(None),
         })
     }
 
@@ -177,11 +165,9 @@ impl RawTensor {
         let buf = input.gpu_buffer()?;
 
         let result = GpuKernels::unary_op(buf, op)?;
-        let cpu_cache = Some(result.to_vec());
-
         Some(Storage::Gpu {
             buffer: Arc::new(result),
-            cpu_cache,
+            cpu_cache: RefCell::new(None),
         })
     }
 
@@ -195,11 +181,9 @@ impl RawTensor {
     ) -> Option<Storage> {
         let buf = data.gpu_buffer()?;
         let result = GpuKernels::permute(buf, old_shape, new_shape, axes)?;
-        let cpu_cache = Some(result.to_vec());
-
         Some(Storage::Gpu {
             buffer: Arc::new(result),
-            cpu_cache,
+            cpu_cache: RefCell::new(None),
         })
     }
 
@@ -212,11 +196,9 @@ impl RawTensor {
     ) -> Option<Storage> {
         let buf = data.gpu_buffer()?;
         let result = GpuKernels::expand(buf, old_shape, new_shape)?;
-        let cpu_cache = Some(result.to_vec());
-
         Some(Storage::Gpu {
             buffer: Arc::new(result),
-            cpu_cache,
+            cpu_cache: RefCell::new(None),
         })
     }
 
@@ -230,11 +212,9 @@ impl RawTensor {
     ) -> Option<Storage> {
         let buf = data.gpu_buffer()?;
         let result = GpuKernels::pad(buf, old_shape, new_shape, padding)?;
-        let cpu_cache = Some(result.to_vec());
-
         Some(Storage::Gpu {
             buffer: Arc::new(result),
-            cpu_cache,
+            cpu_cache: RefCell::new(None),
         })
     }
 
@@ -248,11 +228,9 @@ impl RawTensor {
     ) -> Option<Storage> {
         let buf = data.gpu_buffer()?;
         let result = GpuKernels::shrink(buf, old_shape, new_shape, ranges)?;
-        let cpu_cache = Some(result.to_vec());
-
         Some(Storage::Gpu {
             buffer: Arc::new(result),
-            cpu_cache,
+            cpu_cache: RefCell::new(None),
         })
     }
 
@@ -266,11 +244,9 @@ impl RawTensor {
     ) -> Option<Storage> {
         let buf = data.gpu_buffer()?;
         let result = GpuKernels::stride(buf, old_shape, new_shape, strides)?;
-        let cpu_cache = Some(result.to_vec());
-
         Some(Storage::Gpu {
             buffer: Arc::new(result),
-            cpu_cache,
+            cpu_cache: RefCell::new(None),
         })
     }
 }
@@ -282,7 +258,7 @@ mod tests {
     use crate::storage::Storage;
 
     #[test]
-    fn gpu_add_populates_cpu_cache_and_roundtrips() {
+    fn gpu_add_returns_gpu_storage_without_eager_transfer() {
         if !is_gpu_available() {
             // Skip on machines without a usable GPU.
             return;
@@ -296,11 +272,8 @@ mod tests {
         // Must be GPU-backed storage.
         assert!(out.is_gpu());
 
-        // cpu_cache must be populated so CPU-style access is safe.
-        // as_slice internally uses the cache.
-        assert_eq!(out.as_slice(), &[6.0, 8.0, 10.0, 12.0]);
-
-        // to_vec should also work and match expectations.
+        // cpu_cache is NOT eagerly populated (lazy transfer).
+        // to_vec() fetches from GPU buffer when cache is None.
         assert_eq!(out.to_vec(), vec![6.0, 8.0, 10.0, 12.0]);
     }
 }
