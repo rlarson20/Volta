@@ -45,6 +45,25 @@ impl GradFn for UnaryGradFn {
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let x = parents[0].borrow();
 
+        // Check GPU path - if both out_grad and x are on GPU, use GPU backward
+        #[cfg(feature = "gpu")]
+        {
+            if out_grad.device.is_gpu()
+                && x.device.is_gpu()
+                && let Some(kernel) = unary_backward_kernel_name(self.op)
+                && let Some(grad_storage) =
+                    RawTensor::gpu_unary_backward(&out_grad.data, &x.data, kernel)
+            {
+                return vec![Some(RawTensor::new_with_storage(
+                    grad_storage,
+                    &x.shape,
+                    x.device.clone(),
+                    false,
+                ))];
+            }
+        }
+
+        // CPU fallback
         // Apply chain rule: ∂L/∂x = ∂L/∂y · ∂y/∂x
         // where y = f(x) is the unary operation
         let grad_data: Vec<f32> = match self.op {
@@ -151,6 +170,25 @@ fn unary_kernel_name(op: UnaryOp) -> Option<&'static str> {
         UnaryOp::Log2 => Some("log2"),
         UnaryOp::Sin => Some("sin"),
         UnaryOp::Cos => Some("cos"),
+    }
+}
+
+// Map a `UnaryOp` to the corresponding GPU backward kernel name, if supported.
+#[cfg(feature = "gpu")]
+fn unary_backward_kernel_name(op: UnaryOp) -> Option<&'static str> {
+    match op {
+        UnaryOp::Neg => Some("neg_backward"),
+        UnaryOp::Exp => Some("exp_backward"),
+        UnaryOp::Log => Some("log_backward"),
+        UnaryOp::Tanh => Some("tanh_backward"),
+        UnaryOp::Sigmoid => Some("sigmoid_backward"),
+        UnaryOp::ReLU => Some("relu_backward"),
+        UnaryOp::Sqrt => Some("sqrt_backward"),
+        UnaryOp::Recip => Some("recip_backward"),
+        UnaryOp::Exp2 => Some("exp2_backward"),
+        UnaryOp::Log2 => Some("log2_backward"),
+        UnaryOp::Sin => Some("sin_backward"),
+        UnaryOp::Cos => Some("cos_backward"),
     }
 }
 

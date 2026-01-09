@@ -241,6 +241,87 @@ impl GpuKernels {
         Some(result)
     }
 
+    /// Execute a unary backward operation
+    ///
+    /// For y = f(x), computes grad = out_grad * df/dx
+    ///
+    /// # Arguments
+    /// * `out_grad` - Gradient of the output (upstream gradient)
+    /// * `x` - Input tensor from the forward pass
+    /// * `op` - Which operation to perform ("exp_backward", "relu_backward", etc.)
+    ///
+    /// # Returns
+    /// A new buffer containing the gradient with respect to x
+    pub fn unary_backward(out_grad: &GpuBuffer, x: &GpuBuffer, op: &str) -> Option<GpuBuffer> {
+        assert_eq!(
+            out_grad.len(),
+            x.len(),
+            "out_grad and x must have same size for unary backward"
+        );
+
+        let ctx = get_gpu_context()?;
+        let result = GpuBuffer::zeros(out_grad.len())?;
+
+        let pipeline = match op {
+            "neg_backward" => &ctx.pipelines().neg_backward,
+            "exp_backward" => &ctx.pipelines().exp_backward,
+            "log_backward" => &ctx.pipelines().log_backward,
+            "relu_backward" => &ctx.pipelines().relu_backward,
+            "sigmoid_backward" => &ctx.pipelines().sigmoid_backward,
+            "tanh_backward" => &ctx.pipelines().tanh_backward,
+            "sqrt_backward" => &ctx.pipelines().sqrt_backward,
+            "recip_backward" => &ctx.pipelines().recip_backward,
+            "exp2_backward" => &ctx.pipelines().exp2_backward,
+            "log2_backward" => &ctx.pipelines().log2_backward,
+            "sin_backward" => &ctx.pipelines().sin_backward,
+            "cos_backward" => &ctx.pipelines().cos_backward,
+            _ => panic!("Unknown unary backward op: {}", op),
+        };
+
+        let bind_group_layout = pipeline.get_bind_group_layout(0);
+        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Unary Backward Bind Group"),
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: out_grad.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: x.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: result.buffer().as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Unary Backward Encoder"),
+            });
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Unary Backward Pass"),
+                timestamp_writes: None,
+            });
+
+            compute_pass.set_pipeline(pipeline);
+            compute_pass.set_bind_group(0, &bind_group, &[]);
+
+            let workgroup_count = (out_grad.len() as u32).div_ceil(256);
+            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
+        }
+
+        ctx.queue().submit(Some(encoder.finish()));
+
+        Some(result)
+    }
+
     /// Matrix multiplication: C = A @ B
     ///
     /// # Arguments

@@ -43,6 +43,20 @@ pub struct ComputePipelines {
     pub sin: wgpu::ComputePipeline,
     pub cos: wgpu::ComputePipeline,
 
+    // Unary backward operations
+    pub neg_backward: wgpu::ComputePipeline,
+    pub exp_backward: wgpu::ComputePipeline,
+    pub log_backward: wgpu::ComputePipeline,
+    pub relu_backward: wgpu::ComputePipeline,
+    pub sigmoid_backward: wgpu::ComputePipeline,
+    pub tanh_backward: wgpu::ComputePipeline,
+    pub sqrt_backward: wgpu::ComputePipeline,
+    pub recip_backward: wgpu::ComputePipeline,
+    pub exp2_backward: wgpu::ComputePipeline,
+    pub log2_backward: wgpu::ComputePipeline,
+    pub sin_backward: wgpu::ComputePipeline,
+    pub cos_backward: wgpu::ComputePipeline,
+
     // Reductions
     pub sum_reduce: wgpu::ComputePipeline,
     pub max_reduce: wgpu::ComputePipeline,
@@ -165,6 +179,11 @@ impl GpuContext {
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/movement.wgsl").into()),
         });
 
+        let unary_backward_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Unary Backward Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/unary_backward.wgsl").into()),
+        });
+
         // Helper to create a compute pipeline
         let create_pipeline = |shader: &wgpu::ShaderModule, entry_point: &str, label: &str| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -200,6 +219,68 @@ impl GpuContext {
             log2: create_pipeline(&unary_shader, "log2_op", "Log2 Pipeline"),
             sin: create_pipeline(&unary_shader, "sin_op", "Sin Pipeline"),
             cos: create_pipeline(&unary_shader, "cos_op", "Cos Pipeline"),
+
+            // Unary backward ops
+            neg_backward: create_pipeline(
+                &unary_backward_shader,
+                "neg_backward",
+                "Neg Backward Pipeline",
+            ),
+            exp_backward: create_pipeline(
+                &unary_backward_shader,
+                "exp_backward",
+                "Exp Backward Pipeline",
+            ),
+            log_backward: create_pipeline(
+                &unary_backward_shader,
+                "log_backward",
+                "Log Backward Pipeline",
+            ),
+            relu_backward: create_pipeline(
+                &unary_backward_shader,
+                "relu_backward",
+                "ReLU Backward Pipeline",
+            ),
+            sigmoid_backward: create_pipeline(
+                &unary_backward_shader,
+                "sigmoid_backward",
+                "Sigmoid Backward Pipeline",
+            ),
+            tanh_backward: create_pipeline(
+                &unary_backward_shader,
+                "tanh_backward",
+                "Tanh Backward Pipeline",
+            ),
+            sqrt_backward: create_pipeline(
+                &unary_backward_shader,
+                "sqrt_backward",
+                "Sqrt Backward Pipeline",
+            ),
+            recip_backward: create_pipeline(
+                &unary_backward_shader,
+                "recip_backward",
+                "Recip Backward Pipeline",
+            ),
+            exp2_backward: create_pipeline(
+                &unary_backward_shader,
+                "exp2_backward",
+                "Exp2 Backward Pipeline",
+            ),
+            log2_backward: create_pipeline(
+                &unary_backward_shader,
+                "log2_backward",
+                "Log2 Backward Pipeline",
+            ),
+            sin_backward: create_pipeline(
+                &unary_backward_shader,
+                "sin_backward",
+                "Sin Backward Pipeline",
+            ),
+            cos_backward: create_pipeline(
+                &unary_backward_shader,
+                "cos_backward",
+                "Cos Backward Pipeline",
+            ),
 
             // Reductions
             sum_reduce: create_pipeline(&reduce_shader, "sum_reduce", "Sum Reduce Pipeline"),

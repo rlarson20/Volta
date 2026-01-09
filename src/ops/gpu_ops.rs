@@ -171,6 +171,21 @@ impl RawTensor {
         })
     }
 
+    /// GPU-accelerated unary backward operation
+    ///
+    /// Computes gradient for unary operations: grad = out_grad * df/dx
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_unary_backward(out_grad: &Storage, x: &Storage, op: &str) -> Option<Storage> {
+        let buf_out = out_grad.gpu_buffer()?;
+        let buf_x = x.gpu_buffer()?;
+
+        let result = GpuKernels::unary_backward(buf_out, buf_x, op)?;
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            cpu_cache: RefCell::new(None),
+        })
+    }
+
     /// GPU-accelerated permute operation
     #[cfg(feature = "gpu")]
     pub(crate) fn gpu_permute(
