@@ -322,6 +322,180 @@ impl GpuKernels {
         Some(result)
     }
 
+    /// Execute a binary backward operation for gradient wrt first input (a)
+    ///
+    /// # Arguments
+    /// * `out_grad` - Gradient of the output (upstream gradient)
+    /// * `a` - First input from forward pass
+    /// * `b` - Second input from forward pass (needed for mul/div/max)
+    /// * `op` - Which operation ("add_backward_a", "mul_backward_a", etc.)
+    ///
+    /// # Returns
+    /// A new buffer containing the gradient with respect to a
+    pub fn binary_backward_a(
+        out_grad: &GpuBuffer,
+        a: &GpuBuffer,
+        b: &GpuBuffer,
+        op: &str,
+    ) -> Option<GpuBuffer> {
+        assert_eq!(
+            out_grad.len(),
+            a.len(),
+            "out_grad and a must have same size for binary backward"
+        );
+        assert_eq!(
+            out_grad.len(),
+            b.len(),
+            "out_grad and b must have same size for binary backward"
+        );
+
+        let ctx = get_gpu_context()?;
+        let result = GpuBuffer::zeros(out_grad.len())?;
+
+        let pipeline = match op {
+            "add_backward_a" => &ctx.pipelines().add_backward_a,
+            "sub_backward_a" => &ctx.pipelines().sub_backward_a,
+            "mul_backward_a" => &ctx.pipelines().mul_backward_a,
+            "div_backward_a" => &ctx.pipelines().div_backward_a,
+            "max_backward_a" => &ctx.pipelines().max_backward_a,
+            _ => panic!("Unknown binary backward op for a: {}", op),
+        };
+
+        let bind_group_layout = pipeline.get_bind_group_layout(0);
+        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Binary Backward A Bind Group"),
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: out_grad.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: a.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: b.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: result.buffer().as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Binary Backward A Encoder"),
+            });
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Binary Backward A Pass"),
+                timestamp_writes: None,
+            });
+
+            compute_pass.set_pipeline(pipeline);
+            compute_pass.set_bind_group(0, &bind_group, &[]);
+
+            let workgroup_count = (out_grad.len() as u32).div_ceil(256);
+            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
+        }
+
+        ctx.queue().submit(Some(encoder.finish()));
+
+        Some(result)
+    }
+
+    /// Execute a binary backward operation for gradient wrt second input (b)
+    ///
+    /// # Arguments
+    /// * `out_grad` - Gradient of the output (upstream gradient)
+    /// * `a` - First input from forward pass (needed for mul/div/max)
+    /// * `b` - Second input from forward pass
+    /// * `op` - Which operation ("add_backward_b", "mul_backward_b", etc.)
+    ///
+    /// # Returns
+    /// A new buffer containing the gradient with respect to b
+    pub fn binary_backward_b(
+        out_grad: &GpuBuffer,
+        a: &GpuBuffer,
+        b: &GpuBuffer,
+        op: &str,
+    ) -> Option<GpuBuffer> {
+        assert_eq!(
+            out_grad.len(),
+            b.len(),
+            "out_grad and b must have same size for binary backward"
+        );
+        assert_eq!(
+            out_grad.len(),
+            a.len(),
+            "out_grad and a must have same size for binary backward"
+        );
+
+        let ctx = get_gpu_context()?;
+        let result = GpuBuffer::zeros(out_grad.len())?;
+
+        let pipeline = match op {
+            "add_backward_b" => &ctx.pipelines().add_backward_b,
+            "sub_backward_b" => &ctx.pipelines().sub_backward_b,
+            "mul_backward_b" => &ctx.pipelines().mul_backward_b,
+            "div_backward_b" => &ctx.pipelines().div_backward_b,
+            "max_backward_b" => &ctx.pipelines().max_backward_b,
+            _ => panic!("Unknown binary backward op for b: {}", op),
+        };
+
+        let bind_group_layout = pipeline.get_bind_group_layout(0);
+        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Binary Backward B Bind Group"),
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: out_grad.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: a.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: b.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: result.buffer().as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Binary Backward B Encoder"),
+            });
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Binary Backward B Pass"),
+                timestamp_writes: None,
+            });
+
+            compute_pass.set_pipeline(pipeline);
+            compute_pass.set_bind_group(0, &bind_group, &[]);
+
+            let workgroup_count = (out_grad.len() as u32).div_ceil(256);
+            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
+        }
+
+        ctx.queue().submit(Some(encoder.finish()));
+
+        Some(result)
+    }
+
     /// Matrix multiplication: C = A @ B
     ///
     /// # Arguments

@@ -57,6 +57,18 @@ pub struct ComputePipelines {
     pub sin_backward: wgpu::ComputePipeline,
     pub cos_backward: wgpu::ComputePipeline,
 
+    // Binary backward operations
+    pub add_backward_a: wgpu::ComputePipeline,
+    pub add_backward_b: wgpu::ComputePipeline,
+    pub sub_backward_a: wgpu::ComputePipeline,
+    pub sub_backward_b: wgpu::ComputePipeline,
+    pub mul_backward_a: wgpu::ComputePipeline,
+    pub mul_backward_b: wgpu::ComputePipeline,
+    pub div_backward_a: wgpu::ComputePipeline,
+    pub div_backward_b: wgpu::ComputePipeline,
+    pub max_backward_a: wgpu::ComputePipeline,
+    pub max_backward_b: wgpu::ComputePipeline,
+
     // Reductions
     pub sum_reduce: wgpu::ComputePipeline,
     pub max_reduce: wgpu::ComputePipeline,
@@ -184,6 +196,11 @@ impl GpuContext {
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/unary_backward.wgsl").into()),
         });
 
+        let binary_backward_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Binary Backward Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/binary_backward.wgsl").into()),
+        });
+
         // Helper to create a compute pipeline
         let create_pipeline = |shader: &wgpu::ShaderModule, entry_point: &str, label: &str| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -280,6 +297,58 @@ impl GpuContext {
                 &unary_backward_shader,
                 "cos_backward",
                 "Cos Backward Pipeline",
+            ),
+
+            // Binary backward ops
+            add_backward_a: create_pipeline(
+                &binary_backward_shader,
+                "add_backward_a",
+                "Add Backward A Pipeline",
+            ),
+            add_backward_b: create_pipeline(
+                &binary_backward_shader,
+                "add_backward_b",
+                "Add Backward B Pipeline",
+            ),
+            sub_backward_a: create_pipeline(
+                &binary_backward_shader,
+                "sub_backward_a",
+                "Sub Backward A Pipeline",
+            ),
+            sub_backward_b: create_pipeline(
+                &binary_backward_shader,
+                "sub_backward_b",
+                "Sub Backward B Pipeline",
+            ),
+            mul_backward_a: create_pipeline(
+                &binary_backward_shader,
+                "mul_backward_a",
+                "Mul Backward A Pipeline",
+            ),
+            mul_backward_b: create_pipeline(
+                &binary_backward_shader,
+                "mul_backward_b",
+                "Mul Backward B Pipeline",
+            ),
+            div_backward_a: create_pipeline(
+                &binary_backward_shader,
+                "div_backward_a",
+                "Div Backward A Pipeline",
+            ),
+            div_backward_b: create_pipeline(
+                &binary_backward_shader,
+                "div_backward_b",
+                "Div Backward B Pipeline",
+            ),
+            max_backward_a: create_pipeline(
+                &binary_backward_shader,
+                "max_backward_a",
+                "Max Backward A Pipeline",
+            ),
+            max_backward_b: create_pipeline(
+                &binary_backward_shader,
+                "max_backward_b",
+                "Max Backward B Pipeline",
             ),
 
             // Reductions

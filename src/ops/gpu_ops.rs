@@ -186,6 +186,48 @@ impl RawTensor {
         })
     }
 
+    /// GPU-accelerated binary backward operation for first input (a)
+    ///
+    /// Computes gradient with respect to first input for binary operations
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_binary_backward_a(
+        out_grad: &Storage,
+        a: &Storage,
+        b: &Storage,
+        op: &str,
+    ) -> Option<Storage> {
+        let buf_out = out_grad.gpu_buffer()?;
+        let buf_a = a.gpu_buffer()?;
+        let buf_b = b.gpu_buffer()?;
+
+        let result = GpuKernels::binary_backward_a(buf_out, buf_a, buf_b, op)?;
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            cpu_cache: RefCell::new(None),
+        })
+    }
+
+    /// GPU-accelerated binary backward operation for second input (b)
+    ///
+    /// Computes gradient with respect to second input for binary operations
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_binary_backward_b(
+        out_grad: &Storage,
+        a: &Storage,
+        b: &Storage,
+        op: &str,
+    ) -> Option<Storage> {
+        let buf_out = out_grad.gpu_buffer()?;
+        let buf_a = a.gpu_buffer()?;
+        let buf_b = b.gpu_buffer()?;
+
+        let result = GpuKernels::binary_backward_b(buf_out, buf_a, buf_b, op)?;
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            cpu_cache: RefCell::new(None),
+        })
+    }
+
     /// GPU-accelerated permute operation
     #[cfg(feature = "gpu")]
     pub(crate) fn gpu_permute(
