@@ -388,6 +388,25 @@ impl RawTensor {
             cpu_cache: RefCell::new(None),
         })
     }
+
+    /// GPU-accelerated optimizer step operation
+    ///
+    /// Updates parameters in-place using gradients and optimizer state.
+    /// Supports SGD, SGD with momentum, and Adam optimizers.
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_optimizer_step(
+        params: &Storage,
+        grads: &Storage,
+        state1: &Storage,
+        state2: &Storage,
+        opt_params: &crate::gpu::OptimizerStepParams,
+    ) -> Option<()> {
+        let buf_params = params.gpu_buffer()?;
+        let buf_grads = grads.gpu_buffer()?;
+        let buf_state1 = state1.gpu_buffer()?;
+        let buf_state2 = state2.gpu_buffer()?;
+        GpuKernels::optimizer_step(buf_params, buf_grads, buf_state1, buf_state2, opt_params)
+    }
 }
 
 #[cfg(all(test, feature = "gpu"))]

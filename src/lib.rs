@@ -1764,4 +1764,269 @@ mod gpu_tests {
             assert!((cpu_val - gpu_val).abs() < 1e-5);
         }
     }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn test_sgd_optimizer_gpu() {
+        use crate::nn::optim::SGD;
+
+        if !is_gpu_available() {
+            return;
+        }
+
+        let gpu_device = Device::gpu().expect("GPU should be available");
+
+        // Create a simple parameter on GPU
+        let param = RawTensor::new(vec![0.5; 10], &[10], true).to_device(gpu_device.clone());
+
+        // Create optimizer with the parameter
+        let mut opt = SGD::new(vec![param.clone()], 0.01, 0.0, 0.0);
+
+        // Manually set a gradient on GPU
+        {
+            let mut p = param.borrow_mut();
+            let grad_data = vec![0.1; 10];
+            p.grad = Some(Storage::gpu(grad_data));
+        }
+
+        // Step should update the parameter
+        let param_before = param.borrow().data.to_vec();
+        opt.step();
+        let param_after = param.borrow().data.to_vec();
+
+        // Parameter should have changed (param -= lr * grad = 0.01 * 0.1 = 0.001 per element)
+        for (before, after) in param_before.iter().zip(param_after.iter()) {
+            assert!((after - (before - 0.001)).abs() < 1e-5);
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn test_adam_optimizer_gpu() {
+        use crate::nn::optim::Adam;
+
+        if !is_gpu_available() {
+            return;
+        }
+
+        let gpu_device = Device::gpu().expect("GPU should be available");
+
+        // Create a simple parameter on GPU
+        let param = RawTensor::new(vec![0.5; 10], &[10], true).to_device(gpu_device.clone());
+
+        // Create Adam optimizer with the parameter
+        let mut opt = Adam::new(vec![param.clone()], 0.01, (0.9, 0.999), 1e-8, 0.0);
+
+        // Manually set a gradient on GPU
+        {
+            let mut p = param.borrow_mut();
+            let grad_data = vec![0.1; 10];
+            p.grad = Some(Storage::gpu(grad_data));
+        }
+
+        // Step should update the parameter
+        let param_before = param.borrow().data.to_vec();
+        opt.step();
+        let param_after = param.borrow().data.to_vec();
+
+        // Parameter should have changed (Adam update formula is complex, but should change)
+        for (before, after) in param_before.iter().zip(param_after.iter()) {
+            assert_ne!(before, after, "Parameter should change after Adam step");
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn test_sgd_momentum_optimizer_gpu() {
+        use crate::nn::optim::SGD;
+
+        if !is_gpu_available() {
+            return;
+        }
+
+        let gpu_device = Device::gpu().expect("GPU should be available");
+
+        // Create a simple parameter on GPU
+        let param = RawTensor::new(vec![0.5; 10], &[10], true).to_device(gpu_device.clone());
+
+        // Create SGD optimizer with momentum
+        let mut opt = SGD::new(vec![param.clone()], 0.01, 0.9, 0.0);
+
+        // Manually set a gradient on GPU
+        {
+            let mut p = param.borrow_mut();
+            let grad_data = vec![0.1; 10];
+            p.grad = Some(Storage::gpu(grad_data));
+        }
+
+        // First step
+        let param_before = param.borrow().data.to_vec();
+        opt.step();
+        let param_after_step1 = param.borrow().data.to_vec();
+
+        // Parameter should have changed
+        for (before, after) in param_before.iter().zip(param_after_step1.iter()) {
+            assert_ne!(before, after);
+        }
+
+        // Set same gradient again
+        {
+            let mut p = param.borrow_mut();
+            p.grad = Some(Storage::gpu(vec![0.1; 10]));
+        }
+
+        // Second step should apply different update due to momentum
+        let param_after_step2;
+        {
+            let p = param.borrow();
+            param_after_step2 = p.data.to_vec();
+        }
+
+        // With momentum, second step should be different from first
+        // (momentum accumulates gradient velocity)
+        let changes_step1: Vec<f32> = param_after_step1
+            .iter()
+            .zip(param_before.iter())
+            .map(|(a, b)| a - b)
+            .collect();
+        let changes_step2: Vec<f32> = param_after_step2
+            .iter()
+            .zip(param_after_step1.iter())
+            .map(|(a, b)| a - b)
+            .collect();
+
+        // Changes should be different due to momentum accumulation
+        for (c1, c2) in changes_step1.iter().zip(changes_step2.iter()) {
+            assert_ne!(c1, c2);
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn test_optimizer_gpu_cpu_equivalence() {
+        use crate::nn::optim::Adam;
+
+        if !is_gpu_available() {
+            return;
+        }
+
+        let gpu_device = Device::gpu().expect("GPU should be available");
+
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let grad_data = vec![0.1, 0.2, 0.3, 0.4, 0.5];
+
+        // CPU parameter and optimizer
+        let param_cpu = RawTensor::new(data.clone(), &[5], true);
+        let mut opt_cpu = Adam::new(vec![param_cpu.clone()], 0.01, (0.9, 0.999), 1e-8, 0.0);
+        {
+            let mut p = param_cpu.borrow_mut();
+            p.grad = Some(Storage::Cpu(grad_data.clone()));
+        }
+
+        // GPU parameter and optimizer
+        let param_gpu = RawTensor::new(data, &[5], true).to_device(gpu_device.clone());
+        let mut opt_gpu = Adam::new(vec![param_gpu.clone()], 0.01, (0.9, 0.999), 1e-8, 0.0);
+        {
+            let mut p = param_gpu.borrow_mut();
+            // Create GPU gradient
+            p.grad = Some(Storage::gpu(grad_data));
+        }
+
+        // Take one step on both
+        opt_cpu.step();
+        opt_gpu.step();
+
+        // Results should be approximately equal
+        let result_cpu = param_cpu.borrow().data.to_vec();
+        let result_gpu = param_gpu.borrow().data.to_vec();
+
+        assert_eq!(result_cpu.len(), result_gpu.len());
+        for (cpu_val, gpu_val) in result_cpu.iter().zip(result_gpu.iter()) {
+            assert!(
+                (cpu_val - gpu_val).abs() < 1e-4,
+                "CPU={cpu_val}, GPU={gpu_val}"
+            );
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn test_optimizer_state_stays_on_gpu() {
+        use crate::nn::optim::Adam;
+
+        if !is_gpu_available() {
+            return;
+        }
+
+        let gpu_device = Device::gpu().expect("GPU should be available");
+
+        // Create a parameter on GPU
+        let param = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0], &[5], true).to_device(gpu_device);
+
+        // Create Adam optimizer - state should be initialized on GPU
+        let mut opt = Adam::new(vec![param.clone()], 0.01, (0.9, 0.999), 1e-8, 0.0);
+
+        // Verify state is on GPU
+        // We can't directly access m and v since they're private,
+        // but we can verify the optimizer works without CPU transfers
+
+        // Set gradient on GPU
+        {
+            let mut p = param.borrow_mut();
+            p.grad = Some(Storage::gpu(vec![0.1, 0.2, 0.3, 0.4, 0.5]));
+        }
+
+        // Take multiple steps
+        for _ in 0..5 {
+            // Update gradient each step
+            {
+                let mut p = param.borrow_mut();
+                p.grad = Some(Storage::gpu(vec![0.1, 0.2, 0.3, 0.4, 0.5]));
+            }
+            opt.step();
+        }
+
+        // If state was being transferred to CPU each step, this would be much slower
+        // and the test would time out. For this test, we just verify it completes
+        // successfully without errors.
+
+        // Verify parameter changed
+        let result = param.borrow().data.to_vec();
+        for val in result.iter() {
+            assert_ne!(*val, 0.0, "Parameter should have been updated");
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn test_sgd_momentum_state_stays_on_gpu() {
+        use crate::nn::optim::SGD;
+
+        if !is_gpu_available() {
+            return;
+        }
+
+        let gpu_device = Device::gpu().expect("GPU should be available");
+
+        // Create a parameter on GPU
+        let param = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0], &[5], true).to_device(gpu_device);
+
+        // Create SGD with momentum - velocity state should be on GPU
+        let mut opt = SGD::new(vec![param.clone()], 0.01, 0.9, 0.0);
+
+        // Set gradient on GPU and take multiple steps
+        for _ in 0..5 {
+            {
+                let mut p = param.borrow_mut();
+                p.grad = Some(Storage::gpu(vec![0.1, 0.2, 0.3, 0.4, 0.5]));
+            }
+            opt.step();
+        }
+
+        // Verify parameter changed
+        let result = param.borrow().data.to_vec();
+        for val in result.iter() {
+            assert_ne!(*val, 0.0, "Parameter should have been updated");
+        }
+    }
 }

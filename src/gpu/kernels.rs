@@ -34,6 +34,20 @@ pub struct ReduceBackwardParams {
     pub _padding: u32,
 }
 
+/// Parameters for optimizer step operations
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct OptimizerStepParams {
+    pub op: u32,           // 0=SGD, 1=SGD+momentum, 2=Adam
+    pub lr: f32,           // Learning rate
+    pub beta1: f32,        // Adam beta1 or momentum coefficient
+    pub beta2: f32,        // Adam beta2
+    pub t: f32,            // Timestep for bias correction (Adam)
+    pub eps: f32,          // Adam epsilon
+    pub weight_decay: f32, // L2 regularization
+    pub _padding: f32,
+}
+
 /// Parameters for movement operations
 /// Must match the MovementParams struct in movement.wgsl
 #[repr(C)]
@@ -1183,6 +1197,86 @@ impl GpuKernels {
         };
 
         movement_op(input, result, &params, &ctx.pipelines().stride)
+    }
+
+    /// Optimizer step: update parameters using gradients and optimizer state
+    ///
+    /// Supports SGD, SGD with momentum, and Adam updates on GPU.
+    ///
+    /// # Arguments
+    /// * `params` - Parameters to update (read/write)
+    /// * `grads` - Gradients for each parameter (read)
+    /// * `state1` - First state buffer: velocity (SGD) or m (Adam) (read/write)
+    /// * `state2` - Second state buffer: v (Adam only), unused for SGD (read/write)
+    /// * `opt_params` - Optimizer hyperparameters
+    pub fn optimizer_step(
+        params: &GpuBuffer,
+        grads: &GpuBuffer,
+        state1: &GpuBuffer,
+        state2: &GpuBuffer,
+        opt_params: &OptimizerStepParams,
+    ) -> Option<()> {
+        let ctx = get_gpu_context()?;
+
+        // Create uniform buffer with optimizer parameters
+        let params_buffer = ctx
+            .device()
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Optimizer Params"),
+                contents: bytemuck::bytes_of(opt_params),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+
+        let pipeline = &ctx.pipelines().optimizer_step;
+        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Optimizer Step Bind Group"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: params.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: grads.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: state1.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: state2.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Optimizer Step Encoder"),
+            });
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Optimizer Step Pass"),
+                timestamp_writes: None,
+            });
+
+            compute_pass.set_pipeline(pipeline);
+            compute_pass.set_bind_group(0, &bind_group, &[]);
+
+            let workgroup_count = (params.len() as u32).div_ceil(256);
+            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
+        }
+
+        ctx.queue().submit(Some(encoder.finish()));
+
+        Some(())
     }
 }
 

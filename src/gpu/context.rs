@@ -92,6 +92,9 @@ pub struct ComputePipelines {
     pub sum_backward: wgpu::ComputePipeline,
     pub mean_backward: wgpu::ComputePipeline,
     pub max_backward: wgpu::ComputePipeline,
+
+    // Optimizer step
+    pub optimizer_step: wgpu::ComputePipeline,
 }
 
 impl GpuContext {
@@ -218,6 +221,11 @@ impl GpuContext {
         let reduce_backward_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Reduce Backward Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/reduce_backward.wgsl").into()),
+        });
+
+        let optimizer_step_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Optimizer Step Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/optimizer_step.wgsl").into()),
         });
 
         // Helper to create a compute pipeline
@@ -405,6 +413,13 @@ impl GpuContext {
                 "Mean Backward Pipeline",
             ),
             max_backward: create_pipeline(&reduce_backward_shader, "main", "Max Backward Pipeline"),
+
+            // Optimizer step
+            optimizer_step: create_pipeline(
+                &optimizer_step_shader,
+                "main",
+                "Optimizer Step Pipeline",
+            ),
         })
     }
 }

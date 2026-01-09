@@ -12,7 +12,7 @@ mod kernels;
 
 pub use buffer::GpuBuffer;
 pub use context::GpuContext;
-pub use kernels::{GpuKernels, MovementParams};
+pub use kernels::{GpuKernels, MovementParams, OptimizerStepParams};
 
 use std::sync::OnceLock;
 

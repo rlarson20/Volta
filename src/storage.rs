@@ -70,6 +70,33 @@ impl Storage {
         Storage::Cpu(data)
     }
 
+    /// Create new zero-filled storage on the specified device
+    pub fn new_zeros(len: usize, device: &Device) -> Self {
+        match device {
+            Device::CPU => Storage::Cpu(vec![0.0; len]),
+            Device::GPU(_) => {
+                #[cfg(feature = "gpu")]
+                {
+                    if is_gpu_available() {
+                        // Create GPU zeros
+                        if let Some(buffer) = GpuBuffer::zeros(len) {
+                            return Storage::Gpu {
+                                buffer: std::sync::Arc::new(buffer),
+                                cpu_cache: RefCell::new(None),
+                            };
+                        }
+                    }
+                    // Fall back to CPU
+                    Storage::Cpu(vec![0.0; len])
+                }
+                #[cfg(not(feature = "gpu"))]
+                {
+                    Storage::Cpu(vec![0.0; len])
+                }
+            }
+        }
+    }
+
     /// Get data as a slice (triggers GPU->CPU transfer on first access)
     ///
     /// For GPU storage, this lazily populates the CPU cache on first access.
