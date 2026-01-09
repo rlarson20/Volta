@@ -276,17 +276,26 @@ impl RawTensor {
     /// Reorders axes according to the permutation specified by `axes`.
     /// For example, axes=[1,0] transposes a 2D matrix.
     fn permute_impl(self_t: &Tensor, axes: &[usize]) -> Tensor {
-        let (data, shape) = {
+        let (data, shape, device) = {
             let s = self_t.borrow();
-            (s.data.clone(), s.shape.clone())
+            (s.data.clone(), s.shape.clone(), s.device.clone())
         };
         assert_eq!(axes.len(), shape.len(), "Axes length must match rank");
 
         let new_shape: Vec<usize> = axes.iter().map(|&i| shape[i]).collect();
+
+        // Try GPU path first if available
+        #[cfg(feature = "gpu")]
+        if device.is_gpu()
+            && let Some(storage) = RawTensor::gpu_permute(&data, &shape, &new_shape, axes)
+        {
+            return Self::new_with_storage(storage, &new_shape, device, false);
+        }
+
+        // CPU fallback
         let old_strides = Self::compute_strides(&shape);
         let mut new_data = vec![0.0; data.len()];
 
-        // CPU implementation (GPU shader needs debugging)
         let cpu_data = data.to_vec();
 
         // Helper: convert linear index to coordinates
@@ -353,9 +362,14 @@ impl RawTensor {
     /// Dimensions can only be expanded from size 1 to size N.
     /// Rank must remain the same.
     pub fn expand(self_t: &Tensor, new_shape: &[usize]) -> Tensor {
-        let (data, old_shape, req_grad) = {
+        let (data, old_shape, req_grad, device) = {
             let s = self_t.borrow();
-            (s.data.clone(), s.shape.clone(), s.requires_grad)
+            (
+                s.data.clone(),
+                s.shape.clone(),
+                s.requires_grad,
+                s.device.clone(),
+            )
         };
 
         assert_eq!(old_shape.len(), new_shape.len(), "Expand: rank must match");
@@ -381,7 +395,25 @@ impl RawTensor {
             new_shape
         );
 
-        // CPU implementation (GPU shader needs debugging)
+        // Try GPU path first if available
+        #[cfg(feature = "gpu")]
+        if device.is_gpu()
+            && let Some(storage) = RawTensor::gpu_expand(&data, &old_shape, new_shape)
+        {
+            let out = Self::new_with_storage(storage, new_shape, device, req_grad);
+            if req_grad {
+                out.borrow_mut().parents = vec![self_t.clone()];
+                out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
+                    op: MovementOp::Expand {
+                        new_shape: new_shape.to_vec(),
+                    },
+                    original_shape: old_shape,
+                }));
+            }
+            return out;
+        }
+
+        // CPU fallback
         let mut result = vec![0.0; new_size];
         let cpu_data = data.to_vec();
 
@@ -422,9 +454,14 @@ impl RawTensor {
     /// # Arguments
     /// * `padding` - For each dimension, (`left_pad`, `right_pad`)
     pub fn pad(self_t: &Tensor, padding: &[(usize, usize)]) -> Tensor {
-        let (data, old_shape, req_grad) = {
+        let (data, old_shape, req_grad, device) = {
             let s = self_t.borrow();
-            (s.data.clone(), s.shape.clone(), s.requires_grad)
+            (
+                s.data.clone(),
+                s.shape.clone(),
+                s.requires_grad,
+                s.device.clone(),
+            )
         };
 
         assert_eq!(
@@ -450,7 +487,25 @@ impl RawTensor {
             new_shape
         );
 
-        // CPU implementation (GPU shader needs debugging)
+        // Try GPU path first if available
+        #[cfg(feature = "gpu")]
+        if device.is_gpu()
+            && let Some(storage) = RawTensor::gpu_pad(&data, &old_shape, &new_shape, padding)
+        {
+            let out = Self::new_with_storage(storage, &new_shape, device, req_grad);
+            if req_grad {
+                out.borrow_mut().parents = vec![self_t.clone()];
+                out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
+                    op: MovementOp::Pad {
+                        padding: padding.to_vec(),
+                    },
+                    original_shape: old_shape,
+                }));
+            }
+            return out;
+        }
+
+        // CPU fallback
         let mut result = vec![0.0; new_size];
         let cpu_data = data.to_vec();
 
@@ -525,9 +580,14 @@ impl RawTensor {
     /// # Arguments
     /// * `ranges` - For each dimension, (start, end) indices
     pub fn shrink(self_t: &Tensor, ranges: &[(usize, usize)]) -> Tensor {
-        let (data, old_shape, req_grad) = {
+        let (data, old_shape, req_grad, device) = {
             let s = self_t.borrow();
-            (s.data.clone(), s.shape.clone(), s.requires_grad)
+            (
+                s.data.clone(),
+                s.shape.clone(),
+                s.requires_grad,
+                s.device.clone(),
+            )
         };
 
         assert_eq!(
@@ -538,7 +598,25 @@ impl RawTensor {
 
         let new_shape: Vec<usize> = ranges.iter().map(|(start, end)| end - start).collect();
 
-        // CPU implementation (GPU shader needs debugging)
+        // Try GPU path first if available
+        #[cfg(feature = "gpu")]
+        if device.is_gpu()
+            && let Some(storage) = RawTensor::gpu_shrink(&data, &old_shape, &new_shape, ranges)
+        {
+            let out = Self::new_with_storage(storage, &new_shape, device, req_grad);
+            if req_grad {
+                out.borrow_mut().parents = vec![self_t.clone()];
+                out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
+                    op: MovementOp::Shrink {
+                        ranges: ranges.to_vec(),
+                    },
+                    original_shape: old_shape,
+                }));
+            }
+            return out;
+        }
+
+        // CPU fallback
         let new_size: usize = new_shape.iter().product();
         let mut result = vec![0.0; new_size];
         let cpu_data = data.to_vec();
@@ -612,9 +690,14 @@ impl RawTensor {
     ///
     /// Similar to slicing with step: array\[`::2`\] takes every other element
     pub fn stride_op(self_t: &Tensor, strides: &[usize]) -> Tensor {
-        let (data, old_shape, req_grad) = {
+        let (data, old_shape, req_grad, device) = {
             let s = self_t.borrow();
-            (s.data.clone(), s.shape.clone(), s.requires_grad)
+            (
+                s.data.clone(),
+                s.shape.clone(),
+                s.requires_grad,
+                s.device.clone(),
+            )
         };
 
         assert_eq!(
@@ -629,7 +712,25 @@ impl RawTensor {
             .map(|(d, s)| d.div_ceil(*s))
             .collect();
 
-        // CPU implementation (GPU shader needs debugging)
+        // Try GPU path first if available
+        #[cfg(feature = "gpu")]
+        if device.is_gpu()
+            && let Some(storage) = RawTensor::gpu_stride(&data, &old_shape, &new_shape, strides)
+        {
+            let out = Self::new_with_storage(storage, &new_shape, device, req_grad);
+            if req_grad {
+                out.borrow_mut().parents = vec![self_t.clone()];
+                out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
+                    op: MovementOp::Stride {
+                        strides: strides.to_vec(),
+                    },
+                    original_shape: old_shape,
+                }));
+            }
+            return out;
+        }
+
+        // CPU fallback
         let new_size: usize = new_shape.iter().product();
         let mut result = vec![0.0; new_size];
         let cpu_data = data.to_vec();

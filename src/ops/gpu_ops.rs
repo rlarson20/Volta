@@ -187,7 +187,6 @@ impl RawTensor {
 
     /// GPU-accelerated permute operation
     #[cfg(feature = "gpu")]
-    #[allow(dead_code)]
     pub(crate) fn gpu_permute(
         data: &Storage,
         old_shape: &[usize],
@@ -206,7 +205,6 @@ impl RawTensor {
 
     /// GPU-accelerated expand (broadcast) operation
     #[cfg(feature = "gpu")]
-    #[allow(dead_code)]
     pub(crate) fn gpu_expand(
         data: &Storage,
         old_shape: &[usize],
@@ -224,7 +222,6 @@ impl RawTensor {
 
     /// GPU-accelerated pad operation
     #[cfg(feature = "gpu")]
-    #[allow(dead_code)]
     pub(crate) fn gpu_pad(
         data: &Storage,
         old_shape: &[usize],
@@ -243,7 +240,6 @@ impl RawTensor {
 
     /// GPU-accelerated shrink operation
     #[cfg(feature = "gpu")]
-    #[allow(dead_code)]
     pub(crate) fn gpu_shrink(
         data: &Storage,
         old_shape: &[usize],
@@ -262,7 +258,6 @@ impl RawTensor {
 
     /// GPU-accelerated stride operation
     #[cfg(feature = "gpu")]
-    #[allow(dead_code)]
     pub(crate) fn gpu_stride(
         data: &Storage,
         old_shape: &[usize],

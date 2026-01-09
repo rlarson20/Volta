@@ -16,6 +16,15 @@ struct MovementParams {
 
 @group(0) @binding(2) var<uniform> params: MovementParams;
 
+// Compute output size based on shape and rank (only multiply actual dimensions)
+fn output_size(shape: vec4<u32>, rank: u32) -> u32 {
+    var size: u32 = 1u;
+    for (var i: u32 = 0u; i < rank; i = i + 1u) {
+        size = size * shape[i];
+    }
+    return size;
+}
+
 // Convert linear index to multi-dimensional coordinates (row-major)
 fn idx_to_coords(idx: u32, shape: vec4<u32>, rank: u32) -> vec4<u32> {
     var coords = vec4<u32>(0u, 0u, 0u, 0u);
@@ -59,9 +68,9 @@ fn compute_strides(shape: vec4<u32>, rank: u32) -> vec4<u32> {
 @compute @workgroup_size(256)
 fn permute(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    let output_size = params.new_shape.x * params.new_shape.y * params.new_shape.z * params.new_shape.w;
+    let out_size = output_size(params.new_shape, params.rank);
 
-    if (idx < output_size) {
+    if (idx < out_size) {
         let new_coords = idx_to_coords(idx, params.new_shape, params.rank);
         var old_coords = vec4<u32>(0u, 0u, 0u, 0u);
 
@@ -81,9 +90,9 @@ fn permute(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @compute @workgroup_size(256)
 fn expand(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    let output_size = params.new_shape.x * params.new_shape.y * params.new_shape.z * params.new_shape.w;
+    let out_size = output_size(params.new_shape, params.rank);
 
-    if (idx < output_size) {
+    if (idx < out_size) {
         let new_coords = idx_to_coords(idx, params.new_shape, params.rank);
         var old_coords = vec4<u32>(0u, 0u, 0u, 0u);
 
@@ -106,9 +115,9 @@ fn expand(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @compute @workgroup_size(256)
 fn pad(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    let output_size = params.new_shape.x * params.new_shape.y * params.new_shape.z * params.new_shape.w;
+    let out_size = output_size(params.new_shape, params.rank);
 
-    if (idx < output_size) {
+    if (idx < out_size) {
         let new_coords = idx_to_coords(idx, params.new_shape, params.rank);
         var in_bounds = true;
         var old_coords = vec4<u32>(0u, 0u, 0u, 0u);
@@ -137,9 +146,9 @@ fn pad(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @compute @workgroup_size(256)
 fn shrink(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    let output_size = params.new_shape.x * params.new_shape.y * params.new_shape.z * params.new_shape.w;
+    let out_size = output_size(params.new_shape, params.rank);
 
-    if (idx < output_size) {
+    if (idx < out_size) {
         let new_coords = idx_to_coords(idx, params.new_shape, params.rank);
         var old_coords = vec4<u32>(0u, 0u, 0u, 0u);
 
@@ -158,9 +167,9 @@ fn shrink(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @compute @workgroup_size(256)
 fn stride(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    let output_size = params.new_shape.x * params.new_shape.y * params.new_shape.z * params.new_shape.w;
+    let out_size = output_size(params.new_shape, params.rank);
 
-    if (idx < output_size) {
+    if (idx < out_size) {
         let new_coords = idx_to_coords(idx, params.new_shape, params.rank);
         var old_coords = vec4<u32>(0u, 0u, 0u, 0u);
 

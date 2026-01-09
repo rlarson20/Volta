@@ -538,8 +538,10 @@ fn movement_op(
         compute_pass.set_pipeline(pipeline);
         compute_pass.set_bind_group(0, &bind_group, &[]);
 
-        let output_size =
-            params.new_shape[0] * params.new_shape[1] * params.new_shape[2] * params.new_shape[3];
+        // Only multiply actual dimensions (based on rank), not the padded zeros
+        let output_size = (0..params.rank as usize)
+            .map(|i| params.new_shape[i])
+            .product::<u32>();
         let workgroup_count = output_size.div_ceil(256);
         compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
     }
