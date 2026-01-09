@@ -348,6 +348,46 @@ impl RawTensor {
             cpu_cache: RefCell::new(None),
         })
     }
+
+    /// GPU-accelerated sum backward operation
+    ///
+    /// Broadcasts scalar gradient to all elements
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_sum_backward(grad: f32, input_size: usize) -> Option<Storage> {
+        let result = GpuKernels::sum_backward(grad, input_size)?;
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            cpu_cache: RefCell::new(None),
+        })
+    }
+
+    /// GPU-accelerated mean backward operation
+    ///
+    /// Broadcasts scalar gradient / count to all elements
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_mean_backward(grad: f32, input_size: usize) -> Option<Storage> {
+        let result = GpuKernels::mean_backward(grad, input_size)?;
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            cpu_cache: RefCell::new(None),
+        })
+    }
+
+    /// GPU-accelerated max backward operation
+    ///
+    /// Sparse gradient - only max element receives gradient
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_max_backward(
+        grad: f32,
+        input_size: usize,
+        max_index: usize,
+    ) -> Option<Storage> {
+        let result = GpuKernels::max_backward(grad, input_size, max_index)?;
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            cpu_cache: RefCell::new(None),
+        })
+    }
 }
 
 #[cfg(all(test, feature = "gpu"))]

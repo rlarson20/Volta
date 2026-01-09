@@ -87,6 +87,11 @@ pub struct ComputePipelines {
     // Matrix multiplication backward
     pub matmul_backward_a: wgpu::ComputePipeline,
     pub matmul_backward_b: wgpu::ComputePipeline,
+
+    // Reduction backward
+    pub sum_backward: wgpu::ComputePipeline,
+    pub mean_backward: wgpu::ComputePipeline,
+    pub max_backward: wgpu::ComputePipeline,
 }
 
 impl GpuContext {
@@ -208,6 +213,11 @@ impl GpuContext {
         let matmul_backward_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("MatMul Backward Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/matmul_backward.wgsl").into()),
+        });
+
+        let reduce_backward_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Reduce Backward Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/reduce_backward.wgsl").into()),
         });
 
         // Helper to create a compute pipeline
@@ -386,6 +396,15 @@ impl GpuContext {
                 "matmul_backward_b",
                 "MatMul Backward B Pipeline",
             ),
+
+            // Reduction backward
+            sum_backward: create_pipeline(&reduce_backward_shader, "main", "Sum Backward Pipeline"),
+            mean_backward: create_pipeline(
+                &reduce_backward_shader,
+                "main",
+                "Mean Backward Pipeline",
+            ),
+            max_backward: create_pipeline(&reduce_backward_shader, "main", "Max Backward Pipeline"),
         })
     }
 }

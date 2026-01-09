@@ -23,6 +23,23 @@ impl GradFn for SumGradFn {
     fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let size: usize = self.input_shape.iter().product();
         let grad_val: f32 = out_grad.data[0];
+
+        // Check if we can do GPU backward
+        #[cfg(feature = "gpu")]
+        {
+            if out_grad.device.is_gpu()
+                && let Some(storage) = crate::RawTensor::gpu_sum_backward(grad_val, size)
+            {
+                return vec![Some(RawTensor::new_with_storage(
+                    storage,
+                    &self.input_shape,
+                    out_grad.device.clone(),
+                    false,
+                ))];
+            }
+        }
+
+        // CPU fallback
         vec![Some(RawTensor::new(
             vec![grad_val; size],
             &self.input_shape,
@@ -48,8 +65,27 @@ pub struct MaxReduceGradFn {
 impl GradFn for MaxReduceGradFn {
     fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let size: usize = self.input_shape.iter().product();
+        let grad_val: f32 = out_grad.data[0];
+
+        // Check if we can do GPU backward
+        #[cfg(feature = "gpu")]
+        {
+            if out_grad.device.is_gpu()
+                && let Some(storage) =
+                    crate::RawTensor::gpu_max_backward(grad_val, size, self.max_index)
+            {
+                return vec![Some(RawTensor::new_with_storage(
+                    storage,
+                    &self.input_shape,
+                    out_grad.device.clone(),
+                    false,
+                ))];
+            }
+        }
+
+        // CPU fallback
         let mut grad_data = vec![0.0; size];
-        grad_data[self.max_index] = out_grad.data[0];
+        grad_data[self.max_index] = grad_val;
         vec![Some(RawTensor::new(grad_data, &self.input_shape, false))]
     }
 
@@ -71,9 +107,27 @@ pub struct MeanGradFn {
 impl GradFn for MeanGradFn {
     fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let size: usize = self.input_shape.iter().product();
-        let grad_val = out_grad.data[0] / (size as f32);
+        let grad_val: f32 = out_grad.data[0];
+
+        // Check if we can do GPU backward
+        #[cfg(feature = "gpu")]
+        {
+            if out_grad.device.is_gpu()
+                && let Some(storage) = crate::RawTensor::gpu_mean_backward(grad_val, size)
+            {
+                return vec![Some(RawTensor::new_with_storage(
+                    storage,
+                    &self.input_shape,
+                    out_grad.device.clone(),
+                    false,
+                ))];
+            }
+        }
+
+        // CPU fallback
+        let grad_val_cpu = grad_val / (size as f32);
         vec![Some(RawTensor::new(
-            vec![grad_val; size],
+            vec![grad_val_cpu; size],
             &self.input_shape,
             false,
         ))]

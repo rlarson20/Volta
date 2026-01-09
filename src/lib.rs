@@ -1594,4 +1594,174 @@ mod gpu_tests {
             }
         }
     }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn test_sum_backward_gpu() {
+        if !is_gpu_available() {
+            return;
+        }
+
+        let gpu_device = Device::gpu().expect("GPU should be available");
+
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], true)
+            .to_device(gpu_device.clone());
+        let sum_result = x.sum();
+
+        // Forward should be on GPU
+        assert!(sum_result.borrow().device.is_gpu());
+
+        // Backward should compute gradients on GPU
+        sum_result.backward();
+
+        // Gradient should be on GPU and all ones
+        let grad_data;
+        {
+            let x_ref = x.borrow();
+            let x_grad = x_ref.grad.as_ref().expect("x should have grad");
+            assert!(x_grad.is_gpu());
+            grad_data = x_grad.to_vec();
+        }
+
+        assert_eq!(grad_data.len(), 6);
+        for &val in &grad_data {
+            assert!((val - 1.0).abs() < 1e-5);
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn test_mean_backward_gpu() {
+        if !is_gpu_available() {
+            return;
+        }
+
+        let gpu_device = Device::gpu().expect("GPU should be available");
+
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], true)
+            .to_device(gpu_device.clone());
+        let mean_result = x.mean();
+
+        // Forward should be on GPU
+        assert!(mean_result.borrow().device.is_gpu());
+
+        // Backward should compute gradients on GPU
+        mean_result.backward();
+
+        // Gradient should be on GPU and all 1/6
+        let grad_data;
+        {
+            let x_ref = x.borrow();
+            let x_grad = x_ref.grad.as_ref().expect("x should have grad");
+            assert!(x_grad.is_gpu());
+            grad_data = x_grad.to_vec();
+        }
+
+        assert_eq!(grad_data.len(), 6);
+        let expected = 1.0 / 6.0;
+        for &val in &grad_data {
+            assert!((val - expected).abs() < 1e-5);
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn test_max_backward_gpu() {
+        if !is_gpu_available() {
+            return;
+        }
+
+        let gpu_device = Device::gpu().expect("GPU should be available");
+
+        let x = RawTensor::new(vec![1.0, 5.0, 3.0, 4.0, 2.0, 6.0], &[2, 3], true)
+            .to_device(gpu_device.clone());
+        let max_result = x.max_reduce();
+
+        // Forward should be on GPU
+        assert!(max_result.borrow().device.is_gpu());
+
+        // Backward should compute gradients on GPU
+        max_result.backward();
+
+        // Gradient should be on GPU and only max element (6.0 at index 5) gets grad
+        let grad_data;
+        {
+            let x_ref = x.borrow();
+            let x_grad = x_ref.grad.as_ref().expect("x should have grad");
+            assert!(x_grad.is_gpu());
+            grad_data = x_grad.to_vec();
+        }
+
+        assert_eq!(grad_data.len(), 6);
+
+        // Only the max element (6.0 at linear index 5) should have gradient 1.0
+        for (i, &val) in grad_data.iter().enumerate() {
+            if i == 5 {
+                assert!((val - 1.0).abs() < 1e-5);
+            } else {
+                assert!(val.abs() < 1e-5);
+            }
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn test_reduction_backward_gpu_cpu_equivalence() {
+        if !is_gpu_available() {
+            return;
+        }
+
+        let gpu_device = Device::gpu().expect("GPU should be available");
+
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let shape = &[2, 4];
+
+        // Test sum
+        let x_cpu = RawTensor::new(data.clone(), shape, true);
+        let sum_cpu = x_cpu.sum();
+        sum_cpu.backward();
+        let sum_grad_cpu = x_cpu.borrow().grad.as_ref().unwrap().to_vec();
+
+        let x_gpu = RawTensor::new(data.clone(), shape, true).to_device(gpu_device.clone());
+        let sum_gpu = x_gpu.sum();
+        sum_gpu.backward();
+        let sum_grad_gpu = x_gpu.borrow().grad.as_ref().unwrap().to_vec();
+
+        assert_eq!(sum_grad_cpu.len(), sum_grad_gpu.len());
+        for (cpu_val, gpu_val) in sum_grad_cpu.iter().zip(sum_grad_gpu.iter()) {
+            assert!((cpu_val - gpu_val).abs() < 1e-5);
+        }
+
+        // Test mean
+        let x_cpu2 = RawTensor::new(data.clone(), shape, true);
+        let mean_cpu = x_cpu2.mean();
+        mean_cpu.backward();
+        let mean_grad_cpu = x_cpu2.borrow().grad.as_ref().unwrap().to_vec();
+
+        let x_gpu2 = RawTensor::new(data.clone(), shape, true).to_device(gpu_device.clone());
+        let mean_gpu = x_gpu2.mean();
+        mean_gpu.backward();
+        let mean_grad_gpu = x_gpu2.borrow().grad.as_ref().unwrap().to_vec();
+
+        assert_eq!(mean_grad_cpu.len(), mean_grad_gpu.len());
+        for (cpu_val, gpu_val) in mean_grad_cpu.iter().zip(mean_grad_gpu.iter()) {
+            assert!((cpu_val - gpu_val).abs() < 1e-5);
+        }
+
+        // Test max
+        let x_cpu3 = RawTensor::new(data.clone(), shape, true);
+        let max_cpu = x_cpu3.max_reduce();
+        max_cpu.backward();
+        let max_grad_cpu = x_cpu3.borrow().grad.as_ref().unwrap().to_vec();
+
+        let x_gpu3 = RawTensor::new(data.clone(), shape, true).to_device(gpu_device);
+        let max_gpu = x_gpu3.max_reduce();
+        max_gpu.backward();
+        let max_grad_gpu = x_gpu3.borrow().grad.as_ref().unwrap().to_vec();
+
+        assert_eq!(max_grad_cpu.len(), max_grad_gpu.len());
+        for (cpu_val, gpu_val) in max_grad_cpu.iter().zip(max_grad_gpu.iter()) {
+            assert!((cpu_val - gpu_val).abs() < 1e-5);
+        }
+    }
 }
