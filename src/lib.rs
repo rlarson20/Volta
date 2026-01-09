@@ -1475,4 +1475,123 @@ mod gpu_tests {
         // Note: Gradients are still computed on CPU
         // This is a known limitation documented in to_device()
     }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn test_matmul_backward_gpu() {
+        if !is_gpu_available() {
+            return; // Skip test if GPU not available
+        }
+
+        let gpu_device = Device::gpu().expect("GPU should be available");
+
+        // Simple 2x3 @ 3x4 = 2x4 case
+        let a = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], true)
+            .to_device(gpu_device.clone());
+        let b = RawTensor::new(
+            vec![
+                1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+            ],
+            &[3, 4],
+            true,
+        )
+        .to_device(gpu_device.clone());
+        let c = a.matmul(&b);
+
+        // Forward should be on GPU
+        assert!(c.borrow().device.is_gpu());
+
+        // Backward should compute gradients on GPU
+        c.backward();
+
+        // Gradients should be on GPU
+        {
+            let a_ref = a.borrow();
+            let b_ref = b.borrow();
+            let a_grad = a_ref.grad.as_ref().expect("a should have grad");
+            let b_grad = b_ref.grad.as_ref().expect("b should have grad");
+            assert!(a_grad.is_gpu());
+            assert!(b_grad.is_gpu());
+        }
+
+        // Verify gradient values are correct by comparing to CPU computation
+        let a_cpu = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], true);
+        let b_cpu = RawTensor::new(
+            vec![
+                1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+            ],
+            &[3, 4],
+            true,
+        );
+        let c_cpu = a_cpu.matmul(&b_cpu);
+        c_cpu.backward();
+
+        let a_grad_data;
+        let b_grad_data;
+        {
+            let a_ref = a.borrow();
+            let b_ref = b.borrow();
+            a_grad_data = a_ref.grad.as_ref().unwrap().to_vec();
+            b_grad_data = b_ref.grad.as_ref().unwrap().to_vec();
+        }
+
+        let a_grad_cpu_data;
+        let b_grad_cpu_data;
+        {
+            let a_ref = a_cpu.borrow();
+            let b_ref = b_cpu.borrow();
+            a_grad_cpu_data = a_ref.grad.as_ref().unwrap().to_vec();
+            b_grad_cpu_data = b_ref.grad.as_ref().unwrap().to_vec();
+        }
+
+        assert_eq!(a_grad_data.len(), a_grad_cpu_data.len());
+        assert_eq!(b_grad_data.len(), b_grad_cpu_data.len());
+
+        // Check values are approximately equal
+        for (gpu_val, cpu_val) in a_grad_data.iter().zip(a_grad_cpu_data.iter()) {
+            assert!((gpu_val - cpu_val).abs() < 1e-5);
+        }
+        for (gpu_val, cpu_val) in b_grad_data.iter().zip(b_grad_cpu_data.iter()) {
+            assert!((gpu_val - cpu_val).abs() < 1e-5);
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn test_linear_layer_backward_gpu() {
+        if !is_gpu_available() {
+            return; // Skip test if GPU not available
+        }
+
+        use crate::nn::{Linear, Module};
+
+        let gpu_device = Device::gpu().expect("GPU should be available");
+
+        let layer = Linear::new(4, 3, true);
+
+        // Move layer parameters to GPU
+        let params = layer.parameters();
+        for param in &params {
+            let p = RawTensor::to_device(param, gpu_device.clone());
+            *param.borrow_mut() = p.borrow().clone();
+        }
+
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 4], true)
+            .to_device(gpu_device);
+        let out = layer.forward(&x);
+        let loss = out.sum();
+
+        loss.backward();
+
+        // Check gradients exist and are on GPU
+        let params = layer.parameters();
+        assert!(!params.is_empty());
+
+        for param in params {
+            let param_ref = param.borrow();
+            if let Some(grad) = &param_ref.grad {
+                assert!(grad.is_gpu(), "Gradient should be on GPU");
+            }
+        }
+    }
 }

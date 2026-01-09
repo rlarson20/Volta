@@ -306,6 +306,48 @@ impl RawTensor {
             cpu_cache: RefCell::new(None),
         })
     }
+
+    /// GPU-accelerated matmul backward operation for gradient with respect to A
+    ///
+    /// Computes dA = grad @ B^T
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_matmul_backward_a(
+        grad: &Storage,
+        b: &Storage,
+        m: usize,
+        k: usize,
+        n: usize,
+    ) -> Option<Storage> {
+        let buf_grad = grad.gpu_buffer()?;
+        let buf_b = b.gpu_buffer()?;
+
+        let result = GpuKernels::matmul_backward_a(buf_grad, buf_b, m, k, n)?;
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            cpu_cache: RefCell::new(None),
+        })
+    }
+
+    /// GPU-accelerated matmul backward operation for gradient with respect to B
+    ///
+    /// Computes dB = A^T @ grad
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_matmul_backward_b(
+        a: &Storage,
+        grad: &Storage,
+        m: usize,
+        k: usize,
+        n: usize,
+    ) -> Option<Storage> {
+        let buf_a = a.gpu_buffer()?;
+        let buf_grad = grad.gpu_buffer()?;
+
+        let result = GpuKernels::matmul_backward_b(buf_a, buf_grad, m, k, n)?;
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            cpu_cache: RefCell::new(None),
+        })
+    }
 }
 
 #[cfg(all(test, feature = "gpu"))]

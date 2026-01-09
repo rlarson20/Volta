@@ -352,6 +352,64 @@ impl GradFn for MatMulGradFn {
         let x = parents[0].borrow();
         let y = parents[1].borrow();
 
+        // Check if we can do GPU backward (same pattern as unary/binary)
+        #[cfg(feature = "gpu")]
+        {
+            // For GPU backward, we need:
+            // - out_grad on GPU
+            // - The corresponding input (x for grad_x, y for grad_y) on GPU
+            // - Same device for all involved tensors
+            let gpu_available = out_grad.device.is_gpu()
+                && ((x.device.is_gpu() && y.device.is_gpu())
+                    || (!x.requires_grad || !y.requires_grad));
+
+            if gpu_available {
+                // For MVP, only handle the standard 2D×2D case on GPU
+                if x.shape.len() == 2 && y.shape.len() == 2 {
+                    let m = out_grad.shape[0];
+                    let n = out_grad.shape[1];
+                    let k = y.shape[0]; // y is (k, n)
+
+                    let grad_x = if x.requires_grad {
+                        if let Some(storage) =
+                            RawTensor::gpu_matmul_backward_a(&out_grad.data, &y.data, m, k, n)
+                        {
+                            Some(RawTensor::new_with_storage(
+                                storage,
+                                &x.shape,
+                                x.device.clone(),
+                                false,
+                            ))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    let grad_y = if y.requires_grad {
+                        if let Some(storage) =
+                            RawTensor::gpu_matmul_backward_b(&x.data, &out_grad.data, m, k, n)
+                        {
+                            Some(RawTensor::new_with_storage(
+                                storage,
+                                &y.shape,
+                                y.device.clone(),
+                                false,
+                            ))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    return vec![grad_x, grad_y];
+                }
+                // For other cases (matrix-vector, etc.), fall through to CPU implementation
+            }
+        }
+
         // For z = x @ y where x: (m,n), y: (n,p), z: (m,p)
         // ∂L/∂x = ∂L/∂z @ y^T  -> (m,p) @ (p,n) = (m,n)
         // ∂L/∂y = x^T @ ∂L/∂z  -> (n,m) @ (m,p) = (n,p)

@@ -578,6 +578,196 @@ impl GpuKernels {
         Some(result)
     }
 
+    /// Matrix multiplication backward pass: gradient with respect to A
+    ///
+    /// For C = A @ B where A: [M, K], B: [K, N], C: [M, N]:
+    /// dC/dA = grad @ B^T  ->  [M, N] @ [N, K] = [M, K]
+    ///
+    /// # Arguments
+    /// * `grad` - Output gradient with shape (m, n)
+    /// * `b` - Matrix B from forward pass with shape (k, n)
+    /// * `m` - Number of rows in grad / rows in dA
+    /// * `k` - Number of columns in grad / rows in B
+    /// * `n` - Number of columns in B / columns in grad
+    pub fn matmul_backward_a(
+        grad: &GpuBuffer,
+        b: &GpuBuffer,
+        m: usize,
+        k: usize,
+        n: usize,
+    ) -> Option<GpuBuffer> {
+        assert_eq!(
+            grad.len(),
+            m * n,
+            "Grad buffer size doesn't match dimensions"
+        );
+        assert_eq!(b.len(), k * n, "B buffer size doesn't match dimensions");
+
+        let ctx = get_gpu_context()?;
+        let result = GpuBuffer::zeros(m * k)?;
+
+        // Create uniform buffer for dimensions
+        let params = MatMulParams {
+            m: m as u32,
+            k: k as u32,
+            n: n as u32,
+            _padding: 0,
+        };
+
+        let params_buffer = ctx
+            .device()
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("MatMul Backward A Params"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+
+        let pipeline = &ctx.pipelines().matmul_backward_a;
+        let bind_group_layout = pipeline.get_bind_group_layout(0);
+        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("MatMul Backward A Bind Group"),
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: grad.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: b.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: result.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("MatMul Backward A Encoder"),
+            });
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("MatMul Backward A Pass"),
+                timestamp_writes: None,
+            });
+
+            compute_pass.set_pipeline(pipeline);
+            compute_pass.set_bind_group(0, &bind_group, &[]);
+
+            // Output is (m, k), dispatch one workgroup per 16x16 tile
+            let workgroups_x = (k as u32).div_ceil(16);
+            let workgroups_y = (m as u32).div_ceil(16);
+            compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+        }
+
+        ctx.queue().submit(Some(encoder.finish()));
+
+        Some(result)
+    }
+
+    /// Matrix multiplication backward pass: gradient with respect to B
+    ///
+    /// For C = A @ B where A: [M, K], B: [K, N], C: [M, N]:
+    /// dC/dB = A^T @ grad  ->  [K, M] @ [M, N] = [K, N]
+    ///
+    /// # Arguments
+    /// * `a` - Matrix A from forward pass with shape (m, k)
+    /// * `grad` - Output gradient with shape (m, n)
+    /// * `m` - Number of rows in A / rows in grad
+    /// * `k` - Number of columns in A / rows in dB
+    /// * `n` - Number of columns in grad / columns in B
+    pub fn matmul_backward_b(
+        a: &GpuBuffer,
+        grad: &GpuBuffer,
+        m: usize,
+        k: usize,
+        n: usize,
+    ) -> Option<GpuBuffer> {
+        assert_eq!(a.len(), m * k, "A buffer size doesn't match dimensions");
+        assert_eq!(
+            grad.len(),
+            m * n,
+            "Grad buffer size doesn't match dimensions"
+        );
+
+        let ctx = get_gpu_context()?;
+        let result = GpuBuffer::zeros(k * n)?;
+
+        // Create uniform buffer for dimensions
+        let params = MatMulParams {
+            m: m as u32,
+            k: k as u32,
+            n: n as u32,
+            _padding: 0,
+        };
+
+        let params_buffer = ctx
+            .device()
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("MatMul Backward B Params"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+
+        let pipeline = &ctx.pipelines().matmul_backward_b;
+        let bind_group_layout = pipeline.get_bind_group_layout(0);
+        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("MatMul Backward B Bind Group"),
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: a.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: grad.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: result.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("MatMul Backward B Encoder"),
+            });
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("MatMul Backward B Pass"),
+                timestamp_writes: None,
+            });
+
+            compute_pass.set_pipeline(pipeline);
+            compute_pass.set_bind_group(0, &bind_group, &[]);
+
+            // Output is (k, n), dispatch one workgroup per 16x16 tile
+            let workgroups_x = (n as u32).div_ceil(16);
+            let workgroups_y = (k as u32).div_ceil(16);
+            compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+        }
+
+        ctx.queue().submit(Some(encoder.finish()));
+
+        Some(result)
+    }
+
     /// Sum all elements in a buffer
     pub fn sum(input: &GpuBuffer) -> Option<f32> {
         let ctx = get_gpu_context()?;
