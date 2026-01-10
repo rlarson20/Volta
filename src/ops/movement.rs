@@ -248,16 +248,23 @@ impl GradFn for MovementGradFn {
 impl RawTensor {
     /// Reshape tensor to new shape (same number of elements)
     pub fn reshape(self_t: &Tensor, new_shape: &[usize]) -> Tensor {
-        let (data, old_shape, req_grad) = {
+        let (data, old_shape, req_grad, device) = {
             let s = self_t.borrow();
-            (s.data.clone(), s.shape.clone(), s.requires_grad)
+            (
+                s.data.clone(),
+                s.shape.clone(),
+                s.requires_grad,
+                s.device.clone(),
+            )
         };
 
         let old_size: usize = old_shape.iter().product();
         let new_size: usize = new_shape.iter().product();
         assert_eq!(old_size, new_size, "Cannot reshape: size mismatch");
 
-        let out = Self::new(data.to_vec(), new_shape, req_grad);
+        // Reshape is a view operation - data stays in place, only shape changes
+        // Use new_with_storage to preserve the device
+        let out = Self::new_with_storage(data, new_shape, device, req_grad);
 
         if req_grad {
             out.borrow_mut().parents = vec![self_t.clone()];

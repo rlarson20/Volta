@@ -407,6 +407,34 @@ impl RawTensor {
         let buf_state2 = state2.gpu_buffer()?;
         GpuKernels::optimizer_step(buf_params, buf_grads, buf_state1, buf_state2, opt_params)
     }
+
+    /// GPU-accelerated im2col transformation for convolution
+    ///
+    /// Transforms 4D input (B, C, H, W) into 2D matrix (B*H_out*W_out, C*K_h*K_w).
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_im2col(
+        input: &Storage,
+        batch_size: usize,
+        channels: usize,
+        height: usize,
+        width: usize,
+        kernel_h: usize,
+        kernel_w: usize,
+        stride_h: usize,
+        stride_w: usize,
+        h_out: usize,
+        w_out: usize,
+    ) -> Option<Storage> {
+        let buf_input = input.gpu_buffer()?;
+        let result = GpuKernels::im2col(
+            buf_input, batch_size, channels, height, width, kernel_h, kernel_w, stride_h, stride_w,
+            h_out, w_out,
+        )?;
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            cpu_cache: RefCell::new(None),
+        })
+    }
 }
 
 #[cfg(all(test, feature = "gpu"))]

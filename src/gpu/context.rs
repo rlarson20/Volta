@@ -95,6 +95,9 @@ pub struct ComputePipelines {
 
     // Optimizer step
     pub optimizer_step: wgpu::ComputePipeline,
+
+    // Image-to-column transformation for convolution
+    pub im2col: wgpu::ComputePipeline,
 }
 
 impl GpuContext {
@@ -226,6 +229,11 @@ impl GpuContext {
         let optimizer_step_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Optimizer Step Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/optimizer_step.wgsl").into()),
+        });
+
+        let im2col_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Im2col Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/im2col.wgsl").into()),
         });
 
         // Helper to create a compute pipeline
@@ -420,6 +428,9 @@ impl GpuContext {
                 "main",
                 "Optimizer Step Pipeline",
             ),
+
+            // Image-to-column transformation
+            im2col: create_pipeline(&im2col_shader, "im2col_main", "Im2col Pipeline"),
         })
     }
 }

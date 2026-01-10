@@ -111,7 +111,7 @@ fn expand(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 }
 
-// Pad: add zeros around edges (2D only for simplicity)
+// Pad: add zeros around edges (supports up to 4D)
 @compute @workgroup_size(256)
 fn pad(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
@@ -122,9 +122,28 @@ fn pad(@builtin(global_invocation_id) global_id: vec3<u32>) {
         var in_bounds = true;
         var old_coords = vec4<u32>(0u, 0u, 0u, 0u);
 
-        // Unpack padding from op_params: (left0, right0, left1, right1)
+        // Unpack padding from op_params, padding2, and _padding
+        // op_params: [left0, right0, left1, right1] for dims 0,1
+        // padding2: left2|right2 (16 bits each) for dim 2
+        // _padding[0]: left3|right3 (16 bits each) for dim 3
         for (var i: u32 = 0u; i < params.rank; i = i + 1u) {
-            let left = params.op_params[i * 2u];
+            var left: u32 = 0u;
+            var right: u32 = 0u;
+
+            if (i == 0u) {
+                left = params.op_params[0u];
+                right = params.op_params[1u];
+            } else if (i == 1u) {
+                left = params.op_params[2u];
+                right = params.op_params[3u];
+            } else if (i == 2u) {
+                left = (params.padding2 & 0xFFFF0000u) >> 16u;
+                right = params.padding2 & 0x0000FFFFu;
+            } else if (i == 3u) {
+                left = (params._padding[0] & 0xFFFF0000u) >> 16u;
+                right = params._padding[0] & 0x0000FFFFu;
+            }
+
             old_coords[i] = new_coords[i] - left;
 
             if (old_coords[i] >= params.old_shape[i]) {

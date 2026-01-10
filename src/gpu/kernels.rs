@@ -61,6 +61,24 @@ pub struct MovementParams {
     pub _padding: [u32; 2],
 }
 
+/// Parameters for im2col operation
+/// Must match the Im2colParams struct in im2col.wgsl
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Im2colParams {
+    pub batch_size: u32,
+    pub channels: u32,
+    pub height: u32,
+    pub width: u32,
+    pub kernel_h: u32,
+    pub kernel_w: u32,
+    pub stride_h: u32,
+    pub stride_w: u32,
+    pub h_out: u32,
+    pub w_out: u32,
+    pub _padding: [u32; 2],
+}
+
 /// Run a reduction operation that returns a scalar f32 value
 fn reduce_scalar(input: &GpuBuffer, pipeline: &wgpu::ComputePipeline) -> Option<f32> {
     let ctx = get_gpu_context()?;
@@ -1127,16 +1145,31 @@ impl GpuKernels {
         let output_size = new_shape.iter().product::<usize>();
         let result = GpuBuffer::zeros(output_size)?;
 
-        // Pack padding into op_params (left1, right1, left2, right2)
+        // Pack padding into op_params for all dimensions (up to 4)
+        // op_params: [left0, right0, left1, right1] for dims 0,1
+        // padding2: [left2 | right2] for dim 2 (16 bits each)
+        // _padding: [left3 | right3] for dim 3 (16 bits each)
         let mut pad_params = [0u32; 4];
-        for (i, &(left, right)) in padding.iter().take(2).enumerate() {
+        for (i, &(left, right)) in padding.iter().enumerate().take(2) {
             pad_params[i * 2] = left as u32;
             pad_params[i * 2 + 1] = right as u32;
         }
 
-        // Note: For dimensions > 2, padding is currently not fully supported in shader
-        // The shader uses op_params for first 2 dims and padding2 would need to pack more
-        let padding2: u32 = 0; // Currently unused - would pack dims 3,4 padding
+        // Pack dim 2 into padding2 (left in upper 16 bits, right in lower 16 bits)
+        let mut padding2: u32 = 0;
+        if padding.len() > 2 {
+            let left2 = padding[2].0 as u32;
+            let right2 = padding[2].1 as u32;
+            padding2 = (left2 << 16) | right2;
+        }
+
+        // Pack dim 3 into _padding[0] (left in upper 16 bits, right in lower 16 bits)
+        let mut padding3: u32 = 0;
+        if padding.len() > 3 {
+            let left3 = padding[3].0 as u32;
+            let right3 = padding[3].1 as u32;
+            padding3 = (left3 << 16) | right3;
+        }
 
         let params = MovementParams {
             old_shape: pad_to_u32_4(old_shape),
@@ -1144,7 +1177,7 @@ impl GpuKernels {
             op_params: pad_params,
             rank: old_shape.len() as u32,
             padding2,
-            _padding: [0, 0],
+            _padding: [padding3, 0],
         };
 
         movement_op(input, result, &params, &ctx.pipelines().pad)
@@ -1277,6 +1310,115 @@ impl GpuKernels {
         ctx.queue().submit(Some(encoder.finish()));
 
         Some(())
+    }
+
+    /// Image-to-column transformation for GPU convolution
+    ///
+    /// Transforms 4D input (B, C, H, W) into 2D matrix (B*H_out*W_out, C*K_h*K_w)
+    /// where each row represents a flattened receptive field for one output position.
+    ///
+    /// # Arguments
+    /// * `input` - 4D input tensor (batch, channels, height, width)
+    /// * `batch_size` - Batch size (B)
+    /// * `channels` - Number of input channels (C)
+    /// * `height` - Input height (H)
+    /// * `width` - Input width (W)
+    /// * `kernel_h` - Kernel height
+    /// * `kernel_w` - Kernel width
+    /// * `stride_h` - Vertical stride
+    /// * `stride_w` - Horizontal stride
+    /// * `h_out` - Output height
+    /// * `w_out` - Output width
+    ///
+    /// # Returns
+    /// A 2D matrix of shape (B*H_out*W_out, C*K_h*K_w)
+    pub fn im2col(
+        input: &GpuBuffer,
+        batch_size: usize,
+        channels: usize,
+        height: usize,
+        width: usize,
+        kernel_h: usize,
+        kernel_w: usize,
+        stride_h: usize,
+        stride_w: usize,
+        h_out: usize,
+        w_out: usize,
+    ) -> Option<GpuBuffer> {
+        let ctx = get_gpu_context()?;
+
+        // Output matrix size: (B*H_out*W_out, C*K_h*K_w)
+        let rows = batch_size * h_out * w_out;
+        let cols = channels * kernel_h * kernel_w;
+        let output_size = rows * cols;
+        let result = GpuBuffer::zeros(output_size)?;
+
+        // Create uniform buffer with im2col parameters
+        let params = Im2colParams {
+            batch_size: batch_size as u32,
+            channels: channels as u32,
+            height: height as u32,
+            width: width as u32,
+            kernel_h: kernel_h as u32,
+            kernel_w: kernel_w as u32,
+            stride_h: stride_h as u32,
+            stride_w: stride_w as u32,
+            h_out: h_out as u32,
+            w_out: w_out as u32,
+            _padding: [0, 0],
+        };
+
+        let params_buffer = ctx
+            .device()
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Im2col Params"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+
+        let pipeline = &ctx.pipelines().im2col;
+        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Im2col Bind Group"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: input.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: result.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Im2col Encoder"),
+            });
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Im2col Pass"),
+                timestamp_writes: None,
+            });
+
+            compute_pass.set_pipeline(pipeline);
+            compute_pass.set_bind_group(0, &bind_group, &[]);
+
+            // Each workgroup handles one output row (one output position)
+            let workgroup_count = (rows as u32).div_ceil(256);
+            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
+        }
+
+        ctx.queue().submit(Some(encoder.finish()));
+
+        Some(result)
     }
 }
 
