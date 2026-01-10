@@ -143,9 +143,9 @@ impl GradFn for BinaryGradFn {
                 } else if let Some(broadcast_kernel) =
                     binary_backward_broadcast_kernel_name(self.op)
                 {
-                    // For different shapes (broadcasting), try broadcast path
+                    // For different shapes (broadcasting), try RACE-FREE broadcast path
                     if let Some((grad_a_storage, grad_b_storage)) =
-                        RawTensor::gpu_binary_backward_broadcast(
+                        RawTensor::gpu_binary_backward_broadcast_safe(
                             &out_grad.data,
                             &x_val.data,
                             &y_val.data,

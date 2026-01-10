@@ -236,6 +236,7 @@ impl RawTensor {
     /// # Returns
     /// A tuple of (gradient wrt a, gradient wrt b)
     #[cfg(feature = "gpu")]
+    #[allow(dead_code)] // Keep as fallback, safe version is now used
     pub(crate) fn gpu_binary_backward_broadcast(
         out_grad: &Storage,
         a: &Storage,
@@ -250,6 +251,42 @@ impl RawTensor {
         let buf_b = b.gpu_buffer()?;
 
         let (a_grad, b_grad) = GpuKernels::binary_backward_broadcast(
+            buf_out, buf_a, buf_b, op, out_shape, a_shape, b_shape,
+        )?;
+
+        Some((
+            Storage::Gpu {
+                buffer: Arc::new(a_grad),
+                cpu_cache: RefCell::new(None),
+            },
+            Storage::Gpu {
+                buffer: Arc::new(b_grad),
+                cpu_cache: RefCell::new(None),
+            },
+        ))
+    }
+
+    /// GPU-accelerated binary backward with RACE-FREE broadcasting support
+    ///
+    /// This uses a two-pass algorithm to avoid race conditions in gradient reduction.
+    ///
+    /// # Returns
+    /// A tuple of (gradient wrt a, gradient wrt b)
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_binary_backward_broadcast_safe(
+        out_grad: &Storage,
+        a: &Storage,
+        b: &Storage,
+        op: &str,
+        out_shape: &[usize],
+        a_shape: &[usize],
+        b_shape: &[usize],
+    ) -> Option<(Storage, Storage)> {
+        let buf_out = out_grad.gpu_buffer()?;
+        let buf_a = a.gpu_buffer()?;
+        let buf_b = b.gpu_buffer()?;
+
+        let (a_grad, b_grad) = GpuKernels::binary_backward_broadcast_safe(
             buf_out, buf_a, buf_b, op, out_shape, a_shape, b_shape,
         )?;
 

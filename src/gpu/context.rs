@@ -76,6 +76,18 @@ pub struct ComputePipelines {
     pub div_broadcast: wgpu::ComputePipeline,
     pub max_broadcast: wgpu::ComputePipeline,
 
+    // Binary backward operations with RACE-FREE broadcasting (two-pass)
+    pub add_broadcast_pass1: wgpu::ComputePipeline,
+    pub add_broadcast_pass2: wgpu::ComputePipeline,
+    pub sub_broadcast_pass1: wgpu::ComputePipeline,
+    pub sub_broadcast_pass2: wgpu::ComputePipeline,
+    pub mul_broadcast_pass1: wgpu::ComputePipeline,
+    pub mul_broadcast_pass2: wgpu::ComputePipeline,
+    pub div_broadcast_pass1: wgpu::ComputePipeline,
+    pub div_broadcast_pass2: wgpu::ComputePipeline,
+    pub max_broadcast_pass1: wgpu::ComputePipeline,
+    pub max_broadcast_pass2: wgpu::ComputePipeline,
+
     // Reductions
     pub sum_reduce: wgpu::ComputePipeline,
     pub max_reduce: wgpu::ComputePipeline,
@@ -222,6 +234,14 @@ impl GpuContext {
             label: Some("Binary Backward Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/binary_backward.wgsl").into()),
         });
+
+        let binary_backward_safe_shader =
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Binary Backward Safe Shader"),
+                source: wgpu::ShaderSource::Wgsl(
+                    include_str!("shaders/binary_backward_safe.wgsl").into(),
+                ),
+            });
 
         let matmul_backward_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("MatMul Backward Shader"),
@@ -418,6 +438,58 @@ impl GpuContext {
                 &binary_backward_shader,
                 "max_broadcast",
                 "Max Broadcast Pipeline",
+            ),
+
+            // Binary backward with RACE-FREE broadcasting (two-pass)
+            add_broadcast_pass1: create_pipeline(
+                &binary_backward_safe_shader,
+                "add_broadcast_pass1",
+                "Add Broadcast Pass1 Pipeline",
+            ),
+            add_broadcast_pass2: create_pipeline(
+                &binary_backward_safe_shader,
+                "add_broadcast_pass2",
+                "Add Broadcast Pass2 Pipeline",
+            ),
+            sub_broadcast_pass1: create_pipeline(
+                &binary_backward_safe_shader,
+                "sub_broadcast_pass1",
+                "Sub Broadcast Pass1 Pipeline",
+            ),
+            sub_broadcast_pass2: create_pipeline(
+                &binary_backward_safe_shader,
+                "sub_broadcast_pass2",
+                "Sub Broadcast Pass2 Pipeline",
+            ),
+            mul_broadcast_pass1: create_pipeline(
+                &binary_backward_safe_shader,
+                "mul_broadcast_pass1",
+                "Mul Broadcast Pass1 Pipeline",
+            ),
+            mul_broadcast_pass2: create_pipeline(
+                &binary_backward_safe_shader,
+                "mul_broadcast_pass2",
+                "Mul Broadcast Pass2 Pipeline",
+            ),
+            div_broadcast_pass1: create_pipeline(
+                &binary_backward_safe_shader,
+                "div_broadcast_pass1",
+                "Div Broadcast Pass1 Pipeline",
+            ),
+            div_broadcast_pass2: create_pipeline(
+                &binary_backward_safe_shader,
+                "div_broadcast_pass2",
+                "Div Broadcast Pass2 Pipeline",
+            ),
+            max_broadcast_pass1: create_pipeline(
+                &binary_backward_safe_shader,
+                "max_broadcast_pass1",
+                "Max Broadcast Pass1 Pipeline",
+            ),
+            max_broadcast_pass2: create_pipeline(
+                &binary_backward_safe_shader,
+                "max_broadcast_pass2",
+                "Max Broadcast Pass2 Pipeline",
             ),
 
             // Reductions

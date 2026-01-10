@@ -1385,6 +1385,7 @@ mod axis_reduce_tests {
 #[cfg(test)]
 mod gpu_tests {
     use super::*;
+    use approx::assert_abs_diff_eq;
 
     #[test]
     fn test_device_gpu_returns_none_when_disabled() {
@@ -2028,5 +2029,101 @@ mod gpu_tests {
         for val in result.iter() {
             assert_ne!(*val, 0.0, "Parameter should have been updated");
         }
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn test_gpu_binary_backward_broadcast_add() {
+        if !is_gpu_available() {
+            return;
+        }
+
+        let gpu_device = Device::gpu().expect("GPU should be available");
+
+        // Test case: (3, 1) + (1, 4) -> (3, 4)
+        // a_grad should sum over dim 1: (3, 1)
+        // b_grad should sum over dim 0: (1, 4)
+        let a = RawTensor::new(vec![1.0, 2.0, 3.0], &[3, 1], true).to_device(gpu_device.clone());
+        let b = RawTensor::new(vec![10.0, 20.0, 30.0, 40.0], &[1, 4], true)
+            .to_device(gpu_device.clone());
+
+        let c = a.add(&b);
+        c.backward();
+
+        // Verify gradients exist
+        assert!(a.grad().is_some());
+        assert!(b.grad().is_some());
+
+        let a_grad = a.grad().unwrap();
+        let b_grad = b.grad().unwrap();
+
+        // Each a element received gradient from 4 b elements
+        assert_abs_diff_eq!(a_grad[0], 4.0, epsilon = 1e-3);
+        assert_abs_diff_eq!(a_grad[1], 4.0, epsilon = 1e-3);
+        assert_abs_diff_eq!(a_grad[2], 4.0, epsilon = 1e-3);
+
+        // Each b element received gradient from 3 a elements
+        assert_abs_diff_eq!(b_grad[0], 3.0, epsilon = 1e-3);
+        assert_abs_diff_eq!(b_grad[1], 3.0, epsilon = 1e-3);
+        assert_abs_diff_eq!(b_grad[2], 3.0, epsilon = 1e-3);
+        assert_abs_diff_eq!(b_grad[3], 3.0, epsilon = 1e-3);
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn test_gpu_binary_backward_broadcast_mul() {
+        if !is_gpu_available() {
+            return;
+        }
+
+        let gpu_device = Device::gpu().expect("GPU should be available");
+
+        // Test broadcasting multiplication
+        let a = RawTensor::new(vec![1.0, 2.0], &[2, 1], true).to_device(gpu_device.clone());
+        let b = RawTensor::new(vec![10.0, 20.0, 30.0], &[1, 3], true).to_device(gpu_device.clone());
+
+        let c = a.elem_mul(&b);
+        c.backward();
+
+        // Verify gradients exist and are finite
+        assert!(a.grad().is_some());
+        assert!(b.grad().is_some());
+
+        let a_grad = a.grad().unwrap();
+        let b_grad = b.grad().unwrap();
+
+        // All gradients should be finite
+        for g in a_grad.iter() {
+            assert!(g.is_finite(), "a_grad contains non-finite value");
+        }
+        for g in b_grad.iter() {
+            assert!(g.is_finite(), "b_grad contains non-finite value");
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn test_gpu_binary_backward_broadcast_stress() {
+        if !is_gpu_available() {
+            return;
+        }
+
+        let gpu_device = Device::gpu().expect("GPU should be available");
+
+        // Stress test with many output positions mapping to same input
+        let a = RawTensor::new(vec![1.0], &[1], true).to_device(gpu_device.clone());
+        let b = RawTensor::new(
+            (0..1000).map(|i| i as f32).collect::<Vec<_>>(),
+            &[1000],
+            true,
+        )
+        .to_device(gpu_device.clone());
+
+        let c = a.add(&b);
+        c.backward();
+
+        // a should accumulate gradient from all 1000 positions
+        let a_grad = a.grad().unwrap();
+        assert_abs_diff_eq!(a_grad[0], 1000.0, epsilon = 1e-2);
     }
 }

@@ -690,6 +690,222 @@ impl GpuKernels {
         Some((a_grad, b_grad))
     }
 
+    /// Execute a binary backward operation with RACE-FREE broadcasting support
+    ///
+    /// This uses a two-pass algorithm to avoid race conditions in gradient reduction:
+    /// - Pass 1: Each thread scatters (target_idx_a, target_idx_b, grad_value) to temp buffer
+    /// - Pass 2: Each thread reduces contributions for its gradient position
+    ///
+    /// # Arguments
+    /// * `out_grad` - Gradient of the output (upstream gradient)
+    /// * `a` - First input from forward pass
+    /// * `b` - Second input from forward pass
+    /// * `op` - Which operation ("add", "sub", "mul", "div", "max")
+    /// * `out_shape` - Shape of the output tensor
+    /// * `a_shape` - Shape of the first input tensor
+    /// * `b_shape` - Shape of the second input tensor
+    ///
+    /// # Returns
+    /// A tuple of (gradient wrt a, gradient wrt b)
+    pub fn binary_backward_broadcast_safe(
+        out_grad: &GpuBuffer,
+        a: &GpuBuffer,
+        b: &GpuBuffer,
+        op: &str,
+        out_shape: &[usize],
+        a_shape: &[usize],
+        b_shape: &[usize],
+    ) -> Option<(GpuBuffer, GpuBuffer)> {
+        let ctx = get_gpu_context()?;
+
+        // Calculate temporary buffer size
+        // For add/sub: 3 floats per output (idx_a, idx_b, val)
+        // For mul/div: 3 floats per output (idx_a, idx_b, val) - values read in pass2
+        // For max: 5 floats per output (idx_a, idx_b, val, a_val, b_val)
+        let temp_size = if op == "max" {
+            out_grad.len() * 5
+        } else {
+            out_grad.len() * 3
+        };
+        let temp_buffer = GpuBuffer::zeros(temp_size)?;
+
+        // Create unified result buffer (concatenated a_grad and b_grad)
+        let result_grad = GpuBuffer::zeros(a.len() + b.len())?;
+
+        // Prepare shape parameters (pad to 4D)
+        let mut out_shape_padded = [1u32; 4];
+        let mut a_shape_padded = [1u32; 4];
+        let mut b_shape_padded = [1u32; 4];
+
+        let out_rank = out_shape.len() as u32;
+        let a_rank = a_shape.len() as u32;
+        let b_rank = b_shape.len() as u32;
+
+        // Pad shapes to match (align to right for NumPy-style broadcasting)
+        let out_offset = 4usize.saturating_sub(out_shape.len());
+        let a_offset = 4usize.saturating_sub(a_shape.len());
+        let b_offset = 4usize.saturating_sub(b_shape.len());
+
+        for (i, &dim) in out_shape.iter().enumerate() {
+            out_shape_padded[out_offset + i] = dim as u32;
+        }
+        for (i, &dim) in a_shape.iter().enumerate() {
+            a_shape_padded[a_offset + i] = dim as u32;
+        }
+        for (i, &dim) in b_shape.iter().enumerate() {
+            b_shape_padded[b_offset + i] = dim as u32;
+        }
+
+        let params = BinaryBackwardParams {
+            out_shape: out_shape_padded,
+            a_shape: a_shape_padded,
+            b_shape: b_shape_padded,
+            out_rank,
+            a_rank,
+            b_rank,
+            _padding: 0,
+        };
+
+        let params_buffer = ctx
+            .device()
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Binary Backward Safe Params"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+
+        // Select pipelines for both passes
+        let (pass1_pipeline, pass2_pipeline) = match op {
+            "add" => (
+                &ctx.pipelines().add_broadcast_pass1,
+                &ctx.pipelines().add_broadcast_pass2,
+            ),
+            "sub" => (
+                &ctx.pipelines().sub_broadcast_pass1,
+                &ctx.pipelines().sub_broadcast_pass2,
+            ),
+            "mul" => (
+                &ctx.pipelines().mul_broadcast_pass1,
+                &ctx.pipelines().mul_broadcast_pass2,
+            ),
+            "div" => (
+                &ctx.pipelines().div_broadcast_pass1,
+                &ctx.pipelines().div_broadcast_pass2,
+            ),
+            "max" => (
+                &ctx.pipelines().max_broadcast_pass1,
+                &ctx.pipelines().max_broadcast_pass2,
+            ),
+            _ => panic!("Unknown binary backward op: {}", op),
+        };
+
+        // ============ PASS 1: Scatter ============
+        let pass1_bind_group_layout = pass1_pipeline.get_bind_group_layout(0);
+        let pass1_bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Binary Backward Safe Pass1 Bind Group"),
+            layout: &pass1_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: out_grad.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: a.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: b.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: temp_buffer.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: result_grad.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Binary Backward Safe Encoder"),
+            });
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Binary Backward Safe Pass1"),
+                timestamp_writes: None,
+            });
+
+            compute_pass.set_pipeline(pass1_pipeline);
+            compute_pass.set_bind_group(0, &pass1_bind_group, &[]);
+
+            let workgroup_count = (out_grad.len() as u32).div_ceil(256);
+            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
+        }
+
+        // ============ PASS 2: Reduce ============
+        let pass2_bind_group_layout = pass2_pipeline.get_bind_group_layout(0);
+        let pass2_bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Binary Backward Safe Pass2 Bind Group"),
+            layout: &pass2_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: out_grad.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: a.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: b.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: temp_buffer.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: result_grad.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Binary Backward Safe Pass2"),
+                timestamp_writes: None,
+            });
+
+            compute_pass.set_pipeline(pass2_pipeline);
+            compute_pass.set_bind_group(0, &pass2_bind_group, &[]);
+
+            let max_size = (a.len().max(b.len()) as u32).div_ceil(256);
+            compute_pass.dispatch_workgroups(max_size, 1, 1);
+        }
+
+        ctx.queue().submit(Some(encoder.finish()));
+
+        // Split the concatenated result into two separate buffers
+        let a_grad = result_grad.copy_region(0, a.len())?;
+        let b_grad = result_grad.copy_region(a.len(), b.len())?;
+
+        Some((a_grad, b_grad))
+    }
+
     /// Matrix multiplication: C = A @ B
     ///
     /// # Arguments
