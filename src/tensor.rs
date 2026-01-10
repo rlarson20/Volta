@@ -951,6 +951,7 @@ pub struct DataLoader {
     shuffle: bool,
     indices: Vec<usize>,
     current: usize,
+    device: Option<crate::device::Device>, // Optional device for GPU prefetch
 }
 
 impl DataLoader {
@@ -979,7 +980,34 @@ impl DataLoader {
             shuffle,
             indices,
             current: 0,
+            device: None, // Default: no GPU prefetch
         }
+    }
+
+    /// Enable automatic GPU prefetch for batches
+    ///
+    /// When set, batches will automatically be transferred to the specified device.
+    /// This avoids manual `.to_device()` calls in the training loop.
+    ///
+    /// # Arguments
+    /// * `device` - Device to prefetch batches to (typically GPU)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use volta::{DataLoader, Device};
+    /// # #[cfg(feature = "gpu")]
+    /// # {
+    /// # let data = vec![0.0; 28 * 28 * 100];
+    /// # let targets = vec![0.0; 10 * 100];
+    /// let device = Device::gpu().expect("GPU required");
+    /// let dataloader = DataLoader::new(data, targets, &[28, 28], &[10], 64, true)
+    ///     .with_device(device);
+    /// // Batches will now be automatically on GPU
+    /// # }
+    /// ```
+    pub fn with_device(mut self, device: crate::device::Device) -> Self {
+        self.device = Some(device);
+        self
     }
 
     pub fn reset(&mut self) {
@@ -1027,10 +1055,18 @@ impl Iterator for DataLoader {
         let mut target_batch_shape = vec![actual_batch];
         target_batch_shape.extend_from_slice(&self.target_shape);
 
-        Some((
-            RawTensor::new(batch_data, &batch_shape, false),
-            RawTensor::new(batch_targets, &target_batch_shape, false),
-        ))
+        let data_tensor = RawTensor::new(batch_data, &batch_shape, false);
+        let target_tensor = RawTensor::new(batch_targets, &target_batch_shape, false);
+
+        // Transfer to device if GPU prefetch is enabled
+        if let Some(ref device) = self.device {
+            Some((
+                data_tensor.to_device(device.clone()),
+                target_tensor.to_device(device.clone()),
+            ))
+        } else {
+            Some((data_tensor, target_tensor))
+        }
     }
 }
 

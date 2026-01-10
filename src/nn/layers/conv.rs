@@ -1,6 +1,7 @@
 // src/layers/conv.rs
 use crate::Storage;
 use crate::autograd::GradFn;
+use crate::device::Device;
 use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
 use crate::tensor::{RawTensor, Tensor, TensorOps};
@@ -49,6 +50,57 @@ impl Conv2d {
             let b = RawTensor::zeros(&[out_ch]);
             b.borrow_mut().requires_grad = true;
             Some(b)
+        } else {
+            None
+        };
+        Conv2d {
+            weight: w,
+            bias: b,
+            stride: (stride, stride),
+            padding: (padding, padding),
+        }
+    }
+
+    /// Create a new Conv2d layer on a specific device
+    ///
+    /// Uses He initialization and places tensors on the specified device.
+    ///
+    /// # Arguments
+    /// * `in_ch` - Number of input channels
+    /// * `out_ch` - Number of output channels
+    /// * `kernel` - Kernel size (square)
+    /// * `stride` - Stride (square)
+    /// * `padding` - Padding (square)
+    /// * `use_bias` - Whether to include a bias term
+    /// * `device` - Device to place parameters on (CPU or GPU)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use volta::{Conv2d, Device};
+    /// # #[cfg(feature = "gpu")]
+    /// # {
+    /// let device = Device::gpu().expect("GPU required");
+    /// let layer = Conv2d::new_on_device(3, 64, 3, 1, 1, true, device);
+    /// // Parameters are now on GPU
+    /// # }
+    /// ```
+    pub fn new_on_device(
+        in_ch: usize,
+        out_ch: usize,
+        kernel: usize,
+        stride: usize,
+        padding: usize,
+        use_bias: bool,
+        device: Device,
+    ) -> Self {
+        let w = RawTensor::he_initialization(&[out_ch, in_ch, kernel, kernel]);
+        w.borrow_mut().requires_grad = true;
+        let w = w.to_device(device.clone());
+
+        let b = if use_bias {
+            let b = RawTensor::zeros(&[out_ch]);
+            b.borrow_mut().requires_grad = true;
+            Some(b.to_device(device))
         } else {
             None
         };
