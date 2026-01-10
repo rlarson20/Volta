@@ -395,3 +395,30 @@ fn test_tensor_gpu_max_dim_device_and_grad_on_gpu() {
     // Only max elements get gradient: indices (0,1) and (1,1).
     assert_eq!(grad_storage.to_vec(), vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0]);
 }
+
+#[test]
+#[cfg(feature = "gpu")]
+fn test_binary_add_backward_simple() {
+    use volta::gpu::is_gpu_available;
+    use volta::{Device, RawTensor, TensorOps};
+
+    if !is_gpu_available() {
+        return;
+    }
+
+    let dev = Device::GPU("Test".to_string());
+    let x = RawTensor::new(vec![1.0, 2.0], &[2], true).to_device(dev.clone());
+    let y = RawTensor::new(vec![3.0, 4.0], &[2], true).to_device(dev.clone());
+
+    let z = x.add(&y);
+    let loss = z.sum();
+    loss.backward();
+
+    let x_grad = x.grad().unwrap();
+    println!("x_grad: {:?}", x_grad);
+    assert_eq!(x_grad, vec![1.0, 1.0]);
+
+    let y_grad = y.grad().unwrap();
+    println!("y_grad: {:?}", y_grad);
+    assert_eq!(y_grad, vec![1.0, 1.0]);
+}

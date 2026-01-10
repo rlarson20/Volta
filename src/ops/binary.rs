@@ -88,62 +88,99 @@ impl GradFn for BinaryGradFn {
         let x_val = parents[0].borrow();
         let y_val = parents[1].borrow();
 
-        // Check GPU path - only for same-shape case (no broadcasting)
+        // Check GPU path - use legacy path for same-shape, broadcast path for different shapes
         #[cfg(feature = "gpu")]
         {
-            if out_grad.device.is_gpu()
-                && x_val.device.is_gpu()
-                && y_val.device.is_gpu()
-                && out_grad.shape == x_val.shape
-                && out_grad.shape == y_val.shape
-                && let Some((kernel_a, kernel_b)) = binary_backward_kernel_names(self.op)
-            {
-                // All same shape, no broadcasting needed
-                let gx = if x_val.requires_grad {
-                    if let Some(grad_storage) = RawTensor::gpu_binary_backward_a(
-                        &out_grad.data,
-                        &x_val.data,
-                        &y_val.data,
-                        kernel_a,
-                    ) {
-                        Some(RawTensor::new_with_storage(
-                            grad_storage,
+            if out_grad.device.is_gpu() && x_val.device.is_gpu() && y_val.device.is_gpu() {
+                // For same-shape case, use legacy path (more tested)
+                if out_grad.shape == x_val.shape && out_grad.shape == y_val.shape {
+                    if let Some((kernel_a, kernel_b)) = binary_backward_kernel_names(self.op) {
+                        let gx = if x_val.requires_grad {
+                            RawTensor::gpu_binary_backward_a(
+                                &out_grad.data,
+                                &x_val.data,
+                                &y_val.data,
+                                kernel_a,
+                            )
+                            .map(|storage| {
+                                RawTensor::new_with_storage(
+                                    storage,
+                                    &x_val.shape,
+                                    x_val.device.clone(),
+                                    false,
+                                )
+                            })
+                        } else {
+                            None
+                        };
+
+                        let gy = if y_val.requires_grad {
+                            RawTensor::gpu_binary_backward_b(
+                                &out_grad.data,
+                                &x_val.data,
+                                &y_val.data,
+                                kernel_b,
+                            )
+                            .map(|storage| {
+                                RawTensor::new_with_storage(
+                                    storage,
+                                    &y_val.shape,
+                                    y_val.device.clone(),
+                                    false,
+                                )
+                            })
+                        } else {
+                            None
+                        };
+
+                        // If GPU path succeeded, return early
+                        if (x_val.requires_grad && gx.is_some())
+                            || (y_val.requires_grad && gy.is_some())
+                        {
+                            return vec![gx, gy];
+                        }
+                    }
+                } else if let Some(broadcast_kernel) =
+                    binary_backward_broadcast_kernel_name(self.op)
+                {
+                    // For different shapes (broadcasting), try broadcast path
+                    if let Some((grad_a_storage, grad_b_storage)) =
+                        RawTensor::gpu_binary_backward_broadcast(
+                            &out_grad.data,
+                            &x_val.data,
+                            &y_val.data,
+                            broadcast_kernel,
+                            &out_grad.shape,
                             &x_val.shape,
-                            x_val.device.clone(),
-                            false,
-                        ))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                let gy = if y_val.requires_grad {
-                    if let Some(grad_storage) = RawTensor::gpu_binary_backward_b(
-                        &out_grad.data,
-                        &x_val.data,
-                        &y_val.data,
-                        kernel_b,
-                    ) {
-                        Some(RawTensor::new_with_storage(
-                            grad_storage,
                             &y_val.shape,
-                            y_val.device.clone(),
-                            false,
-                        ))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
+                        )
+                    {
+                        let gx = if x_val.requires_grad {
+                            Some(RawTensor::new_with_storage(
+                                grad_a_storage,
+                                &x_val.shape,
+                                x_val.device.clone(),
+                                false,
+                            ))
+                        } else {
+                            None
+                        };
 
-                // If GPU path succeeded for both, return early
-                if (x_val.requires_grad && gx.is_some()) || (y_val.requires_grad && gy.is_some()) {
-                    return vec![gx, gy];
+                        let gy = if y_val.requires_grad {
+                            Some(RawTensor::new_with_storage(
+                                grad_b_storage,
+                                &y_val.shape,
+                                y_val.device.clone(),
+                                false,
+                            ))
+                        } else {
+                            None
+                        };
+
+                        return vec![gx, gy];
+                    }
+                    // If all GPU paths failed, fall through to CPU path
                 }
-                // Otherwise fall through to CPU path
             }
         }
 
@@ -326,6 +363,18 @@ fn binary_backward_kernel_names(op: BinaryOp) -> Option<(&'static str, &'static 
         BinaryOp::Mul => Some(("mul_backward_a", "mul_backward_b")),
         BinaryOp::Div => Some(("div_backward_a", "div_backward_b")),
         BinaryOp::Max => Some(("max_backward_a", "max_backward_b")),
+        BinaryOp::Mod | BinaryOp::Cmplt => None, // Non-differentiable
+    }
+}
+
+/// Get the broadcast kernel name for a binary operation
+fn binary_backward_broadcast_kernel_name(op: BinaryOp) -> Option<&'static str> {
+    match op {
+        BinaryOp::Add => Some("add"),
+        BinaryOp::Sub => Some("sub"),
+        BinaryOp::Mul => Some("mul"),
+        BinaryOp::Div => Some("div"),
+        BinaryOp::Max => Some("max"),
         BinaryOp::Mod | BinaryOp::Cmplt => None, // Non-differentiable
     }
 }

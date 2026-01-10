@@ -57,7 +57,7 @@ pub struct ComputePipelines {
     pub sin_backward: wgpu::ComputePipeline,
     pub cos_backward: wgpu::ComputePipeline,
 
-    // Binary backward operations
+    // Binary backward operations (same-shape only, legacy)
     pub add_backward_a: wgpu::ComputePipeline,
     pub add_backward_b: wgpu::ComputePipeline,
     pub sub_backward_a: wgpu::ComputePipeline,
@@ -68,6 +68,13 @@ pub struct ComputePipelines {
     pub div_backward_b: wgpu::ComputePipeline,
     pub max_backward_a: wgpu::ComputePipeline,
     pub max_backward_b: wgpu::ComputePipeline,
+
+    // Binary backward operations with broadcasting support
+    pub add_broadcast: wgpu::ComputePipeline,
+    pub sub_broadcast: wgpu::ComputePipeline,
+    pub mul_broadcast: wgpu::ComputePipeline,
+    pub div_broadcast: wgpu::ComputePipeline,
+    pub max_broadcast: wgpu::ComputePipeline,
 
     // Reductions
     pub sum_reduce: wgpu::ComputePipeline,
@@ -384,6 +391,33 @@ impl GpuContext {
                 &binary_backward_shader,
                 "max_backward_b",
                 "Max Backward B Pipeline",
+            ),
+
+            // Binary backward with broadcasting support
+            add_broadcast: create_pipeline(
+                &binary_backward_shader,
+                "add_broadcast",
+                "Add Broadcast Pipeline",
+            ),
+            sub_broadcast: create_pipeline(
+                &binary_backward_shader,
+                "sub_broadcast",
+                "Sub Broadcast Pipeline",
+            ),
+            mul_broadcast: create_pipeline(
+                &binary_backward_shader,
+                "mul_broadcast",
+                "Mul Broadcast Pipeline",
+            ),
+            div_broadcast: create_pipeline(
+                &binary_backward_shader,
+                "div_broadcast",
+                "Div Broadcast Pipeline",
+            ),
+            max_broadcast: create_pipeline(
+                &binary_backward_shader,
+                "max_broadcast",
+                "Max Broadcast Pipeline",
             ),
 
             // Reductions

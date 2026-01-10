@@ -79,6 +79,20 @@ pub struct Im2colParams {
     pub _padding: [u32; 2],
 }
 
+/// Parameters for binary backward operations with broadcasting
+/// Must match the BinaryBackwardParams struct in binary_backward.wgsl
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct BinaryBackwardParams {
+    pub out_shape: [u32; 4],
+    pub a_shape: [u32; 4],
+    pub b_shape: [u32; 4],
+    pub out_rank: u32,
+    pub a_rank: u32,
+    pub b_rank: u32,
+    pub _padding: u32,
+}
+
 /// Run a reduction operation that returns a scalar f32 value
 fn reduce_scalar(input: &GpuBuffer, pipeline: &wgpu::ComputePipeline) -> Option<f32> {
     let ctx = get_gpu_context()?;
@@ -536,6 +550,144 @@ impl GpuKernels {
         ctx.queue().submit(Some(encoder.finish()));
 
         Some(result)
+    }
+
+    /// Execute a binary backward operation with broadcasting support
+    ///
+    /// This computes gradients for both inputs simultaneously, handling broadcasting
+    /// by reducing gradients over broadcasted dimensions.
+    ///
+    /// # Arguments
+    /// * `out_grad` - Gradient of the output (upstream gradient)
+    /// * `a` - First input from forward pass
+    /// * `b` - Second input from forward pass
+    /// * `op` - Which operation ("add", "sub", "mul", "div", "max")
+    /// * `out_shape` - Shape of the output tensor
+    /// * `a_shape` - Shape of the first input tensor
+    /// * `b_shape` - Shape of the second input tensor
+    ///
+    /// # Returns
+    /// A tuple of (gradient wrt a, gradient wrt b)
+    pub fn binary_backward_broadcast(
+        out_grad: &GpuBuffer,
+        a: &GpuBuffer,
+        b: &GpuBuffer,
+        op: &str,
+        out_shape: &[usize],
+        a_shape: &[usize],
+        b_shape: &[usize],
+    ) -> Option<(GpuBuffer, GpuBuffer)> {
+        let ctx = get_gpu_context()?;
+
+        // Create unified result buffer (concatenated a_grad and b_grad)
+        // The shader uses atomic adds, so we need to zero-initialize
+        let result_grad = GpuBuffer::zeros(a.len() + b.len())?;
+
+        // Prepare shape parameters (pad to 4D)
+        let mut out_shape_padded = [1u32; 4];
+        let mut a_shape_padded = [1u32; 4];
+        let mut b_shape_padded = [1u32; 4];
+
+        let out_rank = out_shape.len() as u32;
+        let a_rank = a_shape.len() as u32;
+        let b_rank = b_shape.len() as u32;
+
+        // Pad shapes to match (align to right for NumPy-style broadcasting)
+        let out_offset = 4usize.saturating_sub(out_shape.len());
+        let a_offset = 4usize.saturating_sub(a_shape.len());
+        let b_offset = 4usize.saturating_sub(b_shape.len());
+
+        for (i, &dim) in out_shape.iter().enumerate() {
+            out_shape_padded[out_offset + i] = dim as u32;
+        }
+        for (i, &dim) in a_shape.iter().enumerate() {
+            a_shape_padded[a_offset + i] = dim as u32;
+        }
+        for (i, &dim) in b_shape.iter().enumerate() {
+            b_shape_padded[b_offset + i] = dim as u32;
+        }
+
+        let params = BinaryBackwardParams {
+            out_shape: out_shape_padded,
+            a_shape: a_shape_padded,
+            b_shape: b_shape_padded,
+            out_rank,
+            a_rank,
+            b_rank,
+            _padding: 0,
+        };
+
+        let params_buffer = ctx
+            .device()
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Binary Backward Broadcast Params"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+
+        let pipeline = match op {
+            "add" => &ctx.pipelines().add_broadcast,
+            "sub" => &ctx.pipelines().sub_broadcast,
+            "mul" => &ctx.pipelines().mul_broadcast,
+            "div" => &ctx.pipelines().div_broadcast,
+            "max" => &ctx.pipelines().max_broadcast,
+            _ => panic!("Unknown binary backward op: {}", op),
+        };
+
+        let bind_group_layout = pipeline.get_bind_group_layout(0);
+        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Binary Backward Broadcast Bind Group"),
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: out_grad.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: a.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: b.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: result_grad.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Binary Backward Broadcast Encoder"),
+            });
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Binary Backward Broadcast Pass"),
+                timestamp_writes: None,
+            });
+
+            compute_pass.set_pipeline(pipeline);
+            compute_pass.set_bind_group(0, &bind_group, &[]);
+
+            let workgroup_count = (out_grad.len() as u32).div_ceil(256);
+            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
+        }
+
+        ctx.queue().submit(Some(encoder.finish()));
+
+        // Split the concatenated result into two separate buffers
+        let a_grad = result_grad.copy_region(0, a.len())?;
+        let b_grad = result_grad.copy_region(a.len(), b.len())?;
+
+        Some((a_grad, b_grad))
     }
 
     /// Matrix multiplication: C = A @ B
