@@ -100,6 +100,13 @@ pub struct ComputePipelines {
     pub shrink: wgpu::ComputePipeline,
     pub stride: wgpu::ComputePipeline,
 
+    // Movement backward operations
+    pub permute_backward: wgpu::ComputePipeline,
+    pub expand_backward: wgpu::ComputePipeline,
+    pub pad_backward: wgpu::ComputePipeline,
+    pub shrink_backward: wgpu::ComputePipeline,
+    pub stride_backward: wgpu::ComputePipeline,
+
     // Matrix multiplication (this is the big one for ML!)
     pub matmul: wgpu::ComputePipeline,
 
@@ -223,6 +230,11 @@ impl GpuContext {
         let movement_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Movement Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/movement.wgsl").into()),
+        });
+
+        let movement_backward_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Movement Backward Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/movement_backward.wgsl").into()),
         });
 
         let unary_backward_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -503,6 +515,33 @@ impl GpuContext {
             pad: create_pipeline(&movement_shader, "pad", "Pad Pipeline"),
             shrink: create_pipeline(&movement_shader, "shrink", "Shrink Pipeline"),
             stride: create_pipeline(&movement_shader, "stride", "Stride Pipeline"),
+
+            // Movement backward operations
+            permute_backward: create_pipeline(
+                &movement_backward_shader,
+                "permute_backward",
+                "Permute Backward Pipeline",
+            ),
+            expand_backward: create_pipeline(
+                &movement_backward_shader,
+                "expand_backward",
+                "Expand Backward Pipeline",
+            ),
+            pad_backward: create_pipeline(
+                &movement_backward_shader,
+                "pad_backward",
+                "Pad Backward Pipeline",
+            ),
+            shrink_backward: create_pipeline(
+                &movement_backward_shader,
+                "shrink_backward",
+                "Shrink Backward Pipeline",
+            ),
+            stride_backward: create_pipeline(
+                &movement_backward_shader,
+                "stride_backward",
+                "Stride Backward Pipeline",
+            ),
 
             // Matrix multiplication
             matmul: create_pipeline(&matmul_shader, "matmul", "MatMul Pipeline"),

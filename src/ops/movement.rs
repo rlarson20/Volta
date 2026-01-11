@@ -38,13 +38,53 @@ impl GradFn for MovementGradFn {
                 for (i, &ax) in axes.iter().enumerate() {
                     inverse_axes[ax] = i;
                 }
-                // Permute gradient back
+
+                // Try GPU path
+                #[cfg(feature = "gpu")]
+                {
+                    if out_grad.device.is_gpu()
+                        && let Some(grad_storage) = RawTensor::gpu_permute_backward(
+                            &out_grad.data,
+                            &self.original_shape,
+                            &out_grad.shape,
+                            &inverse_axes,
+                        )
+                    {
+                        return vec![Some(RawTensor::new_with_storage(
+                            grad_storage,
+                            &self.original_shape,
+                            out_grad.device.clone(),
+                            false,
+                        ))];
+                    }
+                }
+
+                // CPU fallback
                 let grad_t = RawTensor::new(out_grad.data.to_vec(), &out_grad.shape, false);
                 let result = RawTensor::permute_impl(&grad_t, &inverse_axes);
                 return vec![Some(result)];
             }
             MovementOp::Expand { new_shape } => {
-                // Sum gradient over dimensions that were expanded (broadcast)
+                // Try GPU path
+                #[cfg(feature = "gpu")]
+                {
+                    if out_grad.device.is_gpu()
+                        && let Some(grad_storage) = RawTensor::gpu_expand_backward(
+                            &out_grad.data,
+                            &self.original_shape,
+                            new_shape,
+                        )
+                    {
+                        return vec![Some(RawTensor::new_with_storage(
+                            grad_storage,
+                            &self.original_shape,
+                            out_grad.device.clone(),
+                            false,
+                        ))];
+                    }
+                }
+
+                // CPU fallback: Sum gradient over dimensions that were expanded (broadcast)
                 let mut grad_data = vec![0.0; self.original_shape.iter().product()];
                 let old_strides = RawTensor::compute_strides(&self.original_shape);
                 let _new_strides = RawTensor::compute_strides(new_shape);
@@ -65,7 +105,27 @@ impl GradFn for MovementGradFn {
                 RawTensor::new(grad_data, &self.original_shape, false)
             }
             MovementOp::Pad { padding } => {
-                // Remove padding from gradient (extract center region)
+                // Try GPU path
+                #[cfg(feature = "gpu")]
+                {
+                    if out_grad.device.is_gpu()
+                        && let Some(grad_storage) = RawTensor::gpu_pad_backward(
+                            &out_grad.data,
+                            &self.original_shape,
+                            &out_grad.shape,
+                            padding,
+                        )
+                    {
+                        return vec![Some(RawTensor::new_with_storage(
+                            grad_storage,
+                            &self.original_shape,
+                            out_grad.device.clone(),
+                            false,
+                        ))];
+                    }
+                }
+
+                // CPU fallback: Remove padding from gradient (extract center region)
                 let mut result = vec![0.0; self.original_shape.iter().product()];
                 let old_strides = RawTensor::compute_strides(&self.original_shape);
                 let new_strides = RawTensor::compute_strides(&out_grad.shape);
@@ -120,7 +180,27 @@ impl GradFn for MovementGradFn {
                 RawTensor::new(result, &self.original_shape, false)
             }
             MovementOp::Shrink { ranges } => {
-                // Pad gradient back to original size (inverse of shrink)
+                // Try GPU path
+                #[cfg(feature = "gpu")]
+                {
+                    if out_grad.device.is_gpu()
+                        && let Some(grad_storage) = RawTensor::gpu_shrink_backward(
+                            &out_grad.data,
+                            &self.original_shape,
+                            &out_grad.shape,
+                            ranges,
+                        )
+                    {
+                        return vec![Some(RawTensor::new_with_storage(
+                            grad_storage,
+                            &self.original_shape,
+                            out_grad.device.clone(),
+                            false,
+                        ))];
+                    }
+                }
+
+                // CPU fallback: Pad gradient back to original size (inverse of shrink)
                 let mut result = vec![0.0; self.original_shape.iter().product()];
                 let old_strides = RawTensor::compute_strides(&self.original_shape);
                 let new_strides = RawTensor::compute_strides(&out_grad.shape);
@@ -175,7 +255,27 @@ impl GradFn for MovementGradFn {
                 RawTensor::new(result, &self.original_shape, false)
             }
             MovementOp::Stride { strides } => {
-                // Upsample gradient (inverse of stride/downsampling)
+                // Try GPU path
+                #[cfg(feature = "gpu")]
+                {
+                    if out_grad.device.is_gpu()
+                        && let Some(grad_storage) = RawTensor::gpu_stride_backward(
+                            &out_grad.data,
+                            &self.original_shape,
+                            &out_grad.shape,
+                            strides,
+                        )
+                    {
+                        return vec![Some(RawTensor::new_with_storage(
+                            grad_storage,
+                            &self.original_shape,
+                            out_grad.device.clone(),
+                            false,
+                        ))];
+                    }
+                }
+
+                // CPU fallback: Upsample gradient (inverse of stride/downsampling)
                 let mut result = vec![0.0; self.original_shape.iter().product()];
                 let old_strides_mem = RawTensor::compute_strides(&self.original_shape);
                 let new_strides_mem = RawTensor::compute_strides(&out_grad.shape);

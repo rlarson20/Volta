@@ -1600,6 +1600,153 @@ impl GpuKernels {
         movement_op(input, result, &params, &ctx.pipelines().stride)
     }
 
+    // ===== MOVEMENT BACKWARD OPERATIONS =====
+
+    /// Permute backward: apply inverse permutation to gradient
+    pub fn permute_backward(
+        out_grad: &GpuBuffer,
+        old_shape: &[usize],
+        new_shape: &[usize],
+        axes: &[usize],
+    ) -> Option<GpuBuffer> {
+        let ctx = get_gpu_context()?;
+        let output_size = old_shape.iter().product::<usize>();
+        let result = GpuBuffer::zeros(output_size)?;
+
+        let params = MovementParams {
+            old_shape: pad_to_u32_4(old_shape),
+            new_shape: pad_to_u32_4(new_shape),
+            op_params: pad_to_u32_4(axes),
+            rank: old_shape.len() as u32,
+            padding2: 0,
+            _padding: [0, 0],
+        };
+
+        movement_op(out_grad, result, &params, &ctx.pipelines().permute_backward)
+    }
+
+    /// Expand backward: sum gradients over broadcast dimensions
+    pub fn expand_backward(
+        out_grad: &GpuBuffer,
+        old_shape: &[usize],
+        new_shape: &[usize],
+    ) -> Option<GpuBuffer> {
+        let ctx = get_gpu_context()?;
+        let output_size = old_shape.iter().product::<usize>();
+        let result = GpuBuffer::zeros(output_size)?;
+
+        let params = MovementParams {
+            old_shape: pad_to_u32_4(old_shape),
+            new_shape: pad_to_u32_4(new_shape),
+            op_params: [0, 0, 0, 0],
+            rank: old_shape.len() as u32,
+            padding2: 0,
+            _padding: [0, 0],
+        };
+
+        movement_op(out_grad, result, &params, &ctx.pipelines().expand_backward)
+    }
+
+    /// Pad backward: extract center region from gradient (remove padding)
+    pub fn pad_backward(
+        out_grad: &GpuBuffer,
+        old_shape: &[usize],
+        new_shape: &[usize],
+        padding: &[(usize, usize)],
+    ) -> Option<GpuBuffer> {
+        let ctx = get_gpu_context()?;
+        let output_size = old_shape.iter().product::<usize>();
+        let result = GpuBuffer::zeros(output_size)?;
+
+        // Pack padding into params (same as forward pad operation)
+        let mut op_params = [0u32; 4];
+        let mut padding2 = 0u32;
+        let mut _padding = [0u32; 2];
+
+        for (i, &(left, right)) in padding.iter().enumerate().take(4) {
+            match i {
+                0 => {
+                    op_params[0] = left as u32;
+                    op_params[1] = right as u32;
+                }
+                1 => {
+                    op_params[2] = left as u32;
+                    op_params[3] = right as u32;
+                }
+                2 => {
+                    padding2 = ((left as u32) << 16) | (right as u32);
+                }
+                3 => {
+                    _padding[0] = ((left as u32) << 16) | (right as u32);
+                }
+                _ => {}
+            }
+        }
+
+        let params = MovementParams {
+            old_shape: pad_to_u32_4(old_shape),
+            new_shape: pad_to_u32_4(new_shape),
+            op_params,
+            rank: old_shape.len() as u32,
+            padding2,
+            _padding,
+        };
+
+        movement_op(out_grad, result, &params, &ctx.pipelines().pad_backward)
+    }
+
+    /// Shrink backward: pad gradient back to original size
+    pub fn shrink_backward(
+        out_grad: &GpuBuffer,
+        old_shape: &[usize],
+        new_shape: &[usize],
+        ranges: &[(usize, usize)],
+    ) -> Option<GpuBuffer> {
+        let ctx = get_gpu_context()?;
+        let output_size = old_shape.iter().product::<usize>();
+        let result = GpuBuffer::zeros(output_size)?;
+
+        // Pack range starts into op_params
+        let mut range_starts = [0usize; 4];
+        for (i, &(start, _)) in ranges.iter().enumerate().take(4) {
+            range_starts[i] = start;
+        }
+
+        let params = MovementParams {
+            old_shape: pad_to_u32_4(old_shape),
+            new_shape: pad_to_u32_4(new_shape),
+            op_params: pad_to_u32_4(&range_starts),
+            rank: old_shape.len() as u32,
+            padding2: 0,
+            _padding: [0, 0],
+        };
+
+        movement_op(out_grad, result, &params, &ctx.pipelines().shrink_backward)
+    }
+
+    /// Stride backward: upsample gradient (inverse of striding/downsampling)
+    pub fn stride_backward(
+        out_grad: &GpuBuffer,
+        old_shape: &[usize],
+        new_shape: &[usize],
+        strides: &[usize],
+    ) -> Option<GpuBuffer> {
+        let ctx = get_gpu_context()?;
+        let output_size = old_shape.iter().product::<usize>();
+        let result = GpuBuffer::zeros(output_size)?;
+
+        let params = MovementParams {
+            old_shape: pad_to_u32_4(old_shape),
+            new_shape: pad_to_u32_4(new_shape),
+            op_params: pad_to_u32_4(strides),
+            rank: old_shape.len() as u32,
+            padding2: 0,
+            _padding: [0, 0],
+        };
+
+        movement_op(out_grad, result, &params, &ctx.pipelines().stride_backward)
+    }
+
     /// Optimizer step: update parameters using gradients and optimizer state
     ///
     /// Supports SGD, SGD with momentum, and Adam updates on GPU.

@@ -509,6 +509,87 @@ impl RawTensor {
             cpu_cache: RefCell::new(None),
         })
     }
+
+    // ===== MOVEMENT BACKWARD OPERATIONS =====
+
+    /// GPU-accelerated permute backward operation
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_permute_backward(
+        out_grad: &Storage,
+        old_shape: &[usize],
+        new_shape: &[usize],
+        axes: &[usize],
+    ) -> Option<Storage> {
+        let buf = out_grad.gpu_buffer()?;
+        let result = GpuKernels::permute_backward(buf, old_shape, new_shape, axes)?;
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            cpu_cache: RefCell::new(None),
+        })
+    }
+
+    /// GPU-accelerated expand backward operation (sum over broadcast dimensions)
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_expand_backward(
+        out_grad: &Storage,
+        old_shape: &[usize],
+        new_shape: &[usize],
+    ) -> Option<Storage> {
+        let buf = out_grad.gpu_buffer()?;
+        let result = GpuKernels::expand_backward(buf, old_shape, new_shape)?;
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            cpu_cache: RefCell::new(None),
+        })
+    }
+
+    /// GPU-accelerated pad backward operation (extract center region)
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_pad_backward(
+        out_grad: &Storage,
+        old_shape: &[usize],
+        new_shape: &[usize],
+        padding: &[(usize, usize)],
+    ) -> Option<Storage> {
+        let buf = out_grad.gpu_buffer()?;
+        let result = GpuKernels::pad_backward(buf, old_shape, new_shape, padding)?;
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            cpu_cache: RefCell::new(None),
+        })
+    }
+
+    /// GPU-accelerated shrink backward operation (pad back to original size)
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_shrink_backward(
+        out_grad: &Storage,
+        old_shape: &[usize],
+        new_shape: &[usize],
+        ranges: &[(usize, usize)],
+    ) -> Option<Storage> {
+        let buf = out_grad.gpu_buffer()?;
+        let result = GpuKernels::shrink_backward(buf, old_shape, new_shape, ranges)?;
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            cpu_cache: RefCell::new(None),
+        })
+    }
+
+    /// GPU-accelerated stride backward operation (upsample gradient)
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_stride_backward(
+        out_grad: &Storage,
+        old_shape: &[usize],
+        new_shape: &[usize],
+        strides: &[usize],
+    ) -> Option<Storage> {
+        let buf = out_grad.gpu_buffer()?;
+        let result = GpuKernels::stride_backward(buf, old_shape, new_shape, strides)?;
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            cpu_cache: RefCell::new(None),
+        })
+    }
 }
 
 #[cfg(all(test, feature = "gpu"))]
