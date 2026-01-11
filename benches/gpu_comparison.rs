@@ -215,12 +215,17 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
     }
 
     let mut group = c.benchmark_group("gpu_batch_processing");
+    group.sample_size(10); // Reduce from 100 to 10 samples to prevent memory exhaustion
 
     // Compare processing many small operations vs one large operation
+    // This demonstrates GPU kernel dispatch overhead: launching many small
+    // kernels is much slower than one large kernel with the same total work.
+    // Reduced to 20 tensors to prevent memory exhaustion during benchmarking.
     group.bench_function("many_small_ops", |b| {
-        let tensors: Vec<_> = (0..100)
-            .map(|_| random_tensor(256).to_device(Device::gpu().unwrap()))
-            .collect();
+        let tensors: Vec<_> =
+            (0..20) // Reduced from 100 to 20 tensors
+                .map(|_| random_tensor(256).to_device(Device::gpu().unwrap()))
+                .collect();
 
         b.iter(|| {
             for t in &tensors {
@@ -230,7 +235,7 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
     });
 
     group.bench_function("single_large_op", |b| {
-        let large_tensor = random_tensor(25600).to_device(Device::gpu().unwrap());
+        let large_tensor = random_tensor(5120).to_device(Device::gpu().unwrap()); // 20 × 256
         b.iter(|| black_box(&large_tensor).relu())
     });
 

@@ -115,14 +115,17 @@ impl Storage {
     }
 
     /// Create new GPU storage from f32 data (falls back to CPU if GPU unavailable)
+    ///
+    /// The CPU cache is initialized lazily - data is only copied back from GPU
+    /// when accessed via `as_f32_slice()` or similar methods. This avoids
+    /// duplicating data in CPU memory unnecessarily.
     #[cfg(feature = "gpu")]
     pub fn gpu(data: Vec<f32>) -> Self {
         if let Some(buffer) = GpuBuffer::from_slice(&data) {
-            let bytes: Vec<u8> = cast_slice(&data).to_vec();
             Storage::Gpu {
                 buffer: std::sync::Arc::new(buffer),
                 dtype: DType::F32,
-                cpu_cache: RefCell::new(Some(bytes)), // Keep original data as cache
+                cpu_cache: RefCell::new(None), // Lazy initialization on first access
             }
         } else {
             Self::cpu(data)

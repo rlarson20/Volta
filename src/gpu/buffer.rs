@@ -2,8 +2,16 @@
 //!
 //! GpuBuffer wraps a wgpu buffer and provides methods for
 //! transferring data between CPU and GPU.
+//!
+//! # Buffer Pooling
+//!
+//! GpuBuffers are automatically returned to a pool when dropped, enabling
+//! efficient reuse across operations. This prevents memory exhaustion during
+//! repeated GPU operations like benchmarking or training loops.
 
 use super::get_gpu_context;
+use super::pool::BufferPool;
+use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -11,11 +19,17 @@ use std::time::Duration;
 ///
 /// This is analogous to a `Vec<f32>` but the data lives in GPU memory.
 /// We need to explicitly copy data to/from the CPU.
+///
+/// When dropped, the buffer is returned to the pool for reuse rather than
+/// being immediately deallocated. This significantly improves performance
+/// for repeated operations.
 pub struct GpuBuffer {
-    /// The actual GPU buffer
-    buffer: wgpu::Buffer,
+    /// The actual GPU buffer (Option to allow taking on Drop)
+    buffer: Option<wgpu::Buffer>,
     /// Size in number of f32 elements
     len: usize,
+    /// Reference to the pool for returning the buffer on drop
+    pool: Option<Arc<BufferPool>>,
 }
 
 impl GpuBuffer {
@@ -24,44 +38,92 @@ impl GpuBuffer {
     /// This copies the data from CPU to GPU memory.
     pub fn from_slice(data: &[f32]) -> Option<Self> {
         let ctx = get_gpu_context()?;
+        let byte_size = std::mem::size_of_val(data);
+
+        // Try to get a buffer from the pool first
+        if let Some(buffer) = ctx.buffer_pool().acquire(byte_size) {
+            // Write data to the pooled buffer
+            ctx.queue()
+                .write_buffer(&buffer, 0, bytemuck::cast_slice(data));
+
+            return Some(GpuBuffer {
+                buffer: Some(buffer),
+                len: data.len(),
+                pool: Some(ctx.buffer_pool_arc()),
+            });
+        }
+
+        // Allocate with the bucket size (power of 2) for consistent pooling
+        let alloc_size = BufferPool::allocation_size(byte_size);
 
         // Create a buffer with the STORAGE usage (for compute shaders)
         // and COPY_SRC/COPY_DST for data transfer
-        let buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Tensor Buffer"),
-                contents: bytemuck::cast_slice(data),
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_SRC
-                    | wgpu::BufferUsages::COPY_DST,
-            });
-
-        Some(GpuBuffer {
-            buffer,
-            len: data.len(),
-        })
-    }
-
-    /// Create an empty (zeroed) GPU buffer of a given size
-    pub fn zeros(len: usize) -> Option<Self> {
-        let ctx = get_gpu_context()?;
-
         let buffer = ctx.device().create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Tensor Buffer (zeros)"),
-            size: (len * std::mem::size_of::<f32>()) as u64,
+            label: Some("Tensor Buffer"),
+            size: alloc_size as u64,
             usage: wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
-        // Zero-initialize by writing zeros
+        // Write the actual data
+        ctx.queue()
+            .write_buffer(&buffer, 0, bytemuck::cast_slice(data));
+
+        Some(GpuBuffer {
+            buffer: Some(buffer),
+            len: data.len(),
+            pool: Some(ctx.buffer_pool_arc()),
+        })
+    }
+
+    /// Create an empty (zeroed) GPU buffer of a given size
+    ///
+    /// First attempts to acquire a buffer from the pool for reuse.
+    /// If none available, allocates a new buffer with power-of-2 size
+    /// for efficient pooling.
+    pub fn zeros(len: usize) -> Option<Self> {
+        let ctx = get_gpu_context()?;
+        let byte_size = len * std::mem::size_of::<f32>();
+
+        // Try to get a buffer from the pool first
+        if let Some(buffer) = ctx.buffer_pool().acquire(byte_size) {
+            // Zero-initialize the pooled buffer (only the portion we'll use)
+            let zeros = vec![0.0f32; len];
+            ctx.queue()
+                .write_buffer(&buffer, 0, bytemuck::cast_slice(&zeros));
+
+            return Some(GpuBuffer {
+                buffer: Some(buffer),
+                len,
+                pool: Some(ctx.buffer_pool_arc()),
+            });
+        }
+
+        // Allocate with the bucket size (power of 2) for consistent pooling
+        let alloc_size = BufferPool::allocation_size(byte_size);
+
+        // Allocate a new buffer
+        let buffer = ctx.device().create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Tensor Buffer (zeros)"),
+            size: alloc_size as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Zero-initialize by writing zeros (only the portion we'll use)
         let zeros = vec![0.0f32; len];
         ctx.queue()
             .write_buffer(&buffer, 0, bytemuck::cast_slice(&zeros));
 
-        Some(GpuBuffer { buffer, len })
+        Some(GpuBuffer {
+            buffer: Some(buffer),
+            len,
+            pool: Some(ctx.buffer_pool_arc()),
+        })
     }
 
     /// Copy data from GPU back to CPU
@@ -69,6 +131,7 @@ impl GpuBuffer {
     /// This is a relatively expensive operation - try to minimize transfers!
     pub fn to_vec(&self) -> Vec<f32> {
         let ctx = get_gpu_context().expect("GPU context should exist if buffer exists");
+        let buffer = self.buffer.as_ref().expect("Buffer should not be taken");
 
         // Create a staging buffer for reading
         // GPU buffers with STORAGE usage can't be mapped directly
@@ -87,7 +150,7 @@ impl GpuBuffer {
             });
 
         encoder.copy_buffer_to_buffer(
-            &self.buffer,
+            buffer,
             0,
             &staging_buffer,
             0,
@@ -135,7 +198,7 @@ impl GpuBuffer {
 
     /// Get the underlying wgpu buffer (for use in compute passes)
     pub fn buffer(&self) -> &wgpu::Buffer {
-        &self.buffer
+        self.buffer.as_ref().expect("Buffer should not be taken")
     }
 
     /// Get the number of elements
@@ -155,15 +218,24 @@ impl GpuBuffer {
     /// * `len` - Number of elements to copy
     pub fn copy_region(&self, offset: usize, len: usize) -> Option<Self> {
         let ctx = get_gpu_context()?;
+        let src_buffer = self.buffer.as_ref().expect("Buffer should not be taken");
+        let byte_size = len * std::mem::size_of::<f32>();
 
-        let new_buffer = ctx.device().create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Copied Buffer Region"),
-            size: (len * std::mem::size_of::<f32>()) as u64,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        // Try to get a buffer from the pool first
+        let new_buffer = if let Some(pooled) = ctx.buffer_pool().acquire(byte_size) {
+            pooled
+        } else {
+            // Allocate with the bucket size (power of 2) for consistent pooling
+            let alloc_size = BufferPool::allocation_size(byte_size);
+            ctx.device().create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Copied Buffer Region"),
+                size: alloc_size as u64,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
 
         let mut encoder = ctx
             .device()
@@ -172,18 +244,32 @@ impl GpuBuffer {
             });
 
         let byte_offset = (offset * std::mem::size_of::<f32>()) as u64;
-        let byte_size = (len * std::mem::size_of::<f32>()) as u64;
 
-        encoder.copy_buffer_to_buffer(&self.buffer, byte_offset, &new_buffer, 0, byte_size);
+        encoder.copy_buffer_to_buffer(src_buffer, byte_offset, &new_buffer, 0, byte_size as u64);
 
         ctx.queue().submit(Some(encoder.finish()));
 
         Some(GpuBuffer {
-            buffer: new_buffer,
+            buffer: Some(new_buffer),
             len,
+            pool: Some(ctx.buffer_pool_arc()),
         })
     }
 }
 
+impl Drop for GpuBuffer {
+    fn drop(&mut self) {
+        // Return the buffer to the pool for reuse
+        if let Some(buffer) = self.buffer.take()
+            && let Some(pool) = &self.pool
+        {
+            let byte_size = self.len * std::mem::size_of::<f32>();
+            // Try to return to pool; if pool is full, buffer is dropped normally
+            pool.release(buffer, byte_size);
+        }
+        // If no pool reference or pool rejected, buffer drops normally
+    }
+}
+
 // We need this trait for wgpu buffer initialization
-use wgpu::util::DeviceExt;
+// use wgpu::util::DeviceExt; //I think we still need this but I'm getting errors with it rn

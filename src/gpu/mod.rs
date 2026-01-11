@@ -9,10 +9,12 @@
 mod buffer;
 mod context;
 mod kernels;
+mod pool;
 
 pub use buffer::GpuBuffer;
 pub use context::GpuContext;
 pub use kernels::{GpuKernels, MovementParams, OptimizerStepParams};
+pub use pool::{BufferPool, BufferPoolConfig};
 
 use std::sync::OnceLock;
 

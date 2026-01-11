@@ -3,6 +3,9 @@
 //! The GpuContext holds the wgpu device and queue, which are needed
 //! for all GPU operations. Think of it as your "connection" to the GPU.
 
+use super::pool::{BufferPool, BufferPoolConfig};
+use std::sync::Arc;
+
 /// Manages the GPU device, queue, and compiled compute pipelines
 pub struct GpuContext {
     /// The GPU device - represents the actual hardware
@@ -13,6 +16,8 @@ pub struct GpuContext {
     adapter_info: wgpu::AdapterInfo,
     /// Pre-compiled compute pipelines for common operations
     pipelines: ComputePipelines,
+    /// Buffer pool for reusing GPU memory allocations
+    buffer_pool: Arc<BufferPool>,
 }
 
 /// Collection of pre-compiled compute pipelines
@@ -176,11 +181,15 @@ impl GpuContext {
         // Step 4: Compile all our compute shaders
         let pipelines = Self::create_pipelines(&device)?;
 
+        // Step 5: Create the buffer pool for memory reuse
+        let buffer_pool = Arc::new(BufferPool::new(BufferPoolConfig::default()));
+
         Ok(GpuContext {
             device,
             queue,
             adapter_info,
             pipelines,
+            buffer_pool,
         })
     }
 
@@ -202,6 +211,16 @@ impl GpuContext {
     /// Get the compiled pipelines
     pub fn pipelines(&self) -> &ComputePipelines {
         &self.pipelines
+    }
+
+    /// Get a reference to the buffer pool
+    pub fn buffer_pool(&self) -> &BufferPool {
+        &self.buffer_pool
+    }
+
+    /// Get an Arc reference to the buffer pool (for GpuBuffer to hold)
+    pub fn buffer_pool_arc(&self) -> Arc<BufferPool> {
+        Arc::clone(&self.buffer_pool)
     }
 
     /// Create all compute pipelines by compiling shaders
