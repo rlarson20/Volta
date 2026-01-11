@@ -1847,6 +1847,7 @@ impl GpuKernels {
     ///
     /// # Returns
     /// A 2D matrix of shape (B*H_out*W_out, C*K_h*K_w)
+    #[allow(clippy::too_many_arguments)]
     pub fn im2col(
         input: &GpuBuffer,
         batch_size: usize,

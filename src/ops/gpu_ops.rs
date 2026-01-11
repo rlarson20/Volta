@@ -512,6 +512,7 @@ impl RawTensor {
     ///
     /// Transforms 4D input (B, C, H, W) into 2D matrix (B*H_out*W_out, C*K_h*K_w).
     #[cfg(feature = "gpu")]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn gpu_im2col(
         input: &Storage,
         batch_size: usize,
