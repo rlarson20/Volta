@@ -3,6 +3,36 @@ check:
 	cargo build
 	cargo test
 
+# ===== BENCHMARKING =====
+
+# Run all benchmarks
+bench:
+	cargo bench
+
+# Run specific benchmark
+bench-name name:
+	cargo bench --bench {{name}}
+
+# Benchmark CPU only (no features)
+bench-cpu:
+	cargo bench --no-default-features
+
+# Benchmark with Accelerate (macOS BLAS)
+bench-accel:
+	cargo bench --features accelerate --no-default-features
+
+# Benchmark GPU comparison
+bench-gpu:
+	cargo bench --features gpu --bench gpu_comparison
+
+# Save benchmark results for comparison
+bench-save:
+	cargo bench -- --save-baseline main
+
+# Compare against saved baseline
+bench-compare:
+	cargo bench -- --baseline main
+
 
 ask-gpu model:
 	@echo "Cleaning!"

@@ -53,7 +53,22 @@ path = "examples/load_external_mnist.rs"
 [target.'cfg(target_os = "macos")'.dependencies]
 blas-src = { version = "0.14", features = ["accelerate"], optional = true }
 
+[dev-dependencies]
+criterion = "0.5"
+
 [features]
 default = ["gpu", "accelerate"]
 accelerate = ["blas-src"]
 gpu = ["wgpu", "pollster"]
+
+[[bench]]
+name = "tensor_ops"
+harness = false
+
+[[bench]]
+name = "neural_networks"
+harness = false
+
+[[bench]]
+name = "gpu_comparison"
+harness = false
