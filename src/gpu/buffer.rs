@@ -147,6 +147,42 @@ impl GpuBuffer {
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
+
+    /// Copy a region of this buffer to a new GPU buffer
+    ///
+    /// # Arguments
+    /// * `offset` - Starting element offset in this buffer
+    /// * `len` - Number of elements to copy
+    pub fn copy_region(&self, offset: usize, len: usize) -> Option<Self> {
+        let ctx = get_gpu_context()?;
+
+        let new_buffer = ctx.device().create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Copied Buffer Region"),
+            size: (len * std::mem::size_of::<f32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Copy Buffer Region Encoder"),
+            });
+
+        let byte_offset = (offset * std::mem::size_of::<f32>()) as u64;
+        let byte_size = (len * std::mem::size_of::<f32>()) as u64;
+
+        encoder.copy_buffer_to_buffer(&self.buffer, byte_offset, &new_buffer, 0, byte_size);
+
+        ctx.queue().submit(Some(encoder.finish()));
+
+        Some(GpuBuffer {
+            buffer: new_buffer,
+            len,
+        })
+    }
 }
 
 // We need this trait for wgpu buffer initialization

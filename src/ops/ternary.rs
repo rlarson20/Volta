@@ -1,5 +1,7 @@
 use crate::autograd::GradFn;
 use crate::{RawTensor, Tensor};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// Ternary operations: three inputs, one output
 #[derive(Clone, Copy)]
@@ -125,29 +127,86 @@ impl RawTensor {
     pub fn ternary_op(x: &Tensor, y: &Tensor, z: &Tensor, op: TernaryOp) -> Tensor {
         match op {
             TernaryOp::MulAcc => {
-                let (data_x, shape_x, req_x) = {
+                let (data_x, shape_x, req_x, dev_x) = {
                     let s = x.borrow();
-                    (s.data.clone(), s.shape.clone(), s.requires_grad)
+                    (
+                        s.data.clone(),
+                        s.shape.clone(),
+                        s.requires_grad,
+                        s.device.clone(),
+                    )
                 };
-                let (data_y, _, req_y) = {
+                let (data_y, shape_y, req_y, dev_y) = {
                     let s = y.borrow();
-                    (s.data.clone(), s.shape.clone(), s.requires_grad)
+                    (
+                        s.data.clone(),
+                        s.shape.clone(),
+                        s.requires_grad,
+                        s.device.clone(),
+                    )
                 };
-                let (data_z, _, req_z) = {
+                let (data_z, shape_z, req_z, dev_z) = {
                     let s = z.borrow();
-                    (s.data.clone(), s.shape.clone(), s.requires_grad)
+                    (
+                        s.data.clone(),
+                        s.shape.clone(),
+                        s.requires_grad,
+                        s.device.clone(),
+                    )
                 };
-                assert_eq!(shape_x, y.borrow().shape, "MulAcc requires matching shapes");
-                assert_eq!(shape_x, z.borrow().shape, "MulAcc requires matching shapes");
 
+                assert_eq!(
+                    shape_x, shape_y,
+                    "MulAcc requires matching shapes for x and y"
+                );
+                assert_eq!(
+                    shape_x, shape_z,
+                    "MulAcc requires matching shapes for x and z"
+                );
+
+                let requires_grad = req_x || req_y || req_z;
+
+                // Fast path: when all three inputs live on the same GPU device and
+                // shapes match exactly, evaluate z = x * y + w entirely on GPU.
+                #[cfg(feature = "gpu")]
+                {
+                    if dev_x.is_gpu() && dev_x == dev_y && dev_x == dev_z {
+                        if let Some(prod) = RawTensor::gpu_mul(&data_x, &data_y) {
+                            if let Some(sum) = RawTensor::gpu_add(&prod, &data_z) {
+                                let out = Rc::new(RefCell::new(RawTensor {
+                                    data: sum,
+                                    shape: shape_x.clone(),
+                                    grad: None,
+                                    requires_grad,
+                                    grad_fn: None,
+                                    parents: vec![x.clone(), y.clone(), z.clone()],
+                                    device: dev_x.clone(),
+                                }));
+                                if requires_grad {
+                                    out.borrow_mut().grad_fn = Some(Box::new(MulAccGradFn));
+                                }
+                                return out;
+                            } else {
+                                eprintln!(
+                                    "Warning: GPU add for MulAcc failed; falling back to CPU path"
+                                );
+                            }
+                        } else {
+                            eprintln!(
+                                "Warning: GPU mul for MulAcc failed; falling back to CPU path"
+                            );
+                        }
+                    }
+                }
+
+                // CPU fallback.
                 let result_data = data_x
                     .iter()
                     .zip(&data_y)
                     .zip(&data_z)
                     .map(|((a, b), c)| a * b + c)
                     .collect::<Vec<_>>();
-
-                let out = Self::new(result_data, &shape_x, req_x || req_y || req_z);
+                let out = Self::new(result_data, &shape_x, requires_grad);
                 if out.borrow().requires_grad {
                     out.borrow_mut().parents = vec![x.clone(), y.clone(), z.clone()];
                     out.borrow_mut().grad_fn = Some(Box::new(MulAccGradFn));

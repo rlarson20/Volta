@@ -1,5 +1,9 @@
 use crate::autograd::GradFn;
+use crate::device::Device;
+use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// Binary operations: two inputs, one output
 ///
@@ -16,6 +20,61 @@ pub enum BinaryOp {
     Cmplt, // x < y ? 1 : 0 (non-differentiable)
 }
 
+impl RawTensor {
+    #[cfg(feature = "gpu")]
+    fn try_gpu_binary_result(
+        self_t: &Tensor,
+        other: &Tensor,
+        op: BinaryOp,
+    ) -> Option<(Vec<usize>, Storage, Device)> {
+        // Only these ops have GPU kernels at the moment.
+        if !matches!(
+            op,
+            BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::Div
+                | BinaryOp::Max
+                | BinaryOp::Mod
+                | BinaryOp::Cmplt
+        ) {
+            return None;
+        }
+
+        let (shape_a, device_a, storage_a) = {
+            let a = self_t.borrow();
+            (a.shape.clone(), a.device.clone(), a.data.clone())
+        };
+        let (shape_b, device_b, storage_b) = {
+            let b = other.borrow();
+            (b.shape.clone(), b.device.clone(), b.data.clone())
+        };
+
+        // Both tensors must be on the same GPU device.
+        if !device_a.is_gpu() || !device_b.is_gpu() || device_a != device_b {
+            return None;
+        }
+
+        // Broadcasting on GPU is not yet implemented; fall back to CPU when
+        // shapes differ.
+        if shape_a != shape_b {
+            return None;
+        }
+
+        let storage = match op {
+            BinaryOp::Add => RawTensor::gpu_add(&storage_a, &storage_b)?,
+            BinaryOp::Sub => RawTensor::gpu_sub(&storage_a, &storage_b)?,
+            BinaryOp::Mul => RawTensor::gpu_mul(&storage_a, &storage_b)?,
+            BinaryOp::Div => RawTensor::gpu_div(&storage_a, &storage_b)?,
+            BinaryOp::Max => RawTensor::gpu_max(&storage_a, &storage_b)?,
+            BinaryOp::Mod => RawTensor::gpu_mod(&storage_a, &storage_b)?,
+            BinaryOp::Cmplt => RawTensor::gpu_cmplt(&storage_a, &storage_b)?,
+        };
+
+        Some((shape_a, storage, device_a))
+    }
+}
+
 /// Gradient function for binary operations
 ///
 /// Handles broadcasting during backward pass - gradients must be summed
@@ -29,6 +88,103 @@ impl GradFn for BinaryGradFn {
         let x_val = parents[0].borrow();
         let y_val = parents[1].borrow();
 
+        // Check GPU path - use legacy path for same-shape, broadcast path for different shapes
+        #[cfg(feature = "gpu")]
+        {
+            if out_grad.device.is_gpu() && x_val.device.is_gpu() && y_val.device.is_gpu() {
+                // For same-shape case, use legacy path (more tested)
+                if out_grad.shape == x_val.shape && out_grad.shape == y_val.shape {
+                    if let Some((kernel_a, kernel_b)) = binary_backward_kernel_names(self.op) {
+                        let gx = if x_val.requires_grad {
+                            RawTensor::gpu_binary_backward_a(
+                                &out_grad.data,
+                                &x_val.data,
+                                &y_val.data,
+                                kernel_a,
+                            )
+                            .map(|storage| {
+                                RawTensor::new_with_storage(
+                                    storage,
+                                    &x_val.shape,
+                                    x_val.device.clone(),
+                                    false,
+                                )
+                            })
+                        } else {
+                            None
+                        };
+
+                        let gy = if y_val.requires_grad {
+                            RawTensor::gpu_binary_backward_b(
+                                &out_grad.data,
+                                &x_val.data,
+                                &y_val.data,
+                                kernel_b,
+                            )
+                            .map(|storage| {
+                                RawTensor::new_with_storage(
+                                    storage,
+                                    &y_val.shape,
+                                    y_val.device.clone(),
+                                    false,
+                                )
+                            })
+                        } else {
+                            None
+                        };
+
+                        // If GPU path succeeded, return early
+                        if (x_val.requires_grad && gx.is_some())
+                            || (y_val.requires_grad && gy.is_some())
+                        {
+                            return vec![gx, gy];
+                        }
+                    }
+                } else if let Some(broadcast_kernel) =
+                    binary_backward_broadcast_kernel_name(self.op)
+                {
+                    // For different shapes (broadcasting), try RACE-FREE broadcast path
+                    if let Some((grad_a_storage, grad_b_storage)) =
+                        RawTensor::gpu_binary_backward_broadcast_safe(
+                            &out_grad.data,
+                            &x_val.data,
+                            &y_val.data,
+                            broadcast_kernel,
+                            &out_grad.shape,
+                            &x_val.shape,
+                            &y_val.shape,
+                        )
+                    {
+                        let gx = if x_val.requires_grad {
+                            Some(RawTensor::new_with_storage(
+                                grad_a_storage,
+                                &x_val.shape,
+                                x_val.device.clone(),
+                                false,
+                            ))
+                        } else {
+                            None
+                        };
+
+                        let gy = if y_val.requires_grad {
+                            Some(RawTensor::new_with_storage(
+                                grad_b_storage,
+                                &y_val.shape,
+                                y_val.device.clone(),
+                                false,
+                            ))
+                        } else {
+                            None
+                        };
+
+                        return vec![gx, gy];
+                    }
+                    // If all GPU paths failed, fall through to CPU path
+                }
+            }
+        }
+
+        // CPU fallback
         let (grad_x, grad_y) = match self.op {
             BinaryOp::Add => {
                 // ∂(x+y)/∂x = 1, ∂(x+y)/∂y = 1
@@ -194,6 +350,32 @@ impl GradFn for BinaryGradFn {
 
     fn clone_box(&self) -> Box<dyn GradFn> {
         Box::new(BinaryGradFn { op: self.op })
+    }
+}
+
+// Map a `BinaryOp` to the corresponding GPU backward kernel names, if supported.
+// Returns (kernel_for_grad_a, kernel_for_grad_b)
+#[cfg(feature = "gpu")]
+fn binary_backward_kernel_names(op: BinaryOp) -> Option<(&'static str, &'static str)> {
+    match op {
+        BinaryOp::Add => Some(("add_backward_a", "add_backward_b")),
+        BinaryOp::Sub => Some(("sub_backward_a", "sub_backward_b")),
+        BinaryOp::Mul => Some(("mul_backward_a", "mul_backward_b")),
+        BinaryOp::Div => Some(("div_backward_a", "div_backward_b")),
+        BinaryOp::Max => Some(("max_backward_a", "max_backward_b")),
+        BinaryOp::Mod | BinaryOp::Cmplt => None, // Non-differentiable
+    }
+}
+
+/// Get the broadcast kernel name for a binary operation
+fn binary_backward_broadcast_kernel_name(op: BinaryOp) -> Option<&'static str> {
+    match op {
+        BinaryOp::Add => Some("add"),
+        BinaryOp::Sub => Some("sub"),
+        BinaryOp::Mul => Some("mul"),
+        BinaryOp::Div => Some("div"),
+        BinaryOp::Max => Some("max"),
+        BinaryOp::Mod | BinaryOp::Cmplt => None, // Non-differentiable
     }
 }
 
@@ -370,7 +552,38 @@ impl RawTensor {
             (o.data.clone(), o.shape.clone(), o.requires_grad)
         };
 
-        // Compute broadcast shape
+        // Mod and Cmplt are non-differentiable
+        let requires_grad = match op {
+            BinaryOp::Mod | BinaryOp::Cmplt => false,
+            _ => req_a || req_b,
+        };
+
+        // If both operands are already on the same GPU and we have a matching
+        // kernel, try to perform the operation there and fall back to CPU
+        // otherwise.
+        #[cfg(feature = "gpu")]
+        {
+            if RawTensor::common_gpu_device(&[self_t, other]).is_some()
+                && let Some((shape, storage, device)) =
+                    Self::try_gpu_binary_result(self_t, other, op)
+            {
+                let out = Rc::new(RefCell::new(RawTensor {
+                    data: storage,
+                    shape,
+                    grad: None,
+                    requires_grad,
+                    grad_fn: None,
+                    parents: vec![self_t.clone(), other.clone()],
+                    device,
+                }));
+                if requires_grad {
+                    out.borrow_mut().grad_fn = Some(Box::new(BinaryGradFn { op }));
+                }
+                return out;
+            }
+        }
+
+        // CPU path: compute broadcast shape and perform the operation on host data.
         let out_shape = Self::broadcast_shape(&shape_a, &shape_b);
 
         // Broadcast inputs to output shape
@@ -400,12 +613,6 @@ impl RawTensor {
                 }
             })
             .collect();
-
-        // Mod and Cmplt are non-differentiable
-        let requires_grad = match op {
-            BinaryOp::Mod | BinaryOp::Cmplt => false,
-            _ => req_a || req_b,
-        };
 
         let out = Self::new(result_data, &out_shape, requires_grad);
 

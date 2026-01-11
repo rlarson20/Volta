@@ -1,5 +1,7 @@
 use crate::autograd::GradFn;
 use crate::{RawTensor, Tensor};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 // ===== TRANSPOSE GRADIENT =====
 
@@ -118,14 +120,26 @@ impl RawTensor {
     /// - (m,n) @ (n,) -> (m,)    [matrix-vector]
     /// - (n,) @ (n,p) -> (p,)    [vector-matrix]
     /// - (n,) @ (n,) -> scalar   [dot product]
+    // TODO: since i updated the device stuff, fix the unused vars since it'll probably be
+    // relevant somewhere
     pub fn matmul(self_t: &Tensor, other: &Tensor) -> Tensor {
-        let (data_a, shape_a, req_a) = {
+        let (data_a, shape_a, req_a, _dev_a) = {
             let s = self_t.borrow();
-            (s.data.clone(), s.shape.clone(), s.requires_grad)
+            (
+                s.data.clone(),
+                s.shape.clone(),
+                s.requires_grad,
+                s.device.clone(),
+            )
         };
-        let (data_b, shape_b, req_b) = {
+        let (data_b, shape_b, req_b, _dev_b) = {
             let o = other.borrow();
-            (o.data.clone(), o.shape.clone(), o.requires_grad)
+            (
+                o.data.clone(),
+                o.shape.clone(),
+                o.requires_grad,
+                o.device.clone(),
+            )
         };
 
         // Handle different cases
@@ -140,6 +154,35 @@ impl RawTensor {
                     m, n, n2, p
                 );
 
+                // If both inputs live on the same GPU device, try the GPU path first.
+                // Fallback to the existing CPU implementation if anything fails.
+                #[cfg(feature = "gpu")]
+                {
+                    if let Some(device) = RawTensor::common_gpu_device(&[self_t, other]) {
+                        if let Some(storage) = Self::gpu_matmul(&data_a, &data_b, m, n, p) {
+                            let requires_grad = req_a || req_b;
+                            let out = Rc::new(RefCell::new(RawTensor {
+                                data: storage,
+                                shape: vec![m, p],
+                                grad: None,
+                                requires_grad,
+                                grad_fn: None,
+                                parents: vec![self_t.clone(), other.clone()],
+                                device: device.clone(),
+                            }));
+                            if requires_grad {
+                                out.borrow_mut().grad_fn = Some(Box::new(MatMulGradFn));
+                            }
+                            return out;
+                        } else {
+                            eprintln!(
+                                "Warning: GPU matmul requested but failed; falling back to CPU"
+                            );
+                        }
+                    }
+                }
+
+                // CPU fallback: BLAS/Accelerate or matrixmultiply on host data.
                 let result_data = Self::matmul_raw(&data_a, &data_b, m, n, p);
                 let out = Self::new(result_data, &[m, p], req_a || req_b);
 
@@ -308,6 +351,64 @@ impl GradFn for MatMulGradFn {
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let x = parents[0].borrow();
         let y = parents[1].borrow();
+
+        // Check if we can do GPU backward (same pattern as unary/binary)
+        #[cfg(feature = "gpu")]
+        {
+            // For GPU backward, we need:
+            // - out_grad on GPU
+            // - The corresponding input (x for grad_x, y for grad_y) on GPU
+            // - Same device for all involved tensors
+            let gpu_available = out_grad.device.is_gpu()
+                && ((x.device.is_gpu() && y.device.is_gpu())
+                    || (!x.requires_grad || !y.requires_grad));
+
+            if gpu_available {
+                // For MVP, only handle the standard 2D×2D case on GPU
+                if x.shape.len() == 2 && y.shape.len() == 2 {
+                    let m = out_grad.shape[0];
+                    let n = out_grad.shape[1];
+                    let k = y.shape[0]; // y is (k, n)
+
+                    let grad_x = if x.requires_grad {
+                        if let Some(storage) =
+                            RawTensor::gpu_matmul_backward_a(&out_grad.data, &y.data, m, k, n)
+                        {
+                            Some(RawTensor::new_with_storage(
+                                storage,
+                                &x.shape,
+                                x.device.clone(),
+                                false,
+                            ))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    let grad_y = if y.requires_grad {
+                        if let Some(storage) =
+                            RawTensor::gpu_matmul_backward_b(&x.data, &out_grad.data, m, k, n)
+                        {
+                            Some(RawTensor::new_with_storage(
+                                storage,
+                                &y.shape,
+                                y.device.clone(),
+                                false,
+                            ))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    return vec![grad_x, grad_y];
+                }
+                // For other cases (matrix-vector, etc.), fall through to CPU implementation
+            }
+        }
 
         // For z = x @ y where x: (m,n), y: (n,p), z: (m,p)
         // ∂L/∂x = ∂L/∂z @ y^T  -> (m,p) @ (p,n) = (m,n)

@@ -63,5 +63,76 @@ mod gpu_extended_tests {
         // Test Neg
         let res_neg = gpu::GpuKernels::unary_op(&buf, "neg").unwrap().to_vec();
         assert_eq!(res_neg, vec![1.0, -0.0, -1.0, -4.0]);
+
+        // Test Recip (using positive inputs to avoid division by zero)
+        let buf_recip = gpu::GpuBuffer::from_slice(&[1.0, 2.0, 4.0, 8.0]).unwrap();
+        let res_recip = gpu::GpuKernels::unary_op(&buf_recip, "recip")
+            .unwrap()
+            .to_vec();
+        for (i, &val) in res_recip.iter().enumerate() {
+            let expected = 1.0 / [1.0, 2.0, 4.0, 8.0][i];
+            assert!(
+                (val - expected).abs() < 1e-5,
+                "Recip failed at index {}: got {}, expected {}",
+                i,
+                val,
+                expected
+            );
+        }
+
+        // Test Exp2
+        let res_exp2 = gpu::GpuKernels::unary_op(&buf, "exp2").unwrap().to_vec();
+        for (i, &val) in res_exp2.iter().enumerate() {
+            let expected = 2_f32.powf([-1.0, 0.0, 1.0, 4.0][i]);
+            assert!(
+                (val - expected).abs() < 1e-4,
+                "Exp2 failed at index {}: got {}, expected {}",
+                i,
+                val,
+                expected
+            );
+        }
+
+        // Test Log2 (using positive inputs)
+        let buf_log2 = gpu::GpuBuffer::from_slice(&[1.0, 2.0, 4.0, 8.0]).unwrap();
+        let res_log2 = gpu::GpuKernels::unary_op(&buf_log2, "log2")
+            .unwrap()
+            .to_vec();
+        for (i, &val) in res_log2.iter().enumerate() {
+            let expected = [0.0, 1.0, 2.0, 3.0][i];
+            assert!(
+                (val - expected).abs() < 1e-5,
+                "Log2 failed at index {}: got {}, expected {}",
+                i,
+                val,
+                expected
+            );
+        }
+
+        // Test Sin
+        let res_sin = gpu::GpuKernels::unary_op(&buf, "sin").unwrap().to_vec();
+        for (i, &val) in res_sin.iter().enumerate() {
+            let expected = [-1.0_f32.sin(), 0.0_f32.sin(), 1.0_f32.sin(), 4.0_f32.sin()][i];
+            assert!(
+                (val - expected).abs() < 1e-5,
+                "Sin failed at index {}: got {}, expected {}",
+                i,
+                val,
+                expected
+            );
+        }
+
+        // Test Cos
+        let res_cos = gpu::GpuKernels::unary_op(&buf, "cos").unwrap().to_vec();
+        let expected_vals = [0.5403023, 1.0, 0.5403023, -0.6536436]; // cos([-1, 0, 1, 4])
+        for (i, &val) in res_cos.iter().enumerate() {
+            assert!(
+                (val - expected_vals[i]).abs() < 1e-5,
+                "Cos failed at index {}: got {}, expected {}",
+                i,
+                val,
+                expected_vals[i]
+            );
+        }
     }
 }

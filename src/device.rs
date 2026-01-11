@@ -3,14 +3,12 @@ use std::fmt;
 
 /// Compute device for tensor operations
 ///
-/// Currently only CPU is implemented. GPU would require integration
-/// with CUDA/OpenCL, and Metal is for Apple Silicon.
+/// In progress adding GPU support with wgpu.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub enum Device {
     #[default]
     CPU,
     GPU(String),
-    Metal(String),
 }
 
 impl Device {
@@ -28,8 +26,37 @@ impl Device {
     pub fn name(&self) -> &str {
         match self {
             Device::CPU => "CPU",
-            Device::GPU(name) | Device::Metal(name) => name.as_str(),
+            Device::GPU(name) => name.as_str(),
         }
+    }
+
+    /// Get the default GPU device.
+    ///
+    /// Returns `Some(Device::GPU)` if GPU is available, `None` otherwise.
+    /// The GPU name comes from the initialized GPU context.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # #[cfg(feature = "gpu")]
+    /// # {
+    /// use volta::Device;
+    ///
+    /// if let Some(gpu) = Device::gpu() {
+    ///     println!("Using GPU: {}", gpu.name());
+    /// } else {
+    ///     println!("GPU not available, using CPU");
+    /// }
+    /// # }
+    /// ```
+    #[cfg(feature = "gpu")]
+    pub fn gpu() -> Option<Self> {
+        crate::gpu::get_gpu_context().map(|ctx| Device::GPU(ctx.device_name().to_string()))
+    }
+
+    /// When GPU feature is disabled, gpu() always returns None
+    #[cfg(not(feature = "gpu"))]
+    pub fn gpu() -> Option<Self> {
+        None
     }
 }
 

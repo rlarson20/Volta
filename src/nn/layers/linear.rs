@@ -1,4 +1,5 @@
 use crate::Storage;
+use crate::device::Device;
 use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
 use crate::tensor::{RawTensor, Tensor, TensorOps};
@@ -59,6 +60,46 @@ impl Linear {
             let b = RawTensor::zeros(&[out_features]);
             b.borrow_mut().requires_grad = true;
             Some(b)
+        } else {
+            None
+        };
+        Linear { weight: w, bias: b }
+    }
+
+    /// Create a new linear layer on a specific device
+    ///
+    /// Uses Xavier initialization and places tensors on the specified device.
+    ///
+    /// # Arguments
+    /// * `in_features` - Size of input features
+    /// * `out_features` - Size of output features
+    /// * `use_bias` - Whether to include a bias term
+    /// * `device` - Device to place parameters on (CPU or GPU)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use volta::{Linear, Device};
+    /// # #[cfg(feature = "gpu")]
+    /// # {
+    /// let device = Device::gpu().expect("GPU required");
+    /// let layer = Linear::new_on_device(784, 128, true, device);
+    /// // Parameters are now on GPU
+    /// # }
+    /// ```
+    pub fn new_on_device(
+        in_features: usize,
+        out_features: usize,
+        use_bias: bool,
+        device: Device,
+    ) -> Self {
+        let w = RawTensor::xavier_uniform(&[in_features, out_features]);
+        w.borrow_mut().requires_grad = true;
+        let w = w.to_device(device.clone());
+
+        let b = if use_bias {
+            let b = RawTensor::zeros(&[out_features]);
+            b.borrow_mut().requires_grad = true;
+            Some(b.to_device(device))
         } else {
             None
         };

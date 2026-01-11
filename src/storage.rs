@@ -10,15 +10,17 @@ use crate::dtype::DType;
 use crate::gpu::{GpuBuffer, is_gpu_available};
 use bytemuck::{cast_slice, cast_slice_mut};
 use half::{bf16, f16};
+
+#[cfg(feature = "gpu")]
+use std::cell::RefCell;
 use std::ops::{
     Index, IndexMut, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo, RangeToInclusive,
 };
 
 /// Storage backend for tensor data
 ///
-/// This enum allows tensors to store their data either on CPU (as a byte buffer)
-/// or on GPU (as a GpuBuffer). The dtype field indicates how to interpret the bytes.
-#[derive(Clone)]
+/// This enum allows tensors to store their data either on CPU (as raw bytes with dtype)
+/// or on GPU (as a `GpuBuffer`). Operations automatically handle the right backend.
 pub enum Storage {
     /// CPU storage - data lives in main memory as raw bytes
     Cpu { data: Vec<u8>, dtype: DType },
@@ -31,8 +33,30 @@ pub enum Storage {
         /// Data type
         dtype: DType,
         /// Cached CPU copy (for operations that need CPU access)
-        cpu_cache: Option<Vec<u8>>,
+        /// Uses RefCell for lazy population - populated on first CPU access
+        cpu_cache: RefCell<Option<Vec<u8>>>,
     },
+}
+
+impl Clone for Storage {
+    fn clone(&self) -> Self {
+        match self {
+            Storage::Cpu { data, dtype } => Storage::Cpu {
+                data: data.clone(),
+                dtype: *dtype,
+            },
+            #[cfg(feature = "gpu")]
+            Storage::Gpu {
+                buffer,
+                dtype,
+                cpu_cache,
+            } => Storage::Gpu {
+                buffer: buffer.clone(),
+                dtype: *dtype,
+                cpu_cache: RefCell::new(cpu_cache.borrow().clone()),
+            },
+        }
+    }
 }
 
 impl Storage {
@@ -98,7 +122,7 @@ impl Storage {
             Storage::Gpu {
                 buffer: std::sync::Arc::new(buffer),
                 dtype: DType::F32,
-                cpu_cache: Some(bytes),
+                cpu_cache: RefCell::new(Some(bytes)), // Keep original data as cache
             }
         } else {
             Self::cpu(data)
@@ -121,6 +145,34 @@ impl Storage {
         }
     }
 
+    /// Create new zero-filled storage on the specified device
+    pub fn new_zeros(len: usize, device: &Device) -> Self {
+        match device {
+            Device::CPU => Storage::cpu(vec![0.0; len]),
+            Device::GPU(_) => {
+                #[cfg(feature = "gpu")]
+                {
+                    if is_gpu_available() {
+                        // Create GPU zeros
+                        if let Some(buffer) = GpuBuffer::zeros(len) {
+                            return Storage::Gpu {
+                                buffer: std::sync::Arc::new(buffer),
+                                dtype: DType::F32,
+                                cpu_cache: RefCell::new(None),
+                            };
+                        }
+                    }
+                    // Fall back to CPU
+                    Storage::cpu(vec![0.0; len])
+                }
+                #[cfg(not(feature = "gpu"))]
+                {
+                    Storage::cpu(vec![0.0; len])
+                }
+            }
+        }
+    }
+
     // ========== F32 Access (Backward Compatible) ==========
 
     /// Get data as f32 slice. Only valid if dtype is F32.
@@ -133,14 +185,31 @@ impl Storage {
             }
             #[cfg(feature = "gpu")]
             Storage::Gpu {
-                cpu_cache, dtype, ..
+                buffer,
+                dtype,
+                cpu_cache,
             } => {
                 assert_eq!(*dtype, DType::F32, "Storage dtype is {:?}, not F32", dtype);
-                cast_slice(
-                    cpu_cache
-                        .as_ref()
-                        .expect("GPU buffer needs sync before slice access"),
-                )
+                // Ensure cache is populated (lazy transfer from GPU)
+                {
+                    let mut cache = cpu_cache.borrow_mut();
+                    if cache.is_none() {
+                        let f32_data = buffer.to_vec();
+                        let bytes: Vec<u8> = cast_slice(&f32_data).to_vec();
+                        *cache = Some(bytes);
+                    }
+                }
+                // SAFETY: cache is now populated and never cleared.
+                // We use as_ptr() to get a reference that outlives the RefCell borrow.
+                // This is safe because:
+                // 1. The cache is Some(Vec<u8>) after the block above
+                // 2. We never clear the cache once populated
+                // 3. The Vec inside is stable (won't move/reallocate)
+                // 4. We cast bytes to &[f32] using cast_slice
+                unsafe {
+                    let bytes = (*cpu_cache.as_ptr()).as_ref().unwrap().as_slice();
+                    cast_slice(bytes)
+                }
             }
         }
     }
@@ -178,8 +247,25 @@ impl Storage {
             Storage::Cpu { data, dtype } if *dtype == DType::F64 => Some(cast_slice(data)),
             #[cfg(feature = "gpu")]
             Storage::Gpu {
-                cpu_cache, dtype, ..
-            } if *dtype == DType::F64 => cpu_cache.as_ref().map(|c| cast_slice(c.as_slice())),
+                buffer,
+                dtype,
+                cpu_cache,
+            } if *dtype == DType::F64 => {
+                // Ensure cache is populated (lazy transfer from GPU)
+                {
+                    let mut cache = cpu_cache.borrow_mut();
+                    if cache.is_none() {
+                        let f32_data = buffer.to_vec();
+                        let bytes: Vec<u8> = cast_slice(&f32_data).to_vec();
+                        *cache = Some(bytes);
+                    }
+                }
+                // SAFETY: Similar to as_f32_slice(), cache is populated and stable
+                unsafe {
+                    let bytes = (*cpu_cache.as_ptr()).as_ref().unwrap().as_slice();
+                    Some(cast_slice(bytes))
+                }
+            }
             _ => None,
         }
     }
@@ -190,8 +276,25 @@ impl Storage {
             Storage::Cpu { data, dtype } if *dtype == DType::F16 => Some(cast_slice(data)),
             #[cfg(feature = "gpu")]
             Storage::Gpu {
-                cpu_cache, dtype, ..
-            } if *dtype == DType::F16 => cpu_cache.as_ref().map(|c| cast_slice(c.as_slice())),
+                buffer,
+                dtype,
+                cpu_cache,
+            } if *dtype == DType::F16 => {
+                // Ensure cache is populated (lazy transfer from GPU)
+                {
+                    let mut cache = cpu_cache.borrow_mut();
+                    if cache.is_none() {
+                        let f32_data = buffer.to_vec();
+                        let bytes: Vec<u8> = cast_slice(&f32_data).to_vec();
+                        *cache = Some(bytes);
+                    }
+                }
+                // SAFETY: Similar to as_f32_slice(), cache is populated and stable
+                unsafe {
+                    let bytes = (*cpu_cache.as_ptr()).as_ref().unwrap().as_slice();
+                    Some(cast_slice(bytes))
+                }
+            }
             _ => None,
         }
     }
@@ -202,8 +305,25 @@ impl Storage {
             Storage::Cpu { data, dtype } if *dtype == DType::BF16 => Some(cast_slice(data)),
             #[cfg(feature = "gpu")]
             Storage::Gpu {
-                cpu_cache, dtype, ..
-            } if *dtype == DType::BF16 => cpu_cache.as_ref().map(|c| cast_slice(c.as_slice())),
+                buffer,
+                dtype,
+                cpu_cache,
+            } if *dtype == DType::BF16 => {
+                // Ensure cache is populated (lazy transfer from GPU)
+                {
+                    let mut cache = cpu_cache.borrow_mut();
+                    if cache.is_none() {
+                        let f32_data = buffer.to_vec();
+                        let bytes: Vec<u8> = cast_slice(&f32_data).to_vec();
+                        *cache = Some(bytes);
+                    }
+                }
+                // SAFETY: Similar to as_f32_slice(), cache is populated and stable
+                unsafe {
+                    let bytes = (*cpu_cache.as_ptr()).as_ref().unwrap().as_slice();
+                    Some(cast_slice(bytes))
+                }
+            }
             _ => None,
         }
     }
@@ -213,9 +333,23 @@ impl Storage {
         match self {
             Storage::Cpu { data, .. } => data,
             #[cfg(feature = "gpu")]
-            Storage::Gpu { cpu_cache, .. } => cpu_cache
-                .as_ref()
-                .expect("GPU buffer needs sync before byte access"),
+            Storage::Gpu {
+                buffer,
+                cpu_cache,
+                dtype: _,
+            } => {
+                // Ensure cache is populated (lazy transfer from GPU)
+                {
+                    let mut cache = cpu_cache.borrow_mut();
+                    if cache.is_none() {
+                        let f32_data = buffer.to_vec();
+                        let bytes: Vec<u8> = cast_slice(&f32_data).to_vec();
+                        *cache = Some(bytes);
+                    }
+                }
+                // SAFETY: Similar to as_f32_slice(), cache is populated and stable
+                unsafe { (*cpu_cache.as_ptr()).as_ref().unwrap().as_slice() }
+            }
         }
     }
 
@@ -370,7 +504,7 @@ impl Storage {
                     dtype: self.dtype(),
                 }
             }
-            Device::GPU(_) | Device::Metal(_) => {
+            Device::GPU(_) => {
                 #[cfg(feature = "gpu")]
                 {
                     if is_gpu_available() {

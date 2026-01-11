@@ -8,6 +8,6 @@
 .aider*
 
 *.bin
-
 # Data files
-data/mnist/
+data/
+node_modules/

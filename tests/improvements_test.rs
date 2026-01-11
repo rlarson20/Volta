@@ -47,12 +47,6 @@ fn test_device_safety_improvements() {
     assert!(gpu_device.is_gpu());
     assert_eq!(gpu_device.name(), "CUDA");
     assert_eq!(gpu_device.to_string(), "CUDA");
-
-    // Test Metal device
-    let metal_device = Device::Metal("Metal".to_string());
-    assert!(!metal_device.is_cpu());
-    assert!(!metal_device.is_gpu());
-    assert_eq!(metal_device.name(), "Metal");
 }
 
 #[test]

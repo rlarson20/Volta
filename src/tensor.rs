@@ -131,6 +131,33 @@ impl RawTensor {
         };
         Rc::new(RefCell::new(raw))
     }
+
+    /// Create a new tensor from Storage and shape (internal use for GPU ops)
+    #[allow(dead_code)]
+    pub(crate) fn new_with_storage(
+        data: crate::storage::Storage,
+        shape: &[usize],
+        device: Device,
+        requires_grad: bool,
+    ) -> Tensor {
+        assert_eq!(
+            data.len(),
+            shape.iter().product::<usize>(),
+            "Data length must match shape"
+        );
+
+        let raw = RawTensor {
+            data,
+            shape: shape.to_vec(),
+            grad: None,
+            requires_grad,
+            grad_fn: None,
+            parents: vec![],
+            device,
+        };
+        Rc::new(RefCell::new(raw))
+    }
+
     /// Create a tensor filled with zeros
     pub fn zeros(shape: &[usize]) -> Tensor {
         let size = shape.iter().product();
@@ -204,6 +231,27 @@ impl RawTensor {
         let data: Vec<f32> = with_rng(|rng| (0..size).map(|_| normal.sample(rng)).collect());
 
         Self::new(data, shape, false)
+    }
+}
+
+#[cfg(feature = "gpu")]
+impl RawTensor {
+    /// Return the GPU device shared by `tensors` if every tensor lives on the same GPU.
+    ///
+    /// This avoids accidentally invoking GPU kernels when inputs are on mixed devices.
+    pub(crate) fn common_gpu_device(tensors: &[&Tensor]) -> Option<Device> {
+        let first = tensors.first()?;
+        let first_device = first.borrow().device.clone();
+        if !first_device.is_gpu() {
+            return None;
+        }
+        for tensor in tensors.iter().skip(1) {
+            let device = tensor.borrow().device.clone();
+            if device != first_device {
+                return None;
+            }
+        }
+        Some(first_device)
     }
 }
 
@@ -440,7 +488,7 @@ impl RawTensor {
     /// `x.sum_dim(1`, false) // -> [6, 15] shape \[2\]
     /// `x.sum_dim(1`, true)  // -> [\[6\], \[15\]] shape \[2,1\]
     pub fn sum_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
-        let (data, shape, req_grad) = {
+        let (data, shape, req_grad, device) = {
             let s = self_t.borrow();
             assert!(
                 dim < s.shape.len(),
@@ -448,41 +496,36 @@ impl RawTensor {
                 dim,
                 s.shape
             );
-            (s.data.clone(), s.shape.clone(), s.requires_grad)
+            (
+                s.data.clone(),
+                s.shape.clone(),
+                s.requires_grad,
+                s.device.clone(),
+            )
         };
 
-        let _dim_size = shape[dim];
+        let dim_size = shape[dim];
         let mut out_shape = shape.clone();
         out_shape[dim] = 1; // intermediate shape before squeeze
         let out_size: usize = out_shape.iter().product();
         let mut result = vec![0.0; out_size];
 
-        // Compute strides for indexing
-        let _strides = Self::compute_strides(&shape);
-        let out_strides = Self::compute_strides(&out_shape);
+        // Optimized stride-based reduction: O(1) per element instead of O(rank) coordinate conversion
+        // View data as: [outer_size, dim_size, inner_size] where we sum over dim_size
+        let outer_size: usize = shape[..dim].iter().product();
+        let inner_size: usize = shape[dim + 1..].iter().product();
 
-        // Sum over the target dimension
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..data.len() {
-            // Convert linear index to coordinates
-            let mut coords = vec![0; shape.len()];
-            let mut rem = i;
-            for (d, &dim_sz) in shape.iter().enumerate().rev() {
-                coords[d] = rem % dim_sz;
-                rem /= dim_sz;
+        // Sum over the target dimension using stride arithmetic
+        for outer in 0..outer_size {
+            for inner in 0..inner_size {
+                let out_idx = outer * inner_size + inner;
+                let mut sum = 0.0;
+                for k in 0..dim_size {
+                    let in_idx = outer * dim_size * inner_size + k * inner_size + inner;
+                    sum += data[in_idx];
+                }
+                result[out_idx] = sum;
             }
-
-            // Zero out the target dimension for output indexing
-            let mut out_coords = coords.clone();
-            out_coords[dim] = 0;
-
-            // Convert output coords to linear index
-            let out_idx: usize = out_coords
-                .iter()
-                .zip(&out_strides)
-                .map(|(c, s)| c * s)
-                .sum();
-            result[out_idx] += data[i];
         }
 
         // Squeeze dimension if keepdim=false
@@ -498,6 +541,12 @@ impl RawTensor {
         };
 
         let out = Self::new(result, &final_shape, req_grad);
+        // Place the reduction result on the same logical device as the input.
+        {
+            let mut ob = out.borrow_mut();
+            ob.data = ob.data.to_device(&device);
+            ob.device = device;
+        }
 
         if req_grad {
             out.borrow_mut().parents = vec![self_t.clone()];
@@ -548,7 +597,7 @@ impl RawTensor {
     ///
     /// Returns maximum value along dimension and stores indices for backward pass.
     pub fn max_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
-        let (data, shape, req_grad) = {
+        let (data, shape, req_grad, device) = {
             let s = self_t.borrow();
             assert!(
                 dim < s.shape.len(),
@@ -556,10 +605,15 @@ impl RawTensor {
                 dim,
                 s.shape
             );
-            (s.data.clone(), s.shape.clone(), s.requires_grad)
+            (
+                s.data.clone(),
+                s.shape.clone(),
+                s.requires_grad,
+                s.device.clone(),
+            )
         };
 
-        let _dim_size = shape[dim];
+        let dim_size = shape[dim];
         let mut out_shape = shape.clone();
         out_shape[dim] = 1;
         let out_size: usize = out_shape.iter().product();
@@ -567,29 +621,22 @@ impl RawTensor {
         let mut result = vec![f32::NEG_INFINITY; out_size];
         let mut max_indices = vec![0; out_size]; // track which index won
 
-        let _strides = Self::compute_strides(&shape);
-        let out_strides = Self::compute_strides(&out_shape);
+        // Optimized stride-based reduction: O(1) per element instead of O(rank) coordinate conversion
+        // View data as: [outer_size, dim_size, inner_size] where we find max over dim_size
+        let outer_size: usize = shape[..dim].iter().product();
+        let inner_size: usize = shape[dim + 1..].iter().product();
 
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..data.len() {
-            let mut coords = vec![0; shape.len()];
-            let mut rem = i;
-            for (d, &dim_sz) in shape.iter().enumerate().rev() {
-                coords[d] = rem % dim_sz;
-                rem /= dim_sz;
-            }
-
-            let mut out_coords = coords.clone();
-            out_coords[dim] = 0;
-            let out_idx: usize = out_coords
-                .iter()
-                .zip(&out_strides)
-                .map(|(c, s)| c * s)
-                .sum();
-
-            if data[i] > result[out_idx] {
-                result[out_idx] = data[i];
-                max_indices[out_idx] = i; // store linear index of max element
+        // Find max over the target dimension using stride arithmetic
+        for outer in 0..outer_size {
+            for inner in 0..inner_size {
+                let out_idx = outer * inner_size + inner;
+                for k in 0..dim_size {
+                    let in_idx = outer * dim_size * inner_size + k * inner_size + inner;
+                    if data[in_idx] > result[out_idx] {
+                        result[out_idx] = data[in_idx];
+                        max_indices[out_idx] = in_idx; // store linear index of max element
+                    }
+                }
             }
         }
 
@@ -605,6 +652,12 @@ impl RawTensor {
         };
 
         let out = Self::new(result, &final_shape, req_grad);
+        // Ensure the max result lives on the same logical device as the input.
+        {
+            let mut ob = out.borrow_mut();
+            ob.data = ob.data.to_device(&device);
+            ob.device = device;
+        }
 
         if req_grad {
             out.borrow_mut().parents = vec![self_t.clone()];
@@ -642,9 +695,9 @@ impl RawTensor {
     ///
     /// Implemented as `sum_dim(dim)` / size(dim)
     pub fn mean_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
-        let (shape, _req_grad) = {
+        let (shape, device) = {
             let t = self_t.borrow();
-            (t.shape.clone(), t.requires_grad)
+            (t.shape.clone(), t.device.clone())
         };
         assert!(dim < shape.len(), "Dimension out of bounds");
 
@@ -652,7 +705,9 @@ impl RawTensor {
         let sum = Self::sum_dim(self_t, dim, keepdim);
         let div_tensor = Self::new(vec![n], &[1], false);
 
-        sum.div(&div_tensor)
+        let mean = sum.div(&div_tensor);
+        // Keep mean result on same device as input
+        Self::to_device(&mean, device)
     }
 }
 
@@ -989,6 +1044,7 @@ pub struct DataLoader {
     shuffle: bool,
     indices: Vec<usize>,
     current: usize,
+    device: Option<crate::device::Device>, // Optional device for GPU prefetch
 }
 
 impl DataLoader {
@@ -1017,7 +1073,34 @@ impl DataLoader {
             shuffle,
             indices,
             current: 0,
+            device: None, // Default: no GPU prefetch
         }
+    }
+
+    /// Enable automatic GPU prefetch for batches
+    ///
+    /// When set, batches will automatically be transferred to the specified device.
+    /// This avoids manual `.to_device()` calls in the training loop.
+    ///
+    /// # Arguments
+    /// * `device` - Device to prefetch batches to (typically GPU)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use volta::{DataLoader, Device};
+    /// # #[cfg(feature = "gpu")]
+    /// # {
+    /// # let data = vec![0.0; 28 * 28 * 100];
+    /// # let targets = vec![0.0; 10 * 100];
+    /// let device = Device::gpu().expect("GPU required");
+    /// let dataloader = DataLoader::new(data, targets, &[28, 28], &[10], 64, true)
+    ///     .with_device(device);
+    /// // Batches will now be automatically on GPU
+    /// # }
+    /// ```
+    pub fn with_device(mut self, device: crate::device::Device) -> Self {
+        self.device = Some(device);
+        self
     }
 
     pub fn reset(&mut self) {
@@ -1065,10 +1148,18 @@ impl Iterator for DataLoader {
         let mut target_batch_shape = vec![actual_batch];
         target_batch_shape.extend_from_slice(&self.target_shape);
 
-        Some((
-            RawTensor::new(batch_data, &batch_shape, false),
-            RawTensor::new(batch_targets, &target_batch_shape, false),
-        ))
+        let data_tensor = RawTensor::new(batch_data, &batch_shape, false);
+        let target_tensor = RawTensor::new(batch_targets, &target_batch_shape, false);
+
+        // Transfer to device if GPU prefetch is enabled
+        if let Some(ref device) = self.device {
+            Some((
+                data_tensor.to_device(device.clone()),
+                target_tensor.to_device(device.clone()),
+            ))
+        } else {
+            Some((data_tensor, target_tensor))
+        }
     }
 }
 
