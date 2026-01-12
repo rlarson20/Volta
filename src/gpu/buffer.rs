@@ -159,6 +159,9 @@ impl GpuBuffer {
 
         // Submit the copy command
         ctx.queue().submit(Some(encoder.finish()));
+        ctx.increment_pending();
+        // Note: We don't call maybe_sync() here because we're about to
+        // block on device.poll() anyway to read the buffer back
 
         // Map the staging buffer and read the data
         let buffer_slice = staging_buffer.slice(..);
@@ -248,6 +251,8 @@ impl GpuBuffer {
         encoder.copy_buffer_to_buffer(src_buffer, byte_offset, &new_buffer, 0, byte_size as u64);
 
         ctx.queue().submit(Some(encoder.finish()));
+        ctx.increment_pending();
+        ctx.maybe_sync();
 
         Some(GpuBuffer {
             buffer: Some(new_buffer),

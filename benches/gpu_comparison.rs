@@ -259,21 +259,36 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
                 .map(|_| random_tensor(256).to_device(Device::gpu().unwrap()))
                 .collect();
 
+        // Sync after tensor setup to start with clean GPU state
+        if !gpu_sync() {
+            eprintln!("Warning: GPU sync timed out after tensor setup");
+        }
+
         b.iter(|| {
             for t in &tensors {
                 black_box(&t).relu();
             }
             // Sync to ensure GPU work completes and timing is accurate
-            gpu_sync();
+            if !gpu_sync() {
+                eprintln!("Warning: GPU sync timed out during benchmark");
+            }
         })
     });
 
     group.bench_function("single_large_op", |b| {
         let large_tensor = random_tensor(5120).to_device(Device::gpu().unwrap()); // 20 × 256
+
+        // Sync after tensor setup to start with clean GPU state
+        if !gpu_sync() {
+            eprintln!("Warning: GPU sync timed out after tensor setup");
+        }
+
         b.iter(|| {
             black_box(&large_tensor).relu();
             // Sync to ensure GPU work completes and timing is accurate
-            gpu_sync();
+            if !gpu_sync() {
+                eprintln!("Warning: GPU sync timed out during benchmark");
+            }
         })
     });
 

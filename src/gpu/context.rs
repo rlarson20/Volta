@@ -238,7 +238,17 @@ impl GpuContext {
     /// Increment the pending submission counter.
     /// Call this after each `queue.submit()`.
     pub fn increment_pending(&self) {
-        self.pending_submissions.fetch_add(1, Ordering::Relaxed);
+        #[cfg(debug_assertions)]
+        {
+            let new_count = self.pending_submissions.fetch_add(1, Ordering::Relaxed) + 1;
+            if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
+                eprintln!("[GPU] Pending count: {} -> {}", new_count - 1, new_count);
+            }
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            self.pending_submissions.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// Force GPU synchronization - wait for all pending commands to complete.
@@ -246,22 +256,71 @@ impl GpuContext {
     /// This polls the device until all submitted work is finished, then resets
     /// the pending counter. Use this when you need a clean sync point, such as
     /// between benchmark iterations or before reading results.
-    pub fn sync(&self) {
+    ///
+    /// Returns true if sync completed successfully, false if it timed out.
+    /// A timeout doesn't necessarily mean the device is lost - the GPU may
+    /// just be under heavy load. The pending counter is reset regardless.
+    pub fn sync(&self) -> bool {
+        let pending = self.pending_submissions.load(Ordering::Relaxed);
+
         // Only sync if there are pending submissions
-        if self.pending_submissions.load(Ordering::Relaxed) == 0 {
-            return;
+        if pending == 0 {
+            return true;
+        }
+
+        #[cfg(debug_assertions)]
+        if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
+            eprintln!("[GPU] Syncing {} pending submissions...", pending);
         }
 
         // Poll the device until all work completes
-        self.device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: Some(Duration::from_secs(10)),
-            })
-            .expect("GPU sync failed - device may be lost");
+        let result = self.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(Duration::from_secs(10)),
+        });
 
-        // Reset the counter
+        // Reset the counter regardless of success/failure
+        // (we may have completed some work even on timeout)
         self.pending_submissions.store(0, Ordering::Relaxed);
+
+        match result {
+            Ok(_) => {
+                #[cfg(debug_assertions)]
+                if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
+                    eprintln!("[GPU] Sync complete. Pending reset to 0.");
+                }
+                true
+            }
+            Err(e) => {
+                eprintln!("[GPU] Sync timeout warning: {:?}", e);
+                eprintln!("[GPU] This may indicate GPU overload. Consider:");
+                eprintln!("[GPU]   - Reducing batch size");
+                eprintln!("[GPU]   - Adding more frequent sync points");
+                eprintln!("[GPU]   - Using smaller tensors");
+                false
+            }
+        }
+    }
+
+    /// Force sync with retry on timeout
+    ///
+    /// Attempts to sync up to `max_retries` times, returning true only
+    /// if sync eventually succeeds.
+    pub fn sync_with_retry(&self, max_retries: u32) -> bool {
+        for attempt in 0..max_retries {
+            if self.sync() {
+                return true;
+            }
+            eprintln!(
+                "[GPU] Sync retry {}/{} - GPU may be overwhelmed",
+                attempt + 1,
+                max_retries
+            );
+            // Small delay between retries
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        eprintln!("[GPU] All sync retries failed - GPU may be lost");
+        false
     }
 
     /// Conditionally sync if pending submissions exceed the threshold.
@@ -270,9 +329,30 @@ impl GpuContext {
     /// exhaustion during rapid-fire operations. Call after each submit to
     /// ensure the queue doesn't grow unbounded.
     pub fn maybe_sync(&self) {
-        if self.pending_submissions.load(Ordering::Relaxed) >= self.sync_threshold {
+        let pending = self.pending_submissions.load(Ordering::Relaxed);
+        if pending >= self.sync_threshold {
+            #[cfg(debug_assertions)]
+            if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
+                eprintln!(
+                    "[GPU] Auto-sync triggered: {} >= {}",
+                    pending, self.sync_threshold
+                );
+            }
             self.sync();
         }
+    }
+
+    /// Get the current pending submission count (diagnostic)
+    ///
+    /// This is useful for debugging GPU command queue issues.
+    /// Returns the number of unsynced GPU submissions.
+    pub fn pending_count(&self) -> u32 {
+        self.pending_submissions.load(Ordering::Relaxed)
+    }
+
+    /// Get the sync threshold (diagnostic)
+    pub fn sync_threshold(&self) -> u32 {
+        self.sync_threshold
     }
 
     /// Create all compute pipelines by compiling shaders

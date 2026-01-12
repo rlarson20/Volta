@@ -358,7 +358,7 @@ impl Storage {
 
     // ========== Conversion ==========
 
-    /// Convert to Vec<f32> (always works, may involve conversion)
+    /// Convert to `Vec<f32>` (always works, may involve conversion)
     pub fn to_f32_vec(&self) -> Vec<f32> {
         match self.dtype() {
             DType::F32 => self.as_f32_slice().to_vec(),
@@ -404,7 +404,7 @@ impl Storage {
         }
     }
 
-    /// Backward compatible: convert to Vec<f32>
+    /// Backward compatible: convert to `Vec<f32>`
     pub fn to_vec(&self) -> Vec<f32> {
         self.to_f32_vec()
     }

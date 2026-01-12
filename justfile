@@ -4,35 +4,48 @@ check:
 	cargo test
 
 # ===== BENCHMARKING =====
-
 # Run all benchmarks
 bench:
-	cargo bench
+	cargo bench --bench tensor_ops --
+	cargo bench --bench neural_networks --
+	cargo bench --bench gpu_comparison --
 
 # Run specific benchmark
 bench-name name:
-	cargo bench --bench {{name}}
+	cargo bench --bench {{name}} --
 
 # Benchmark CPU only (no features)
 bench-cpu:
-	cargo bench --no-default-features
+	cargo bench --bench tensor_ops --no-default-features --
+	cargo bench --bench neural_networks --no-default-features --
+	cargo bench --bench gpu_comparison --no-default-features --
 
 # Benchmark with Accelerate (macOS BLAS)
 bench-accel:
-	cargo bench --features accelerate --no-default-features
+	cargo bench --features accelerate --no-default-features --bench tensor_ops --
+	cargo bench --features accelerate --no-default-features --bench neural_networks --
+	cargo bench --features accelerate --no-default-features --bench gpu_comparison --
 
 # Benchmark GPU comparison
 bench-gpu:
-	cargo bench --features gpu --bench gpu_comparison
+	cargo bench --features gpu --bench gpu_comparison --
 
 # Save benchmark results for comparison
 bench-save:
-	cargo bench -- --save-baseline main
+	cargo bench --bench tensor_ops -- --save-baseline main
+	cargo bench --bench neural_networks -- --save-baseline main
+	cargo bench --bench gpu_comparison -- --save-baseline main
 
 # Compare against saved baseline
 bench-compare:
-	cargo bench -- --baseline main
+	cargo bench --bench tensor_ops -- --baseline main
+	cargo bench --bench neural_networks -- --baseline main
+	cargo bench --bench gpu_comparison -- --baseline main
 
+bench-report:
+	open './target/criterion/report/index.html'
+
+# ===== LLM ASSISTED DEV =====
 
 ask-gpu model:
 	@echo "Cleaning!"
