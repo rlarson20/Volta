@@ -8,17 +8,21 @@
 
 mod buffer;
 mod context;
+pub mod early_warning;
 mod kernels;
 pub mod monitor;
 mod pool;
 pub mod staging_pool;
+pub mod system_monitor;
 
 pub use buffer::GpuBuffer;
 pub use context::{GpuContext, GpuSyncError};
+pub use early_warning::{EarlyWarningSystem, HealthStatus as EarlyWarningHealthStatus, TrendData};
 pub use kernels::{GpuKernels, MovementParams, OptimizerStepParams};
 pub use monitor::{ResourceStatus, check_system_resources, get_process_memory_mb};
 pub use pool::{BufferPool, BufferPoolConfig};
 pub use staging_pool::StagingBufferPool;
+pub use system_monitor::{MonitorStats, SystemMonitor};
 
 use std::sync::OnceLock;
 

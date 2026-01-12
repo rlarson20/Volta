@@ -402,4 +402,189 @@ mod gpu_stress_tests {
 
         gpu_sync();
     }
+
+    /// Test 12: System monitor profiling
+    ///
+    /// Demonstrate real-time performance profiling with SystemMonitor
+    #[test]
+    fn test_system_monitor_profiling() {
+        use volta::gpu::system_monitor::SystemMonitor;
+
+        let monitor = SystemMonitor::new();
+
+        monitor.checkpoint("test_start");
+
+        // Create tensors
+        let tensors: Vec<_> = (0..10).map(|_| gpu_tensor(1024)).collect();
+        monitor.checkpoint("tensors_created");
+
+        // Run operations
+        for i in 0..50 {
+            for t in &tensors {
+                let _ = t.relu();
+                monitor.record_operation();
+            }
+
+            if i % 10 == 0 {
+                monitor.checkpoint(&format!("iteration_{}", i));
+            }
+        }
+
+        gpu_sync();
+        monitor.record_sync();
+        monitor.checkpoint("operations_complete");
+
+        // Get final stats
+        let stats = monitor.stats();
+        println!("\nFinal Stats: {}", stats);
+
+        assert!(stats.operation_count > 0, "Should have recorded operations");
+        assert!(stats.sync_count > 0, "Should have recorded syncs");
+        assert!(stats.elapsed_secs > 0.0, "Should have elapsed time");
+    }
+
+    /// Test 13: Early warning system trend detection
+    ///
+    /// Verify early warning system detects increasing memory trends
+    #[test]
+    fn test_early_warning_trend_detection() {
+        use volta::gpu::early_warning::{EarlyWarningSystem, HealthStatus};
+
+        let mut ews = EarlyWarningSystem::new();
+
+        // Initial checks should be healthy (insufficient data)
+        match ews.check_health() {
+            HealthStatus::Healthy => println!("Initial: Healthy (insufficient data)"),
+            HealthStatus::Warning(msg) => println!("Initial: Warning - {}", msg),
+            HealthStatus::Critical(msg) => println!("Initial: Critical - {}", msg),
+        }
+
+        // Run some operations and periodically check
+        let tensors: Vec<_> = (0..10).map(|_| gpu_tensor(256)).collect();
+
+        for iteration in 0..20 {
+            for t in &tensors {
+                let _ = t.relu();
+            }
+
+            if iteration % 5 == 0 {
+                match ews.check_health() {
+                    HealthStatus::Healthy => {
+                        println!("Iteration {}: Healthy", iteration);
+                    }
+                    HealthStatus::Warning(msg) => {
+                        println!("Iteration {}: Warning - {}", iteration, msg);
+                    }
+                    HealthStatus::Critical(msg) => {
+                        println!("Iteration {}: Critical - {}", iteration, msg);
+                        // In real usage, would abort here
+                    }
+                }
+            }
+        }
+
+        gpu_sync();
+
+        // Get trend data
+        let trends = ews.trends();
+        println!(
+            "Collected {} memory samples, {} pending samples",
+            trends.memory_samples.len(),
+            trends.pending_samples.len()
+        );
+
+        assert!(
+            !trends.memory_samples.is_empty(),
+            "Should have collected memory samples"
+        );
+    }
+
+    /// Test 14: Combined monitoring integration
+    ///
+    /// Demonstrate using all monitoring tools together
+    #[test]
+    fn test_combined_monitoring_integration() {
+        use volta::gpu::early_warning::{EarlyWarningSystem, HealthStatus as EWSHealthStatus};
+        use volta::gpu::monitor::{ResourceStatus, check_system_resources};
+        use volta::gpu::system_monitor::SystemMonitor;
+
+        // Initialize all monitors
+        let monitor = SystemMonitor::new();
+        let mut ews = EarlyWarningSystem::new();
+
+        monitor.checkpoint("combined_test_start");
+
+        // Pre-flight resource check
+        match check_system_resources() {
+            ResourceStatus::Critical(msg) => {
+                panic!("Cannot start - resources critical: {}", msg);
+            }
+            ResourceStatus::Warning(msg) => {
+                println!("Starting with warning: {}", msg);
+            }
+            ResourceStatus::Healthy => {
+                println!("Starting healthy");
+            }
+        }
+
+        // Create workload
+        let tensors: Vec<_> = (0..15).map(|_| gpu_tensor(512)).collect();
+        monitor.checkpoint("setup_complete");
+
+        // Run with combined monitoring
+        for iteration in 0..30 {
+            for t in &tensors {
+                let _ = t.relu();
+                monitor.record_operation();
+            }
+
+            if iteration % 5 == 0 {
+                // Check immediate resources
+                if let ResourceStatus::Critical(msg) = check_system_resources() {
+                    panic!("Iteration {}: Critical resources - {}", iteration, msg);
+                }
+
+                // Check trends
+                match ews.check_health() {
+                    EWSHealthStatus::Critical(msg) => {
+                        println!("Iteration {}: Critical trend - {}", iteration, msg);
+                    }
+                    EWSHealthStatus::Warning(msg) => {
+                        println!("Iteration {}: Warning trend - {}", iteration, msg);
+                    }
+                    _ => {}
+                }
+
+                // Profiling checkpoint
+                monitor.checkpoint(&format!("iter_{}", iteration));
+            }
+        }
+
+        gpu_sync();
+        monitor.record_sync();
+        monitor.checkpoint("test_complete");
+
+        // Final reporting
+        let stats = monitor.stats();
+        println!("\n=== Final Performance Stats ===");
+        println!("{}", stats);
+
+        let trends = ews.trends();
+        println!(
+            "\n=== Trend Data ===\nMemory samples: {:?}\nPending samples: {:?}",
+            trends.memory_samples, trends.pending_samples
+        );
+
+        match check_system_resources() {
+            ResourceStatus::Critical(msg) => {
+                println!("\n=== CRITICAL: {} ===", msg);
+            }
+            ResourceStatus::Warning(msg) => {
+                println!("\n=== Warning: {} ===", msg);
+            }
+            ResourceStatus::Healthy => {
+                println!("\n=== Completed Healthy ===");
+            }
+        }
+    }
 }
