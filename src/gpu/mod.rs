@@ -21,7 +21,7 @@ pub use early_warning::{EarlyWarningSystem, HealthStatus as EarlyWarningHealthSt
 pub use kernels::{GpuKernels, MovementParams, OptimizerStepParams};
 pub use monitor::{ResourceStatus, check_system_resources, get_process_memory_mb};
 pub use pool::{BufferPool, BufferPoolConfig};
-pub use staging_pool::StagingBufferPool;
+pub use staging_pool::{StagingBufferPool, StagingPoolStats};
 pub use system_monitor::{MonitorStats, SystemMonitor};
 
 use std::sync::OnceLock;
@@ -113,4 +113,60 @@ pub fn gpu_sync_threshold() -> u32 {
     get_gpu_context()
         .map(|ctx| ctx.sync_threshold())
         .unwrap_or(0)
+}
+
+/// Clear GPU buffer pools to release memory
+///
+/// Call this between benchmark groups or when GPU memory needs to be reclaimed.
+/// This clears:
+/// - Buffer pool (reusable GPU buffers)
+/// - Staging pool (GPU→CPU transfer buffers)
+///
+/// The function syncs the GPU before clearing to ensure all pending operations
+/// complete before buffers are released.
+///
+/// Returns true if cleanup succeeded, false if GPU unavailable.
+///
+/// # Example
+///
+/// ```ignore
+/// use volta::gpu_cleanup;
+///
+/// // After a batch of GPU operations
+/// gpu_cleanup();
+/// println!("GPU memory released");
+/// ```
+pub fn gpu_cleanup() -> bool {
+    if let Some(ctx) = get_gpu_context() {
+        ctx.sync(); // Ensure all work complete before clearing
+        ctx.buffer_pool().clear();
+        ctx.staging_pool().clear();
+        true
+    } else {
+        false
+    }
+}
+
+/// Get current buffer pool statistics for debugging
+///
+/// Returns a tuple of (buffer_pool_count, staging_pool_count) representing
+/// the number of buffers currently held in each pool.
+///
+/// Returns None if GPU is not available.
+///
+/// # Example
+///
+/// ```ignore
+/// use volta::gpu_pool_stats;
+///
+/// if let Some((buffers, staging)) = gpu_pool_stats() {
+///     println!("Pooled buffers: {}, Staging buffers: {}", buffers, staging);
+/// }
+/// ```
+pub fn gpu_pool_stats() -> Option<(usize, usize)> {
+    get_gpu_context().map(|ctx| {
+        let buffer_stats = ctx.buffer_pool().stats();
+        let staging_stats = ctx.staging_pool().stats();
+        (buffer_stats.total_pooled, staging_stats.total_pooled)
+    })
 }

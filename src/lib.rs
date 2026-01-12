@@ -25,8 +25,8 @@ pub use storage::Storage;
 
 #[cfg(feature = "gpu")]
 pub use gpu::{
-    GpuBuffer, GpuContext, get_gpu_context, gpu_pending_count, gpu_sync, gpu_sync_threshold,
-    is_gpu_available,
+    GpuBuffer, GpuContext, get_gpu_context, gpu_cleanup, gpu_pending_count, gpu_pool_stats,
+    gpu_sync, gpu_sync_threshold, is_gpu_available,
 };
 
 pub mod autograd;

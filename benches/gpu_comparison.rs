@@ -7,7 +7,7 @@ use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, 
 use volta::{Device, RawTensor, Tensor, TensorOps};
 
 #[cfg(feature = "gpu")]
-use volta::{get_gpu_context, gpu_sync};
+use volta::{get_gpu_context, gpu_cleanup, gpu_pool_stats, gpu_sync};
 
 #[cfg(feature = "gpu")]
 use volta::gpu::monitor::{ResourceStatus, check_system_resources, get_process_memory_mb};
@@ -119,16 +119,31 @@ fn bench_matmul_cpu_vs_gpu(c: &mut Criterion) {
         }
     }
 
-    // Explicit GPU cleanup
+    // Explicit GPU cleanup with memory release
     println!("[Cleanup] Syncing GPU after matmul_cpu_vs_gpu...");
     if !gpu_sync() {
         eprintln!("WARNING: GPU sync timeout after matmul_cpu_vs_gpu");
     }
 
+    // Clear buffer pools to release GPU memory
+    if let Some((buffers, staging)) = gpu_pool_stats() {
+        println!(
+            "[Cleanup] Clearing pools (buffers: {}, staging: {})",
+            buffers, staging
+        );
+    }
+    gpu_cleanup();
+
     // Cooldown period to allow GPU to fully drain command queues
     // This prevents accumulated stress from affecting subsequent benchmarks
     println!("[Cleanup] Cooldown period (500ms) to allow GPU recovery...");
     std::thread::sleep(std::time::Duration::from_millis(500));
+
+    // Log memory after cleanup
+    println!(
+        "[Cleanup] Post-cleanup memory: {}MB",
+        get_process_memory_mb()
+    );
 
     // Verify cleanup succeeded
     if let ResourceStatus::Critical(msg) = check_system_resources() {
@@ -235,14 +250,29 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
         }
     }
 
-    // Explicit GPU cleanup
+    // Explicit GPU cleanup with memory release
     println!("[Cleanup] Syncing GPU after binary_ops_cpu_vs_gpu...");
     if !gpu_sync() {
         eprintln!("WARNING: GPU sync timeout after binary_ops_cpu_vs_gpu");
     }
 
+    // Clear buffer pools to release GPU memory
+    if let Some((buffers, staging)) = gpu_pool_stats() {
+        println!(
+            "[Cleanup] Clearing pools (buffers: {}, staging: {})",
+            buffers, staging
+        );
+    }
+    gpu_cleanup();
+
     // Brief cooldown to ensure clean state for next benchmark
     std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Log memory after cleanup
+    println!(
+        "[Cleanup] Post-cleanup memory: {}MB",
+        get_process_memory_mb()
+    );
 
     // Verify cleanup succeeded
     if let ResourceStatus::Critical(msg) = check_system_resources() {
@@ -345,14 +375,29 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
         }
     }
 
-    // Explicit GPU cleanup
+    // Explicit GPU cleanup with memory release
     println!("[Cleanup] Syncing GPU after unary_ops_cpu_vs_gpu...");
     if !gpu_sync() {
         eprintln!("WARNING: GPU sync timeout after unary_ops_cpu_vs_gpu");
     }
 
+    // Clear buffer pools to release GPU memory
+    if let Some((buffers, staging)) = gpu_pool_stats() {
+        println!(
+            "[Cleanup] Clearing pools (buffers: {}, staging: {})",
+            buffers, staging
+        );
+    }
+    gpu_cleanup();
+
     // Brief cooldown to ensure clean state for next benchmark
     std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Log memory after cleanup
+    println!(
+        "[Cleanup] Post-cleanup memory: {}MB",
+        get_process_memory_mb()
+    );
 
     // Verify cleanup succeeded
     if let ResourceStatus::Critical(msg) = check_system_resources() {
@@ -455,14 +500,29 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
         }
     }
 
-    // Explicit GPU cleanup
+    // Explicit GPU cleanup with memory release
     println!("[Cleanup] Syncing GPU after reduce_ops_cpu_vs_gpu...");
     if !gpu_sync() {
         eprintln!("WARNING: GPU sync timeout after reduce_ops_cpu_vs_gpu");
     }
 
+    // Clear buffer pools to release GPU memory
+    if let Some((buffers, staging)) = gpu_pool_stats() {
+        println!(
+            "[Cleanup] Clearing pools (buffers: {}, staging: {})",
+            buffers, staging
+        );
+    }
+    gpu_cleanup();
+
     // Brief cooldown to ensure clean state for next benchmark
     std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Log memory after cleanup
+    println!(
+        "[Cleanup] Post-cleanup memory: {}MB",
+        get_process_memory_mb()
+    );
 
     // Verify cleanup succeeded
     if let ResourceStatus::Critical(msg) = check_system_resources() {
@@ -541,14 +601,29 @@ fn bench_memory_transfer(c: &mut Criterion) {
         }
     }
 
-    // Explicit GPU cleanup
+    // Explicit GPU cleanup with memory release
     println!("[Cleanup] Syncing GPU after memory_transfer...");
     if !gpu_sync() {
         eprintln!("WARNING: GPU sync timeout after memory_transfer");
     }
 
+    // Clear buffer pools to release GPU memory
+    if let Some((buffers, staging)) = gpu_pool_stats() {
+        println!(
+            "[Cleanup] Clearing pools (buffers: {}, staging: {})",
+            buffers, staging
+        );
+    }
+    gpu_cleanup();
+
     // Brief cooldown to ensure clean state for next benchmark
     std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Log memory after cleanup
+    println!(
+        "[Cleanup] Post-cleanup memory: {}MB",
+        get_process_memory_mb()
+    );
 
     // Verify cleanup succeeded
     if let ResourceStatus::Critical(msg) = check_system_resources() {
@@ -702,14 +777,29 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
         }
     }
 
-    // Explicit GPU cleanup (for consistency with other groups)
+    // Explicit GPU cleanup with memory release
     println!("[Cleanup] Syncing GPU after gpu_batch_processing...");
     if !gpu_sync() {
         eprintln!("WARNING: GPU sync timeout after gpu_batch_processing");
     }
 
+    // Clear buffer pools to release GPU memory
+    if let Some((buffers, staging)) = gpu_pool_stats() {
+        println!(
+            "[Cleanup] Clearing pools (buffers: {}, staging: {})",
+            buffers, staging
+        );
+    }
+    gpu_cleanup();
+
     // Brief cooldown to ensure clean state for next benchmark
     std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Log memory after cleanup
+    println!(
+        "[Cleanup] Post-cleanup memory: {}MB",
+        get_process_memory_mb()
+    );
 
     // Verify cleanup succeeded
     if let ResourceStatus::Critical(msg) = check_system_resources() {

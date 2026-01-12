@@ -144,6 +144,25 @@ impl StagingBufferPool {
     pub fn capacity(&self) -> usize {
         self.max_total
     }
+
+    /// Get statistics about pool usage
+    ///
+    /// Returns a snapshot of the current pool state for diagnostics.
+    pub fn stats(&self) -> StagingPoolStats {
+        StagingPoolStats {
+            total_pooled: *self.current_count.lock().unwrap(),
+            max_capacity: self.max_total,
+        }
+    }
+}
+
+/// Statistics about staging buffer pool usage
+#[derive(Debug, Clone)]
+pub struct StagingPoolStats {
+    /// Total number of buffers currently in the pool
+    pub total_pooled: usize,
+    /// Maximum pool capacity
+    pub max_capacity: usize,
 }
 
 impl Default for StagingBufferPool {

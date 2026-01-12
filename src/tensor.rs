@@ -253,6 +253,32 @@ impl RawTensor {
         }
         Some(first_device)
     }
+
+    /// Clear any CPU-side cached copy of GPU data
+    ///
+    /// This releases CPU memory for GPU tensors that have been read back to CPU.
+    /// The cache will be repopulated on the next CPU access if needed.
+    ///
+    /// Useful for reducing memory pressure after GPU operations are complete
+    /// and the CPU copy is no longer needed. Call this between benchmark groups
+    /// or after training steps to reduce memory pressure.
+    ///
+    /// For CPU tensors, this is a no-op.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let t = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], false)
+    ///     .to_device(Device::gpu().unwrap());
+    /// let _ = t.borrow().data.as_f32_slice(); // Populates CPU cache
+    /// t.borrow_mut().invalidate_gpu_cache(); // Releases CPU copy
+    /// ```
+    pub fn invalidate_gpu_cache(&mut self) {
+        self.data.invalidate_cpu_cache();
+        if let Some(ref grad) = self.grad {
+            grad.invalidate_cpu_cache();
+        }
+    }
 }
 
 // ===== LOSS FUNCTIONS =====

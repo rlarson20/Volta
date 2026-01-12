@@ -535,6 +535,31 @@ impl Storage {
             _ => None,
         }
     }
+
+    /// Invalidate the CPU cache for GPU storage
+    ///
+    /// This releases the CPU-side copy of GPU data, reducing memory usage.
+    /// The cache will be repopulated on the next CPU access if needed.
+    ///
+    /// This is useful for releasing memory after GPU operations are complete
+    /// and the CPU copy is no longer needed. Call this between benchmark groups
+    /// or after training steps to reduce memory pressure.
+    ///
+    /// For CPU storage, this is a no-op.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let storage = Storage::gpu(vec![1.0, 2.0, 3.0]);
+    /// let _ = storage.as_f32_slice(); // Populates CPU cache
+    /// storage.invalidate_cpu_cache(); // Releases CPU copy
+    /// ```
+    #[cfg(feature = "gpu")]
+    pub fn invalidate_cpu_cache(&self) {
+        if let Storage::Gpu { cpu_cache, .. } = self {
+            cpu_cache.borrow_mut().take();
+        }
+    }
 }
 
 // ========== Iterator Support (F32 only for backward compat) ==========
