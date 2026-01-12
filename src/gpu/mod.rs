@@ -147,6 +147,65 @@ pub fn gpu_cleanup() -> bool {
     }
 }
 
+/// Force GPU memory compaction to release accumulated buffers
+///
+/// Call this between heavy benchmark groups to ensure GPU memory is actually
+/// released by the driver, not just marked for cleanup.
+///
+/// On macOS Metal, buffer drops don't immediately reclaim memory—this function
+/// forces the driver to complete pending work and run its internal GC by:
+/// 1. Clearing buffer pools (drops wgpu::Buffer instances)
+/// 2. Submitting an empty command buffer to flush the command queue
+/// 3. Polling the device to completion
+/// 4. Brief sleep to allow Metal's internal command queue to drain
+/// 5. Final poll to pick up any deferred cleanup
+///
+/// Returns true if compaction succeeded, false if GPU unavailable.
+///
+/// # Example
+///
+/// ```ignore
+/// use volta::gpu_compact;
+///
+/// // After a heavy benchmark group
+/// gpu_compact();
+/// println!("GPU memory compacted and released");
+/// ```
+pub fn gpu_compact() -> bool {
+    if let Some(ctx) = get_gpu_context() {
+        // Step 1: Clear buffer pools (drops wgpu::Buffer instances)
+        ctx.buffer_pool().clear();
+        ctx.staging_pool().clear();
+
+        // Step 2: Submit empty command buffer to flush command queue
+        let encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Compaction Encoder"),
+            });
+        ctx.queue().submit(Some(encoder.finish()));
+
+        // Step 3: Poll device to completion to ensure all pending work finishes
+        let _ = ctx.device().poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(std::time::Duration::from_secs(2)),
+        });
+
+        // Step 4: Brief sleep to allow Metal's internal command queue to drain
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        // Step 5: Poll again to pick up any deferred cleanup
+        let _ = ctx.device().poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(std::time::Duration::from_millis(500)),
+        });
+
+        true
+    } else {
+        false
+    }
+}
+
 /// Get current buffer pool statistics for debugging
 ///
 /// Returns a tuple of (buffer_pool_count, staging_pool_count) representing
