@@ -9,6 +9,9 @@ use volta::{Device, RawTensor, Tensor, TensorOps};
 #[cfg(feature = "gpu")]
 use volta::{get_gpu_context, gpu_sync};
 
+#[cfg(feature = "gpu")]
+use volta::gpu::monitor::{ResourceStatus, check_system_resources, get_process_memory_mb};
+
 /// Generate a random tensor of the given size
 fn random_tensor(size: usize) -> Tensor {
     let data: Vec<f32> = (0..size).map(|i| (i as f32 * 0.01).sin()).collect();
@@ -241,9 +244,31 @@ fn bench_memory_transfer(c: &mut Criterion) {
 
 // ===== GPU BATCH PROCESSING =====
 
+#[cfg(feature = "gpu")]
 fn bench_gpu_batch_processing(c: &mut Criterion) {
     if !is_gpu_enabled() {
         return;
+    }
+
+    // Pre-flight resource check
+    match check_system_resources() {
+        ResourceStatus::Critical(msg) => {
+            eprintln!("CRITICAL: Cannot run GPU benchmarks - {}", msg);
+            eprintln!("Skipping gpu_batch_processing to avoid system freeze");
+            return;
+        }
+        ResourceStatus::Warning(msg) => {
+            eprintln!(
+                "WARNING: Starting benchmarks with elevated resources: {}",
+                msg
+            );
+        }
+        ResourceStatus::Healthy => {
+            println!(
+                "Resources healthy. Starting GPU benchmarks (Memory: {}MB)",
+                get_process_memory_mb()
+            );
+        }
     }
 
     let mut group = c.benchmark_group("gpu_batch_processing");
@@ -254,6 +279,11 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
     // kernels is much slower than one large kernel with the same total work.
     // Reduced to 20 tensors to prevent memory exhaustion during benchmarking.
     group.bench_function("many_small_ops", |b| {
+        // Check resources before setup
+        if let ResourceStatus::Critical(msg) = check_system_resources() {
+            panic!("Benchmark aborted before setup - {}", msg);
+        }
+
         let tensors: Vec<_> =
             (0..20) // Reduced from 100 to 20 tensors
                 .map(|_| random_tensor(256).to_device(Device::gpu().unwrap()))
@@ -264,18 +294,40 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
             eprintln!("Warning: GPU sync timed out after tensor setup");
         }
 
+        // Check resources after setup
+        match check_system_resources() {
+            ResourceStatus::Critical(msg) => {
+                panic!("Benchmark aborted after setup - {}", msg);
+            }
+            ResourceStatus::Warning(msg) => {
+                eprintln!("Warning after setup: {}", msg);
+            }
+            _ => {}
+        }
+
         b.iter(|| {
             for t in &tensors {
                 black_box(&t).relu();
             }
+
             // Sync to ensure GPU work completes and timing is accurate
             if !gpu_sync() {
                 eprintln!("Warning: GPU sync timed out during benchmark");
+            }
+
+            // Check resources after each iteration
+            if let ResourceStatus::Critical(msg) = check_system_resources() {
+                panic!("Benchmark aborted during iteration - {}", msg);
             }
         })
     });
 
     group.bench_function("single_large_op", |b| {
+        // Check resources before setup
+        if let ResourceStatus::Critical(msg) = check_system_resources() {
+            panic!("Benchmark aborted before setup - {}", msg);
+        }
+
         let large_tensor = random_tensor(5120).to_device(Device::gpu().unwrap()); // 20 × 256
 
         // Sync after tensor setup to start with clean GPU state
@@ -283,16 +335,58 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
             eprintln!("Warning: GPU sync timed out after tensor setup");
         }
 
+        // Check resources after setup
+        match check_system_resources() {
+            ResourceStatus::Critical(msg) => {
+                panic!("Benchmark aborted after setup - {}", msg);
+            }
+            ResourceStatus::Warning(msg) => {
+                eprintln!("Warning after setup: {}", msg);
+            }
+            _ => {}
+        }
+
         b.iter(|| {
             black_box(&large_tensor).relu();
+
             // Sync to ensure GPU work completes and timing is accurate
             if !gpu_sync() {
                 eprintln!("Warning: GPU sync timed out during benchmark");
+            }
+
+            // Check resources after each iteration
+            if let ResourceStatus::Critical(msg) = check_system_resources() {
+                panic!("Benchmark aborted during iteration - {}", msg);
             }
         })
     });
 
     group.finish();
+
+    // Final resource check
+    let final_memory = get_process_memory_mb();
+    match check_system_resources() {
+        ResourceStatus::Critical(msg) => {
+            eprintln!(
+                "CRITICAL after benchmarks: {} (Memory: {}MB)",
+                msg, final_memory
+            );
+        }
+        ResourceStatus::Warning(msg) => {
+            eprintln!(
+                "Warning after benchmarks: {} (Memory: {}MB)",
+                msg, final_memory
+            );
+        }
+        ResourceStatus::Healthy => {
+            println!("Benchmarks complete. Final memory: {}MB", final_memory);
+        }
+    }
+}
+
+#[cfg(not(feature = "gpu"))]
+fn bench_gpu_batch_processing(_c: &mut Criterion) {
+    // No-op when GPU feature is disabled
 }
 
 criterion_group!(
