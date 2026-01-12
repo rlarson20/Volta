@@ -42,3 +42,31 @@ pub fn get_gpu_context() -> Option<&'static GpuContext> {
 pub fn is_gpu_available() -> bool {
     get_gpu_context().is_some()
 }
+
+/// Force GPU synchronization - wait for all pending commands to complete.
+///
+/// Call this when you need a clean sync point, such as:
+/// - Between benchmark iterations to ensure accurate timing
+/// - Before reading GPU results back to CPU
+/// - After a burst of GPU operations to prevent command queue buildup
+///
+/// If GPU is not available, this is a no-op.
+///
+/// # Example
+///
+/// ```ignore
+/// use volta::{gpu_sync, RawTensor, TensorOps, Device};
+///
+/// // Run many GPU operations
+/// for _ in 0..100 {
+///     tensor.relu();
+/// }
+///
+/// // Ensure all work completes before timing next section
+/// gpu_sync();
+/// ```
+pub fn gpu_sync() {
+    if let Some(ctx) = get_gpu_context() {
+        ctx.sync();
+    }
+}

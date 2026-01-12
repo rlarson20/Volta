@@ -151,6 +151,8 @@ fn reduce_scalar(input: &GpuBuffer, pipeline: &wgpu::ComputePipeline) -> Option<
     }
 
     ctx.queue().submit(Some(encoder.finish()));
+    ctx.increment_pending();
+    ctx.maybe_sync();
 
     // Read back the result
     Some(result_buffer.to_vec()[0])
@@ -230,8 +232,10 @@ impl GpuKernels {
             compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
         }
 
-        // Submit to GPU
+        // Submit to GPU with throttling
         ctx.queue().submit(Some(encoder.finish()));
+        ctx.increment_pending();
+        ctx.maybe_sync();
 
         Some(result)
     }
@@ -293,6 +297,8 @@ impl GpuKernels {
         }
 
         ctx.queue().submit(Some(encoder.finish()));
+        ctx.increment_pending();
+        ctx.maybe_sync();
 
         Some(result)
     }
@@ -374,6 +380,8 @@ impl GpuKernels {
         }
 
         ctx.queue().submit(Some(encoder.finish()));
+        ctx.increment_pending();
+        ctx.maybe_sync();
 
         Some(result)
     }
@@ -461,6 +469,8 @@ impl GpuKernels {
         }
 
         ctx.queue().submit(Some(encoder.finish()));
+        ctx.increment_pending();
+        ctx.maybe_sync();
 
         Some(result)
     }
@@ -548,6 +558,8 @@ impl GpuKernels {
         }
 
         ctx.queue().submit(Some(encoder.finish()));
+        ctx.increment_pending();
+        ctx.maybe_sync();
 
         Some(result)
     }
@@ -682,6 +694,8 @@ impl GpuKernels {
         }
 
         ctx.queue().submit(Some(encoder.finish()));
+        ctx.increment_pending();
+        ctx.maybe_sync();
 
         // Split the concatenated result into two separate buffers
         let a_grad = result_grad.copy_region(0, a.len())?;
@@ -898,6 +912,8 @@ impl GpuKernels {
         }
 
         ctx.queue().submit(Some(encoder.finish()));
+        ctx.increment_pending();
+        ctx.maybe_sync();
 
         // Split the concatenated result into two separate buffers
         let a_grad = result_grad.copy_region(0, a.len())?;
@@ -984,6 +1000,8 @@ impl GpuKernels {
         }
 
         ctx.queue().submit(Some(encoder.finish()));
+        ctx.increment_pending();
+        ctx.maybe_sync();
 
         Some(result)
     }
@@ -1079,6 +1097,8 @@ impl GpuKernels {
         }
 
         ctx.queue().submit(Some(encoder.finish()));
+        ctx.increment_pending();
+        ctx.maybe_sync();
 
         Some(result)
     }
@@ -1174,6 +1194,8 @@ impl GpuKernels {
         }
 
         ctx.queue().submit(Some(encoder.finish()));
+        ctx.increment_pending();
+        ctx.maybe_sync();
 
         Some(result)
     }
@@ -1276,6 +1298,8 @@ impl GpuKernels {
         }
 
         ctx.queue().submit(Some(encoder.finish()));
+        ctx.increment_pending();
+        ctx.maybe_sync();
 
         Some(result)
     }
@@ -1360,6 +1384,8 @@ impl GpuKernels {
         }
 
         ctx.queue().submit(Some(encoder.finish()));
+        ctx.increment_pending();
+        ctx.maybe_sync();
 
         Some(result)
     }
@@ -1447,6 +1473,8 @@ impl GpuKernels {
         }
 
         ctx.queue().submit(Some(encoder.finish()));
+        ctx.increment_pending();
+        ctx.maybe_sync();
 
         Some(result)
     }
@@ -1823,6 +1851,8 @@ impl GpuKernels {
         }
 
         ctx.queue().submit(Some(encoder.finish()));
+        ctx.increment_pending();
+        ctx.maybe_sync();
 
         Some(())
     }
@@ -1933,6 +1963,8 @@ impl GpuKernels {
         }
 
         ctx.queue().submit(Some(encoder.finish()));
+        ctx.increment_pending();
+        ctx.maybe_sync();
 
         Some(result)
     }
@@ -2009,6 +2041,8 @@ fn movement_op(
     }
 
     ctx.queue().submit(Some(encoder.finish()));
+    ctx.increment_pending();
+    ctx.maybe_sync();
 
     // Return the result buffer (now filled by GPU computation)
     Some(result)

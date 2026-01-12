@@ -24,7 +24,7 @@ pub use dtype::DType;
 pub use storage::Storage;
 
 #[cfg(feature = "gpu")]
-pub use gpu::{GpuBuffer, GpuContext, get_gpu_context, is_gpu_available};
+pub use gpu::{GpuBuffer, GpuContext, get_gpu_context, gpu_sync, is_gpu_available};
 
 pub mod autograd;
 pub mod data;

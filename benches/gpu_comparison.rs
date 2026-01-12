@@ -7,7 +7,7 @@ use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, 
 use volta::{Device, RawTensor, Tensor, TensorOps};
 
 #[cfg(feature = "gpu")]
-use volta::get_gpu_context;
+use volta::{get_gpu_context, gpu_sync};
 
 /// Generate a random tensor of the given size
 fn random_tensor(size: usize) -> Tensor {
@@ -57,7 +57,11 @@ fn bench_matmul_cpu_vs_gpu(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("gpu", n), n_ref, |b, s| {
             let a = random_tensor_2d(*s, *s).to_device(Device::gpu().unwrap());
             let tensor_b = random_tensor_2d(*s, *s).to_device(Device::gpu().unwrap());
-            b.iter(|| black_box(&a).matmul(black_box(&tensor_b)))
+            b.iter(|| {
+                let result = black_box(&a).matmul(black_box(&tensor_b));
+                gpu_sync();
+                result
+            })
         });
     }
 
@@ -86,7 +90,11 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("gpu_add", size), size_ref, |b, s| {
             let a = random_tensor(*s).to_device(Device::gpu().unwrap());
             let tensor_b = random_tensor(*s).to_device(Device::gpu().unwrap());
-            b.iter(|| black_box(&a).add(black_box(&tensor_b)))
+            b.iter(|| {
+                let result = black_box(&a).add(black_box(&tensor_b));
+                gpu_sync();
+                result
+            })
         });
 
         // CPU multiplication
@@ -100,7 +108,11 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("gpu_mul", size), size_ref, |b, s| {
             let a = random_tensor(*s).to_device(Device::gpu().unwrap());
             let tensor_b = random_tensor(*s).to_device(Device::gpu().unwrap());
-            b.iter(|| black_box(&a).elem_mul(black_box(&tensor_b)))
+            b.iter(|| {
+                let result = black_box(&a).elem_mul(black_box(&tensor_b));
+                gpu_sync();
+                result
+            })
         });
     }
 
@@ -127,7 +139,11 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
         // GPU exp
         group.bench_with_input(BenchmarkId::new("gpu_exp", size), size_ref, |b, s| {
             let a = random_tensor(*s).to_device(Device::gpu().unwrap());
-            b.iter(|| black_box(&a).exp())
+            b.iter(|| {
+                let result = black_box(&a).exp();
+                gpu_sync();
+                result
+            })
         });
 
         // CPU relu
@@ -139,7 +155,11 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
         // GPU relu
         group.bench_with_input(BenchmarkId::new("gpu_relu", size), size_ref, |b, s| {
             let a = random_tensor(*s).to_device(Device::gpu().unwrap());
-            b.iter(|| black_box(&a).relu())
+            b.iter(|| {
+                let result = black_box(&a).relu();
+                gpu_sync();
+                result
+            })
         });
     }
 
@@ -166,7 +186,11 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
         // GPU sum
         group.bench_with_input(BenchmarkId::new("gpu_sum", size), size_ref, |b, s| {
             let a = random_tensor(*s).to_device(Device::gpu().unwrap());
-            b.iter(|| black_box(&a).sum())
+            b.iter(|| {
+                let result = black_box(&a).sum();
+                gpu_sync();
+                result
+            })
         });
 
         // CPU mean
@@ -178,7 +202,11 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
         // GPU mean
         group.bench_with_input(BenchmarkId::new("gpu_mean", size), size_ref, |b, s| {
             let a = random_tensor(*s).to_device(Device::gpu().unwrap());
-            b.iter(|| black_box(&a).mean())
+            b.iter(|| {
+                let result = black_box(&a).mean();
+                gpu_sync();
+                result
+            })
         });
     }
 
@@ -200,7 +228,11 @@ fn bench_memory_transfer(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("cpu_to_gpu", size), size_ref, |b, s| {
             let a = random_tensor(*s);
-            b.iter(|| black_box(&a).to_device(Device::gpu().unwrap()))
+            b.iter(|| {
+                let result = black_box(&a).to_device(Device::gpu().unwrap());
+                gpu_sync(); // Ensure transfer completes for accurate timing
+                result
+            })
         });
     }
 
@@ -231,12 +263,18 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
             for t in &tensors {
                 black_box(&t).relu();
             }
+            // Sync to ensure GPU work completes and timing is accurate
+            gpu_sync();
         })
     });
 
     group.bench_function("single_large_op", |b| {
         let large_tensor = random_tensor(5120).to_device(Device::gpu().unwrap()); // 20 × 256
-        b.iter(|| black_box(&large_tensor).relu())
+        b.iter(|| {
+            black_box(&large_tensor).relu();
+            // Sync to ensure GPU work completes and timing is accurate
+            gpu_sync();
+        })
     });
 
     group.finish();

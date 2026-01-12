@@ -5,8 +5,14 @@
 
 use super::pool::{BufferPool, BufferPoolConfig};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
 
 /// Manages the GPU device, queue, and compiled compute pipelines
+/// Default threshold for pending submissions before forcing a sync.
+/// This prevents GPU command queue exhaustion during rapid-fire operations.
+const DEFAULT_SYNC_THRESHOLD: u32 = 16;
+
 pub struct GpuContext {
     /// The GPU device - represents the actual hardware
     device: wgpu::Device,
@@ -18,6 +24,10 @@ pub struct GpuContext {
     pipelines: ComputePipelines,
     /// Buffer pool for reusing GPU memory allocations
     buffer_pool: Arc<BufferPool>,
+    /// Counter for pending GPU submissions (for back-pressure throttling)
+    pending_submissions: AtomicU32,
+    /// Threshold before forcing a sync to prevent command queue exhaustion
+    sync_threshold: u32,
 }
 
 /// Collection of pre-compiled compute pipelines
@@ -190,6 +200,8 @@ impl GpuContext {
             adapter_info,
             pipelines,
             buffer_pool,
+            pending_submissions: AtomicU32::new(0),
+            sync_threshold: DEFAULT_SYNC_THRESHOLD,
         })
     }
 
@@ -221,6 +233,46 @@ impl GpuContext {
     /// Get an Arc reference to the buffer pool (for GpuBuffer to hold)
     pub fn buffer_pool_arc(&self) -> Arc<BufferPool> {
         Arc::clone(&self.buffer_pool)
+    }
+
+    /// Increment the pending submission counter.
+    /// Call this after each `queue.submit()`.
+    pub fn increment_pending(&self) {
+        self.pending_submissions.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Force GPU synchronization - wait for all pending commands to complete.
+    ///
+    /// This polls the device until all submitted work is finished, then resets
+    /// the pending counter. Use this when you need a clean sync point, such as
+    /// between benchmark iterations or before reading results.
+    pub fn sync(&self) {
+        // Only sync if there are pending submissions
+        if self.pending_submissions.load(Ordering::Relaxed) == 0 {
+            return;
+        }
+
+        // Poll the device until all work completes
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(Duration::from_secs(10)),
+            })
+            .expect("GPU sync failed - device may be lost");
+
+        // Reset the counter
+        self.pending_submissions.store(0, Ordering::Relaxed);
+    }
+
+    /// Conditionally sync if pending submissions exceed the threshold.
+    ///
+    /// This provides automatic back-pressure to prevent GPU command queue
+    /// exhaustion during rapid-fire operations. Call after each submit to
+    /// ensure the queue doesn't grow unbounded.
+    pub fn maybe_sync(&self) {
+        if self.pending_submissions.load(Ordering::Relaxed) >= self.sync_threshold {
+            self.sync();
+        }
     }
 
     /// Create all compute pipelines by compiling shaders
