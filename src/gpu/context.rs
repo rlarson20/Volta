@@ -4,6 +4,7 @@
 //! for all GPU operations. Think of it as your "connection" to the GPU.
 
 use super::pool::{BufferPool, BufferPoolConfig};
+use super::staging_pool::StagingBufferPool;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
@@ -12,6 +13,33 @@ use std::time::Duration;
 /// Default threshold for pending submissions before forcing a sync.
 /// This prevents GPU command queue exhaustion during rapid-fire operations.
 const DEFAULT_SYNC_THRESHOLD: u32 = 16;
+
+/// Hard timeout for GPU sync operations (M2 Mac optimized)
+/// Reduced from 10s to detect problems faster
+const HARD_SYNC_TIMEOUT_SECS: u64 = 2;
+
+/// Maximum consecutive timeouts before aborting (3-strike rule)
+const MAX_CONSECUTIVE_TIMEOUTS: u32 = 3;
+
+/// GPU synchronization errors
+#[derive(Debug)]
+pub enum GpuSyncError {
+    /// Sync timed out (potentially recoverable)
+    Timeout(String),
+    /// GPU appears lost after consecutive timeouts
+    GpuLost(String),
+}
+
+impl std::fmt::Display for GpuSyncError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            GpuSyncError::Timeout(msg) => write!(f, "GPU sync timeout: {}", msg),
+            GpuSyncError::GpuLost(msg) => write!(f, "GPU lost: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for GpuSyncError {}
 
 pub struct GpuContext {
     /// The GPU device - represents the actual hardware
@@ -24,10 +52,14 @@ pub struct GpuContext {
     pipelines: ComputePipelines,
     /// Buffer pool for reusing GPU memory allocations
     buffer_pool: Arc<BufferPool>,
+    /// Staging buffer pool for GPU→CPU transfers
+    staging_pool: Arc<StagingBufferPool>,
     /// Counter for pending GPU submissions (for back-pressure throttling)
     pending_submissions: AtomicU32,
     /// Threshold before forcing a sync to prevent command queue exhaustion
     sync_threshold: u32,
+    /// Consecutive timeout counter for 3-strike abort rule
+    consecutive_timeouts: AtomicU32,
 }
 
 /// Collection of pre-compiled compute pipelines
@@ -194,14 +226,19 @@ impl GpuContext {
         // Step 5: Create the buffer pool for memory reuse
         let buffer_pool = Arc::new(BufferPool::new(BufferPoolConfig::default()));
 
+        // Step 6: Create the staging buffer pool for GPU→CPU transfers
+        let staging_pool = Arc::new(StagingBufferPool::default());
+
         Ok(GpuContext {
             device,
             queue,
             adapter_info,
             pipelines,
             buffer_pool,
+            staging_pool,
             pending_submissions: AtomicU32::new(0),
             sync_threshold: DEFAULT_SYNC_THRESHOLD,
+            consecutive_timeouts: AtomicU32::new(0),
         })
     }
 
@@ -233,6 +270,16 @@ impl GpuContext {
     /// Get an Arc reference to the buffer pool (for GpuBuffer to hold)
     pub fn buffer_pool_arc(&self) -> Arc<BufferPool> {
         Arc::clone(&self.buffer_pool)
+    }
+
+    /// Get a reference to the staging buffer pool
+    pub fn staging_pool(&self) -> &StagingBufferPool {
+        &self.staging_pool
+    }
+
+    /// Get an Arc reference to the staging buffer pool
+    pub fn staging_pool_arc(&self) -> Arc<StagingBufferPool> {
+        Arc::clone(&self.staging_pool)
     }
 
     /// Increment the pending submission counter.
@@ -273,10 +320,10 @@ impl GpuContext {
             eprintln!("[GPU] Syncing {} pending submissions...", pending);
         }
 
-        // Poll the device until all work completes
+        // Poll the device until all work completes (2-second timeout)
         let result = self.device.poll(wgpu::PollType::Wait {
             submission_index: None,
-            timeout: Some(Duration::from_secs(10)),
+            timeout: Some(Duration::from_secs(HARD_SYNC_TIMEOUT_SECS)),
         });
 
         // Reset the counter regardless of success/failure
@@ -353,6 +400,98 @@ impl GpuContext {
     /// Get the sync threshold (diagnostic)
     pub fn sync_threshold(&self) -> u32 {
         self.sync_threshold
+    }
+
+    /// Force sync with hard timeout and consecutive failure tracking
+    ///
+    /// This method implements a 3-strike rule for GPU timeouts:
+    /// - Returns Ok(()) on successful sync (resets timeout counter)
+    /// - Returns Err(Timeout) on timeout (increments counter)
+    /// - Returns Err(GpuLost) if 3+ consecutive timeouts occur
+    ///
+    /// Use this instead of `sync()` in critical paths where you need
+    /// error handling for GPU failures.
+    pub fn sync_checked(&self) -> Result<(), GpuSyncError> {
+        let timeout_count = self.consecutive_timeouts.load(Ordering::Relaxed);
+
+        // 3-strike rule: abort after consecutive failures
+        if timeout_count >= MAX_CONSECUTIVE_TIMEOUTS {
+            return Err(GpuSyncError::GpuLost(format!(
+                "{} consecutive timeouts - GPU unresponsive",
+                timeout_count
+            )));
+        }
+
+        let pending = self.pending_submissions.load(Ordering::Relaxed);
+        if pending == 0 {
+            return Ok(());
+        }
+
+        #[cfg(debug_assertions)]
+        if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
+            eprintln!("[GPU] sync_checked: {} pending submissions...", pending);
+        }
+
+        // Use 2-second hard timeout
+        let result = self.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(Duration::from_secs(HARD_SYNC_TIMEOUT_SECS)),
+        });
+
+        self.pending_submissions.store(0, Ordering::Relaxed);
+
+        match result {
+            Ok(_) => {
+                // Success - reset timeout counter
+                self.consecutive_timeouts.store(0, Ordering::Relaxed);
+
+                #[cfg(debug_assertions)]
+                if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
+                    eprintln!("[GPU] sync_checked: Success, timeout counter reset");
+                }
+
+                Ok(())
+            }
+            Err(e) => {
+                // Timeout - increment counter
+                let new_count = self.consecutive_timeouts.fetch_add(1, Ordering::Relaxed) + 1;
+
+                eprintln!("[GPU] Sync timeout #{}: {:?}", new_count, e);
+
+                if new_count >= MAX_CONSECUTIVE_TIMEOUTS {
+                    Err(GpuSyncError::GpuLost(format!(
+                        "{} consecutive timeouts - aborting",
+                        new_count
+                    )))
+                } else {
+                    Err(GpuSyncError::Timeout(format!(
+                        "Timeout #{} of {}",
+                        new_count, MAX_CONSECUTIVE_TIMEOUTS
+                    )))
+                }
+            }
+        }
+    }
+
+    /// Get consecutive timeout count (diagnostic)
+    ///
+    /// Returns the number of consecutive sync timeouts. This counter
+    /// resets to 0 on successful sync or manual reset.
+    pub fn consecutive_timeouts(&self) -> u32 {
+        self.consecutive_timeouts.load(Ordering::Relaxed)
+    }
+
+    /// Reset the consecutive timeout counter (manual recovery)
+    ///
+    /// Use this to manually clear the timeout counter after diagnosing
+    /// and resolving GPU issues.
+    pub fn reset_timeout_counter(&self) {
+        self.consecutive_timeouts.store(0, Ordering::Relaxed);
+
+        #[cfg(debug_assertions)]
+        if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
+            eprintln!("[GPU] Timeout counter manually reset");
+        }
     }
 
     /// Create all compute pipelines by compiling shaders

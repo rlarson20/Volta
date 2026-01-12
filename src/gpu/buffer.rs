@@ -133,13 +133,18 @@ impl GpuBuffer {
         let ctx = get_gpu_context().expect("GPU context should exist if buffer exists");
         let buffer = self.buffer.as_ref().expect("Buffer should not be taken");
 
-        // Create a staging buffer for reading
-        // GPU buffers with STORAGE usage can't be mapped directly
-        let staging_buffer = ctx.device().create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Staging Buffer"),
-            size: (self.len * std::mem::size_of::<f32>()) as u64,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
+        let byte_size = (self.len * std::mem::size_of::<f32>()) as u64;
+
+        // Try to acquire staging buffer from pool first, create new if pool full
+        // GPU buffers with STORAGE usage can't be mapped directly, so we need
+        // a staging buffer with MAP_READ usage for GPU→CPU transfers
+        let staging_buffer = ctx.staging_pool().acquire(byte_size).unwrap_or_else(|| {
+            ctx.device().create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Staging Buffer"),
+                size: byte_size,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
         });
 
         // Create a command encoder and copy data
@@ -192,9 +197,13 @@ impl GpuBuffer {
         let data = buffer_slice.get_mapped_range();
         let result: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
 
-        // Unmap before returning
+        // Unmap before returning to pool
         drop(data);
         staging_buffer.unmap();
+
+        // Return staging buffer to pool for reuse
+        // (if pool is full, buffer will be dropped and freed)
+        ctx.staging_pool().release(staging_buffer, byte_size);
 
         result
     }

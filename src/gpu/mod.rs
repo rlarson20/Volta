@@ -9,12 +9,16 @@
 mod buffer;
 mod context;
 mod kernels;
+pub mod monitor;
 mod pool;
+pub mod staging_pool;
 
 pub use buffer::GpuBuffer;
-pub use context::GpuContext;
+pub use context::{GpuContext, GpuSyncError};
 pub use kernels::{GpuKernels, MovementParams, OptimizerStepParams};
+pub use monitor::{ResourceStatus, check_system_resources, get_process_memory_mb};
 pub use pool::{BufferPool, BufferPoolConfig};
+pub use staging_pool::StagingBufferPool;
 
 use std::sync::OnceLock;
 

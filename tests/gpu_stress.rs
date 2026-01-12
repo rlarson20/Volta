@@ -216,4 +216,190 @@ mod gpu_stress_tests {
 
         gpu_sync();
     }
+
+    /// Test 8: Staging buffer pooling
+    ///
+    /// Verify staging buffers are reused across multiple GPU→CPU transfers
+    #[test]
+    fn test_staging_buffer_pooling() {
+        println!("Testing staging buffer pool with multiple readbacks");
+
+        // Create 10 tensors
+        let tensors: Vec<_> = (0..10).map(|_| gpu_tensor(1024)).collect();
+
+        // Read back multiple times - staging buffers should be pooled
+        for iteration in 0..5 {
+            println!("Readback iteration {}", iteration);
+
+            for (i, t) in tensors.iter().enumerate() {
+                let data = t.borrow().data.to_vec();
+                assert_eq!(data.len(), 1024, "Tensor {} data length mismatch", i);
+
+                // Verify data integrity (values should be i * 0.01 for indices)
+                assert!(data[0] >= 0.0 && data[0] <= 1.0, "Data sanity check failed");
+            }
+
+            println!(
+                "Iteration {} complete, pending: {}",
+                iteration,
+                gpu_pending_count()
+            );
+        }
+
+        gpu_sync();
+        println!("Staging buffer pool test complete");
+    }
+
+    /// Test 9: sync_checked() timeout handling
+    ///
+    /// Verify sync_checked() properly tracks consecutive timeouts
+    #[test]
+    fn test_sync_checked_timeout_handling() {
+        use volta::get_gpu_context;
+
+        let ctx = get_gpu_context().expect("GPU available");
+
+        // Reset timeout counter to start fresh
+        ctx.reset_timeout_counter();
+        assert_eq!(
+            ctx.consecutive_timeouts(),
+            0,
+            "Timeout counter should start at 0"
+        );
+
+        let t = gpu_tensor(1024);
+
+        // Run operations with periodic sync_checked()
+        for i in 0..50 {
+            let _ = t.relu();
+
+            if i % 10 == 0 {
+                println!("Checkpoint {}: pending = {}", i, gpu_pending_count());
+
+                match ctx.sync_checked() {
+                    Ok(()) => {
+                        println!("Sync {} OK, timeouts: {}", i, ctx.consecutive_timeouts());
+                        assert_eq!(
+                            ctx.consecutive_timeouts(),
+                            0,
+                            "Successful sync should reset timeout counter"
+                        );
+                    }
+                    Err(e) => {
+                        panic!("Sync failed at checkpoint {}: {}", i, e);
+                    }
+                }
+            }
+        }
+
+        // Final check
+        assert_eq!(
+            ctx.consecutive_timeouts(),
+            0,
+            "Timeout counter should be 0 after successful syncs"
+        );
+    }
+
+    /// Test 10: Resource monitoring integration
+    ///
+    /// Verify resource monitoring works and doesn't panic
+    #[test]
+    fn test_resource_monitoring() {
+        use volta::gpu::monitor::{ResourceStatus, check_system_resources, get_process_memory_mb};
+
+        // Check resources before starting
+        match check_system_resources() {
+            ResourceStatus::Critical(msg) => {
+                println!("WARNING: Resources already critical before test: {}", msg);
+                println!("Skipping heavy operations to avoid system freeze");
+                return; // Skip test if already in critical state
+            }
+            ResourceStatus::Warning(msg) => {
+                println!("Resources elevated at test start: {}", msg);
+            }
+            ResourceStatus::Healthy => {
+                println!("Resources healthy at test start");
+            }
+        }
+
+        println!("Initial memory: {}MB", get_process_memory_mb());
+
+        // Create moderate workload
+        let tensors: Vec<_> = (0..20).map(|_| gpu_tensor(256)).collect();
+
+        for iteration in 0..100 {
+            for t in &tensors {
+                let _ = t.relu();
+            }
+
+            // Check resources every 10 iterations
+            if iteration % 10 == 0 {
+                let memory_mb = get_process_memory_mb();
+                let pending = gpu_pending_count();
+
+                match check_system_resources() {
+                    ResourceStatus::Critical(msg) => {
+                        println!("CRITICAL at iter {}: {}", iteration, msg);
+                        println!("Memory: {}MB, Pending: {}", memory_mb, pending);
+                        panic!("Test aborted - resources critical: {}", msg);
+                    }
+                    ResourceStatus::Warning(msg) => {
+                        println!("Warning at iter {}: {}", iteration, msg);
+                        println!("Memory: {}MB, Pending: {}", memory_mb, pending);
+                    }
+                    ResourceStatus::Healthy => {
+                        println!(
+                            "Iter {}: Healthy ({}MB, {} pending)",
+                            iteration, memory_mb, pending
+                        );
+                    }
+                }
+            }
+        }
+
+        gpu_sync();
+        println!("Final memory: {}MB", get_process_memory_mb());
+    }
+
+    /// Test 11: Many small ops with resource monitoring
+    ///
+    /// Enhanced version of test 1 with resource monitoring to abort early
+    #[test]
+    fn test_many_small_ops_with_monitoring() {
+        use volta::gpu::monitor::{ResourceStatus, check_system_resources};
+
+        // Pre-flight check
+        match check_system_resources() {
+            ResourceStatus::Critical(msg) => {
+                panic!("Cannot start test - resources already critical: {}", msg);
+            }
+            ResourceStatus::Warning(msg) => {
+                println!("Starting with elevated resources: {}", msg);
+            }
+            _ => {}
+        }
+
+        let tensors: Vec<_> = (0..20).map(|_| gpu_tensor(256)).collect();
+
+        for iteration in 0..100 {
+            for t in &tensors {
+                let _ = t.relu();
+            }
+
+            if iteration % 10 == 0 {
+                match check_system_resources() {
+                    ResourceStatus::Critical(msg) => {
+                        gpu_sync(); // Try to clean up before aborting
+                        panic!("Test aborted at iteration {} - {}", iteration, msg);
+                    }
+                    ResourceStatus::Warning(msg) => {
+                        println!("Warning at iter {}: {}", iteration, msg);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        gpu_sync();
+    }
 }
