@@ -44,6 +44,32 @@ fn bench_matmul_cpu_vs_gpu(c: &mut Criterion) {
         return; // Skip if GPU not available
     }
 
+    // Reset timeout counter to isolate this benchmark from previous state
+    if let Some(ctx) = get_gpu_context() {
+        ctx.reset_timeout_counter();
+    }
+
+    // Pre-flight resource check
+    match check_system_resources() {
+        ResourceStatus::Critical(msg) => {
+            eprintln!("CRITICAL: Cannot run matmul benchmarks - {}", msg);
+            eprintln!("Skipping matmul_cpu_vs_gpu to avoid system freeze");
+            return;
+        }
+        ResourceStatus::Warning(msg) => {
+            eprintln!(
+                "WARNING: Starting matmul benchmarks with elevated resources: {}",
+                msg
+            );
+        }
+        ResourceStatus::Healthy => {
+            println!(
+                "Resources healthy. Starting matmul_cpu_vs_gpu (Memory: {}MB)",
+                get_process_memory_mb()
+            );
+        }
+    }
+
     let mut group = c.benchmark_group("matmul_cpu_vs_gpu");
 
     // Large matrices where GPU should shine
@@ -69,6 +95,45 @@ fn bench_matmul_cpu_vs_gpu(c: &mut Criterion) {
     }
 
     group.finish();
+
+    // Post-flight check
+    let final_memory = get_process_memory_mb();
+    match check_system_resources() {
+        ResourceStatus::Critical(msg) => {
+            eprintln!(
+                "CRITICAL after matmul_cpu_vs_gpu: {} (Memory: {}MB)",
+                msg, final_memory
+            );
+        }
+        ResourceStatus::Warning(msg) => {
+            eprintln!(
+                "Warning after matmul_cpu_vs_gpu: {} (Memory: {}MB)",
+                msg, final_memory
+            );
+        }
+        ResourceStatus::Healthy => {
+            println!(
+                "matmul_cpu_vs_gpu complete. Final memory: {}MB",
+                final_memory
+            );
+        }
+    }
+
+    // Explicit GPU cleanup
+    println!("[Cleanup] Syncing GPU after matmul_cpu_vs_gpu...");
+    if !gpu_sync() {
+        eprintln!("WARNING: GPU sync timeout after matmul_cpu_vs_gpu");
+    }
+
+    // Cooldown period to allow GPU to fully drain command queues
+    // This prevents accumulated stress from affecting subsequent benchmarks
+    println!("[Cleanup] Cooldown period (500ms) to allow GPU recovery...");
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    // Verify cleanup succeeded
+    if let ResourceStatus::Critical(msg) = check_system_resources() {
+        panic!("CRITICAL after cleanup: {}", msg);
+    }
 }
 
 // ===== BINARY OPERATIONS COMPARISON =====
@@ -76,6 +141,32 @@ fn bench_matmul_cpu_vs_gpu(c: &mut Criterion) {
 fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
     if !is_gpu_enabled() {
         return;
+    }
+
+    // Reset timeout counter to isolate this benchmark from previous state
+    if let Some(ctx) = get_gpu_context() {
+        ctx.reset_timeout_counter();
+    }
+
+    // Pre-flight resource check
+    match check_system_resources() {
+        ResourceStatus::Critical(msg) => {
+            eprintln!("CRITICAL: Cannot run binary ops benchmarks - {}", msg);
+            eprintln!("Skipping binary_ops_cpu_vs_gpu to avoid system freeze");
+            return;
+        }
+        ResourceStatus::Warning(msg) => {
+            eprintln!(
+                "WARNING: Starting binary ops benchmarks with elevated resources: {}",
+                msg
+            );
+        }
+        ResourceStatus::Healthy => {
+            println!(
+                "Resources healthy. Starting binary_ops_cpu_vs_gpu (Memory: {}MB)",
+                get_process_memory_mb()
+            );
+        }
     }
 
     let mut group = c.benchmark_group("binary_ops_cpu_vs_gpu");
@@ -120,6 +211,43 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
     }
 
     group.finish();
+
+    // Post-flight check
+    let final_memory = get_process_memory_mb();
+    match check_system_resources() {
+        ResourceStatus::Critical(msg) => {
+            eprintln!(
+                "CRITICAL after binary_ops_cpu_vs_gpu: {} (Memory: {}MB)",
+                msg, final_memory
+            );
+        }
+        ResourceStatus::Warning(msg) => {
+            eprintln!(
+                "Warning after binary_ops_cpu_vs_gpu: {} (Memory: {}MB)",
+                msg, final_memory
+            );
+        }
+        ResourceStatus::Healthy => {
+            println!(
+                "binary_ops_cpu_vs_gpu complete. Final memory: {}MB",
+                final_memory
+            );
+        }
+    }
+
+    // Explicit GPU cleanup
+    println!("[Cleanup] Syncing GPU after binary_ops_cpu_vs_gpu...");
+    if !gpu_sync() {
+        eprintln!("WARNING: GPU sync timeout after binary_ops_cpu_vs_gpu");
+    }
+
+    // Brief cooldown to ensure clean state for next benchmark
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Verify cleanup succeeded
+    if let ResourceStatus::Critical(msg) = check_system_resources() {
+        panic!("CRITICAL after cleanup: {}", msg);
+    }
 }
 
 // ===== UNARY OPERATIONS COMPARISON =====
@@ -127,6 +255,32 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
 fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
     if !is_gpu_enabled() {
         return;
+    }
+
+    // Reset timeout counter to isolate this benchmark from previous state
+    if let Some(ctx) = get_gpu_context() {
+        ctx.reset_timeout_counter();
+    }
+
+    // Pre-flight resource check
+    match check_system_resources() {
+        ResourceStatus::Critical(msg) => {
+            eprintln!("CRITICAL: Cannot run unary ops benchmarks - {}", msg);
+            eprintln!("Skipping unary_ops_cpu_vs_gpu to avoid system freeze");
+            return;
+        }
+        ResourceStatus::Warning(msg) => {
+            eprintln!(
+                "WARNING: Starting unary ops benchmarks with elevated resources: {}",
+                msg
+            );
+        }
+        ResourceStatus::Healthy => {
+            println!(
+                "Resources healthy. Starting unary_ops_cpu_vs_gpu (Memory: {}MB)",
+                get_process_memory_mb()
+            );
+        }
     }
 
     let mut group = c.benchmark_group("unary_ops_cpu_vs_gpu");
@@ -167,6 +321,43 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
     }
 
     group.finish();
+
+    // Post-flight check
+    let final_memory = get_process_memory_mb();
+    match check_system_resources() {
+        ResourceStatus::Critical(msg) => {
+            eprintln!(
+                "CRITICAL after unary_ops_cpu_vs_gpu: {} (Memory: {}MB)",
+                msg, final_memory
+            );
+        }
+        ResourceStatus::Warning(msg) => {
+            eprintln!(
+                "Warning after unary_ops_cpu_vs_gpu: {} (Memory: {}MB)",
+                msg, final_memory
+            );
+        }
+        ResourceStatus::Healthy => {
+            println!(
+                "unary_ops_cpu_vs_gpu complete. Final memory: {}MB",
+                final_memory
+            );
+        }
+    }
+
+    // Explicit GPU cleanup
+    println!("[Cleanup] Syncing GPU after unary_ops_cpu_vs_gpu...");
+    if !gpu_sync() {
+        eprintln!("WARNING: GPU sync timeout after unary_ops_cpu_vs_gpu");
+    }
+
+    // Brief cooldown to ensure clean state for next benchmark
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Verify cleanup succeeded
+    if let ResourceStatus::Critical(msg) = check_system_resources() {
+        panic!("CRITICAL after cleanup: {}", msg);
+    }
 }
 
 // ===== REDUCTION OPERATIONS COMPARISON =====
@@ -174,6 +365,32 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
 fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
     if !is_gpu_enabled() {
         return;
+    }
+
+    // Reset timeout counter to isolate this benchmark from previous state
+    if let Some(ctx) = get_gpu_context() {
+        ctx.reset_timeout_counter();
+    }
+
+    // Pre-flight resource check
+    match check_system_resources() {
+        ResourceStatus::Critical(msg) => {
+            eprintln!("CRITICAL: Cannot run reduce ops benchmarks - {}", msg);
+            eprintln!("Skipping reduce_ops_cpu_vs_gpu to avoid system freeze");
+            return;
+        }
+        ResourceStatus::Warning(msg) => {
+            eprintln!(
+                "WARNING: Starting reduce ops benchmarks with elevated resources: {}",
+                msg
+            );
+        }
+        ResourceStatus::Healthy => {
+            println!(
+                "Resources healthy. Starting reduce_ops_cpu_vs_gpu (Memory: {}MB)",
+                get_process_memory_mb()
+            );
+        }
     }
 
     let mut group = c.benchmark_group("reduce_ops_cpu_vs_gpu");
@@ -214,6 +431,43 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
     }
 
     group.finish();
+
+    // Post-flight check
+    let final_memory = get_process_memory_mb();
+    match check_system_resources() {
+        ResourceStatus::Critical(msg) => {
+            eprintln!(
+                "CRITICAL after reduce_ops_cpu_vs_gpu: {} (Memory: {}MB)",
+                msg, final_memory
+            );
+        }
+        ResourceStatus::Warning(msg) => {
+            eprintln!(
+                "Warning after reduce_ops_cpu_vs_gpu: {} (Memory: {}MB)",
+                msg, final_memory
+            );
+        }
+        ResourceStatus::Healthy => {
+            println!(
+                "reduce_ops_cpu_vs_gpu complete. Final memory: {}MB",
+                final_memory
+            );
+        }
+    }
+
+    // Explicit GPU cleanup
+    println!("[Cleanup] Syncing GPU after reduce_ops_cpu_vs_gpu...");
+    if !gpu_sync() {
+        eprintln!("WARNING: GPU sync timeout after reduce_ops_cpu_vs_gpu");
+    }
+
+    // Brief cooldown to ensure clean state for next benchmark
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Verify cleanup succeeded
+    if let ResourceStatus::Critical(msg) = check_system_resources() {
+        panic!("CRITICAL after cleanup: {}", msg);
+    }
 }
 
 // ===== MEMORY TRANSFER OVERHEAD =====
@@ -221,6 +475,32 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
 fn bench_memory_transfer(c: &mut Criterion) {
     if !is_gpu_enabled() {
         return;
+    }
+
+    // Reset timeout counter to isolate this benchmark from previous state
+    if let Some(ctx) = get_gpu_context() {
+        ctx.reset_timeout_counter();
+    }
+
+    // Pre-flight resource check
+    match check_system_resources() {
+        ResourceStatus::Critical(msg) => {
+            eprintln!("CRITICAL: Cannot run memory transfer benchmarks - {}", msg);
+            eprintln!("Skipping memory_transfer to avoid system freeze");
+            return;
+        }
+        ResourceStatus::Warning(msg) => {
+            eprintln!(
+                "WARNING: Starting memory transfer benchmarks with elevated resources: {}",
+                msg
+            );
+        }
+        ResourceStatus::Healthy => {
+            println!(
+                "Resources healthy. Starting memory_transfer (Memory: {}MB)",
+                get_process_memory_mb()
+            );
+        }
     }
 
     let mut group = c.benchmark_group("memory_transfer");
@@ -240,6 +520,40 @@ fn bench_memory_transfer(c: &mut Criterion) {
     }
 
     group.finish();
+
+    // Post-flight check
+    let final_memory = get_process_memory_mb();
+    match check_system_resources() {
+        ResourceStatus::Critical(msg) => {
+            eprintln!(
+                "CRITICAL after memory_transfer: {} (Memory: {}MB)",
+                msg, final_memory
+            );
+        }
+        ResourceStatus::Warning(msg) => {
+            eprintln!(
+                "Warning after memory_transfer: {} (Memory: {}MB)",
+                msg, final_memory
+            );
+        }
+        ResourceStatus::Healthy => {
+            println!("memory_transfer complete. Final memory: {}MB", final_memory);
+        }
+    }
+
+    // Explicit GPU cleanup
+    println!("[Cleanup] Syncing GPU after memory_transfer...");
+    if !gpu_sync() {
+        eprintln!("WARNING: GPU sync timeout after memory_transfer");
+    }
+
+    // Brief cooldown to ensure clean state for next benchmark
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Verify cleanup succeeded
+    if let ResourceStatus::Critical(msg) = check_system_resources() {
+        panic!("CRITICAL after cleanup: {}", msg);
+    }
 }
 
 // ===== GPU BATCH PROCESSING =====
@@ -248,6 +562,11 @@ fn bench_memory_transfer(c: &mut Criterion) {
 fn bench_gpu_batch_processing(c: &mut Criterion) {
     if !is_gpu_enabled() {
         return;
+    }
+
+    // Reset timeout counter to isolate this benchmark from previous state
+    if let Some(ctx) = get_gpu_context() {
+        ctx.reset_timeout_counter();
     }
 
     // Pre-flight resource check
@@ -382,6 +701,20 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
             println!("Benchmarks complete. Final memory: {}MB", final_memory);
         }
     }
+
+    // Explicit GPU cleanup (for consistency with other groups)
+    println!("[Cleanup] Syncing GPU after gpu_batch_processing...");
+    if !gpu_sync() {
+        eprintln!("WARNING: GPU sync timeout after gpu_batch_processing");
+    }
+
+    // Brief cooldown to ensure clean state for next benchmark
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    // Verify cleanup succeeded
+    if let ResourceStatus::Critical(msg) = check_system_resources() {
+        panic!("CRITICAL after cleanup: {}", msg);
+    }
 }
 
 #[cfg(not(feature = "gpu"))]
@@ -391,12 +724,12 @@ fn bench_gpu_batch_processing(_c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_matmul_cpu_vs_gpu,
+    bench_gpu_batch_processing, // Lightest: 20 tensors × 256 elements
     bench_binary_ops_cpu_vs_gpu,
     bench_unary_ops_cpu_vs_gpu,
     bench_reduce_ops_cpu_vs_gpu,
     bench_memory_transfer,
-    bench_gpu_batch_processing,
+    bench_matmul_cpu_vs_gpu, // Heaviest: 2048×2048 matrices, run last
 );
 
 criterion_main!(benches);

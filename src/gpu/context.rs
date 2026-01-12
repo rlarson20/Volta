@@ -15,11 +15,24 @@ use std::time::Duration;
 const DEFAULT_SYNC_THRESHOLD: u32 = 16;
 
 /// Hard timeout for GPU sync operations (M2 Mac optimized)
-/// Reduced from 10s to detect problems faster
-const HARD_SYNC_TIMEOUT_SECS: u64 = 2;
+/// Set to 5s to accommodate unified memory architecture and thermal throttling
+const HARD_SYNC_TIMEOUT_SECS: u64 = 5;
 
 /// Maximum consecutive timeouts before aborting (3-strike rule)
 const MAX_CONSECUTIVE_TIMEOUTS: u32 = 3;
+
+/// Get the hard sync timeout from environment or default
+///
+/// Allows runtime configuration for testing:
+/// ```bash
+/// VOLTA_GPU_SYNC_TIMEOUT=5 cargo bench --bench gpu_comparison
+/// ```
+fn get_sync_timeout_secs() -> u64 {
+    std::env::var("VOLTA_GPU_SYNC_TIMEOUT")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(HARD_SYNC_TIMEOUT_SECS)
+}
 
 /// GPU synchronization errors
 #[derive(Debug)]
@@ -323,7 +336,7 @@ impl GpuContext {
         // Poll the device until all work completes (2-second timeout)
         let result = self.device.poll(wgpu::PollType::Wait {
             submission_index: None,
-            timeout: Some(Duration::from_secs(HARD_SYNC_TIMEOUT_SECS)),
+            timeout: Some(Duration::from_secs(get_sync_timeout_secs())),
         });
 
         // Reset the counter regardless of success/failure
@@ -435,7 +448,7 @@ impl GpuContext {
         // Use 2-second hard timeout
         let result = self.device.poll(wgpu::PollType::Wait {
             submission_index: None,
-            timeout: Some(Duration::from_secs(HARD_SYNC_TIMEOUT_SECS)),
+            timeout: Some(Duration::from_secs(get_sync_timeout_secs())),
         });
 
         self.pending_submissions.store(0, Ordering::Relaxed);
