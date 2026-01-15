@@ -49,11 +49,11 @@ impl Clone for Storage {
             Storage::Gpu {
                 buffer,
                 dtype,
-                cpu_cache,
+                cpu_cache: _,
             } => Storage::Gpu {
                 buffer: buffer.clone(),
                 dtype: *dtype,
-                cpu_cache: RefCell::new(cpu_cache.borrow().clone()),
+                cpu_cache: RefCell::new(None),
             },
         }
     }

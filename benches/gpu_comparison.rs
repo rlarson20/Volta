@@ -7,6 +7,8 @@ use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, 
 use volta::{Device, RawTensor, Tensor, TensorOps};
 
 #[cfg(feature = "gpu")]
+use volta::gpu::invalidate_all_tensor_caches;
+#[cfg(feature = "gpu")]
 use volta::{get_gpu_context, gpu_compact, gpu_pool_stats, gpu_sync};
 
 #[cfg(feature = "gpu")]
@@ -72,6 +74,9 @@ fn bench_matmul_cpu_vs_gpu(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("matmul_cpu_vs_gpu");
 
+    // Track setup tensors for cache cleanup
+    let mut setup_tensors: Vec<Tensor> = Vec::new();
+
     // Large matrices where GPU should shine
     for n in [256, 512, 1024, 2048] {
         let n_ref = &n;
@@ -86,6 +91,9 @@ fn bench_matmul_cpu_vs_gpu(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("gpu", n), n_ref, |b, s| {
             let a = random_tensor_2d(*s, *s).to_device(Device::gpu().unwrap());
             let tensor_b = random_tensor_2d(*s, *s).to_device(Device::gpu().unwrap());
+            // Capture setup tensors for cleanup
+            setup_tensors.push(a.clone());
+            setup_tensors.push(tensor_b.clone());
             b.iter(|| {
                 let result = black_box(&a).matmul(black_box(&tensor_b));
                 gpu_sync();
@@ -95,6 +103,17 @@ fn bench_matmul_cpu_vs_gpu(c: &mut Criterion) {
     }
 
     group.finish();
+
+    // Clear CPU caches on setup tensors to free memory
+    if !setup_tensors.is_empty() {
+        let tensor_refs: Vec<&Tensor> = setup_tensors.iter().collect();
+        invalidate_all_tensor_caches(&tensor_refs);
+        println!(
+            "[Cleanup] Cleared CPU caches for {} setup tensors",
+            tensor_refs.len()
+        );
+    }
+    drop(setup_tensors); // Release tensor references
 
     // Post-flight check
     let final_memory = get_process_memory_mb();
@@ -186,6 +205,9 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("binary_ops_cpu_vs_gpu");
 
+    // Track setup tensors for cache cleanup
+    let mut setup_tensors: Vec<Tensor> = Vec::new();
+
     for size in [4096, 16384, 65536] {
         let size_ref = &size;
         // CPU addition
@@ -199,6 +221,9 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("gpu_add", size), size_ref, |b, s| {
             let a = random_tensor(*s).to_device(Device::gpu().unwrap());
             let tensor_b = random_tensor(*s).to_device(Device::gpu().unwrap());
+            // Capture setup tensors for cleanup
+            setup_tensors.push(a.clone());
+            setup_tensors.push(tensor_b.clone());
             b.iter(|| {
                 let result = black_box(&a).add(black_box(&tensor_b));
                 gpu_sync();
@@ -217,6 +242,9 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("gpu_mul", size), size_ref, |b, s| {
             let a = random_tensor(*s).to_device(Device::gpu().unwrap());
             let tensor_b = random_tensor(*s).to_device(Device::gpu().unwrap());
+            // Capture setup tensors for cleanup
+            setup_tensors.push(a.clone());
+            setup_tensors.push(tensor_b.clone());
             b.iter(|| {
                 let result = black_box(&a).elem_mul(black_box(&tensor_b));
                 gpu_sync();
@@ -226,6 +254,17 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
     }
 
     group.finish();
+
+    // Clear CPU caches on setup tensors to free memory
+    if !setup_tensors.is_empty() {
+        let tensor_refs: Vec<&Tensor> = setup_tensors.iter().collect();
+        invalidate_all_tensor_caches(&tensor_refs);
+        println!(
+            "[Cleanup] Cleared CPU caches for {} setup tensors",
+            tensor_refs.len()
+        );
+    }
+    drop(setup_tensors); // Release tensor references
 
     // Post-flight check
     let final_memory = get_process_memory_mb();
@@ -315,6 +354,9 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("unary_ops_cpu_vs_gpu");
 
+    // Track setup tensors for cache cleanup
+    let mut setup_tensors: Vec<Tensor> = Vec::new();
+
     for size in [4096, 16384, 65536] {
         let size_ref = &size;
         // CPU exp
@@ -326,6 +368,8 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
         // GPU exp
         group.bench_with_input(BenchmarkId::new("gpu_exp", size), size_ref, |b, s| {
             let a = random_tensor(*s).to_device(Device::gpu().unwrap());
+            // Capture setup tensor for cleanup
+            setup_tensors.push(a.clone());
             b.iter(|| {
                 let result = black_box(&a).exp();
                 gpu_sync();
@@ -342,6 +386,8 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
         // GPU relu
         group.bench_with_input(BenchmarkId::new("gpu_relu", size), size_ref, |b, s| {
             let a = random_tensor(*s).to_device(Device::gpu().unwrap());
+            // Capture setup tensor for cleanup
+            setup_tensors.push(a.clone());
             b.iter(|| {
                 let result = black_box(&a).relu();
                 gpu_sync();
@@ -351,6 +397,17 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
     }
 
     group.finish();
+
+    // Clear CPU caches on setup tensors to free memory
+    if !setup_tensors.is_empty() {
+        let tensor_refs: Vec<&Tensor> = setup_tensors.iter().collect();
+        invalidate_all_tensor_caches(&tensor_refs);
+        println!(
+            "[Cleanup] Cleared CPU caches for {} setup tensors",
+            tensor_refs.len()
+        );
+    }
+    drop(setup_tensors); // Release tensor references
 
     // Post-flight check
     let final_memory = get_process_memory_mb();
@@ -440,6 +497,9 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("reduce_ops_cpu_vs_gpu");
 
+    // Track setup tensors for cache cleanup
+    let mut setup_tensors: Vec<Tensor> = Vec::new();
+
     for size in [4096, 16384, 65536] {
         let size_ref = &size;
         // CPU sum
@@ -451,6 +511,8 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
         // GPU sum
         group.bench_with_input(BenchmarkId::new("gpu_sum", size), size_ref, |b, s| {
             let a = random_tensor(*s).to_device(Device::gpu().unwrap());
+            // Capture setup tensor for cleanup
+            setup_tensors.push(a.clone());
             b.iter(|| {
                 let result = black_box(&a).sum();
                 gpu_sync();
@@ -467,6 +529,8 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
         // GPU mean
         group.bench_with_input(BenchmarkId::new("gpu_mean", size), size_ref, |b, s| {
             let a = random_tensor(*s).to_device(Device::gpu().unwrap());
+            // Capture setup tensor for cleanup
+            setup_tensors.push(a.clone());
             b.iter(|| {
                 let result = black_box(&a).mean();
                 gpu_sync();
@@ -476,6 +540,17 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
     }
 
     group.finish();
+
+    // Clear CPU caches on setup tensors to free memory
+    if !setup_tensors.is_empty() {
+        let tensor_refs: Vec<&Tensor> = setup_tensors.iter().collect();
+        invalidate_all_tensor_caches(&tensor_refs);
+        println!(
+            "[Cleanup] Cleared CPU caches for {} setup tensors",
+            tensor_refs.len()
+        );
+    }
+    drop(setup_tensors); // Release tensor references
 
     // Post-flight check
     let final_memory = get_process_memory_mb();
@@ -668,6 +743,9 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
     let mut group = c.benchmark_group("gpu_batch_processing");
     group.sample_size(10); // Reduce from 100 to 10 samples to prevent memory exhaustion
 
+    // Track setup tensors for cache cleanup
+    let mut setup_tensors: Vec<Tensor> = Vec::new();
+
     // Compare processing many small operations vs one large operation
     // This demonstrates GPU kernel dispatch overhead: launching many small
     // kernels is much slower than one large kernel with the same total work.
@@ -682,6 +760,11 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
             (0..20) // Reduced from 100 to 20 tensors
                 .map(|_| random_tensor(256).to_device(Device::gpu().unwrap()))
                 .collect();
+
+        // Capture setup tensors for cleanup
+        for t in &tensors {
+            setup_tensors.push(t.clone());
+        }
 
         // Sync after tensor setup to start with clean GPU state
         if !gpu_sync() {
@@ -724,6 +807,9 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
 
         let large_tensor = random_tensor(5120).to_device(Device::gpu().unwrap()); // 20 × 256
 
+        // Capture setup tensor for cleanup
+        setup_tensors.push(large_tensor.clone());
+
         // Sync after tensor setup to start with clean GPU state
         if !gpu_sync() {
             eprintln!("Warning: GPU sync timed out after tensor setup");
@@ -756,6 +842,17 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
     });
 
     group.finish();
+
+    // Clear CPU caches on setup tensors to free memory
+    if !setup_tensors.is_empty() {
+        let tensor_refs: Vec<&Tensor> = setup_tensors.iter().collect();
+        invalidate_all_tensor_caches(&tensor_refs);
+        println!(
+            "[Cleanup] Cleared CPU caches for {} setup tensors",
+            tensor_refs.len()
+        );
+    }
+    drop(setup_tensors); // Release tensor references
 
     // Final resource check
     let final_memory = get_process_memory_mb();

@@ -333,7 +333,7 @@ impl GpuContext {
             eprintln!("[GPU] Syncing {} pending submissions...", pending);
         }
 
-        // Poll the device until all work completes (2-second timeout)
+        // Poll the device until all work completes
         let result = self.device.poll(wgpu::PollType::Wait {
             submission_index: None,
             timeout: Some(Duration::from_secs(get_sync_timeout_secs())),

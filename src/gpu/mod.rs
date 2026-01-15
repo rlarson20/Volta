@@ -229,3 +229,33 @@ pub fn gpu_pool_stats() -> Option<(usize, usize)> {
         (buffer_stats.total_pooled, staging_stats.total_pooled)
     })
 }
+
+/// Invalidate CPU caches for all provided GPU tensors
+///
+/// This function releases CPU-side copies of GPU data, reducing memory usage.
+/// The GPU data remains intact and will be re-cached on next CPU access if needed.
+///
+/// This is particularly useful in benchmarks to prevent memory accumulation
+/// when setup tensors persist through multiple benchmark iterations.
+///
+/// # Arguments
+/// * `tensors` - Slice of tensor references to process
+///
+/// # Example
+///
+/// ```ignore
+/// use volta::{Device, TensorOps, Tensor, gpu::invalidate_all_tensor_caches};
+///
+/// let a = tensor.to_device(Device::gpu().unwrap());
+/// let b = tensor.to_device(Device::gpu().unwrap());
+///
+/// // ... run benchmarks that may populate CPU caches ...
+///
+/// // Release CPU-side copies to free memory
+/// invalidate_all_tensor_caches(&[&a, &b]);
+/// ```
+pub fn invalidate_all_tensor_caches(tensors: &[&crate::Tensor]) {
+    for tensor in tensors {
+        tensor.borrow_mut().invalidate_gpu_cache();
+    }
+}
