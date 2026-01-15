@@ -9,12 +9,12 @@ use wgpu::Buffer;
 ///
 /// **Why pooling?** `GpuBuffer::to_vec()` creates fresh staging buffers on every
 /// call. In benchmark loops with many readbacks, staging buffers accumulate
-/// and cause memory pressure. This pool caps concurrent staging buffers at 16,
+/// and cause memory pressure. This pool caps concurrent staging buffers at 64,
 /// preventing unbounded memory growth.
 ///
 /// **Pool strategy**:
 /// - Exact size matching (not power-of-2 bucketing) - simpler, less waste
-/// - Global limit of 16 buffers - conservative, sufficient for readback use case
+/// - Global limit of 64 buffers - conservative, sufficient for readback use case
 /// - Fail-safe: Returns None if pool full, caller creates new buffer
 ///
 /// # Example
@@ -44,7 +44,7 @@ impl StagingBufferPool {
     /// Create new staging buffer pool with specified capacity
     ///
     /// # Arguments
-    /// * `max_total` - Maximum number of concurrent staging buffers (recommended: 8-32)
+    /// * `max_total` - Maximum number of concurrent staging buffers: default 64
     pub fn new(max_total: usize) -> Self {
         Self {
             pools: Mutex::new(HashMap::new()),
@@ -167,7 +167,7 @@ pub struct StagingPoolStats {
 
 impl Default for StagingBufferPool {
     fn default() -> Self {
-        Self::new(16) // Conservative: 16 concurrent staging buffers max
+        Self::new(64)
     }
 }
 
