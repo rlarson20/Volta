@@ -50,7 +50,7 @@ impl GradFn for UnaryGradFn {
         {
             if out_grad.device.is_gpu()
                 && x.device.is_gpu()
-                && let Some(kernel) = unary_backward_kernel_name(self.op)
+                && let kernel = unary_backward_kernel_name(self.op)
                 && let Some(grad_storage) =
                     RawTensor::gpu_unary_backward(&out_grad.data, &x.data, kernel)
             {
@@ -156,39 +156,39 @@ impl GradFn for UnaryGradFn {
 }
 // Map a `UnaryOp` to the corresponding GPU kernel name, if supported.
 #[cfg(feature = "gpu")]
-fn unary_kernel_name(op: UnaryOp) -> Option<&'static str> {
+fn unary_kernel_name(op: UnaryOp) -> &'static str {
     match op {
-        UnaryOp::Neg => Some("neg"),
-        UnaryOp::Exp => Some("exp"),
-        UnaryOp::Log => Some("log"),
-        UnaryOp::Tanh => Some("tanh"),
-        UnaryOp::Sigmoid => Some("sigmoid"),
-        UnaryOp::ReLU => Some("relu"),
-        UnaryOp::Sqrt => Some("sqrt"),
-        UnaryOp::Recip => Some("recip"),
-        UnaryOp::Exp2 => Some("exp2"),
-        UnaryOp::Log2 => Some("log2"),
-        UnaryOp::Sin => Some("sin"),
-        UnaryOp::Cos => Some("cos"),
+        UnaryOp::Neg => "neg",
+        UnaryOp::Exp => "exp",
+        UnaryOp::Log => "log",
+        UnaryOp::Tanh => "tanh",
+        UnaryOp::Sigmoid => "sigmoid",
+        UnaryOp::ReLU => "relu",
+        UnaryOp::Sqrt => "sqrt",
+        UnaryOp::Recip => "recip",
+        UnaryOp::Exp2 => "exp2",
+        UnaryOp::Log2 => "log2",
+        UnaryOp::Sin => "sin",
+        UnaryOp::Cos => "cos",
     }
 }
 
 // Map a `UnaryOp` to the corresponding GPU backward kernel name, if supported.
 #[cfg(feature = "gpu")]
-fn unary_backward_kernel_name(op: UnaryOp) -> Option<&'static str> {
+fn unary_backward_kernel_name(op: UnaryOp) -> &'static str {
     match op {
-        UnaryOp::Neg => Some("neg_backward"),
-        UnaryOp::Exp => Some("exp_backward"),
-        UnaryOp::Log => Some("log_backward"),
-        UnaryOp::Tanh => Some("tanh_backward"),
-        UnaryOp::Sigmoid => Some("sigmoid_backward"),
-        UnaryOp::ReLU => Some("relu_backward"),
-        UnaryOp::Sqrt => Some("sqrt_backward"),
-        UnaryOp::Recip => Some("recip_backward"),
-        UnaryOp::Exp2 => Some("exp2_backward"),
-        UnaryOp::Log2 => Some("log2_backward"),
-        UnaryOp::Sin => Some("sin_backward"),
-        UnaryOp::Cos => Some("cos_backward"),
+        UnaryOp::Neg => "neg_backward",
+        UnaryOp::Exp => "exp_backward",
+        UnaryOp::Log => "log_backward",
+        UnaryOp::Tanh => "tanh_backward",
+        UnaryOp::Sigmoid => "sigmoid_backward",
+        UnaryOp::ReLU => "relu_backward",
+        UnaryOp::Sqrt => "sqrt_backward",
+        UnaryOp::Recip => "recip_backward",
+        UnaryOp::Exp2 => "exp2_backward",
+        UnaryOp::Log2 => "log2_backward",
+        UnaryOp::Sin => "sin_backward",
+        UnaryOp::Cos => "cos_backward",
     }
 }
 
@@ -214,7 +214,7 @@ impl RawTensor {
         #[cfg(feature = "gpu")]
         {
             if RawTensor::common_gpu_device(&[t]).is_some()
-                && let Some(kernel) = unary_kernel_name(op)
+                && let kernel = unary_kernel_name(op)
                 && let Some(storage) = RawTensor::gpu_unary(&data, kernel)
             {
                 let out = Rc::new(RefCell::new(RawTensor {

@@ -9,5 +9,5 @@
 
 *.bin
 # Data files
-data/
+data/*
 node_modules/

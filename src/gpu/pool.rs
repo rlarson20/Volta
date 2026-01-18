@@ -206,7 +206,7 @@ impl BufferPool {
 pub struct BufferPoolStats {
     /// Total number of buffers currently in the pool
     pub total_pooled: usize,
-    /// Buffer counts per bucket (bucket_size, count)
+    /// Buffer counts per bucket (`bucket_size`, count)
     pub buckets: Vec<(usize, usize)>,
 }
 

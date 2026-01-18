@@ -14,7 +14,9 @@ pub struct TransposeGradFn;
 impl GradFn for TransposeGradFn {
     fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let transposed = RawTensor::transpose_2d(&out_grad.data, &out_grad.shape);
-        let new_shape = vec![out_grad.shape[1], out_grad.shape[0]];
+        let dim0 = out_grad.shape.first().copied().unwrap_or(1);
+        let dim1 = out_grad.shape.get(1).copied().unwrap_or(1);
+        let new_shape = vec![dim1, dim0];
         vec![Some(RawTensor::new(transposed, &new_shape, false))]
     }
 
@@ -31,11 +33,16 @@ impl RawTensor {
     /// For shape [m, n], produces shape [n, m]
     pub(crate) fn transpose_2d(data: &[f32], shape: &[usize]) -> Vec<f32> {
         assert_eq!(shape.len(), 2, "Transpose expects 2D shape");
-        let (m, n) = (shape[0], shape[1]);
+        let m = shape.first().copied().unwrap_or(1);
+        let n = shape.get(1).copied().unwrap_or(1);
         let mut result = vec![0.0; m * n];
         for i in 0..m {
             for j in 0..n {
-                result[j * m + i] = data[i * n + j];
+                if let Some(src) = data.get(i * n + j)
+                    && let Some(dst) = result.get_mut(j * m + i)
+                {
+                    *dst = *src;
+                }
             }
         }
         result
@@ -43,7 +50,7 @@ impl RawTensor {
 
     // Helper: raw matmul computation
     /// Raw matrix multiplication: (m,k) @ (k,n) -> (m,n)
-    /// Uses cblas_sgemm on macOS, matrixmultiply::sgemm elsewhere
+    /// Uses `cblas_sgemm` on macOS, `matrixmultiply::sgemm` elsewhere
     #[must_use]
     pub fn matmul_raw(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
         #[cfg(all(feature = "accelerate", target_os = "macos"))]
@@ -147,13 +154,11 @@ impl RawTensor {
         match (shape_a.len(), shape_b.len()) {
             (2, 2) => {
                 // Standard 2D matmul: (m,n) @ (n,p) -> (m,p)
-                let (m, n) = (shape_a[0], shape_a[1]);
-                let (n2, p) = (shape_b[0], shape_b[1]);
-                assert_eq!(
-                    n, n2,
-                    "Matmul dimension mismatch: ({},{}) @ ({},{})",
-                    m, n, n2, p
-                );
+                let m = shape_a.first().copied().unwrap_or(1);
+                let n = shape_a.get(1).copied().unwrap_or(1);
+                let n2 = shape_b.first().copied().unwrap_or(1);
+                let p = shape_b.get(1).copied().unwrap_or(1);
+                assert_eq!(n, n2, "Matmul dimension mismatch: ({m},{n}) @ ({n2},{p})");
 
                 // If both inputs live on the same GPU device, try the GPU path first.
                 // Fallback to the existing CPU implementation if anything fails.
@@ -175,11 +180,8 @@ impl RawTensor {
                                 out.borrow_mut().grad_fn = Some(Box::new(MatMulGradFn));
                             }
                             return out;
-                        } else {
-                            eprintln!(
-                                "Warning: GPU matmul requested but failed; falling back to CPU"
-                            );
                         }
+                        eprintln!("Warning: GPU matmul requested but failed; falling back to CPU");
                     }
                 }
 
@@ -195,17 +197,24 @@ impl RawTensor {
             }
             (2, 1) => {
                 // Matrix-vector: (m,n) @ (n,) -> (m,)
-                let (m, n) = (shape_a[0], shape_a[1]);
-                let n2 = shape_b[0];
-                assert_eq!(n, n2, "Matmul dimension mismatch: ({},{}) @ ({})", m, n, n2);
+                let m = shape_a.first().copied().unwrap_or(1);
+                let n = shape_a.get(1).copied().unwrap_or(1);
+                let n2 = shape_b.first().copied().unwrap_or(1);
+                assert_eq!(n, n2, "Matmul dimension mismatch: ({m},{n}) @ ({n2})");
 
                 let mut result_data = vec![0.0; m];
                 for i in 0..m {
                     let mut sum = 0.0;
                     for j in 0..n {
-                        sum += data_a[i * n + j] * data_b[j];
+                        if let Some(a_val) = data_a.get(i * n + j)
+                            && let Some(b_val) = data_b.get(j)
+                        {
+                            sum += *a_val * *b_val;
+                        }
                     }
-                    result_data[i] = sum;
+                    if let Some(slot) = result_data.get_mut(i) {
+                        *slot = sum;
+                    }
                 }
 
                 let out = Self::new(result_data, &[m], req_a || req_b);
@@ -218,17 +227,25 @@ impl RawTensor {
             }
             (1, 2) => {
                 // Vector-matrix: (n,) @ (n,p) -> (p,)
-                let n = shape_a[0];
-                let (n2, p) = (shape_b[0], shape_b[1]);
-                assert_eq!(n, n2, "Matmul dimension mismatch: ({}) @ ({},{})", n, n2, p);
+                let n = shape_a.first().copied().unwrap_or(1);
+                let n2 = shape_b.first().copied().unwrap_or(1);
+                let p = shape_b.get(1).copied().unwrap_or(1);
+                assert_eq!(n, n2, "Matmul dimension mismatch: ({n}) @ ({n2},{p})");
 
                 let mut result_data = vec![0.0; p];
                 for j in 0..p {
                     let mut sum = 0.0;
                     for i in 0..n {
-                        sum += data_a[i] * data_b[i * p + j];
+                        if let Some(a_val) = data_a.get(i)
+                            && let Some(b_val) = data_b.get(i * p + j)
+                        {
+                            sum += *a_val * *b_val;
+                        }
                     }
-                    result_data[j] = sum;
+
+                    if let Some(slot) = result_data.get_mut(j) {
+                        *slot = sum;
+                    }
                 }
 
                 let out = Self::new(result_data, &[p], req_a || req_b);
@@ -241,9 +258,9 @@ impl RawTensor {
             }
             (1, 1) => {
                 // Dot product: (n,) @ (n,) -> scalar
-                let n = shape_a[0];
-                let n2 = shape_b[0];
-                assert_eq!(n, n2, "Dot product dimension mismatch: ({}) @ ({})", n, n2);
+                let n = shape_a.first().copied().unwrap_or(1);
+                let n2 = shape_b.first().copied().unwrap_or(1);
+                assert_eq!(n, n2, "Dot product dimension mismatch: ({n}) @ ({n2})");
 
                 let sum: f32 = data_a.iter().zip(&data_b).map(|(a, b)| a * b).sum();
                 let out = Self::new(vec![sum], &[1], req_a || req_b);
@@ -264,15 +281,15 @@ impl RawTensor {
                     "Batched matmul requires rank >= 3"
                 );
 
-                let m = shape_a[rank_a - 2];
-                let k = shape_a[rank_a - 1];
-                let k2 = shape_b[rank_b - 2];
-                let n = shape_b[rank_b - 1];
+                let m = *shape_a.get(rank_a.wrapping_sub(2)).unwrap_or(&1);
+                let k = *shape_a.get(rank_a.wrapping_sub(1)).unwrap_or(&1);
+                let k2 = *shape_b.get(rank_b.wrapping_sub(2)).unwrap_or(&1);
+                let n = *shape_b.get(rank_b.wrapping_sub(1)).unwrap_or(&1);
                 assert_eq!(k, k2, "Matmul dimension mismatch in batch");
 
                 // 1. Broadcast batch dimensions
-                let batch_a = &shape_a[..rank_a - 2];
-                let batch_b = &shape_b[..rank_b - 2];
+                let batch_a = shape_a.get(..rank_a.saturating_sub(2)).unwrap_or(&[]);
+                let batch_b = shape_b.get(..rank_b.saturating_sub(2)).unwrap_or(&[]);
                 let batch_out = Self::broadcast_shape(batch_a, batch_b);
 
                 // 2. Expand inputs to broadcasted batch shape
@@ -295,11 +312,12 @@ impl RawTensor {
                 for b in 0..batch_count {
                     let start_a = b * stride_a;
                     let start_b = b * stride_b;
-                    let slice_a = &data_a_expanded[start_a..start_a + stride_a];
-                    let slice_b = &data_b_expanded[start_b..start_b + stride_b];
-
-                    let chunk_result = Self::matmul_raw(slice_a, slice_b, m, k, n);
-                    result_data.extend_from_slice(&chunk_result);
+                    if let Some(slice_a) = data_a_expanded.get(start_a..start_a + stride_a)
+                        && let Some(slice_b) = data_b_expanded.get(start_b..start_b + stride_b)
+                    {
+                        let chunk_result = Self::matmul_raw(slice_a, slice_b, m, k, n);
+                        result_data.extend_from_slice(&chunk_result);
+                    }
                 }
 
                 let mut out_shape = batch_out;
@@ -326,7 +344,9 @@ impl RawTensor {
         assert_eq!(shape.len(), 2, "Transpose expects 2D tensor");
 
         let transposed_data = Self::transpose_2d(&data, &shape);
-        let new_shape = vec![shape[1], shape[0]];
+        let dim0 = shape.first().copied().unwrap_or(1);
+        let dim1 = shape.get(1).copied().unwrap_or(1);
+        let new_shape = vec![dim1, dim0];
 
         let out = Self::new(transposed_data, &new_shape, req_grad);
 
@@ -367,9 +387,9 @@ impl GradFn for MatMulGradFn {
             if gpu_available {
                 // For MVP, only handle the standard 2D×2D case on GPU
                 if x.shape.len() == 2 && y.shape.len() == 2 {
-                    let m = out_grad.shape[0];
-                    let n = out_grad.shape[1];
-                    let k = y.shape[0]; // y is (k, n)
+                    let m = out_grad.shape.first().copied().unwrap_or(1);
+                    let n = out_grad.shape.get(1).copied().unwrap_or(1);
+                    let k = y.shape.first().copied().unwrap_or(1); // y is (k, n)
 
                     let grad_x = if x.requires_grad {
                         if let Some(storage) =
@@ -420,25 +440,26 @@ impl GradFn for MatMulGradFn {
                 (2, 2) => {
                     // Standard 2D: ∂L/∂x = out_grad @ y^T
                     let y_t = RawTensor::transpose_2d(&y.data, &y.shape);
-                    let grad_data = RawTensor::matmul_raw(
-                        &out_grad.data,
-                        &y_t,
-                        out_grad.shape[0],
-                        out_grad.shape[1],
-                        y.shape[0],
-                    );
+                    let m = out_grad.shape.first().copied().unwrap_or(1);
+                    let n = out_grad.shape.get(1).copied().unwrap_or(1);
+                    let k = y.shape.first().copied().unwrap_or(1);
+                    let grad_data = RawTensor::matmul_raw(&out_grad.data, &y_t, m, n, k);
                     Some(RawTensor::new(grad_data, &x.shape, false))
                 }
                 (2, 1) => {
                     // Matrix-vector: (m,n) @ (n,) -> (m,)
                     // ∂L/∂x = ∂L/∂z[:,None] @ v[None,:] = outer(out_grad, v)
-                    let m = x.shape[0];
-                    let n = x.shape[1];
+                    let m = x.shape.first().copied().unwrap_or(1);
+                    let n = x.shape.get(1).copied().unwrap_or(1);
                     let mut grad_data = vec![0.0; m * n];
                     for i in 0..m {
-                        let gz_i = out_grad.data[i];
+                        let gz_i = out_grad.data.get(i).copied().unwrap_or(0.0);
                         for j in 0..n {
-                            grad_data[i * n + j] = gz_i * y.data[j];
+                            if let Some(y_val) = y.data.get(j)
+                                && let Some(slot) = grad_data.get_mut(i * n + j)
+                            {
+                                *slot = gz_i * *y_val;
+                            }
                         }
                     }
                     Some(RawTensor::new(grad_data, &x.shape, false))
@@ -447,11 +468,18 @@ impl GradFn for MatMulGradFn {
                     // Vector-matrix: (n,) @ (n,p) -> (p,)
                     // ∂L/∂x: out_grad is (p,), y is (n,p)
                     // grad_x = out_grad @ y^T -> (p,) @ (p,n) -> (n,)
-                    let mut grad_data = vec![0.0; x.shape[0]];
+                    let len_x = x.shape.first().copied().unwrap_or(1);
+                    let len_y_p = y.shape.get(1).copied().unwrap_or(1);
+                    let mut grad_data = vec![0.0; len_x];
                     #[allow(clippy::needless_range_loop)]
-                    for i in 0..x.shape[0] {
-                        for j in 0..y.shape[1] {
-                            grad_data[i] += out_grad.data[j] * y.data[i * y.shape[1] + j];
+                    for i in 0..len_x {
+                        for j in 0..len_y_p {
+                            if let Some(og) = out_grad.data.get(j)
+                                && let Some(y_val) = y.data.get(i * len_y_p + j)
+                                && let Some(slot) = grad_data.get_mut(i)
+                            {
+                                *slot += *og * *y_val;
+                            }
                         }
                     }
                     Some(RawTensor::new(grad_data, &x.shape, false))
@@ -459,7 +487,7 @@ impl GradFn for MatMulGradFn {
                 (1, 1) => {
                     // Dot: (n,) @ (n,) -> scalar
                     // ∂L/∂x = out_grad * y
-                    let og = out_grad.data[0];
+                    let og = out_grad.data.first().copied().unwrap_or(0.0);
                     let grad_data: Vec<f32> = y.data.iter().map(|&v| og * v).collect();
                     Some(RawTensor::new(grad_data, &x.shape, false))
                 }
@@ -468,12 +496,15 @@ impl GradFn for MatMulGradFn {
                     // dL/dx = dL/dz @ y^T
                     // Performed batch-wise
                     let rank = x.shape.len();
-                    let m = x.shape[rank - 2];
-                    let k = x.shape[rank - 1];
-                    let n = y.shape[rank - 1]; // y is (B, K, N)
+                    let m = *x.shape.get(rank.wrapping_sub(2)).unwrap_or(&1);
+                    let k = *x.shape.get(rank.wrapping_sub(1)).unwrap_or(&1);
+                    let n = *y.shape.get(rank.wrapping_sub(1)).unwrap_or(&1); // y is (B, K, N)
 
                     // Batch dimensions of output
-                    let batch_dims_out = &out_grad.shape[..out_grad.shape.len() - 2];
+                    let batch_dims_out = out_grad
+                        .shape
+                        .get(..out_grad.shape.len().saturating_sub(2))
+                        .unwrap_or(&[]);
                     let batch_count: usize = batch_dims_out.iter().product();
 
                     // We need y broadcasted to match out_grad's batch dims + [K, N]
@@ -488,14 +519,18 @@ impl GradFn for MatMulGradFn {
                     let mut grad_data_expanded = Vec::with_capacity(batch_count * m * k);
 
                     for b in 0..batch_count {
-                        let out_slice = &out_grad.data[b * stride_out..(b + 1) * stride_out];
-                        let y_slice = &y_data_expanded[b * stride_y..(b + 1) * stride_y];
-                        // Transpose y_slice (K, N) -> (N, K)
-                        // But for matmul_raw we need (M,N) @ (N,K) -> (M,K)
-                        // We can use transpose_2d helper on the slice
-                        let y_t = RawTensor::transpose_2d(y_slice, &[k, n]);
-                        let chunk = RawTensor::matmul_raw(out_slice, &y_t, m, n, k);
-                        grad_data_expanded.extend_from_slice(&chunk);
+                        if let Some(out_slice) =
+                            out_grad.data.get(b * stride_out..(b + 1) * stride_out)
+                            && let Some(y_slice) =
+                                y_data_expanded.get(b * stride_y..(b + 1) * stride_y)
+                        {
+                            // Transpose y_slice (K, N) -> (N, K)
+                            // But for matmul_raw we need (M,N) @ (N,K) -> (M,K)
+                            // We can use transpose_2d helper on the slice
+                            let y_t = RawTensor::transpose_2d(y_slice, &[k, n]);
+                            let chunk = RawTensor::matmul_raw(out_slice, &y_t, m, n, k);
+                            grad_data_expanded.extend_from_slice(&chunk);
+                        }
                     }
                     // Reduce gradients if x was broadcast
                     // grad_data_expanded has shape [*batch_out, m, k]
@@ -519,44 +554,54 @@ impl GradFn for MatMulGradFn {
             match (x.shape.len(), y.shape.len()) {
                 (2, 2) => {
                     let x_t = RawTensor::transpose_2d(&x.data, &x.shape);
-                    let grad_data = RawTensor::matmul_raw(
-                        &x_t,
-                        &out_grad.data,
-                        x.shape[1],
-                        x.shape[0],
-                        out_grad.shape[1],
-                    );
+                    let n = x.shape.get(1).copied().unwrap_or(1);
+                    let m = x.shape.first().copied().unwrap_or(1);
+                    let p = out_grad.shape.get(1).copied().unwrap_or(1);
+                    let grad_data = RawTensor::matmul_raw(&x_t, &out_grad.data, n, m, p);
                     Some(RawTensor::new(grad_data, &y.shape, false))
                 }
                 (2, 1) => {
                     // Matrix-vector: (m,n) @ (n,) -> (m,)
                     // ∂L/∂v = X^T @ ∂L/∂z -> (n,)
-                    let m = x.shape[0];
-                    let n = x.shape[1];
+                    let m = x.shape.first().copied().unwrap_or(1);
+                    let n = x.shape.get(1).copied().unwrap_or(1);
                     let mut grad_data = vec![0.0; n];
                     #[allow(clippy::needless_range_loop)]
                     for j in 0..n {
                         let mut sum = 0.0;
                         for i in 0..m {
-                            sum += x.data[i * n + j] * out_grad.data[i];
+                            if let Some(x_val) = x.data.get(i * n + j)
+                                && let Some(og) = out_grad.data.get(i)
+                            {
+                                sum += *x_val * *og;
+                            }
                         }
-                        grad_data[j] = sum;
+                        if let Some(slot) = grad_data.get_mut(j) {
+                            *slot = sum;
+                        }
                     }
                     Some(RawTensor::new(grad_data, &y.shape, false))
                 }
                 (1, 2) => {
                     // grad_y = x^T @ out_grad -> (n,1) @ (1,p) -> (n,p)
-                    let mut grad_data = vec![0.0; y.shape[0] * y.shape[1]];
-                    for i in 0..y.shape[0] {
-                        for j in 0..y.shape[1] {
-                            grad_data[i * y.shape[1] + j] = x.data[i] * out_grad.data[j];
+                    let dim0 = y.shape.first().copied().unwrap_or(1);
+                    let dim1 = y.shape.get(1).copied().unwrap_or(1);
+                    let mut grad_data = vec![0.0; dim0 * dim1];
+                    for i in 0..dim0 {
+                        for j in 0..dim1 {
+                            if let Some(x_val) = x.data.get(i)
+                                && let Some(og) = out_grad.data.get(j)
+                                && let Some(slot) = grad_data.get_mut(i * dim1 + j)
+                            {
+                                *slot = *x_val * *og;
+                            }
                         }
                     }
                     Some(RawTensor::new(grad_data, &y.shape, false))
                 }
                 (1, 1) => {
                     // Dot: (n,) @ (n,) -> scalar
-                    let og = out_grad.data[0];
+                    let og = out_grad.data.first().copied().unwrap_or(0.0);
                     let grad_data: Vec<f32> = x.data.iter().map(|&u| og * u).collect();
                     Some(RawTensor::new(grad_data, &y.shape, false))
                 }
@@ -564,11 +609,14 @@ impl GradFn for MatMulGradFn {
                     // Batched case: (B, M, K) @ (B, K, N) -> (B, M, N)
                     // dL/dy = x^T @ dL/dz
                     let rank = y.shape.len();
-                    let m = x.shape[rank - 2];
-                    let k = x.shape[rank - 1];
-                    let n = y.shape[rank - 1];
+                    let m = *x.shape.get(rank.wrapping_sub(2)).unwrap_or(&1);
+                    let k = *x.shape.get(rank.wrapping_sub(1)).unwrap_or(&1);
+                    let n = *y.shape.get(rank.wrapping_sub(1)).unwrap_or(&1);
 
-                    let batch_dims_out = &out_grad.shape[..out_grad.shape.len() - 2];
+                    let batch_dims_out = out_grad
+                        .shape
+                        .get(..out_grad.shape.len().saturating_sub(2))
+                        .unwrap_or(&[]);
                     let batch_count: usize = batch_dims_out.iter().product();
 
                     // Expand X to match output batch dims
@@ -583,12 +631,15 @@ impl GradFn for MatMulGradFn {
                     let mut grad_data_expanded = Vec::with_capacity(batch_count * k * n);
 
                     for b in 0..batch_count {
-                        let x_slice = &x_data_expanded[b * stride_x..(b + 1) * stride_x];
-                        let out_slice = &out_grad.data[b * stride_out..(b + 1) * stride_out];
-                        let x_t = RawTensor::transpose_2d(x_slice, &[m, k]);
-                        // (K, M) @ (M, N) -> (K, N)
-                        let chunk = RawTensor::matmul_raw(&x_t, out_slice, k, m, n);
-                        grad_data_expanded.extend_from_slice(&chunk);
+                        if let Some(x_slice) = x_data_expanded.get(b * stride_x..(b + 1) * stride_x)
+                            && let Some(out_slice) =
+                                out_grad.data.get(b * stride_out..(b + 1) * stride_out)
+                        {
+                            let x_t = RawTensor::transpose_2d(x_slice, &[m, k]);
+                            // (K, M) @ (M, N) -> (K, N)
+                            let chunk = RawTensor::matmul_raw(&x_t, out_slice, k, m, n);
+                            grad_data_expanded.extend_from_slice(&chunk);
+                        }
                     }
 
                     // Reduce gradients if y was broadcast

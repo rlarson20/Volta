@@ -30,7 +30,7 @@ impl Module for Flatten {
             return x.clone();
         }
 
-        let batch_size = shape[0];
+        let batch_size = shape.first().copied().unwrap_or(1);
         let flattened_size: usize = shape[1..].iter().product();
 
         x.reshape(&[batch_size, flattened_size])

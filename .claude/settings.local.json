@@ -8,7 +8,9 @@
       "Bash(wc:*)",
       "Bash(cargo build:*)",
       "Bash(cargo check:*)",
-      "Bash(cargo run:*)"
+      "Bash(cargo run:*)",
+      "Bash(tree:*)",
+      "Bash(cargo clippy:*)"
     ]
   }
 }

@@ -142,7 +142,7 @@ impl EarlyWarningSystem {
             return HealthStatus::Healthy;
         }
 
-        let values: Vec<f64> = self.pending_trend.iter().map(|&p| p as f64).collect();
+        let values: Vec<f64> = self.pending_trend.iter().map(|&p| f64::from(p)).collect();
 
         match calculate_trend(&values) {
             TrendDirection::Increasing(rate) if rate > 0.20 => HealthStatus::Critical(format!(
@@ -216,6 +216,8 @@ enum TrendDirection {
 /// # Arguments
 /// * `values` - Time series data to analyze
 fn calculate_trend(values: &[f64]) -> TrendDirection {
+    const THRESHOLD: f64 = 0.01; // 1% per sample
+
     if values.len() < 2 {
         return TrendDirection::Stable;
     }
@@ -239,8 +241,6 @@ fn calculate_trend(values: &[f64]) -> TrendDirection {
     } else {
         0.0
     };
-
-    const THRESHOLD: f64 = 0.01; // 1% per sample
 
     if relative_slope > THRESHOLD {
         TrendDirection::Increasing(relative_slope)

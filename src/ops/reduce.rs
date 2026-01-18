@@ -22,7 +22,7 @@ pub struct SumGradFn {
 impl GradFn for SumGradFn {
     fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let size: usize = self.input_shape.iter().product();
-        let grad_val: f32 = out_grad.data[0];
+        let grad_val: f32 = out_grad.data.first().copied().unwrap_or(0.0);
 
         // Check if we can do GPU backward
         #[cfg(feature = "gpu")]
@@ -65,7 +65,7 @@ pub struct MaxReduceGradFn {
 impl GradFn for MaxReduceGradFn {
     fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let size: usize = self.input_shape.iter().product();
-        let grad_val: f32 = out_grad.data[0];
+        let grad_val: f32 = out_grad.data.first().copied().unwrap_or(0.0);
 
         // Check if we can do GPU backward
         #[cfg(feature = "gpu")]
@@ -85,7 +85,9 @@ impl GradFn for MaxReduceGradFn {
 
         // CPU fallback
         let mut grad_data = vec![0.0; size];
-        grad_data[self.max_index] = grad_val;
+        if let Some(slot) = grad_data.get_mut(self.max_index) {
+            *slot = grad_val;
+        }
         vec![Some(RawTensor::new(grad_data, &self.input_shape, false))]
     }
 
@@ -107,7 +109,7 @@ pub struct MeanGradFn {
 impl GradFn for MeanGradFn {
     fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let size: usize = self.input_shape.iter().product();
-        let grad_val: f32 = out_grad.data[0];
+        let grad_val: f32 = out_grad.data.first().copied().unwrap_or(0.0);
 
         // Check if we can do GPU backward
         #[cfg(feature = "gpu")]

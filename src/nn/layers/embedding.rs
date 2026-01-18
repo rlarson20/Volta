@@ -30,7 +30,7 @@ use rand::Rng;
 pub struct Embedding {
     pub weight: Tensor,
     vocab_size: usize,
-    embedding_dim: usize,
+    dim: usize,
 }
 
 impl Embedding {
@@ -56,7 +56,7 @@ impl Embedding {
         Embedding {
             weight,
             vocab_size,
-            embedding_dim,
+            dim: embedding_dim,
         }
     }
 
@@ -69,7 +69,7 @@ impl Embedding {
     /// Tensor of shape `[num_indices, embedding_dim]` containing the embeddings
     ///
     /// # Panics
-    /// Panics if any index is >= vocab_size
+    /// Panics if any index is >= `vocab_size`
     #[must_use]
     pub fn forward(&self, indices: &[usize]) -> Tensor {
         assert!(!indices.is_empty(), "indices cannot be empty");
@@ -78,7 +78,7 @@ impl Embedding {
         let weight_data = &weight_borrowed.data;
 
         // Gather operation: select rows from weight matrix
-        let mut output_data = Vec::with_capacity(indices.len() * self.embedding_dim);
+        let mut output_data = Vec::with_capacity(indices.len() * self.dim);
 
         for &idx in indices {
             assert!(
@@ -87,14 +87,14 @@ impl Embedding {
                 idx,
                 self.vocab_size
             );
-            let start = idx * self.embedding_dim;
-            let end = start + self.embedding_dim;
+            let start = idx * self.dim;
+            let end = start + self.dim;
             output_data.extend_from_slice(&weight_data[start..end]);
         }
 
         drop(weight_borrowed);
 
-        let output_shape = [indices.len(), self.embedding_dim];
+        let output_shape = [indices.len(), self.dim];
         let output = RawTensor::new(output_data, &output_shape, false);
 
         // Attach gradient function if weight requires grad
@@ -104,7 +104,7 @@ impl Embedding {
             output.borrow_mut().grad_fn = Some(Box::new(EmbeddingGradFn {
                 indices: indices.to_vec(),
                 vocab_size: self.vocab_size,
-                embedding_dim: self.embedding_dim,
+                embedding_dim: self.dim,
             }));
         }
 
@@ -137,13 +137,13 @@ impl Module for Embedding {
             // Validate shape
             assert_eq!(
                 weight_data.shape,
-                vec![self.vocab_size, self.embedding_dim],
+                vec![self.vocab_size, self.dim],
                 "Weight shape mismatch"
             );
 
             let mut weight = self.weight.borrow_mut();
             weight.data = crate::storage::Storage::cpu(weight_data.data.clone());
-            weight.shape = weight_data.shape.clone();
+            weight.shape.clone_from(&weight_data.shape);
         }
     }
 }
@@ -171,7 +171,10 @@ impl GradFn for EmbeddingGradFn {
             for d in 0..self.embedding_dim {
                 let out_grad_idx = i * self.embedding_dim + d;
                 let weight_idx = idx * self.embedding_dim + d;
-                grad_weight[weight_idx] += out_grad.data[out_grad_idx];
+                let grad_val = out_grad.data.get(out_grad_idx).copied().unwrap_or(0.0);
+                if let Some(slot) = grad_weight.get_mut(weight_idx) {
+                    *slot += grad_val;
+                }
             }
         }
 

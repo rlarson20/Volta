@@ -83,8 +83,7 @@ impl SystemMonitor {
         };
 
         println!(
-            "[{}] Mem: {}MB, Ops: {} (+{}, {:.0}/s), Syncs: {}, Pending: {}, Time: {:.2}s",
-            label, current_memory_mb, ops, ops_delta, ops_per_sec, syncs, pending, elapsed
+            "[{label}] Mem: {current_memory_mb}MB, Ops: {ops} (+{ops_delta}, {ops_per_sec:.0}/s), Syncs: {syncs}, Pending: {pending}, Time: {elapsed:.2}s"
         );
     }
 

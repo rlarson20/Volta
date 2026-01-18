@@ -67,7 +67,7 @@ pub fn check_system_resources() -> ResourceStatus {
     }
 
     if pending_count > 100 {
-        return ResourceStatus::Critical(format!("GPU pending count very high: {}", pending_count));
+        return ResourceStatus::Critical(format!("GPU pending count very high: {pending_count}"));
     }
 
     // Warning thresholds - elevated but operational
@@ -79,7 +79,7 @@ pub fn check_system_resources() -> ResourceStatus {
     }
 
     if pending_count > 50 {
-        return ResourceStatus::Warning(format!("GPU pending count elevated: {}", pending_count));
+        return ResourceStatus::Warning(format!("GPU pending count elevated: {pending_count}"));
     }
 
     ResourceStatus::Healthy
@@ -104,21 +104,21 @@ pub fn check_system_resources() -> ResourceStatus {
 /// - Any other errors occur
 #[cfg(target_os = "macos")]
 fn get_process_memory_ratio() -> f64 {
+    const SYSTEM_MEMORY_KB: usize = 24 * 1024 * 1024;
+
     let pid = std::process::id();
 
     // Execute: ps -o rss= -p <pid>
-    let output = match Command::new("ps")
+    let Ok(output) = Command::new("ps")
         .args(["-o", "rss=", "-p", &pid.to_string()])
         .output()
-    {
-        Ok(out) => out,
-        Err(_) => return 0.0, // Fail-safe: assume healthy
+    else {
+        return 0.0;
     };
 
     // Parse RSS value (in KB)
-    let rss_str = match String::from_utf8(output.stdout) {
-        Ok(s) => s,
-        Err(_) => return 0.0,
+    let Ok(rss_str) = String::from_utf8(output.stdout) else {
+        return 0.0;
     };
 
     let rss_kb: usize = match rss_str.trim().parse() {
@@ -128,7 +128,6 @@ fn get_process_memory_ratio() -> f64 {
 
     // Convert to ratio of 24GB (M2 Mac system memory)
     // TODO: Could use sysinfo crate for cross-platform memory detection
-    const SYSTEM_MEMORY_KB: usize = 24 * 1024 * 1024;
     rss_kb as f64 / SYSTEM_MEMORY_KB as f64
 }
 
@@ -151,8 +150,8 @@ fn get_process_memory_ratio() -> f64 {
 /// ```
 #[must_use]
 pub fn get_process_memory_mb() -> usize {
-    let ratio = get_process_memory_ratio();
     const SYSTEM_MEMORY_MB: usize = 24 * 1024;
+    let ratio = get_process_memory_ratio();
     (ratio * SYSTEM_MEMORY_MB as f64) as usize
 }
 

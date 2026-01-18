@@ -13,10 +13,10 @@ pub fn load_mnist_images<P: AsRef<Path>>(path: P) -> Result<Vec<f32>> {
 
     // Parse header (big-endian)
     let magic = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
-    if magic != 0x00000803 {
+    if magic != 0x0000_0803 {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("Invalid MNIST image magic number: 0x{:08x}", magic),
+            format!("Invalid MNIST image magic number: 0x{magic:08x}"),
         ));
     }
 
@@ -30,7 +30,7 @@ pub fn load_mnist_images<P: AsRef<Path>>(path: P) -> Result<Vec<f32>> {
     file.read_exact(&mut pixels)?;
 
     // Convert to f32 and normalize to [0, 1]
-    let data: Vec<f32> = pixels.iter().map(|&p| p as f32 / 255.0).collect();
+    let data: Vec<f32> = pixels.iter().map(|&p| f32::from(p) / 255.0).collect();
 
     Ok(data)
 }
@@ -46,10 +46,10 @@ pub fn load_mnist_labels<P: AsRef<Path>>(path: P) -> Result<Vec<u8>> {
 
     // Parse header (big-endian)
     let magic = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
-    if magic != 0x00000801 {
+    if magic != 0x0000_0801 {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("Invalid MNIST label magic number: 0x{:08x}", magic),
+            format!("Invalid MNIST label magic number: 0x{magic:08x}"),
         ));
     }
 

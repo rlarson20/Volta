@@ -120,7 +120,7 @@ impl RawTensor {
         GpuKernels::sum(buf)
     }
 
-    /// GPU-accelerated max reduction - returns (max_value, max_index)
+    /// GPU-accelerated max reduction - returns `(max_value, max_index)`
     /// Uses GPU to find max value, then CPU to find the index
     #[cfg(feature = "gpu")]
     pub(crate) fn gpu_max_reduce(data: &Storage) -> Option<(f32, usize)> {
@@ -133,8 +133,7 @@ impl RawTensor {
             .iter()
             .enumerate()
             .find(|&(_, v)| (v - max_val).abs() < 1e-6)
-            .map(|(i, _)| i)
-            .unwrap_or(0);
+            .map_or(0, |(i, _)| i);
 
         Some((max_val, max_idx))
     }
@@ -182,7 +181,7 @@ impl RawTensor {
 
     /// GPU-accelerated unary backward operation
     ///
-    /// Computes gradient for unary operations: grad = out_grad * df/dx
+    /// Computes gradient for unary operations: `grad = out_grad * df/dx`
     #[cfg(feature = "gpu")]
     pub(crate) fn gpu_unary_backward(out_grad: &Storage, x: &Storage, op: &str) -> Option<Storage> {
         let buf_out = out_grad.gpu_buffer()?;
@@ -510,7 +509,7 @@ impl RawTensor {
 
     /// GPU-accelerated im2col transformation for convolution
     ///
-    /// Transforms 4D input (B, C, H, W) into 2D matrix (B*H_out*W_out, C*K_h*K_w).
+    /// Transforms 4D input `(B, C, H, W)` into 2D matrix `(B*H_out*W_out, C*K_h*K_w)`.
     #[cfg(feature = "gpu")]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn gpu_im2col(

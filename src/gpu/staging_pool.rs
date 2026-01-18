@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use wgpu::Buffer;
 
-/// Pool for MAP_READ staging buffers used in GPU→CPU transfers
+/// Pool for `MAP_READ` staging buffers used in GPU→CPU transfers
 ///
 /// **Design**: Exact size matching with global capacity limit. Staging buffers
 /// are short-lived read-only buffers used for GPU→CPU data transfers.

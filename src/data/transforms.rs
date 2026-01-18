@@ -13,7 +13,10 @@ pub fn to_one_hot(labels: &[u8], num_classes: usize) -> Vec<f32> {
 
     for (i, &label) in labels.iter().enumerate() {
         let offset = i * num_classes;
-        one_hot[offset + label as usize] = 1.0;
+        let idx = offset + label as usize;
+        if let Some(slot) = one_hot.get_mut(idx) {
+            *slot = 1.0;
+        }
     }
 
     one_hot

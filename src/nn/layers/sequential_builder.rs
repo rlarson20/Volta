@@ -41,6 +41,7 @@ impl SequentialBuilder {
     ///
     /// The layer will use the provided name in the state dict.
     /// Empty strings are treated as unnamed.
+    #[must_use]
     pub fn add_named(mut self, name: impl Into<String>, layer: Box<dyn Module>) -> Self {
         let name_str = name.into();
         let name_opt = if name_str.is_empty() {

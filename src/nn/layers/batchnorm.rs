@@ -55,7 +55,11 @@ impl Module for BatchNorm2d {
             4,
             "BatchNorm2d expected 4D input (B,C,H,W)"
         );
-        assert_eq!(x_borrow.shape[1], self.num_features, "Channel mismatch");
+        assert_eq!(
+            x_borrow.shape.get(1).copied().unwrap_or(1),
+            self.num_features,
+            "Channel mismatch"
+        );
         drop(x_borrow);
 
         // 1. Reshape to normalize over (B, H, W) for each channel
@@ -66,9 +70,10 @@ impl Module for BatchNorm2d {
 
         // We need reshaping to utilize current Tensor ops for mean/var
         // (C, B, H, W) -> (C, B*H*W)
-        let b = x.borrow().shape[0];
-        let h = x.borrow().shape[2];
-        let w = x.borrow().shape[3];
+        let x_shape = &x.borrow().shape;
+        let b = x_shape.first().copied().unwrap_or(1);
+        let h = x_shape.get(2).copied().unwrap_or(1);
+        let w = x_shape.get(3).copied().unwrap_or(1);
         let num_pixels = (b * h * w) as f32;
 
         let x_flat = x_perm.reshape(&[self.num_features, b * h * w]);
@@ -97,10 +102,18 @@ impl Module for BatchNorm2d {
                 let m = self.momentum;
 
                 for i in 0..self.num_features {
-                    rm.data[i] = (1.0 - m) * rm.data[i] + m * bm_data[i];
+                    let rm_val = rm.data.get(i).copied().unwrap_or(0.0);
+                    let bm_val = bm_data.get(i).copied().unwrap_or(0.0);
+                    if let Some(slot) = rm.data.get_mut(i) {
+                        *slot = (1.0 - m) * rm_val + m * bm_val;
+                    }
                     // Bessel correction for running_var update usually applied
-                    let unbiased_var = bv_data[i] * num_pixels / (num_pixels - 1.0);
-                    rv.data[i] = (1.0 - m) * rv.data[i] + m * unbiased_var;
+                    let bv_val = bv_data.get(i).copied().unwrap_or(0.0);
+                    let unbiased_var = bv_val * num_pixels / (num_pixels - 1.0);
+                    let rv_val = rv.data.get(i).copied().unwrap_or(0.0);
+                    if let Some(slot) = rv.data.get_mut(i) {
+                        *slot = (1.0 - m) * rv_val + m * unbiased_var;
+                    }
                 }
             }
 
@@ -168,7 +181,7 @@ impl Module for BatchNorm2d {
                 let mut b = tensor.borrow_mut();
                 // Logic defined exactly once
                 b.data = Storage::cpu(t.data.clone());
-                b.shape = t.shape.clone();
+                b.shape.clone_from(&t.shape);
             }
         }
     }
@@ -229,8 +242,12 @@ impl Module for BatchNorm1d {
             2,
             "BatchNorm1d expected 2D input (B, C)"
         );
-        assert_eq!(x_borrow.shape[1], self.num_features, "Feature mismatch");
-        let batch_size = x_borrow.shape[0] as f32;
+        assert_eq!(
+            x_borrow.shape.get(1).copied().unwrap_or(1),
+            self.num_features,
+            "Feature mismatch"
+        );
+        let batch_size = x_borrow.shape.first().copied().unwrap_or(1) as f32;
         drop(x_borrow);
 
         let (mean, var) = if self.training {
@@ -251,10 +268,18 @@ impl Module for BatchNorm1d {
 
                 let m = self.momentum;
                 for i in 0..self.num_features {
-                    rm.data[i] = (1.0 - m) * rm.data[i] + m * bm_data[i];
+                    let rm_val = rm.data.get(i).copied().unwrap_or(0.0);
+                    let bm_val = bm_data.get(i).copied().unwrap_or(0.0);
+                    if let Some(slot) = rm.data.get_mut(i) {
+                        *slot = (1.0 - m) * rm_val + m * bm_val;
+                    }
                     // Bessel correction for running_var update
-                    let unbiased_var = bv_data[i] * batch_size / (batch_size - 1.0);
-                    rv.data[i] = (1.0 - m) * rv.data[i] + m * unbiased_var;
+                    let bv_val = bv_data.get(i).copied().unwrap_or(0.0);
+                    let unbiased_var = bv_val * batch_size / (batch_size - 1.0);
+                    let rv_val = rv.data.get(i).copied().unwrap_or(0.0);
+                    if let Some(slot) = rv.data.get_mut(i) {
+                        *slot = (1.0 - m) * rv_val + m * unbiased_var;
+                    }
                 }
             }
 
@@ -314,7 +339,7 @@ impl Module for BatchNorm1d {
             if let Some(t) = state.get(key) {
                 let mut b = tensor.borrow_mut();
                 b.data = Storage::cpu(t.data.clone());
-                b.shape = t.shape.clone();
+                b.shape.clone_from(&t.shape);
             }
         }
     }

@@ -19,7 +19,7 @@ impl Module for Linear {
     fn parameters(&self) -> Vec<Tensor> {
         let mut params = vec![self.weight.clone()];
         if let Some(ref bias) = self.bias {
-            params.push(bias.clone())
+            params.push(bias.clone());
         }
         params
     }
@@ -37,7 +37,7 @@ impl Module for Linear {
         if let Some(w) = state.get("weight") {
             let mut t = self.weight.borrow_mut();
             t.data = Storage::cpu(w.data.clone());
-            t.shape = w.shape.clone();
+            t.shape.clone_from(&w.shape);
         }
         if let Some(b) = state.get("bias")
             && self.bias.is_some()
@@ -45,7 +45,7 @@ impl Module for Linear {
             let bias_tensor = self.bias.as_ref().unwrap();
             let mut t = bias_tensor.borrow_mut();
             t.data = Storage::cpu(b.data.clone());
-            t.shape = b.shape.clone();
+            t.shape.clone_from(&b.shape);
         }
     }
 }

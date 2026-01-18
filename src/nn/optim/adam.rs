@@ -69,7 +69,7 @@ impl Adam {
 
         // Process each parameter based on its device
         for i in 0..self.params.len() {
-            let param = &self.params[i];
+            let param = self.params.get(i).unwrap();
             let p = param.borrow();
 
             // Skip parameters without gradients
@@ -94,7 +94,7 @@ impl Adam {
     fn step_gpu_param(&mut self, i: usize) {
         use crate::gpu::OptimizerStepParams;
 
-        let param = &self.params[i];
+        let param = self.params.get(i).unwrap();
         let p = param.borrow_mut();
 
         let grad = match &p.grad {
@@ -103,8 +103,8 @@ impl Adam {
         };
 
         // State is already on GPU (stored as Storage)
-        let m_state = &self.m[i];
-        let v_state = &self.v[i];
+        let m_state = self.m.get(i).unwrap();
+        let v_state = self.v.get(i).unwrap();
 
         // Setup optimizer parameters
         let opt_params = OptimizerStepParams {
@@ -115,7 +115,7 @@ impl Adam {
             t: self.t as f32,
             eps: self.eps,
             weight_decay: self.weight_decay,
-            _padding: 0.0,
+            padding: 0.0,
         };
 
         // Run GPU optimizer step (updates params, m, v in-place)
@@ -132,7 +132,7 @@ impl Adam {
     /// CPU update for a single parameter
     #[allow(clippy::needless_range_loop)]
     fn step_cpu_param(&mut self, i: usize) {
-        let param = &self.params[i];
+        let param = self.params.get(i).unwrap();
         let mut p = param.borrow_mut();
 
         let grad = match &p.grad {
@@ -158,8 +158,15 @@ impl Adam {
 
         // Update biased moments
         for j in 0..active_grad.len() {
-            m_slice[j] = self.betas.0 * m_slice[j] + (1.0 - self.betas.0) * active_grad[j];
-            v_slice[j] = self.betas.1 * v_slice[j] + (1.0 - self.betas.1) * active_grad[j].powi(2);
+            let m_val = m_slice.get(j).copied().unwrap_or(0.0);
+            let g_val = active_grad.get(j).copied().unwrap_or(0.0);
+            if let Some(slot) = m_slice.get_mut(j) {
+                *slot = self.betas.0 * m_val + (1.0 - self.betas.0) * g_val;
+            }
+            let v_val = v_slice.get(j).copied().unwrap_or(0.0);
+            if let Some(slot) = v_slice.get_mut(j) {
+                *slot = self.betas.1 * v_val + (1.0 - self.betas.1) * g_val.powi(2);
+            }
         }
 
         // Bias correction
@@ -172,9 +179,13 @@ impl Adam {
             .as_mut_slice()
             .expect("Parameter should be CPU storage");
         for j in 0..p_data.len() {
-            let m_hat = m_slice[j] * m_hat_scale;
-            let v_hat = v_slice[j] * v_hat_scale;
-            p_data[j] -= self.lr * m_hat / (v_hat.sqrt() + self.eps);
+            let m_val = m_slice.get(j).copied().unwrap_or(0.0);
+            let v_val = v_slice.get(j).copied().unwrap_or(0.0);
+            let m_hat = m_val * m_hat_scale;
+            let v_hat = v_val * v_hat_scale;
+            if let Some(slot) = p_data.get_mut(j) {
+                *slot -= self.lr * m_hat / (v_hat.sqrt() + self.eps);
+            }
         }
     }
 }

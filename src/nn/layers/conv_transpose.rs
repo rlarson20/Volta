@@ -54,7 +54,7 @@ impl ConvTranspose2d {
     /// of transposed convolution.
     ///
     /// # Arguments
-    /// * `col` - Column matrix [B*H_in*W_in, C_out*K*K]
+    /// * `col` - Column matrix [B*`H_in`*`W_in`, `C_out`*K*K]
     /// * `batch` - Batch size
     /// * `out_channels` - Number of output channels
     /// * `in_h`, `in_w` - Input height and width
@@ -117,7 +117,12 @@ impl ConvTranspose2d {
 
                                 let col_idx = c * (kh * kw) + kh_idx * kw + kw_idx;
                                 let cols = out_channels * kh * kw;
-                                result[out_idx] += col[row_idx * cols + col_idx];
+                                let col_data_idx = row_idx * cols + col_idx;
+                                if let Some(&col_val) = col.get(col_data_idx)
+                                    && let Some(slot) = result.get_mut(out_idx)
+                                {
+                                    *slot += col_val;
+                                }
                             }
                         }
                     }
@@ -135,25 +140,25 @@ impl Module for ConvTranspose2d {
             let x_borrow = x.borrow();
             assert_eq!(x_borrow.shape.len(), 4, "Input must be 4D: (B, C, H, W)");
             (
-                x_borrow.shape[0],
-                x_borrow.shape[1],
-                x_borrow.shape[2],
-                x_borrow.shape[3],
+                x_borrow.shape.first().copied().unwrap_or(1),
+                x_borrow.shape.get(1).copied().unwrap_or(1),
+                x_borrow.shape.get(2).copied().unwrap_or(1),
+                x_borrow.shape.get(3).copied().unwrap_or(1),
             )
         };
 
         let (weight_in_ch, out_channels, kh, kw) = {
             let w_borrow = self.weight.borrow();
+            let w_ch = w_borrow.shape.first().copied().unwrap_or(1);
             assert_eq!(
-                w_borrow.shape[0], in_channels,
-                "Channel mismatch: input has {} channels but weight expects {}",
-                in_channels, w_borrow.shape[0]
+                w_ch, in_channels,
+                "Channel mismatch: input has {in_channels} channels but weight expects {w_ch}",
             );
             (
-                w_borrow.shape[0],
-                w_borrow.shape[1],
-                w_borrow.shape[2],
-                w_borrow.shape[3],
+                w_ch,
+                w_borrow.shape.get(1).copied().unwrap_or(1),
+                w_borrow.shape.get(2).copied().unwrap_or(1),
+                w_borrow.shape.get(3).copied().unwrap_or(1),
             )
         };
 
@@ -219,7 +224,7 @@ impl Module for ConvTranspose2d {
         if let Some(w) = state.get("weight") {
             let mut t = self.weight.borrow_mut();
             t.data = Storage::cpu(w.data.clone());
-            t.shape = w.shape.clone();
+            t.shape.clone_from(&w.shape);
         }
         if let Some(b) = state.get("bias")
             && self.bias.is_some()
@@ -227,7 +232,7 @@ impl Module for ConvTranspose2d {
             let bias_tensor = self.bias.as_ref().unwrap();
             let mut t = bias_tensor.borrow_mut();
             t.data = Storage::cpu(b.data.clone());
-            t.shape = b.shape.clone();
+            t.shape.clone_from(&b.shape);
         }
     }
 }

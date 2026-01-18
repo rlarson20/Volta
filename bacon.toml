@@ -1,0 +1,226 @@
+#:schema https://dystroy.org/bacon/.bacon.schema.json
+
+# This is a configuration file for the bacon tool
+#
+# Complete help on configuration: https://dystroy.org/bacon/config/
+#
+# You may check the current default at
+#   https://github.com/Canop/bacon/blob/main/defaults/default-bacon.toml
+
+default_job = "check"
+env.CARGO_TERM_COLOR = "always"
+
+[jobs.check]
+command = ["cargo", "check"]
+need_stdout = false
+
+[jobs.check-all]
+command = ["cargo", "check", "--all-targets"]
+need_stdout = false
+
+# Run clippy on the default target
+[jobs.clippy]
+command = ["cargo", "clippy"]
+need_stdout = false
+
+# Run clippy on all targets
+# To disable some lints, you may change the job this way:
+#    [jobs.clippy-all]
+#    command = [
+#        "cargo", "clippy",
+#        "--all-targets",
+#    	 "--",
+#    	 "-A", "clippy::bool_to_int_with_if",
+#    	 "-A", "clippy::collapsible_if",
+#    	 "-A", "clippy::derive_partial_eq_without_eq",
+#    ]
+# need_stdout = false
+[jobs.clippy-all]
+command = ["cargo", "clippy", "--all-targets"]
+need_stdout = false
+
+# Run clippy in pedantic mode
+# The 'dismiss' feature may come handy
+[jobs.pedantic]
+command = [ #TODO: organize these
+    "cargo",
+    "clippy",
+    "--",
+    # Warnings
+    "-W",
+    "clippy::pedantic",
+    # Allows
+    "-A",
+    "clippy::similar_names",
+    "-A",
+    "clippy::many_single_char_names",
+    "-A",                                         #messes with underscore used for recursion-only parameter lint
+    "clippy::used_underscore_binding",
+    "-A",                                         #TEMP IMP TO FIX!!!
+    "clippy::cast_possible_wrap",
+    "-A",                                         #TEMP IMP TO FIX!!!
+    "clippy::needless_pass_by_value",
+    "-A",                                         #TEMP IMP TO FIX!!!
+    "clippy::redundant_closure_for_method_calls",
+    "-A",                                         #TEMP IMP TO FIX!!!
+    "clippy::cast_sign_loss",
+    "-A",                                         #TEMP IMP TO FIX!!!
+    "clippy::cast_possible_truncation",
+    "-A",                                         #TEMP IMP TO FIX!!!
+    "clippy::cast_precision_loss",
+    "-A",                                         # TEMP
+    "clippy::missing_panics_doc",
+    "-A",                                         # TEMP
+    "clippy::missing_errors_doc",
+    "-A",                                         # TEMP
+    "clippy::too_many_lines",
+    # Denys
+    "-D",
+    "clippy::unreadable_literal",
+    "-D",
+    "clippy::redundant_else",
+    "-D",
+    "clippy::collapsible_if",
+    "-D",
+    "clippy::doc_markdown",
+    "-D",
+    "clippy::uninlined_format_args",
+    "-D",
+    "clippy::unnecessary_wraps",
+    "-D",
+    "clippy::default_trait_access",
+    "-D",
+    "clippy::cast_lossless",
+    "-D",
+    "clippy::items_after_statements",
+    "-D",
+    "clippy::pub_underscore_fields",
+    "-D",
+    "clippy::bool_to_int_with_if",
+    "-D",
+    "clippy::manual_let_else",
+    "-D",
+    "clippy::enum_glob_use",
+    "-D",
+    "clippy::match_same_arms",
+    "-D",                                         #TODO: check if `map_to`s should be `map_to_else`/ lazy vs eager
+    "clippy::map_unwrap_or",
+    "-D",
+    "clippy::return_self_not_must_use",
+    "-D",
+    "clippy::double_must_use",
+    "-D",
+    "clippy::match_wildcard_for_single_variants",
+    "-D",
+    "clippy::manual_assert",
+    "-D",
+    "clippy::explicit_iter_loop",
+    "-D",
+    "clippy::implicit_clone",
+    "-D",
+    "clippy::assigning_clones",
+    "-D",
+    "clippy::struct_field_names",
+    "-D",
+    "clippy::semicolon_if_nothing_returned",
+    "-D",
+    "clippy::single_match_else",
+    "-D",
+    "clippy::collapsible_else_if",
+    "-D",
+    "clippy::map_clone",
+    "-D",
+    "clippy::map_flatten",
+    "-D",
+    "clippy::len_zero",
+    "-D",
+    "clippy::unnecessary_map_or",
+    "-D",
+    "clippy::if_not_else",
+    "-D",
+    "clippy::missing_fields_in_debug",
+]
+need_stdout = false
+
+# This job lets you run
+# - all tests: bacon test
+# - a specific test: bacon test -- config::test_default_files
+# - the tests of a package: bacon test -- -- -p config
+[jobs.test]
+command = ["cargo", "test"]
+need_stdout = true
+
+[jobs.nextest]
+command = [
+    "cargo",
+    "nextest",
+    "run",
+    "--hide-progress-bar",
+    "--failure-output",
+    "final",
+]
+need_stdout = true
+analyzer = "nextest"
+
+[jobs.doc]
+command = ["cargo", "doc", "--no-deps"]
+need_stdout = false
+
+# If the doc compiles, then it opens in your browser and bacon switches
+# to the previous job
+[jobs.doc-open]
+command = ["cargo", "doc", "--no-deps", "--open"]
+need_stdout = false
+on_success = "back"                               # so that we don't open the browser at each change
+
+# You can run your application and have the result displayed in bacon,
+# if it makes sense for this crate.
+[jobs.run]
+command = [
+    "cargo",
+    "run",
+    # put launch parameters for your program behind a `--` separator
+]
+need_stdout = true
+allow_warnings = true
+background = true
+
+# Run your long-running application (eg server) and have the result displayed in bacon.
+# For programs that never stop (eg a server), `background` is set to false
+# to have the cargo run output immediately displayed instead of waiting for
+# program's end.
+# 'on_change_strategy' is set to `kill_then_restart` to have your program restart
+# on every change (an alternative would be to use the 'F5' key manually in bacon).
+# If you often use this job, it makes sense to override the 'r' key by adding
+# a binding `r = job:run-long` at the end of this file .
+# A custom kill command such as the one suggested below is frequently needed to kill
+# long running programs (uncomment it if you need it)
+[jobs.run-long]
+command = [
+    "cargo",
+    "run",
+    # put launch parameters for your program behind a `--` separator
+]
+need_stdout = true
+allow_warnings = true
+background = false
+on_change_strategy = "kill_then_restart"
+# kill = ["pkill", "-TERM", "-P"]
+
+# This parameterized job runs the example of your choice, as soon
+# as the code compiles.
+# Call it as
+#    bacon ex -- my-example
+[jobs.ex]
+command = ["cargo", "run", "--example"]
+need_stdout = true
+allow_warnings = true
+
+# You may define here keybindings that would be specific to
+# a project, for example a shortcut to launch a specific job.
+# Shortcuts to internal functions (scrolling, toggling, etc.)
+# should go in your personal global prefs.toml file instead.
+[keybindings]
+# alt-m = "job:my-job"
+c = "job:clippy-all" # comment this to have 'c' run clippy on only the default target
+p = "job:pedantic"

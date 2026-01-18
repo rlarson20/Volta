@@ -1,8 +1,8 @@
 //! Data type support for tensors
 //!
-//! This module provides the DType enum for representing tensor data types,
+//! This module provides the `DType` enum for representing tensor data types,
 //! enabling Volta to work with different precisions (f16, bf16, f32, f64)
-//! and load models from formats like SafeTensors.
+//! and load models from formats like `SafeTensors`.
 
 use std::fmt;
 
@@ -76,7 +76,7 @@ impl DType {
     /// Follows type promotion rules similar to PyTorch/NumPy.
     #[must_use]
     pub fn promote(a: DType, b: DType) -> DType {
-        use DType::*;
+        use DType::{Bool, F32, F64, I32, I64, U8};
 
         // Same type -> same type
         if a == b {
@@ -88,19 +88,13 @@ impl DType {
             // F64 dominates everything
             (F64, _) | (_, F64) => F64,
 
-            // F32 dominates F16/BF16 and integers
-            (F32, F16 | BF16 | I32 | I64 | U8 | Bool)
-            | (F16 | BF16 | I32 | I64 | U8 | Bool, F32) => F32,
-
-            // F16 and BF16 promote to F32 for safety (including with ints)
-            (F16, BF16 | I32 | I64 | U8 | Bool) | (BF16 | I32 | I64 | U8 | Bool, F16) => F32,
-            (BF16, I32 | I64 | U8 | Bool) | (I32 | I64 | U8 | Bool, BF16) => F32,
-
             // Int types promote to wider int
             (I64, I32 | U8 | Bool) | (I32 | U8 | Bool, I64) => I64,
             (I32, U8 | Bool) | (U8 | Bool, I32) => I32,
             (U8, Bool) | (Bool, U8) => U8,
 
+            // F32 dominates F16/BF16 and integers
+            // F16 and BF16 promote to F32 for safety (including with ints)
             // Fallback (shouldn't reach here due to if a == b check)
             _ => F32,
         }

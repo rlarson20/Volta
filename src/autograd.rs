@@ -32,6 +32,11 @@ impl RawTensor {
     ///
     /// Uses a `HashSet` to track visited nodes and avoid recomputation.
     pub fn backward(tensor_ref: &Tensor) {
+        enum Action {
+            Visit(Tensor),
+            PostVisit(Tensor),
+        }
+
         let tensor = tensor_ref.borrow();
         assert!(
             tensor.requires_grad,
@@ -42,7 +47,7 @@ impl RawTensor {
         {
             let mut tensor = tensor_ref.borrow_mut();
             if tensor.grad.is_none() {
-                let grad_size = if tensor.shape.len() == 1 && tensor.shape[0] == 1 {
+                let grad_size = if tensor.shape.len() == 1 && tensor.shape.first() == Some(&1) {
                     1
                 } else {
                     tensor.data.len()
@@ -64,10 +69,6 @@ impl RawTensor {
 
         // 1. Build topological order (post-order DFS)
         // We simulate recursion with a stack to avoid recursion limit issues on deep graphs
-        enum Action {
-            Visit(Tensor),
-            PostVisit(Tensor),
-        }
         let mut recursion_stack = vec![Action::Visit(tensor_ref.clone())];
 
         while let Some(action) = recursion_stack.pop() {

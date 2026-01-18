@@ -85,8 +85,10 @@ pub struct BinaryGradFn {
 
 impl GradFn for BinaryGradFn {
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
-        let x_val = parents[0].borrow();
-        let y_val = parents[1].borrow();
+        let x_ref = parents.first().cloned().unwrap();
+        let y_ref = parents.get(1).cloned().unwrap();
+        let x_val = x_ref.borrow();
+        let y_val = y_ref.borrow();
 
         // Check GPU path - use legacy path for same-shape, broadcast path for different shapes
         #[cfg(feature = "gpu")]
@@ -398,28 +400,30 @@ impl RawTensor {
 
         // Align from right (trailing dimensions)
         for i in 0..max_len {
-            let a_dim = if i < shape_a.len() {
-                shape_a[shape_a.len() - 1 - i]
+            let a_dim = if i < shape_a.len() && !shape_a.is_empty() {
+                let idx = shape_a.len() - 1 - i;
+                shape_a.get(idx).copied().unwrap_or(1)
             } else {
                 1
             };
-            let b_dim = if i < shape_b.len() {
-                shape_b[shape_b.len() - 1 - i]
+            let b_dim = if i < shape_b.len() && !shape_b.is_empty() {
+                let idx = shape_b.len() - 1 - i;
+                shape_b.get(idx).copied().unwrap_or(1)
             } else {
                 1
             };
 
-            if a_dim == b_dim {
-                result[max_len - 1 - i] = a_dim;
-            } else if a_dim == 1 {
-                result[max_len - 1 - i] = b_dim;
-            } else if b_dim == 1 {
-                result[max_len - 1 - i] = a_dim;
-            } else {
-                panic!(
-                    "Cannot broadcast shapes {:?} and {:?} at dimension {}",
-                    shape_a, shape_b, i
-                );
+            let result_idx = max_len - 1 - i;
+            if let Some(slot) = result.get_mut(result_idx) {
+                if a_dim == b_dim {
+                    *slot = a_dim;
+                } else if a_dim == 1 {
+                    *slot = b_dim;
+                } else if b_dim == 1 {
+                    *slot = a_dim;
+                } else {
+                    panic!("Cannot broadcast shapes {shape_a:?} and {shape_b:?} at dimension {i}");
+                }
             }
         }
         result
@@ -430,19 +434,16 @@ impl RawTensor {
     /// This repeats values along dimensions where `from_shape` is 1
     /// and `to_shape` is larger.
     pub(crate) fn broadcast_to(data: &[f32], from_shape: &[usize], to_shape: &[usize]) -> Vec<f32> {
+        const MAX_ALLOC: usize = 100_000_000;
+
         if from_shape == to_shape {
             return data.to_vec();
         }
 
         let to_size: usize = to_shape.iter().product();
-        const MAX_ALLOC: usize = 100_000_000;
         assert!(
             to_size <= MAX_ALLOC,
-            "Broadcast would create tensor with {} elements (max: {}). Check shapes {:?} -> {:?}",
-            to_size,
-            MAX_ALLOC,
-            from_shape,
-            to_shape
+            "Broadcast would create tensor with {to_size} elements (max: {MAX_ALLOC}). Check shapes {from_shape:?} -> {to_shape:?}"
         );
         let mut result = vec![0.0; to_size];
 
@@ -460,14 +461,20 @@ impl RawTensor {
             let mut remainder = i;
             //calc coords based on to_shape and map
             for dim in 0..to_shape.len() {
-                let coord = remainder / to_strides[dim];
-                remainder %= to_strides[dim];
+                let stride = to_strides.get(dim).copied().unwrap_or(1);
+                let coord = remainder / stride;
+                remainder %= stride;
                 //if dim broadcast (size was 1) use coord 0 for from_idx
-                if padded_from[dim] != 1 {
-                    from_idx += coord * from_strides_padded[dim];
+                if padded_from.get(dim).copied().unwrap_or(1) != 1 {
+                    let from_stride = from_strides_padded.get(dim).copied().unwrap_or(1);
+                    from_idx += coord * from_stride;
                 }
             }
-            result[i] = data[from_idx];
+            if let Some(&src_val) = data.get(from_idx)
+                && let Some(slot) = result.get_mut(i)
+            {
+                *slot = src_val;
+            }
         }
         result
     }
@@ -520,17 +527,21 @@ impl RawTensor {
 
             // convert lin index i in grad_shape to coords and map to target
             for dim in 0..grad_shape.len() {
-                let coord = remainder / grad_strides[dim];
-                remainder %= grad_strides[dim];
+                let grad_stride = grad_strides.get(dim).copied().unwrap_or(1);
+                let coord = remainder / grad_stride;
+                remainder %= grad_stride;
 
                 // Map to target coordinate (skip if was broadcast)
-                if dim >= offset && padded_target[dim] != 1 {
+                if dim >= offset && padded_target.get(dim).copied().unwrap_or(1) != 1 {
                     let target_dim_idx = dim - offset;
-                    target_idx += coord * target_strides[target_dim_idx];
+                    let target_stride = target_strides.get(target_dim_idx).copied().unwrap_or(1);
+                    target_idx += coord * target_stride;
                 }
             }
-            if target_idx < result.len() {
-                result[target_idx] += grad_val;
+            if target_idx < result.len()
+                && let Some(slot) = result.get_mut(target_idx)
+            {
+                *slot += grad_val;
             }
         }
         result

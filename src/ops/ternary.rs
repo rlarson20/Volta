@@ -19,8 +19,10 @@ pub enum TernaryOp {
 pub struct MulAccGradFn;
 impl GradFn for MulAccGradFn {
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
-        let x_val = parents[0].borrow();
-        let y_val = parents[1].borrow();
+        let x_ref = parents.first().cloned().unwrap();
+        let y_ref = parents.get(1).cloned().unwrap();
+        let x_val = x_ref.borrow();
+        let y_val = y_ref.borrow();
 
         let grad_x = if x_val.requires_grad {
             let data = out_grad
@@ -46,7 +48,7 @@ impl GradFn for MulAccGradFn {
             None
         };
 
-        let grad_z = if parents[2].borrow().requires_grad {
+        let grad_z = if parents.get(2).is_some_and(|p| p.borrow().requires_grad) {
             Some(RawTensor::new(
                 out_grad.data.to_vec(),
                 &out_grad.shape,
@@ -75,8 +77,10 @@ pub struct WhereGradFn {
 
 impl GradFn for WhereGradFn {
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
-        let true_parent = parents[0].borrow();
-        let false_parent = parents[1].borrow();
+        let true_ref = parents.first().cloned().unwrap();
+        let false_ref = parents.get(1).cloned().unwrap();
+        let true_parent = true_ref.borrow();
+        let false_parent = false_ref.borrow();
         let needs_true = true_parent.requires_grad;
         let needs_false = false_parent.requires_grad;
         drop(true_parent);
@@ -86,8 +90,10 @@ impl GradFn for WhereGradFn {
         if needs_true {
             let mut data = vec![0.0; out_grad.data.len()];
             for (i, (&g, &c)) in out_grad.data.iter().zip(&self.condition).enumerate() {
-                if c != 0.0 {
-                    data[i] = g;
+                if c != 0.0
+                    && let Some(slot) = data.get_mut(i)
+                {
+                    *slot = g;
                 }
             }
             let reduced =
@@ -99,8 +105,10 @@ impl GradFn for WhereGradFn {
         if needs_false {
             let mut data = vec![0.0; out_grad.data.len()];
             for (i, (&g, &c)) in out_grad.data.iter().zip(&self.condition).enumerate() {
-                if c == 0.0 {
-                    data[i] = g;
+                if c == 0.0
+                    && let Some(slot) = data.get_mut(i)
+                {
+                    *slot = g;
                 }
             }
             let reduced =
@@ -186,11 +194,10 @@ impl RawTensor {
                                     out.borrow_mut().grad_fn = Some(Box::new(MulAccGradFn));
                                 }
                                 return out;
-                            } else {
-                                eprintln!(
-                                    "Warning: GPU add for MulAcc failed; falling back to CPU path"
-                                );
                             }
+                            eprintln!(
+                                "Warning: GPU add for MulAcc failed; falling back to CPU path"
+                            );
                         } else {
                             eprintln!(
                                 "Warning: GPU mul for MulAcc failed; falling back to CPU path"
@@ -239,7 +246,7 @@ impl RawTensor {
                     .iter()
                     .zip(&true_bc)
                     .zip(&false_bc)
-                    .map(|((&c, &t), &f)| if c != 0.0 { t } else { f })
+                    .map(|((&c, &t), &f)| if c == 0.0 { f } else { t })
                     .collect::<Vec<_>>();
 
                 let out = Self::new(result_data, &out_shape, true_req || false_req);

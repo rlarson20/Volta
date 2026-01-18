@@ -117,6 +117,8 @@ impl Conv2d {
     /// Im2col: Convert (B, C, H, W) → (B*`H_out`*`W_out`, C*K*K) matrix
     /// Each row contains a flattened receptive field
     fn im2col(x: &Tensor, kernel: (usize, usize), stride: (usize, usize)) -> Tensor {
+        const MAX_ALLOC: usize = 100_000_000; // Maximum allowed allocation
+
         let (data, shape, requires_grad, device) = {
             let x_borrow = x.borrow();
             assert_eq!(x_borrow.shape.len(), 4, "Input must be 4D: (B, C, H, W)");
@@ -128,7 +130,12 @@ impl Conv2d {
             )
         };
 
-        let (batch, channels, height, width) = (shape[0], shape[1], shape[2], shape[3]);
+        let (batch, channels, height, width) = (
+            shape.first().copied().unwrap_or(1),
+            shape.get(1).copied().unwrap_or(1),
+            shape.get(2).copied().unwrap_or(1),
+            shape.get(3).copied().unwrap_or(1),
+        );
         let (kh, kw) = kernel;
         let (sh, sw) = stride;
 
@@ -175,14 +182,11 @@ impl Conv2d {
         }
 
         // CPU fallback
-        const MAX_ALLOC: usize = 100_000_000; // Maximum allowed allocation
         let total_elements = rows * cols;
-        if total_elements > MAX_ALLOC {
-            panic!(
-                "im2col would create tensor with {} elements (max: {}). Input shape: {:?}, kernel: {:?}, stride: {:?}",
-                total_elements, MAX_ALLOC, shape, kernel, stride
-            );
-        }
+        assert!(
+            total_elements <= MAX_ALLOC,
+            "im2col would create tensor with {total_elements} elements (max: {MAX_ALLOC}). Input shape: {shape:?}, kernel: {kernel:?}, stride: {stride:?}"
+        );
 
         let mut result = vec![0.0; total_elements];
 
@@ -209,7 +213,13 @@ impl Conv2d {
                                     + w_pos;
 
                                 let col_idx = c * (kh * kw) + kh_idx * kw + kw_idx;
-                                result[row_idx * cols + col_idx] = data.to_vec()[in_idx];
+                                let result_idx = row_idx * cols + col_idx;
+                                let cpu_data = data.to_vec();
+                                if let Some(&src_val) = cpu_data.get(in_idx)
+                                    && let Some(slot) = result.get_mut(result_idx)
+                                {
+                                    *slot = src_val;
+                                }
                             }
                         }
                     }
@@ -240,10 +250,10 @@ impl Conv2d {
         stride: (usize, usize),
     ) -> Vec<f32> {
         let (batch, channels, height, width) = (
-            output_shape[0],
-            output_shape[1],
-            output_shape[2],
-            output_shape[3],
+            output_shape.first().copied().unwrap_or(1),
+            output_shape.get(1).copied().unwrap_or(1),
+            output_shape.get(2).copied().unwrap_or(1),
+            output_shape.get(3).copied().unwrap_or(1),
         );
         let (kh, kw) = kernel;
         let (sh, sw) = stride;
@@ -275,7 +285,12 @@ impl Conv2d {
 
                                 let col_idx = c * (kh * kw) + kh_idx * kw + kw_idx;
                                 let cols = channels * kh * kw;
-                                result[out_idx] += col[row_idx * cols + col_idx];
+                                let col_data_idx = row_idx * cols + col_idx;
+                                if let Some(&col_val) = col.get(col_data_idx)
+                                    && let Some(slot) = result.get_mut(out_idx)
+                                {
+                                    *slot += col_val;
+                                }
                             }
                         }
                     }
@@ -291,17 +306,25 @@ impl Conv2d {
             let x_borrow = x.borrow();
             assert_eq!(x_borrow.shape.len(), 4, "Input must be 4D: (B, C, H, W)");
             (
-                x_borrow.shape[0],
-                x_borrow.shape[1],
-                x_borrow.shape[2],
-                x_borrow.shape[3],
+                x_borrow.shape.first().copied().unwrap_or(1),
+                x_borrow.shape.get(1).copied().unwrap_or(1),
+                x_borrow.shape.get(2).copied().unwrap_or(1),
+                x_borrow.shape.get(3).copied().unwrap_or(1),
             )
         };
 
         let (out_channels, kernel_h, kernel_w) = {
             let w_borrow = self.weight.borrow();
-            assert_eq!(w_borrow.shape[1], in_channels, "Channel mismatch");
-            (w_borrow.shape[0], w_borrow.shape[2], w_borrow.shape[3])
+            assert_eq!(
+                w_borrow.shape.get(1).copied().unwrap_or(1),
+                in_channels,
+                "Channel mismatch"
+            );
+            (
+                w_borrow.shape.first().copied().unwrap_or(1),
+                w_borrow.shape.get(2).copied().unwrap_or(1),
+                w_borrow.shape.get(3).copied().unwrap_or(1),
+            )
         };
 
         let (pad_h, pad_w) = self.padding;
@@ -316,7 +339,10 @@ impl Conv2d {
 
         let (padded_h, padded_w) = {
             let p = x_padded.borrow();
-            (p.shape[2], p.shape[3])
+            (
+                p.shape.get(2).copied().unwrap_or(1),
+                p.shape.get(3).copied().unwrap_or(1),
+            )
         };
 
         // Calculate output dimensions
@@ -380,7 +406,7 @@ impl Module for Conv2d {
         if let Some(w) = state.get("weight") {
             let mut t = self.weight.borrow_mut();
             t.data = Storage::cpu(w.data.clone());
-            t.shape = w.shape.clone();
+            t.shape.clone_from(&w.shape);
         }
         if let Some(b) = state.get("bias")
             && self.bias.is_some()
@@ -388,7 +414,7 @@ impl Module for Conv2d {
             let bias_tensor = self.bias.as_ref().unwrap();
             let mut t = bias_tensor.borrow_mut();
             t.data = Storage::cpu(b.data.clone());
-            t.shape = b.shape.clone();
+            t.shape.clone_from(&b.shape);
         }
     }
 }

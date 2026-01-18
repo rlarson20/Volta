@@ -91,7 +91,7 @@ impl std::fmt::Debug for RawTensor {
             .field("requires_grad", &self.requires_grad)
             .field("has_grad", &self.grad.is_some())
             .field("device", &self.device)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -202,8 +202,8 @@ impl RawTensor {
     /// This helps maintain gradient variance across layers.
     #[must_use]
     pub fn xavier_uniform(shape: &[usize]) -> Tensor {
-        let fan_in = shape[0];
-        let fan_out = shape[1];
+        let fan_in = shape.first().copied().unwrap_or(1);
+        let fan_out = shape.get(1).copied().unwrap_or(1);
         let limit = (6.0 / (fan_in + fan_out) as f32).sqrt();
         let data: Vec<f32> = with_rng(|rng| {
             (0..fan_in * fan_out)
@@ -226,9 +226,8 @@ impl RawTensor {
         );
 
         let fan_in = match shape.len() {
-            1 => shape[0],
-            2 => shape[0],                    // Linear weights: [in, out]
-            _ => shape[1..].iter().product(), // Conv weights: [out, in, kH, kW, ...]
+            1 | 2 => *shape.first().unwrap_or(&1), // Linear weights: [in, out]
+            _ => shape.get(1..).unwrap_or(&[]).iter().product(), // Conv weights: [out, in, kH, kW, ...]
         };
         assert!(fan_in > 0, "fan_in must be positive for He initialization");
 
@@ -308,7 +307,7 @@ impl RawTensor {
 
     /// Negative log likelihood loss
     /// Takes log-probabilities and one-hot targets
-    /// Equivalent to cross_entropy but expects pre-computed log probabilities
+    /// Equivalent to `cross_entropy` but expects pre-computed log probabilities
     pub fn nll_loss(log_probs: &Tensor, targets: &Tensor) -> Tensor {
         // -sum(targets * log_probs, dim=1).mean()
         let prod = targets.elem_mul(log_probs);
@@ -345,7 +344,7 @@ impl RawTensor {
 
     /// Binary Cross Entropy loss
     ///
-    /// BCE(y, y_hat) = -mean(y * log(y_hat) + (1-y) * log(1-y_hat))
+    /// `BCE(y, y_hat) = -mean(y * log(y_hat) + (1-y) * log(1-y_hat))`
     ///
     /// # Arguments
     /// * `pred` - Predicted probabilities (should be in [0, 1], typically from sigmoid)
@@ -427,20 +426,28 @@ impl GradFn for SumDimGradFn {
             let mut coords = vec![0; self.input_shape.len()];
             let mut rem = i;
             for (d, &dim_sz) in self.input_shape.iter().enumerate().rev() {
-                coords[d] = rem % dim_sz;
+                if let Some(slot) = coords.get_mut(d) {
+                    *slot = rem % dim_sz;
+                }
                 rem /= dim_sz;
             }
 
             // Map to gradient coordinates (zero out the summed dimension)
             let mut grad_coords = coords.clone();
-            grad_coords[self.dim] = 0;
+            if let Some(slot) = grad_coords.get_mut(self.dim) {
+                *slot = 0;
+            }
 
             let grad_idx: usize = grad_coords
                 .iter()
                 .zip(&grad_strides)
                 .map(|(c, s)| c * s)
                 .sum();
-            result[i] = grad_data[grad_idx];
+            if let Some(val) = grad_data.get(grad_idx)
+                && let Some(slot) = result.get_mut(i)
+            {
+                *slot = *val;
+            }
         }
 
         vec![Some(RawTensor::new(result, &self.input_shape, false))]
@@ -484,7 +491,9 @@ impl GradFn for MaxDimGradFn {
             let mut grad_coords = vec![0; expanded_shape.len()];
             let mut rem = out_idx;
             for (d, &dim_sz) in expanded_shape.iter().enumerate().rev() {
-                grad_coords[d] = rem % dim_sz;
+                if let Some(slot) = grad_coords.get_mut(d) {
+                    *slot = rem % dim_sz;
+                }
                 rem /= dim_sz;
             }
 
@@ -493,7 +502,11 @@ impl GradFn for MaxDimGradFn {
                 .zip(&grad_strides)
                 .map(|(c, s)| c * s)
                 .sum();
-            result[max_lin_idx] = grad_data[grad_idx];
+            if let Some(val) = grad_data.get(grad_idx)
+                && let Some(slot) = result.get_mut(max_lin_idx)
+            {
+                *slot = *val;
+            }
         }
 
         vec![Some(RawTensor::new(result, &self.input_shape, false))]
@@ -537,16 +550,18 @@ impl RawTensor {
             )
         };
 
-        let dim_size = shape[dim];
+        let dim_size = *shape.get(dim).unwrap_or(&1);
         let mut out_shape = shape.clone();
-        out_shape[dim] = 1; // intermediate shape before squeeze
+        if let Some(slot) = out_shape.get_mut(dim) {
+            *slot = 1; // intermediate shape before squeeze
+        }
         let out_size: usize = out_shape.iter().product();
         let mut result = vec![0.0; out_size];
 
         // Optimized stride-based reduction: O(1) per element instead of O(rank) coordinate conversion
         // View data as: [outer_size, dim_size, inner_size] where we sum over dim_size
-        let outer_size: usize = shape[..dim].iter().product();
-        let inner_size: usize = shape[dim + 1..].iter().product();
+        let outer_size: usize = shape.get(..dim).unwrap_or(&[]).iter().product();
+        let inner_size: usize = shape.get(dim + 1..).unwrap_or(&[]).iter().product();
 
         // Sum over the target dimension using stride arithmetic
         for outer in 0..outer_size {
@@ -555,9 +570,13 @@ impl RawTensor {
                 let mut sum = 0.0;
                 for k in 0..dim_size {
                     let in_idx = outer * dim_size * inner_size + k * inner_size + inner;
-                    sum += data[in_idx];
+                    if let Some(val) = data.get(in_idx) {
+                        sum += *val;
+                    }
                 }
-                result[out_idx] = sum;
+                if let Some(slot) = result.get_mut(out_idx) {
+                    *slot = sum;
+                }
             }
         }
 
@@ -646,9 +665,11 @@ impl RawTensor {
             )
         };
 
-        let dim_size = shape[dim];
+        let dim_size = *shape.get(dim).unwrap_or(&1);
         let mut out_shape = shape.clone();
-        out_shape[dim] = 1;
+        if let Some(slot) = out_shape.get_mut(dim) {
+            *slot = 1;
+        }
         let out_size: usize = out_shape.iter().product();
 
         let mut result = vec![f32::NEG_INFINITY; out_size];
@@ -656,8 +677,8 @@ impl RawTensor {
 
         // Optimized stride-based reduction: O(1) per element instead of O(rank) coordinate conversion
         // View data as: [outer_size, dim_size, inner_size] where we find max over dim_size
-        let outer_size: usize = shape[..dim].iter().product();
-        let inner_size: usize = shape[dim + 1..].iter().product();
+        let outer_size: usize = shape.get(..dim).unwrap_or(&[]).iter().product();
+        let inner_size: usize = shape.get(dim + 1..).unwrap_or(&[]).iter().product();
 
         // Find max over the target dimension using stride arithmetic
         for outer in 0..outer_size {
@@ -665,9 +686,14 @@ impl RawTensor {
                 let out_idx = outer * inner_size + inner;
                 for k in 0..dim_size {
                     let in_idx = outer * dim_size * inner_size + k * inner_size + inner;
-                    if data[in_idx] > result[out_idx] {
-                        result[out_idx] = data[in_idx];
-                        max_indices[out_idx] = in_idx; // store linear index of max element
+                    if let Some(&in_val) = data.get(in_idx)
+                        && let Some(out_slot) = result.get_mut(out_idx)
+                        && in_val > *out_slot
+                    {
+                        *out_slot = in_val;
+                        if let Some(idx_slot) = max_indices.get_mut(out_idx) {
+                            *idx_slot = in_idx;
+                        }
                     }
                 }
             }
@@ -734,7 +760,7 @@ impl RawTensor {
         };
         assert!(dim < shape.len(), "Dimension out of bounds");
 
-        let n = shape[dim] as f32;
+        let n = *shape.get(dim).unwrap_or(&1) as f32;
         let sum = Self::sum_dim(self_t, dim, keepdim);
         let div_tensor = Self::new(vec![n], &[1], false);
 
@@ -788,18 +814,34 @@ impl RawTensor {
         for i in 0..original_data.len() {
             //f(x + epsilon)
             let mut data_plus = original_data.clone();
-            data_plus[i] += epsilon;
+            if let Some(val) = data_plus.get_mut(i) {
+                *val += epsilon;
+            }
             let tensor_plus = RawTensor::new(data_plus.to_vec(), &original_shape, requires_grad);
             let loss_plus = loss_fn(&tensor_plus);
-            let val_plus = loss_plus.borrow().data[0];
+            assert!(
+                !loss_plus.borrow().data.is_empty(),
+                "check_gradients: loss must be scalar, got shape {:?}",
+                loss_plus.borrow().shape
+            );
+            let val_plus = loss_plus.borrow().data.first().copied().unwrap_or(0.0);
 
             let mut data_minus = original_data.clone();
-            data_minus[i] -= epsilon;
+            if let Some(val) = data_minus.get_mut(i) {
+                *val -= epsilon;
+            }
             let tensor_minus = RawTensor::new(data_minus.to_vec(), &original_shape, requires_grad);
             let loss_minus = loss_fn(&tensor_minus);
-            let val_minus = loss_minus.borrow().data[0];
+            assert!(
+                !loss_minus.borrow().data.is_empty(),
+                "check_gradients: loss must be scalar, got shape {:?}",
+                loss_minus.borrow().shape
+            );
+            let val_minus = loss_minus.borrow().data.first().copied().unwrap_or(0.0);
             //central diff
-            numerical_grad[i] = (val_plus - val_minus) / (2.0 * epsilon);
+            if let Some(val) = numerical_grad.get_mut(i) {
+                *val = (val_plus - val_minus) / (2.0 * epsilon);
+            }
         }
 
         // Compute errors
@@ -821,8 +863,7 @@ impl RawTensor {
 
             if relative_error > tolerance {
                 eprintln!(
-                    "Gradient mismatch at index {}: analytical={:.6e}, numerical={:.6e}, error={:.6e}",
-                    i, analytical, numerical, relative_error
+                    "Gradient mismatch at index {i}: analytical={analytical:.6e}, numerical={numerical:.6e}, error={relative_error:.6e}",
                 );
             }
         }
@@ -846,10 +887,7 @@ impl RawTensor {
         );
 
         if !passed {
-            eprintln!(
-                "Gradient check FAILED: max_error={:.6e}, mean_error={:.6e}",
-                max_err, mean_err
-            );
+            eprintln!("Gradient check FAILED: max_error={max_err:.6e}, mean_error={mean_err:.6e}");
         }
 
         passed
@@ -1041,13 +1079,13 @@ impl TensorOps for Tensor {
     }
 
     fn backward(&self) {
-        RawTensor::backward(self)
+        RawTensor::backward(self);
     }
     fn grad(&self) -> Option<Vec<f32>> {
         self.borrow().grad.as_ref().map(|g| g.to_vec())
     }
     fn zero_grad(&self) {
-        RawTensor::zero_grad(self)
+        RawTensor::zero_grad(self);
     }
     fn sum_dim(&self, dim: usize, keepdim: bool) -> Tensor {
         RawTensor::sum_dim(self, dim, keepdim)
@@ -1156,7 +1194,7 @@ impl Iterator for DataLoader {
         }
 
         let end = (self.current + self.batch_size).min(self.indices.len());
-        let batch_indices = &self.indices[self.current..end];
+        let batch_indices = self.indices.get(self.current..end)?;
         let actual_batch = batch_indices.len();
 
         let sample_size: usize = self.data_shape.iter().product();
@@ -1170,9 +1208,12 @@ impl Iterator for DataLoader {
             let data_start = idx * sample_size;
             let target_start = idx * target_size;
 
-            batch_data.extend_from_slice(&self.data[data_start..data_start + sample_size]);
-            batch_targets
-                .extend_from_slice(&self.targets[target_start..target_start + target_size]);
+            if let Some(data_slice) = self.data.get(data_start..data_start + sample_size) {
+                batch_data.extend_from_slice(data_slice);
+            }
+            if let Some(target_slice) = self.targets.get(target_start..target_start + target_size) {
+                batch_targets.extend_from_slice(target_slice);
+            }
         }
 
         self.current = end;

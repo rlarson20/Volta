@@ -67,7 +67,7 @@ impl SGD {
     pub fn step(&mut self) {
         // Process each parameter based on its device
         for i in 0..self.params.len() {
-            let param = &self.params[i];
+            let param = self.params.get(i).unwrap();
             let p = param.borrow();
 
             // Skip parameters without gradients
@@ -99,7 +99,7 @@ impl SGD {
 
         let op_code = 1; // SGD with momentum
 
-        let param = &self.params[i];
+        let param = self.params.get(i).unwrap();
         let p = param.borrow_mut();
 
         let grad = match &p.grad {
@@ -108,7 +108,7 @@ impl SGD {
         };
 
         // Get velocity state (already on GPU)
-        let vel_state = &self.velocity[i];
+        let vel_state = self.velocity.get(i).unwrap();
 
         // Dummy second state buffer (not used for SGD)
         let dummy_state2 = Storage::new_zeros(p.data.len(), &p.device);
@@ -122,7 +122,7 @@ impl SGD {
             t: 0.0,               // Not used for SGD
             eps: 0.0,             // Not used for SGD
             weight_decay: self.weight_decay,
-            _padding: 0.0,
+            padding: 0.0,
         };
 
         // Run GPU optimizer step (updates params and velocity in-place)
@@ -146,7 +146,7 @@ impl SGD {
     fn step_gpu_param_simple(&mut self, i: usize) {
         use crate::gpu::OptimizerStepParams;
 
-        let param = &self.params[i];
+        let param = self.params.get(i).unwrap();
         let p = param.borrow_mut();
 
         let grad = match &p.grad {
@@ -166,7 +166,7 @@ impl SGD {
             t: 0.0,
             eps: 0.0,
             weight_decay: self.weight_decay,
-            _padding: 0.0,
+            padding: 0.0,
         };
 
         let success = crate::RawTensor::gpu_optimizer_step(
@@ -186,7 +186,7 @@ impl SGD {
     /// CPU update for a single parameter
     #[cfg(feature = "gpu")]
     fn step_cpu_param(&mut self, i: usize) {
-        let param = &self.params[i];
+        let param = self.params.get(i).unwrap();
         let mut p = param.borrow_mut();
 
         let grad = match &p.grad {

@@ -45,11 +45,11 @@ pub struct OptimizerStepParams {
     pub t: f32,            // Timestep for bias correction (Adam)
     pub eps: f32,          // Adam epsilon
     pub weight_decay: f32, // L2 regularization
-    pub _padding: f32,
+    pub padding: f32,
 }
 
 /// Parameters for movement operations
-/// Must match the MovementParams struct in movement.wgsl
+/// Must match the `MovementParams` struct in movement.wgsl
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MovementParams {
@@ -58,11 +58,11 @@ pub struct MovementParams {
     pub op_params: [u32; 4], // Operation-specific (permute axes, strides, etc.)
     pub rank: u32,
     pub padding2: u32, // Packed padding for dims 2,3
-    pub _padding: [u32; 2],
+    pub padding: [u32; 2],
 }
 
 /// Parameters for im2col operation
-/// Must match the Im2colParams struct in im2col.wgsl
+/// Must match the `Im2colParams` struct in im2col.wgsl
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Im2colParams {
@@ -80,7 +80,7 @@ pub struct Im2colParams {
 }
 
 /// Parameters for binary backward operations with broadcasting
-/// Must match the BinaryBackwardParams struct in binary_backward.wgsl
+/// Must match the `BinaryBackwardParams` struct in `binary_backward.wgsl`
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct BinaryBackwardParams {
@@ -187,7 +187,7 @@ impl GpuKernels {
             "max" => &ctx.pipelines().max,
             "mod" => &ctx.pipelines().mod_op,
             "cmplt" => &ctx.pipelines().cmplt,
-            _ => panic!("Unknown binary op: {}", op),
+            _ => panic!("Unknown binary op: {op}"),
         };
 
         // Create bind group - this connects our buffers to the shader
@@ -260,7 +260,7 @@ impl GpuKernels {
             "log2" => &ctx.pipelines().log2,
             "sin" => &ctx.pipelines().sin,
             "cos" => &ctx.pipelines().cos,
-            _ => panic!("Unknown unary op: {}", op),
+            _ => panic!("Unknown unary op: {op}"),
         };
 
         let bind_group_layout = pipeline.get_bind_group_layout(0);
@@ -307,12 +307,12 @@ impl GpuKernels {
 
     /// Execute a unary backward operation
     ///
-    /// For y = f(x), computes grad = out_grad * df/dx
+    /// For y = f(x), computes grad = `out_grad` * df/dx
     ///
     /// # Arguments
     /// * `out_grad` - Gradient of the output (upstream gradient)
     /// * `x` - Input tensor from the forward pass
-    /// * `op` - Which operation to perform ("exp_backward", "relu_backward", etc.)
+    /// * `op` - Which operation to perform (`"exp_backward"`, `"relu_backward"`, etc.)
     ///
     /// # Returns
     /// A new buffer containing the gradient with respect to x
@@ -340,7 +340,7 @@ impl GpuKernels {
             "log2_backward" => &ctx.pipelines().log2_backward,
             "sin_backward" => &ctx.pipelines().sin_backward,
             "cos_backward" => &ctx.pipelines().cos_backward,
-            _ => panic!("Unknown unary backward op: {}", op),
+            _ => panic!("Unknown unary backward op: {op}"),
         };
 
         let bind_group_layout = pipeline.get_bind_group_layout(0);
@@ -395,7 +395,7 @@ impl GpuKernels {
     /// * `out_grad` - Gradient of the output (upstream gradient)
     /// * `a` - First input from forward pass
     /// * `b` - Second input from forward pass (needed for mul/div/max)
-    /// * `op` - Which operation ("add_backward_a", "mul_backward_a", etc.)
+    /// * `op` - Which operation (`"add_backward_a"`, `"mul_backward_a"`, etc.)
     ///
     /// # Returns
     /// A new buffer containing the gradient with respect to a
@@ -426,7 +426,7 @@ impl GpuKernels {
             "mul_backward_a" => &ctx.pipelines().mul_backward_a,
             "div_backward_a" => &ctx.pipelines().div_backward_a,
             "max_backward_a" => &ctx.pipelines().max_backward_a,
-            _ => panic!("Unknown binary backward op for a: {}", op),
+            _ => panic!("Unknown binary backward op for a: {op}"),
         };
 
         let bind_group_layout = pipeline.get_bind_group_layout(0);
@@ -485,7 +485,7 @@ impl GpuKernels {
     /// * `out_grad` - Gradient of the output (upstream gradient)
     /// * `a` - First input from forward pass (needed for mul/div/max)
     /// * `b` - Second input from forward pass
-    /// * `op` - Which operation ("add_backward_b", "mul_backward_b", etc.)
+    /// * `op` - Which operation (`"add_backward_b"`, `"mul_backward_b"`, etc.)
     ///
     /// # Returns
     /// A new buffer containing the gradient with respect to b
@@ -516,7 +516,7 @@ impl GpuKernels {
             "mul_backward_b" => &ctx.pipelines().mul_backward_b,
             "div_backward_b" => &ctx.pipelines().div_backward_b,
             "max_backward_b" => &ctx.pipelines().max_backward_b,
-            _ => panic!("Unknown binary backward op for b: {}", op),
+            _ => panic!("Unknown binary backward op for b: {op}"),
         };
 
         let bind_group_layout = pipeline.get_bind_group_layout(0);
@@ -616,13 +616,22 @@ impl GpuKernels {
         let b_offset = 4usize.saturating_sub(b_shape.len());
 
         for (i, &dim) in out_shape.iter().enumerate() {
-            out_shape_padded[out_offset + i] = dim as u32;
+            let idx = out_offset + i;
+            if let Some(slot) = out_shape_padded.get_mut(idx) {
+                *slot = dim as u32;
+            }
         }
         for (i, &dim) in a_shape.iter().enumerate() {
-            a_shape_padded[a_offset + i] = dim as u32;
+            let idx = a_offset + i;
+            if let Some(slot) = a_shape_padded.get_mut(idx) {
+                *slot = dim as u32;
+            }
         }
         for (i, &dim) in b_shape.iter().enumerate() {
-            b_shape_padded[b_offset + i] = dim as u32;
+            let idx = b_offset + i;
+            if let Some(slot) = b_shape_padded.get_mut(idx) {
+                *slot = dim as u32;
+            }
         }
 
         let params = BinaryBackwardParams {
@@ -649,7 +658,7 @@ impl GpuKernels {
             "mul" => &ctx.pipelines().mul_broadcast,
             "div" => &ctx.pipelines().div_broadcast,
             "max" => &ctx.pipelines().max_broadcast,
-            _ => panic!("Unknown binary backward op: {}", op),
+            _ => panic!("Unknown binary backward op: {op}"),
         };
 
         let bind_group_layout = pipeline.get_bind_group_layout(0);
@@ -713,7 +722,7 @@ impl GpuKernels {
     /// Execute a binary backward operation with RACE-FREE broadcasting support
     ///
     /// This uses a two-pass algorithm to avoid race conditions in gradient reduction:
-    /// - Pass 1: Each thread scatters (target_idx_a, target_idx_b, grad_value) to temp buffer
+    /// - Pass 1: Each thread scatters (`target_idx_a`, `target_idx_b`, `grad_value`) to temp buffer
     /// - Pass 2: Each thread reduces contributions for its gradient position
     ///
     /// # Arguments
@@ -768,13 +777,22 @@ impl GpuKernels {
         let b_offset = 4usize.saturating_sub(b_shape.len());
 
         for (i, &dim) in out_shape.iter().enumerate() {
-            out_shape_padded[out_offset + i] = dim as u32;
+            let idx = out_offset + i;
+            if let Some(slot) = out_shape_padded.get_mut(idx) {
+                *slot = dim as u32;
+            }
         }
         for (i, &dim) in a_shape.iter().enumerate() {
-            a_shape_padded[a_offset + i] = dim as u32;
+            let idx = a_offset + i;
+            if let Some(slot) = a_shape_padded.get_mut(idx) {
+                *slot = dim as u32;
+            }
         }
         for (i, &dim) in b_shape.iter().enumerate() {
-            b_shape_padded[b_offset + i] = dim as u32;
+            let idx = b_offset + i;
+            if let Some(slot) = b_shape_padded.get_mut(idx) {
+                *slot = dim as u32;
+            }
         }
 
         let params = BinaryBackwardParams {
@@ -817,7 +835,7 @@ impl GpuKernels {
                 &ctx.pipelines().max_broadcast_pass1,
                 &ctx.pipelines().max_broadcast_pass2,
             ),
-            _ => panic!("Unknown binary backward op: {}", op),
+            _ => panic!("Unknown binary backward op: {op}"),
         };
 
         // ============ PASS 1: Scatter ============
@@ -1428,7 +1446,9 @@ impl GpuKernels {
 
         // Create max indices buffer
         let mut indices = vec![0u32; input_size.div_ceil(256)];
-        indices[0] = max_index as u32;
+        if let Some(slot) = indices.get_mut(0) {
+            *slot = max_index as u32;
+        }
         let max_indices_buffer =
             ctx.device()
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1513,7 +1533,7 @@ impl GpuKernels {
             op_params: pad_to_u32_4(axes),
             rank: old_shape.len() as u32,
             padding2: 0,
-            _padding: [0, 0],
+            padding: [0, 0],
         };
 
         movement_op(input, result, &params, &ctx.pipelines().permute)
@@ -1532,8 +1552,10 @@ impl GpuKernels {
 
         // For expand, op_params represents which dimensions were broadcast (size 1 -> N)
         let mut broadcast_flags = [0u32; 4];
-        for (i, (&old, &new)) in old_shape.iter().zip(new_shape).enumerate() {
-            broadcast_flags[i] = if old == 1 && new > 1 { 1 } else { 0 };
+        for (i, (&old, &new)) in old_shape.iter().zip(new_shape).take(4).enumerate() {
+            if let Some(slot) = broadcast_flags.get_mut(i) {
+                *slot = u32::from(old == 1 && new > 1);
+            }
         }
 
         let params = MovementParams {
@@ -1542,7 +1564,7 @@ impl GpuKernels {
             op_params: broadcast_flags,
             rank: old_shape.len() as u32,
             padding2: 0,
-            _padding: [0, 0],
+            padding: [0, 0],
         };
 
         movement_op(input, result, &params, &ctx.pipelines().expand)
@@ -1566,24 +1588,25 @@ impl GpuKernels {
         // _padding: [left3 | right3] for dim 3 (16 bits each)
         let mut pad_params = [0u32; 4];
         for (i, &(left, right)) in padding.iter().enumerate().take(2) {
-            pad_params[i * 2] = left as u32;
-            pad_params[i * 2 + 1] = right as u32;
+            let idx = i * 2;
+            if let Some(slot) = pad_params.get_mut(idx) {
+                *slot = left as u32;
+            }
+            if let Some(slot) = pad_params.get_mut(idx + 1) {
+                *slot = right as u32;
+            }
         }
 
         // Pack dim 2 into padding2 (left in upper 16 bits, right in lower 16 bits)
         let mut padding2: u32 = 0;
-        if padding.len() > 2 {
-            let left2 = padding[2].0 as u32;
-            let right2 = padding[2].1 as u32;
-            padding2 = (left2 << 16) | right2;
+        if let Some(&(left2, right2)) = padding.get(2) {
+            padding2 = (left2 as u32) << 16 | (right2 as u32);
         }
 
         // Pack dim 3 into _padding[0] (left in upper 16 bits, right in lower 16 bits)
         let mut padding3: u32 = 0;
-        if padding.len() > 3 {
-            let left3 = padding[3].0 as u32;
-            let right3 = padding[3].1 as u32;
-            padding3 = (left3 << 16) | right3;
+        if let Some(&(left3, right3)) = padding.get(3) {
+            padding3 = (left3 as u32) << 16 | (right3 as u32);
         }
 
         let params = MovementParams {
@@ -1592,7 +1615,7 @@ impl GpuKernels {
             op_params: pad_params,
             rank: old_shape.len() as u32,
             padding2,
-            _padding: [padding3, 0],
+            padding: [padding3, 0],
         };
 
         movement_op(input, result, &params, &ctx.pipelines().pad)
@@ -1619,7 +1642,7 @@ impl GpuKernels {
             op_params: pad_to_u32_4(&starts),
             rank: old_shape.len() as u32,
             padding2: 0,
-            _padding: [0, 0],
+            padding: [0, 0],
         };
 
         movement_op(input, result, &params, &ctx.pipelines().shrink)
@@ -1643,7 +1666,7 @@ impl GpuKernels {
             op_params: pad_to_u32_4(strides),
             rank: old_shape.len() as u32,
             padding2: 0,
-            _padding: [0, 0],
+            padding: [0, 0],
         };
 
         movement_op(input, result, &params, &ctx.pipelines().stride)
@@ -1669,7 +1692,7 @@ impl GpuKernels {
             op_params: pad_to_u32_4(axes),
             rank: old_shape.len() as u32,
             padding2: 0,
-            _padding: [0, 0],
+            padding: [0, 0],
         };
 
         movement_op(out_grad, result, &params, &ctx.pipelines().permute_backward)
@@ -1692,7 +1715,7 @@ impl GpuKernels {
             op_params: [0, 0, 0, 0],
             rank: old_shape.len() as u32,
             padding2: 0,
-            _padding: [0, 0],
+            padding: [0, 0],
         };
 
         movement_op(out_grad, result, &params, &ctx.pipelines().expand_backward)
@@ -1713,6 +1736,7 @@ impl GpuKernels {
         // Pack padding into params (same as forward pad operation)
         let mut op_params = [0u32; 4];
         let mut padding2 = 0u32;
+        #[allow(clippy::used_underscore_binding)] //TEMP!!!
         let mut _padding = [0u32; 2];
 
         for (i, &(left, right)) in padding.iter().enumerate().take(4) {
@@ -1741,7 +1765,7 @@ impl GpuKernels {
             op_params,
             rank: old_shape.len() as u32,
             padding2,
-            _padding,
+            padding: _padding,
         };
 
         movement_op(out_grad, result, &params, &ctx.pipelines().pad_backward)
@@ -1762,7 +1786,9 @@ impl GpuKernels {
         // Pack range starts into op_params
         let mut range_starts = [0usize; 4];
         for (i, &(start, _)) in ranges.iter().enumerate().take(4) {
-            range_starts[i] = start;
+            if let Some(slot) = range_starts.get_mut(i) {
+                *slot = start;
+            }
         }
 
         let params = MovementParams {
@@ -1771,7 +1797,7 @@ impl GpuKernels {
             op_params: pad_to_u32_4(&range_starts),
             rank: old_shape.len() as u32,
             padding2: 0,
-            _padding: [0, 0],
+            padding: [0, 0],
         };
 
         movement_op(out_grad, result, &params, &ctx.pipelines().shrink_backward)
@@ -1795,7 +1821,7 @@ impl GpuKernels {
             op_params: pad_to_u32_4(strides),
             rank: old_shape.len() as u32,
             padding2: 0,
-            _padding: [0, 0],
+            padding: [0, 0],
         };
 
         movement_op(out_grad, result, &params, &ctx.pipelines().stride_backward)
@@ -1886,7 +1912,7 @@ impl GpuKernels {
 
     /// Image-to-column transformation for GPU convolution
     ///
-    /// Transforms 4D input (B, C, H, W) into 2D matrix (B*H_out*W_out, C*K_h*K_w)
+    /// Transforms 4D input (B, C, H, W) into 2D matrix (B*`H_out`*`W_out`, C*`K_h`*`K_w`)
     /// where each row represents a flattened receptive field for one output position.
     ///
     /// # Arguments
@@ -1903,7 +1929,7 @@ impl GpuKernels {
     /// * `w_out` - Output width
     ///
     /// # Returns
-    /// A 2D matrix of shape (B*H_out*W_out, C*K_h*K_w)
+    /// A 2D matrix of shape (B*`H_out`*`W_out`, C*`K_h`*`K_w`)
     #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn im2col(
@@ -2002,7 +2028,9 @@ impl GpuKernels {
 fn pad_to_u32_4(values: &[usize]) -> [u32; 4] {
     let mut result = [0u32; 4];
     for (i, &v) in values.iter().take(4).enumerate() {
-        result[i] = v as u32;
+        if let Some(slot) = result.get_mut(i) {
+            *slot = v as u32;
+        }
     }
     result
 }
@@ -2062,7 +2090,7 @@ fn movement_op(
 
         // Only multiply actual dimensions (based on rank), not the padded zeros
         let output_size = (0..params.rank as usize)
-            .map(|i| params.new_shape[i])
+            .filter_map(|i| params.new_shape.get(i))
             .product::<u32>();
         let workgroup_count = output_size.div_ceil(256);
         compute_pass.dispatch_workgroups(workgroup_count, 1, 1);

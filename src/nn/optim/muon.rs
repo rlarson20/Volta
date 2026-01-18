@@ -76,11 +76,14 @@ impl Muon {
             let mut c = vec![0.0; cols * cols];
             for i in 0..cols {
                 for j in 0..cols {
-                    let val = xt_x[i * cols + j];
+                    let idx = i * cols + j;
+                    let val = xt_x.get(idx).copied().unwrap_or(0.0);
                     if i == j {
-                        c[i * cols + j] = 3.0 - val;
-                    } else {
-                        c[i * cols + j] = -val;
+                        if let Some(slot) = c.get_mut(idx) {
+                            *slot = 3.0 - val;
+                        }
+                    } else if let Some(slot) = c.get_mut(idx) {
+                        *slot = -val;
                     }
                 }
             }
@@ -90,7 +93,9 @@ impl Muon {
             let next_x = RawTensor::matmul_raw(g, &c, rows, cols, cols);
 
             for (i, val) in next_x.iter().enumerate() {
-                g[i] = val * 0.5;
+                if let Some(slot) = g.get_mut(i) {
+                    *slot = val * 0.5;
+                }
             }
         }
 
@@ -108,17 +113,22 @@ impl Muon {
                 // 1. Flatten params to 2D (keeping output dim as row usually)
                 // If vector (1D), treat as (Rows, 1)
                 let (rows, cols) = if shape.len() < 2 {
-                    (shape[0], 1)
+                    (shape.first().copied().unwrap_or(1), 1)
                 } else {
                     // For Linear: [In, Out] -> Muon treats as [In, Out] usually or [Out, In]
                     // For Conv2d: [Out, In, K, K] -> flatten to [Out, In*K*K]
-                    let rows = shape[0];
-                    let cols = shape[1..].iter().product();
+                    let rows = shape.first().copied().unwrap_or(1);
+                    let cols = shape
+                        .get(1..)
+                        .iter()
+                        .flat_map(|s| s.iter())
+                        .copied()
+                        .product();
                     (rows, cols)
                 };
 
                 // Update buffer
-                let velocity = &mut self.velocity[i];
+                let velocity = self.velocity.get_mut(i).unwrap();
                 for (v, &g) in velocity.iter_mut().zip(grad.iter()) {
                     *v = self.momentum * *v + g;
                 }

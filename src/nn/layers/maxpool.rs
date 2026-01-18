@@ -52,10 +52,10 @@ impl MaxPool2d {
                 "MaxPool2d expects input shape (B, C, H, W)"
             );
             (
-                x_borrow.shape[0],
-                x_borrow.shape[1],
-                x_borrow.shape[2],
-                x_borrow.shape[3],
+                x_borrow.shape.first().copied().unwrap_or(1),
+                x_borrow.shape.get(1).copied().unwrap_or(1),
+                x_borrow.shape.get(2).copied().unwrap_or(1),
+                x_borrow.shape.get(3).copied().unwrap_or(1),
             )
         };
 
@@ -71,7 +71,10 @@ impl MaxPool2d {
             (xp.data.clone(), xp.shape.clone(), xp.requires_grad)
         };
 
-        let (padded_h, padded_w) = (shape[2], shape[3]);
+        let (padded_h, padded_w) = (
+            shape.get(2).copied().unwrap_or(1),
+            shape.get(3).copied().unwrap_or(1),
+        );
         let (kernel_h, kernel_w) = self.kernel;
         let (stride_h, stride_w) = self.stride;
 
@@ -105,16 +108,21 @@ impl MaxPool2d {
                                 let w_in = w_start + kw;
                                 let in_idx =
                                     (((b * channels + c) * padded_h) + h_in) * padded_w + w_in;
-                                let val = data[in_idx];
-                                if val > max_val {
+                                if let Some(&val) = data.get(in_idx)
+                                    && val > max_val
+                                {
                                     max_val = val;
                                     max_idx = in_idx;
                                 }
                             }
                         }
 
-                        out_data[out_idx] = max_val;
-                        max_indices[out_idx] = max_idx;
+                        if let Some(slot) = out_data.get_mut(out_idx) {
+                            *slot = max_val;
+                        }
+                        if let Some(slot) = max_indices.get_mut(out_idx) {
+                            *slot = max_idx;
+                        }
                     }
                 }
             }
@@ -151,11 +159,14 @@ impl Module for MaxPool2d {
 
 impl GradFn for MaxPool2dGradFn {
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
-        let input_shape = parents[0].borrow().shape.clone();
+        let input_shape = parents.first().unwrap().borrow().shape.clone();
         let mut grad_input = vec![0.0; input_shape.iter().product()];
 
         for (idx, &max_linear_idx) in self.max_indices.iter().enumerate() {
-            grad_input[max_linear_idx] += out_grad.data[idx];
+            let grad_val = out_grad.data.get(idx).copied().unwrap_or(0.0);
+            if let Some(slot) = grad_input.get_mut(max_linear_idx) {
+                *slot += grad_val;
+            }
         }
 
         vec![Some(RawTensor::new(grad_input, &input_shape, false))]

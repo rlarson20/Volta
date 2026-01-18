@@ -1,7 +1,9 @@
 //! GPU context management
 //!
-//! The GpuContext holds the wgpu device and queue, which are needed
+//! The `GpuContext` holds the wgpu device and queue, which are needed
 //! for all GPU operations. Think of it as your "connection" to the GPU.
+
+use wgpu::PipelineCompilationOptions;
 
 use super::pool::{BufferPool, BufferPoolConfig};
 use super::staging_pool::StagingBufferPool;
@@ -46,8 +48,8 @@ pub enum GpuSyncError {
 impl std::fmt::Display for GpuSyncError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            GpuSyncError::Timeout(msg) => write!(f, "GPU sync timeout: {}", msg),
-            GpuSyncError::GpuLost(msg) => write!(f, "GPU lost: {}", msg),
+            GpuSyncError::Timeout(msg) => write!(f, "GPU sync timeout: {msg}"),
+            GpuSyncError::GpuLost(msg) => write!(f, "GPU lost: {msg}"),
         }
     }
 }
@@ -232,9 +234,9 @@ impl GpuContext {
         let (device, queue) = adapter
             .request_device(&device_descriptor)
             .await
-            .map_err(|e| format!("Failed to create device: {}", e))?;
+            .map_err(|e| format!("Failed to create device: {e}"))?;
         // Step 4: Compile all our compute shaders
-        let pipelines = Self::create_pipelines(&device)?;
+        let pipelines = Self::create_pipelines(&device);
 
         // Step 5: Create the buffer pool for memory reuse
         let buffer_pool = Arc::new(BufferPool::new(BufferPoolConfig::default()));
@@ -280,7 +282,7 @@ impl GpuContext {
         &self.buffer_pool
     }
 
-    /// Get an Arc reference to the buffer pool (for GpuBuffer to hold)
+    /// Get an Arc reference to the buffer pool (for `GpuBuffer` to hold)
     pub fn buffer_pool_arc(&self) -> Arc<BufferPool> {
         Arc::clone(&self.buffer_pool)
     }
@@ -330,7 +332,7 @@ impl GpuContext {
 
         #[cfg(debug_assertions)]
         if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
-            eprintln!("[GPU] Syncing {} pending submissions...", pending);
+            eprintln!("[GPU] Syncing {pending} pending submissions...");
         }
 
         // Poll the device until all work completes
@@ -352,7 +354,7 @@ impl GpuContext {
                 true
             }
             Err(e) => {
-                eprintln!("[GPU] Sync timeout warning: {:?}", e);
+                eprintln!("[GPU] Sync timeout warning: {e:?}");
                 eprintln!("[GPU] This may indicate GPU overload. Consider:");
                 eprintln!("[GPU]   - Reducing batch size");
                 eprintln!("[GPU]   - Adding more frequent sync points");
@@ -430,8 +432,7 @@ impl GpuContext {
         // 3-strike rule: abort after consecutive failures
         if timeout_count >= MAX_CONSECUTIVE_TIMEOUTS {
             return Err(GpuSyncError::GpuLost(format!(
-                "{} consecutive timeouts - GPU unresponsive",
-                timeout_count
+                "{timeout_count} consecutive timeouts - GPU unresponsive"
             )));
         }
 
@@ -442,7 +443,7 @@ impl GpuContext {
 
         #[cfg(debug_assertions)]
         if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
-            eprintln!("[GPU] sync_checked: {} pending submissions...", pending);
+            eprintln!("[GPU] sync_checked: {pending} pending submissions...");
         }
 
         // Use 2-second hard timeout
@@ -469,17 +470,15 @@ impl GpuContext {
                 // Timeout - increment counter
                 let new_count = self.consecutive_timeouts.fetch_add(1, Ordering::Relaxed) + 1;
 
-                eprintln!("[GPU] Sync timeout #{}: {:?}", new_count, e);
+                eprintln!("[GPU] Sync timeout #{new_count}: {e:?}");
 
                 if new_count >= MAX_CONSECUTIVE_TIMEOUTS {
                     Err(GpuSyncError::GpuLost(format!(
-                        "{} consecutive timeouts - aborting",
-                        new_count
+                        "{new_count} consecutive timeouts - aborting"
                     )))
                 } else {
                     Err(GpuSyncError::Timeout(format!(
-                        "Timeout #{} of {}",
-                        new_count, MAX_CONSECUTIVE_TIMEOUTS
+                        "Timeout #{new_count} of {MAX_CONSECUTIVE_TIMEOUTS}"
                     )))
                 }
             }
@@ -508,7 +507,7 @@ impl GpuContext {
     }
 
     /// Create all compute pipelines by compiling shaders
-    fn create_pipelines(device: &wgpu::Device) -> Result<ComputePipelines, String> {
+    fn create_pipelines(device: &wgpu::Device) -> ComputePipelines {
         // Load and compile shader modules
         let elementwise_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Elementwise Shader"),
@@ -585,12 +584,12 @@ impl GpuContext {
                 layout: None, // Auto-generate layout from shader
                 module: shader,
                 entry_point: Some(entry_point),
-                compilation_options: Default::default(),
+                compilation_options: PipelineCompilationOptions::default(),
                 cache: None,
             })
         };
 
-        Ok(ComputePipelines {
+        ComputePipelines {
             // Element-wise binary ops
             add: create_pipeline(&elementwise_shader, "add", "Add Pipeline"),
             sub: create_pipeline(&elementwise_shader, "sub", "Sub Pipeline"),
@@ -879,6 +878,6 @@ impl GpuContext {
 
             // Image-to-column transformation
             im2col: create_pipeline(&im2col_shader, "im2col_main", "Im2col Pipeline"),
-        })
+        }
     }
 }

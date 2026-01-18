@@ -42,7 +42,7 @@ impl Module for Sequential {
             let prefix = entry.name.as_deref().unwrap_or(&index_str);
 
             for (key, value) in sub_state {
-                state.insert(format!("{}.{}", prefix, key), value);
+                state.insert(format!("{prefix}.{key}"), value);
             }
         }
         state
@@ -61,7 +61,7 @@ impl Module for Sequential {
             let mut sub_state = StateDict::new();
 
             for prefix in possible_prefixes {
-                for (key, value) in state.iter() {
+                for (key, value) in state {
                     if key.starts_with(&prefix) {
                         let sub_key = &key[prefix.len()..];
                         if !sub_key.is_empty() {
@@ -100,7 +100,7 @@ impl Sequential {
         }
     }
 
-    /// Create a new SequentialBuilder for building models with named layers
+    /// Create a new `SequentialBuilder` for building models with named layers
     #[must_use]
     pub fn builder() -> crate::nn::layers::SequentialBuilder {
         crate::nn::layers::SequentialBuilder::new()

@@ -1,11 +1,11 @@
 //! GPU buffer management
 //!
-//! GpuBuffer wraps a wgpu buffer and provides methods for
+//! `GpuBuffer` wraps a wgpu buffer and provides methods for
 //! transferring data between CPU and GPU.
 //!
 //! # Buffer Pooling
 //!
-//! GpuBuffers are automatically returned to a pool when dropped, enabling
+//! `GpuBuffers` are automatically returned to a pool when dropped, enabling
 //! efficient reuse across operations. This prevents memory exhaustion during
 //! repeated GPU operations like benchmarking or training loops.
 

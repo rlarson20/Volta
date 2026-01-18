@@ -2,7 +2,7 @@ use crate::io::StateDict;
 
 /// Builder for composable state dict transformations
 ///
-/// StateDictMapper allows you to transform state dicts when loading external models.
+/// `StateDictMapper` allows you to transform state dicts when loading external models.
 /// Transformations are applied in the order they are added.
 ///
 /// # Examples
@@ -21,13 +21,13 @@ use crate::io::StateDict;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub type TransformationBox = Box<dyn Fn(&mut StateDict)>;
+#[must_use]
 pub struct StateDictMapper {
     transformations: Vec<TransformationBox>,
 }
 
 impl StateDictMapper {
     /// Create a new empty mapper
-    #[must_use]
     pub fn new() -> Self {
         Self {
             transformations: Vec::new(),
@@ -67,11 +67,7 @@ impl StateDictMapper {
                 for (key, value) in state.iter() {
                     if key.starts_with(&old_prefix) {
                         let suffix = &key[old_prefix.len()..];
-                        updates.push((
-                            key.clone(),
-                            format!("{}{}", new_prefix, suffix),
-                            value.clone(),
-                        ));
+                        updates.push((key.clone(), format!("{new_prefix}{suffix}"), value.clone()));
                     }
                 }
                 for (old_key, new_key, value) in updates {
@@ -114,7 +110,7 @@ impl StateDictMapper {
             .push(Box::new(move |state: &mut StateDict| {
                 let mut updates = Vec::new();
                 for (key, value) in state.iter() {
-                    let new_key = format!("{}{}", prefix, key);
+                    let new_key = format!("{prefix}{key}");
                     updates.push((key.clone(), new_key, value.clone()));
                 }
                 for (old_key, new_key, value) in updates {
@@ -127,8 +123,8 @@ impl StateDictMapper {
 
     /// Transpose a specific 2D tensor (for Linear weight conversion)
     ///
-    /// PyTorch Linear layers store weights as [out_features, in_features],
-    /// while Volta stores them as [in_features, out_features].
+    /// `PyTorch` Linear layers store weights as [`out_features`, `in_features`],
+    /// while Volta stores them as [`in_features`, `out_features`].
     ///
     /// This operation only affects 2D tensors. Non-2D tensors are left unchanged.
     pub fn transpose(mut self, key: impl Into<String>) -> Self {
@@ -139,13 +135,18 @@ impl StateDictMapper {
                 if let Some(tensor_data) = state.get_mut(&key)
                     && tensor_data.shape.len() == 2
                 {
-                    let [rows, cols] = [tensor_data.shape[0], tensor_data.shape[1]];
+                    let rows = tensor_data.shape.first().copied().unwrap_or(1);
+                    let cols = tensor_data.shape.get(1).copied().unwrap_or(1);
                     let mut transposed = vec![0.0; rows * cols];
 
                     // Transpose row-major layout: [R, C] -> [C, R]
                     for i in 0..rows {
                         for j in 0..cols {
-                            transposed[j * rows + i] = tensor_data.data[i * cols + j];
+                            if let Some(src) = tensor_data.data.get(i * cols + j)
+                                && let Some(dst) = transposed.get_mut(j * rows + i)
+                            {
+                                *dst = *src;
+                            }
                         }
                     }
 
@@ -174,12 +175,17 @@ impl StateDictMapper {
                     if let Some(tensor_data) = state.get_mut(&key)
                         && tensor_data.shape.len() == 2
                     {
-                        let [rows, cols] = [tensor_data.shape[0], tensor_data.shape[1]];
+                        let rows = tensor_data.shape.first().copied().unwrap_or(1);
+                        let cols = tensor_data.shape.get(1).copied().unwrap_or(1);
                         let mut transposed = vec![0.0; rows * cols];
 
                         for i in 0..rows {
                             for j in 0..cols {
-                                transposed[j * rows + i] = tensor_data.data[i * cols + j];
+                                if let Some(src) = tensor_data.data.get(i * cols + j)
+                                    && let Some(dst) = transposed.get_mut(j * rows + i)
+                                {
+                                    *dst = *src;
+                                }
                             }
                         }
 
@@ -194,7 +200,6 @@ impl StateDictMapper {
     /// Select only specific keys (for partial loading)
     ///
     /// All other keys are removed from the state dict.
-    #[must_use]
     pub fn select_keys(mut self, keys: Vec<String>) -> Self {
         self.transformations
             .push(Box::new(move |state: &mut StateDict| {
@@ -206,7 +211,6 @@ impl StateDictMapper {
     /// Exclude specific keys
     ///
     /// The specified keys are removed from the state dict.
-    #[must_use]
     pub fn exclude_keys(mut self, keys: Vec<String>) -> Self {
         self.transformations
             .push(Box::new(move |state: &mut StateDict| {
@@ -247,10 +251,10 @@ impl Default for StateDictMapper {
     }
 }
 
-/// Load PyTorch Linear weights (requires transpose)
+/// Load `PyTorch` Linear weights (requires transpose)
 ///
-/// PyTorch Linear layers store weights as [out_features, in_features],
-/// while Volta stores them as [in_features, out_features].
+/// `PyTorch` Linear layers store weights as [`out_features`, `in_features`],
+/// while Volta stores them as [`in_features`, `out_features`].
 ///
 /// This convenience function transposes all keys containing "weight".
 #[must_use]
@@ -260,17 +264,17 @@ pub fn load_pytorch_linear_weights(state: StateDict) -> StateDict {
         .map(state)
 }
 
-/// Load HuggingFace transformer weights
+/// Load `HuggingFace` transformer weights
 ///
 /// Strips the model prefix and transposes Linear weights.
 ///
 /// # Arguments
-/// * `state` - The loaded state dict from HuggingFace
-/// * `model_prefix` - The prefix to strip (e.g., "model", "bert", "transformer")
+/// * `state` - The loaded state dict from `HuggingFace`
+/// * `model_prefix` - The prefix to strip (e.g., `"model"`, `"bert"`, `"transformer"`)
 #[must_use]
 pub fn load_huggingface_weights(state: StateDict, model_prefix: &str) -> StateDict {
     StateDictMapper::new()
-        .strip_prefix(format!("{}.", model_prefix))
+        .strip_prefix(format!("{model_prefix}."))
         .transpose_pattern("weight")
         .map(state)
 }
@@ -288,7 +292,6 @@ pub fn load_huggingface_weights(state: StateDict, model_prefix: &str) -> StateDi
 ///     ("fc2.bias", "decoder.bias"),
 /// ]);
 /// ```
-#[must_use]
 pub fn create_key_mapping(mappings: Vec<(&str, &str)>) -> StateDictMapper {
     let mut mapper = StateDictMapper::new();
     for (from, to) in mappings {
@@ -303,7 +306,7 @@ pub fn create_key_mapping(mappings: Vec<(&str, &str)>) -> StateDictMapper {
 #[must_use]
 pub fn load_partial(state: StateDict, prefix: &str) -> StateDict {
     StateDictMapper::new()
-        .strip_prefix(format!("{}.", prefix))
+        .strip_prefix(format!("{prefix}."))
         .map(state)
 }
 

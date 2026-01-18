@@ -67,11 +67,11 @@ impl fmt::Display for StateDictDiff {
                 .shape_mismatches
                 .iter()
                 .map(|(key, expected, loaded)| {
-                    format!("{} (expected {:?}, found {:?})", key, expected, loaded)
+                    format!("{key} (expected {expected:?}, found {loaded:?})")
                 })
                 .collect::<Vec<_>>()
                 .join("; ");
-            sections.push(format!("shape mismatches: {}", entries));
+            sections.push(format!("shape mismatches: {entries}"));
         }
 
         write!(f, "StateDictDiff {{ {} }}", sections.join("; "))
@@ -105,7 +105,7 @@ pub fn diff_state_dict(expected: &StateDict, loaded: &StateDict) -> StateDictDif
     let mut diff = StateDictDiff::default();
 
     // 1. Missing keys and shape mismatches
-    for (key, expected_td) in expected.iter() {
+    for (key, expected_td) in expected {
         match loaded.get(key) {
             None => diff.missing_keys.push(key.clone()),
             Some(actual_td) => {
@@ -163,18 +163,18 @@ pub fn load_state_dict(path: &str) -> Result<StateDict> {
 
 // ========== SafeTensors Support ==========
 
-/// Convert SafeTensors dtype to Volta DType
+/// Convert `SafeTensors` dtype to Volta `DType`
 fn safetensors_dtype_to_volta(dtype: safetensors::Dtype) -> DType {
     match dtype {
         safetensors::Dtype::F16 => DType::F16,
         safetensors::Dtype::BF16 => DType::BF16,
-        safetensors::Dtype::F32 => DType::F32,
         safetensors::Dtype::F64 => DType::F64,
         safetensors::Dtype::I32 => DType::I32,
         safetensors::Dtype::I64 => DType::I64,
         safetensors::Dtype::U8 => DType::U8,
         safetensors::Dtype::BOOL => DType::Bool,
-        safetensors::Dtype::F4
+        safetensors::Dtype::F32
+        | safetensors::Dtype::F4
         | safetensors::Dtype::F6_E2M3
         | safetensors::Dtype::F6_E3M2
         | safetensors::Dtype::I8
@@ -190,7 +190,7 @@ fn safetensors_dtype_to_volta(dtype: safetensors::Dtype) -> DType {
     }
 }
 
-/// Convert Volta DType to SafeTensors dtype
+/// Convert Volta `DType` to `SafeTensors` dtype
 fn volta_dtype_to_safetensors(dtype: DType) -> safetensors::Dtype {
     match dtype {
         DType::F16 => safetensors::Dtype::F16,
@@ -204,10 +204,10 @@ fn volta_dtype_to_safetensors(dtype: DType) -> safetensors::Dtype {
     }
 }
 
-/// Load a SafeTensors file into a StateDict (converts all tensors to f32)
+/// Load a `SafeTensors` file into a `StateDict` (converts all tensors to f32)
 ///
 /// This is the simplest API for loading pretrained models. All tensors are
-/// converted to f32 to match the existing StateDict format.
+/// converted to f32 to match the existing `StateDict` format.
 ///
 /// For native dtype loading, use `load_safetensors_raw()`.
 pub fn load_safetensors<P: AsRef<Path>>(path: P) -> Result<StateDict> {
@@ -216,7 +216,7 @@ pub fn load_safetensors<P: AsRef<Path>>(path: P) -> Result<StateDict> {
     file.read_to_end(&mut buffer)?;
 
     let tensors = SafeTensors::deserialize(&buffer)
-        .map_err(|e| Error::other(format!("SafeTensors parse error: {}", e)))?;
+        .map_err(|e| Error::other(format!("SafeTensors parse error: {e}")))?;
 
     let mut state_dict = StateDict::new();
 
@@ -229,7 +229,7 @@ pub fn load_safetensors<P: AsRef<Path>>(path: P) -> Result<StateDict> {
         let f32_data = storage.to_f32_vec();
 
         state_dict.insert(
-            name.to_string(),
+            name.clone(),
             TensorData {
                 data: f32_data,
                 shape,
@@ -240,7 +240,7 @@ pub fn load_safetensors<P: AsRef<Path>>(path: P) -> Result<StateDict> {
     Ok(state_dict)
 }
 
-/// Tensor data with native dtype support for SafeTensors
+/// Tensor data with native dtype support for `SafeTensors`
 #[derive(Clone)]
 pub struct TypedTensorData {
     /// Raw bytes of tensor data
@@ -252,7 +252,7 @@ pub struct TypedTensorData {
 }
 
 impl TypedTensorData {
-    /// Convert to f32 TensorData
+    /// Convert to f32 `TensorData`
     #[must_use]
     pub fn to_tensor_data(&self) -> TensorData {
         let storage = Storage::from_bytes(self.data.clone(), self.dtype);
@@ -275,9 +275,9 @@ impl TypedTensorData {
     }
 }
 
-/// Load a SafeTensors file with native dtypes preserved
+/// Load a `SafeTensors` file with native dtypes preserved
 ///
-/// Returns a map of tensor names to TypedTensorData, preserving the original
+/// Returns a map of tensor names to `TypedTensorData`, preserving the original
 /// dtype (F16, BF16, etc.) without conversion.
 pub fn load_safetensors_raw<P: AsRef<Path>>(path: P) -> Result<BTreeMap<String, TypedTensorData>> {
     let mut file = File::open(path)?;
@@ -285,13 +285,13 @@ pub fn load_safetensors_raw<P: AsRef<Path>>(path: P) -> Result<BTreeMap<String, 
     file.read_to_end(&mut buffer)?;
 
     let tensors = SafeTensors::deserialize(&buffer)
-        .map_err(|e| Error::other(format!("SafeTensors parse error: {}", e)))?;
+        .map_err(|e| Error::other(format!("SafeTensors parse error: {e}")))?;
 
     let mut result = BTreeMap::new();
 
     for (name, tensor) in tensors.tensors() {
         result.insert(
-            name.to_string(),
+            name.clone(),
             TypedTensorData {
                 data: tensor.data().to_vec(),
                 shape: tensor.shape().to_vec(),
@@ -303,9 +303,9 @@ pub fn load_safetensors_raw<P: AsRef<Path>>(path: P) -> Result<BTreeMap<String, 
     Ok(result)
 }
 
-/// Save a StateDict to SafeTensors format
+/// Save a `StateDict` to `SafeTensors` format
 ///
-/// All tensors are saved as F32 since StateDict uses f32.
+/// All tensors are saved as F32 since `StateDict` uses f32.
 pub fn save_safetensors<P: AsRef<Path>>(state: &StateDict, path: P) -> Result<()> {
     use safetensors::tensor::{Dtype, TensorView};
 
@@ -320,14 +320,14 @@ pub fn save_safetensors<P: AsRef<Path>>(state: &StateDict, path: P) -> Result<()
         .collect();
 
     let bytes = safetensors::tensor::serialize(tensors, None)
-        .map_err(|e| Error::other(format!("SafeTensors serialize error: {}", e)))?;
+        .map_err(|e| Error::other(format!("SafeTensors serialize error: {e}")))?;
 
     let mut file = File::create(path)?;
     file.write_all(&bytes)?;
     Ok(())
 }
 
-/// Save typed tensor data to SafeTensors format with native dtypes
+/// Save typed tensor data to `SafeTensors` format with native dtypes
 pub fn save_safetensors_typed<P: AsRef<Path>>(
     tensors: &BTreeMap<String, TypedTensorData>,
     path: P,
@@ -348,7 +348,7 @@ pub fn save_safetensors_typed<P: AsRef<Path>>(
         .collect();
 
     let bytes = safetensors::tensor::serialize(tensor_views, None)
-        .map_err(|e| Error::other(format!("SafeTensors serialize error: {}", e)))?;
+        .map_err(|e| Error::other(format!("SafeTensors serialize error: {e}")))?;
 
     let mut file = File::create(path)?;
     file.write_all(&bytes)?;
@@ -358,7 +358,7 @@ pub fn save_safetensors_typed<P: AsRef<Path>>(
 /// Load a state dict from a file and apply transformations
 ///
 /// This is a convenience wrapper around `load_state_dict` that applies
-/// a StateDictMapper transformation before returning the result.
+/// a `StateDictMapper` transformation before returning the result.
 ///
 /// # Example
 /// ```no_run
@@ -382,7 +382,7 @@ pub fn load_state_dict_with_mapping<P: AsRef<Path>>(
 /// Load a safetensors file and apply transformations
 ///
 /// This is a convenience wrapper around `load_safetensors` that applies
-/// a StateDictMapper transformation before returning the result.
+/// a `StateDictMapper` transformation before returning the result.
 ///
 /// # Example
 /// ```no_run

@@ -6,24 +6,24 @@ use crate::tensor::{RawTensor, Tensor, TensorOps};
 /// LSTM Cell - processes one timestep at a time
 ///
 /// Implements the LSTM equations:
-/// - i = sigmoid(W_ii @ x + W_hi @ h + b_i)  (input gate)
-/// - f = sigmoid(W_if @ x + W_hf @ h + b_f)  (forget gate)
-/// - g = tanh(W_ig @ x + W_hg @ h + b_g)     (cell gate)
-/// - o = sigmoid(W_io @ x + W_ho @ h + b_o)  (output gate)
-/// - c_next = f * c + i * g                  (new cell state)
-/// - h_next = o * tanh(c_next)               (new hidden state)
+/// - i = `sigmoid(W_ii @ x + W_hi @ h + b_i)`  (input gate)
+/// - f = `sigmoid(W_if @ x + W_hf @ h + b_f)`  (forget gate)
+/// - g = `tanh(W_ig @ x + W_hg @ h + b_g)`     (cell gate)
+/// - o = `sigmoid(W_io @ x + W_ho @ h + b_o)`  (output gate)
+/// - `c_next` = f * c + i * g                  (new cell state)
+/// - `h_next` = o * `tanh(c_next)`               (new hidden state)
 pub struct LSTMCell {
     #[allow(dead_code)]
     input_size: usize,
     hidden_size: usize,
-    /// Combined weights for input: [4*hidden_size, input_size]
+    /// Combined weights for input: `[4*hidden_size, input_size]`
     /// Order: input, forget, cell, output gates
     weight_ih: Tensor,
-    /// Combined weights for hidden: [4*hidden_size, hidden_size]
+    /// Combined weights for hidden: `[4*hidden_size, hidden_size]`
     weight_hh: Tensor,
-    /// Combined bias for input: [4*hidden_size]
+    /// Combined bias for input: `[4*hidden_size]`
     bias_ih: Option<Tensor>,
-    /// Combined bias for hidden: [4*hidden_size]
+    /// Combined bias for hidden: `[4*hidden_size]`
     bias_hh: Option<Tensor>,
 }
 
@@ -61,26 +61,25 @@ impl LSTMCell {
     /// Forward pass for a single timestep
     ///
     /// # Arguments
-    /// * `input` - Input tensor of shape [batch, input_size]
-    /// * `state` - Optional tuple of (h, c) where h and c are [batch, hidden_size]
+    /// * `input` - Input tensor of shape `[batch, input_size]`
+    /// * `state` - Optional tuple of (h, c) where h and c are `[batch, hidden_size]`
     ///
     /// # Returns
-    /// Tuple of (h_next, c_next) both of shape [batch, hidden_size]
+    /// Tuple of `(h_next, c_next)` both of shape `[batch, hidden_size]`
     pub fn forward_step(
         &self,
         input: &Tensor,
         state: Option<(&Tensor, &Tensor)>,
     ) -> (Tensor, Tensor) {
-        let batch_size = input.borrow().shape[0];
+        let batch_size = input.borrow().shape.first().copied().unwrap_or(1);
 
         // Initialize hidden and cell states if not provided
-        let (h, c) = match state {
-            Some((h, c)) => (h.clone(), c.clone()),
-            None => {
-                let h = RawTensor::zeros(&[batch_size, self.hidden_size]);
-                let c = RawTensor::zeros(&[batch_size, self.hidden_size]);
-                (h, c)
-            }
+        let (h, c) = if let Some((h, c)) = state {
+            (h.clone(), c.clone())
+        } else {
+            let h = RawTensor::zeros(&[batch_size, self.hidden_size]);
+            let c = RawTensor::zeros(&[batch_size, self.hidden_size]);
+            (h, c)
         };
 
         // Compute gates: input @ weight_ih + h @ weight_hh + bias
@@ -126,7 +125,7 @@ impl LSTMCell {
 
         // Extract columns [start:end] for all rows
         // gates shape: [batch, 4*hidden_size]
-        let batch_size = gates.borrow().shape[0];
+        let batch_size = gates.borrow().shape.first().copied().unwrap_or(1);
         let data = &gates.borrow().data;
 
         let mut gate_data = Vec::with_capacity(batch_size * self.hidden_size);
@@ -184,12 +183,12 @@ impl Module for LSTMCell {
         if let Some(w) = state.get("weight_ih") {
             let mut t = self.weight_ih.borrow_mut();
             t.data = Storage::cpu(w.data.clone());
-            t.shape = w.shape.clone();
+            t.shape.clone_from(&w.shape);
         }
         if let Some(w) = state.get("weight_hh") {
             let mut t = self.weight_hh.borrow_mut();
             t.data = Storage::cpu(w.data.clone());
-            t.shape = w.shape.clone();
+            t.shape.clone_from(&w.shape);
         }
         if let Some(b) = state.get("bias_ih")
             && self.bias_ih.is_some()
@@ -197,7 +196,7 @@ impl Module for LSTMCell {
             let bias_tensor = self.bias_ih.as_ref().unwrap();
             let mut t = bias_tensor.borrow_mut();
             t.data = Storage::cpu(b.data.clone());
-            t.shape = b.shape.clone();
+            t.shape.clone_from(&b.shape);
         }
         if let Some(b) = state.get("bias_hh")
             && self.bias_hh.is_some()
@@ -205,7 +204,7 @@ impl Module for LSTMCell {
             let bias_tensor = self.bias_hh.as_ref().unwrap();
             let mut t = bias_tensor.borrow_mut();
             t.data = Storage::cpu(b.data.clone());
-            t.shape = b.shape.clone();
+            t.shape.clone_from(&b.shape);
         }
     }
 }

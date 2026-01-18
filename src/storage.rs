@@ -33,7 +33,7 @@ pub enum Storage {
         /// Data type
         dtype: DType,
         /// Cached CPU copy (for operations that need CPU access)
-        /// Uses RefCell for lazy population - populated on first CPU access
+        /// Uses `RefCell` for lazy population - populated on first CPU access
         cpu_cache: RefCell<Option<Vec<u8>>>,
     },
 }
@@ -187,7 +187,7 @@ impl Storage {
     pub fn as_f32_slice(&self) -> &[f32] {
         match self {
             Storage::Cpu { data, dtype } => {
-                assert_eq!(*dtype, DType::F32, "Storage dtype is {:?}, not F32", dtype);
+                assert_eq!(*dtype, DType::F32, "Storage dtype is {dtype:?}, not F32");
                 cast_slice(data)
             }
             #[cfg(feature = "gpu")]
@@ -196,7 +196,7 @@ impl Storage {
                 dtype,
                 cpu_cache,
             } => {
-                assert_eq!(*dtype, DType::F32, "Storage dtype is {:?}, not F32", dtype);
+                assert_eq!(*dtype, DType::F32, "Storage dtype is {dtype:?}, not F32");
                 // Ensure cache is populated (lazy transfer from GPU)
                 {
                     let mut cache = cpu_cache.borrow_mut();
@@ -394,7 +394,7 @@ impl Storage {
             }
             DType::U8 => {
                 let bytes = self.as_bytes();
-                bytes.iter().map(|&x| x as f32).collect()
+                bytes.iter().map(|&x| f32::from(x)).collect()
             }
             DType::Bool => {
                 let bytes = self.as_bytes();
@@ -412,6 +412,7 @@ impl Storage {
     }
 
     /// Convert storage to a different dtype
+    #[must_use]
     pub fn to_dtype(&self, target: DType) -> Storage {
         if self.dtype() == target {
             return self.clone();
@@ -424,7 +425,7 @@ impl Storage {
         match target {
             DType::F32 => Storage::cpu(f32_data),
             DType::F64 => {
-                let data: Vec<f64> = f32_data.iter().map(|&x| x as f64).collect();
+                let data: Vec<f64> = f32_data.iter().map(|&x| f64::from(x)).collect();
                 Storage::cpu_f64(data)
             }
             DType::F16 => {
@@ -462,10 +463,7 @@ impl Storage {
                 }
             }
             DType::Bool => {
-                let data: Vec<u8> = f32_data
-                    .iter()
-                    .map(|&x| if x != 0.0 { 1 } else { 0 })
-                    .collect();
+                let data: Vec<u8> = f32_data.iter().map(|&x| u8::from(x != 0.0)).collect();
                 Storage::Cpu {
                     data,
                     dtype: DType::Bool,
@@ -500,6 +498,7 @@ impl Storage {
     }
 
     /// Move to a specific device
+    #[must_use]
     pub fn to_device(&self, device: &Device) -> Self {
         match device {
             Device::CPU => {
@@ -534,7 +533,7 @@ impl Storage {
     pub fn gpu_buffer(&self) -> Option<&GpuBuffer> {
         match self {
             Storage::Gpu { buffer, .. } => Some(buffer.as_ref()),
-            _ => None,
+            Storage::Cpu { .. } => None,
         }
     }
 
@@ -599,50 +598,89 @@ impl std::ops::DerefMut for Storage {
 impl Index<usize> for Storage {
     type Output = f32;
     fn index(&self, index: usize) -> &Self::Output {
-        &self.as_f32_slice()[index]
+        self.as_f32_slice()
+            .get(index)
+            .expect("Index out of bounds in Storage")
     }
 }
 
 impl IndexMut<usize> for Storage {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self
-            .as_f32_slice_mut()
-            .expect("Mutable access requires F32 CPU storage")[index]
+        self.as_f32_slice_mut()
+            .expect("Mutable access requires F32 CPU storage")
+            .get_mut(index)
+            .expect("Index out of bounds in Storage")
     }
 }
 
 impl Index<Range<usize>> for Storage {
     type Output = [f32];
     fn index(&self, range: Range<usize>) -> &Self::Output {
-        &self.as_f32_slice()[range]
+        let slice = self.as_f32_slice();
+        assert!(
+            !(range.start > range.end || range.end > slice.len()),
+            "Index range out of bounds in Storage: {range:?}"
+        );
+        slice.get(range).expect("Range bounds check failed")
     }
 }
 
 impl Index<RangeFrom<usize>> for Storage {
     type Output = [f32];
     fn index(&self, range: RangeFrom<usize>) -> &Self::Output {
-        &self.as_f32_slice()[range]
+        let slice = self.as_f32_slice();
+        assert!(
+            range.start <= slice.len(),
+            "Index range out of bounds in Storage: {}..",
+            range.start
+        );
+        slice.get(range).expect("RangeFrom bounds check failed")
     }
 }
 
 impl Index<RangeTo<usize>> for Storage {
     type Output = [f32];
     fn index(&self, range: RangeTo<usize>) -> &Self::Output {
-        &self.as_f32_slice()[range]
+        let slice = self.as_f32_slice();
+        if range.end > slice.len() {
+            assert!(
+                range.end <= slice.len(),
+                "Index range out of bounds in Storage: ..{}",
+                range.end
+            );
+        }
+        slice.get(range).expect("RangeTo bounds check failed")
     }
 }
 
 impl Index<RangeToInclusive<usize>> for Storage {
     type Output = [f32];
     fn index(&self, range: RangeToInclusive<usize>) -> &Self::Output {
-        &self.as_f32_slice()[range]
+        let slice = self.as_f32_slice();
+        assert!(
+            range.end < slice.len(),
+            "Index range out of bounds in Storage: ..={}",
+            range.end
+        );
+        slice
+            .get(range)
+            .expect("RangeToInclusive bounds check failed")
     }
 }
 
 impl Index<RangeInclusive<usize>> for Storage {
     type Output = [f32];
     fn index(&self, range: RangeInclusive<usize>) -> &Self::Output {
-        &self.as_f32_slice()[range]
+        let slice = self.as_f32_slice();
+        let start = *range.start();
+        let end = *range.end();
+        assert!(
+            !(start > end || end >= slice.len()),
+            "Index range out of bounds in Storage: {range:?}"
+        );
+        slice
+            .get(range)
+            .expect("RangeInclusive bounds check failed")
     }
 }
 

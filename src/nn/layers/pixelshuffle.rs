@@ -2,7 +2,7 @@ use crate::io::StateDict;
 use crate::nn::Module;
 use crate::tensor::{Tensor, TensorOps};
 
-/// PixelShuffle: Rearranges elements from (B, C*r², H, W) to (B, C, H*r, W*r)
+/// `PixelShuffle`: Rearranges elements from (B, C*r², H, W) to (B, C, H*r, W*r)
 ///
 /// This layer implements the efficient sub-pixel convolution layer described in
 /// "Real-Time Single Image and Video Super-Resolution Using an Efficient
@@ -12,7 +12,7 @@ use crate::tensor::{Tensor, TensorOps};
 /// * `upscale_factor` - Factor to increase spatial resolution by
 ///
 /// # Shape
-/// - Input: (B, C*r², H, W) where r is the upscale_factor
+/// - Input: (B, C*r², H, W) where r is the `upscale_factor`
 /// - Output: (B, C, H*r, W*r)
 ///
 /// # Examples
@@ -29,19 +29,18 @@ pub struct PixelShuffle {
 }
 
 impl PixelShuffle {
-    /// Creates a new PixelShuffle layer with the given upscale factor
+    /// Creates a new `PixelShuffle` layer with the given upscale factor
     ///
     /// # Arguments
     /// * `upscale_factor` - Factor to increase spatial resolution by (must be > 0)
     ///
     /// # Panics
-    /// Panics if upscale_factor is 0
+    /// Panics if `upscale_factor` is 0
     #[must_use]
     pub fn new(upscale_factor: usize) -> Self {
         assert!(
             upscale_factor > 0,
-            "PixelShuffle: upscale_factor must be positive, got {}",
-            upscale_factor
+            "PixelShuffle: upscale_factor must be positive, got {upscale_factor}",
         );
         PixelShuffle { upscale_factor }
     }
@@ -56,14 +55,13 @@ impl Module for PixelShuffle {
         assert_eq!(
             shape.len(),
             4,
-            "PixelShuffle: expected 4D input (B, C, H, W), got shape {:?}",
-            shape
+            "PixelShuffle: expected 4D input (B, C, H, W), got shape {shape:?}",
         );
 
-        let batch_size = shape[0];
-        let in_channels = shape[1];
-        let height = shape[2];
-        let width = shape[3];
+        let batch_size = shape.first().copied().unwrap_or(1);
+        let in_channels = shape.get(1).copied().unwrap_or(1);
+        let height = shape.get(2).copied().unwrap_or(1);
+        let width = shape.get(3).copied().unwrap_or(1);
         let r = self.upscale_factor;
         let r_squared = r * r;
 
@@ -71,9 +69,7 @@ impl Module for PixelShuffle {
         assert_eq!(
             in_channels % r_squared,
             0,
-            "PixelShuffle: input channels ({}) must be divisible by upscale_factor² ({})",
-            in_channels,
-            r_squared
+            "PixelShuffle: input channels ({in_channels}) must be divisible by upscale_factor² ({r_squared})",
         );
 
         let out_channels = in_channels / r_squared;
