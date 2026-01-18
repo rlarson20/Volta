@@ -59,6 +59,7 @@ impl Storage {
     // ========== Constructors ==========
 
     /// Create new CPU storage from f32 data (default dtype)
+    #[must_use]
     pub fn cpu(data: Vec<f32>) -> Self {
         let bytes: Vec<u8> = cast_slice(&data).to_vec();
         Storage::Cpu {
@@ -68,11 +69,13 @@ impl Storage {
     }
 
     /// Create new CPU storage from f32 data with explicit dtype
+    #[must_use]
     pub fn cpu_f32(data: Vec<f32>) -> Self {
         Self::cpu(data)
     }
 
     /// Create new CPU storage from f64 data
+    #[must_use]
     pub fn cpu_f64(data: Vec<f64>) -> Self {
         let bytes: Vec<u8> = cast_slice(&data).to_vec();
         Storage::Cpu {
@@ -82,6 +85,7 @@ impl Storage {
     }
 
     /// Create new CPU storage from f16 data
+    #[must_use]
     pub fn cpu_f16(data: Vec<f16>) -> Self {
         let bytes: Vec<u8> = cast_slice(&data).to_vec();
         Storage::Cpu {
@@ -91,6 +95,7 @@ impl Storage {
     }
 
     /// Create new CPU storage from bf16 data
+    #[must_use]
     pub fn cpu_bf16(data: Vec<bf16>) -> Self {
         let bytes: Vec<u8> = cast_slice(&data).to_vec();
         Storage::Cpu {
@@ -100,6 +105,7 @@ impl Storage {
     }
 
     /// Create new CPU storage from raw bytes with a specific dtype
+    #[must_use]
     pub fn from_bytes(data: Vec<u8>, dtype: DType) -> Self {
         assert!(
             data.len().is_multiple_of(dtype.size_of()),
@@ -116,6 +122,7 @@ impl Storage {
     /// when accessed via `as_f32_slice()` or similar methods. This avoids
     /// duplicating data in CPU memory unnecessarily.
     #[cfg(feature = "gpu")]
+    #[must_use]
     pub fn gpu(data: Vec<f32>) -> Self {
         if let Some(buffer) = GpuBuffer::from_slice(&data) {
             Storage::Gpu {
@@ -145,6 +152,7 @@ impl Storage {
     }
 
     /// Create new zero-filled storage on the specified device
+    #[must_use]
     pub fn new_zeros(len: usize, device: &Device) -> Self {
         match device {
             Device::CPU => Storage::cpu(vec![0.0; len]),

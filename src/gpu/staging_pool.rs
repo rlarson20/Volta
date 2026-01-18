@@ -45,6 +45,7 @@ impl StagingBufferPool {
     ///
     /// # Arguments
     /// * `max_total` - Maximum number of concurrent staging buffers: default 64
+    #[must_use]
     pub fn new(max_total: usize) -> Self {
         Self {
             pools: Mutex::new(HashMap::new()),

@@ -1626,6 +1626,7 @@ impl GpuKernels {
     }
 
     /// Stride (subsample) tensor
+    #[must_use]
     pub fn stride(
         input: &GpuBuffer,
         old_shape: &[usize],
@@ -1651,6 +1652,7 @@ impl GpuKernels {
     // ===== MOVEMENT BACKWARD OPERATIONS =====
 
     /// Permute backward: apply inverse permutation to gradient
+    #[must_use]
     pub fn permute_backward(
         out_grad: &GpuBuffer,
         old_shape: &[usize],
@@ -1674,6 +1676,7 @@ impl GpuKernels {
     }
 
     /// Expand backward: sum gradients over broadcast dimensions
+    #[must_use]
     pub fn expand_backward(
         out_grad: &GpuBuffer,
         old_shape: &[usize],
@@ -1696,6 +1699,7 @@ impl GpuKernels {
     }
 
     /// Pad backward: extract center region from gradient (remove padding)
+    #[must_use]
     pub fn pad_backward(
         out_grad: &GpuBuffer,
         old_shape: &[usize],
@@ -1744,6 +1748,7 @@ impl GpuKernels {
     }
 
     /// Shrink backward: pad gradient back to original size
+    #[must_use]
     pub fn shrink_backward(
         out_grad: &GpuBuffer,
         old_shape: &[usize],
@@ -1773,6 +1778,7 @@ impl GpuKernels {
     }
 
     /// Stride backward: upsample gradient (inverse of striding/downsampling)
+    #[must_use]
     pub fn stride_backward(
         out_grad: &GpuBuffer,
         old_shape: &[usize],
@@ -1805,6 +1811,7 @@ impl GpuKernels {
     /// * `state1` - First state buffer: velocity (SGD) or m (Adam) (read/write)
     /// * `state2` - Second state buffer: v (Adam only), unused for SGD (read/write)
     /// * `opt_params` - Optimizer hyperparameters
+    #[must_use]
     pub fn optimizer_step(
         params: &GpuBuffer,
         grads: &GpuBuffer,
@@ -1898,6 +1905,7 @@ impl GpuKernels {
     /// # Returns
     /// A 2D matrix of shape (B*H_out*W_out, C*K_h*K_w)
     #[allow(clippy::too_many_arguments)]
+    #[must_use]
     pub fn im2col(
         input: &GpuBuffer,
         batch_size: usize,

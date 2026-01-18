@@ -90,6 +90,7 @@ impl Module for Sequential {
 
 impl Sequential {
     // Helper constructor for easier testing and building
+    #[must_use]
     pub fn new(layers: Vec<Box<dyn Module>>) -> Self {
         Sequential {
             layers: layers
@@ -100,11 +101,13 @@ impl Sequential {
     }
 
     /// Create a new SequentialBuilder for building models with named layers
+    #[must_use]
     pub fn builder() -> crate::nn::layers::SequentialBuilder {
         crate::nn::layers::SequentialBuilder::new()
     }
 
     /// Get a layer by index
+    #[must_use]
     pub fn get(&self, index: usize) -> Option<&dyn Module> {
         self.layers.get(index).map(|e| &*e.layer)
     }
@@ -112,6 +115,7 @@ impl Sequential {
     /// Get a layer by name
     ///
     /// Returns None if no layer with the given name exists
+    #[must_use]
     pub fn get_named(&self, name: &str) -> Option<&dyn Module> {
         self.layers
             .iter()
@@ -134,16 +138,19 @@ impl Sequential {
     /// Get the names of all layers
     ///
     /// Returns a Vec where Some(name) indicates a named layer and None indicates an unnamed layer
+    #[must_use]
     pub fn layer_names(&self) -> Vec<Option<&str>> {
         self.layers.iter().map(|e| e.name.as_deref()).collect()
     }
 
     /// Get the number of layers in the sequential
+    #[must_use]
     pub fn len(&self) -> usize {
         self.layers.len()
     }
 
     /// Check if the sequential is empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.layers.is_empty()
     }

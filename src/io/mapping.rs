@@ -27,6 +27,7 @@ pub struct StateDictMapper {
 
 impl StateDictMapper {
     /// Create a new empty mapper
+    #[must_use]
     pub fn new() -> Self {
         Self {
             transformations: Vec::new(),
@@ -193,6 +194,7 @@ impl StateDictMapper {
     /// Select only specific keys (for partial loading)
     ///
     /// All other keys are removed from the state dict.
+    #[must_use]
     pub fn select_keys(mut self, keys: Vec<String>) -> Self {
         self.transformations
             .push(Box::new(move |state: &mut StateDict| {
@@ -204,6 +206,7 @@ impl StateDictMapper {
     /// Exclude specific keys
     ///
     /// The specified keys are removed from the state dict.
+    #[must_use]
     pub fn exclude_keys(mut self, keys: Vec<String>) -> Self {
         self.transformations
             .push(Box::new(move |state: &mut StateDict| {
@@ -231,6 +234,7 @@ impl StateDictMapper {
     }
 
     /// Apply transformations and return new state dict
+    #[must_use]
     pub fn map(&self, mut state: StateDict) -> StateDict {
         self.apply(&mut state);
         state
@@ -249,6 +253,7 @@ impl Default for StateDictMapper {
 /// while Volta stores them as [in_features, out_features].
 ///
 /// This convenience function transposes all keys containing "weight".
+#[must_use]
 pub fn load_pytorch_linear_weights(state: StateDict) -> StateDict {
     StateDictMapper::new()
         .transpose_pattern("weight")
@@ -262,6 +267,7 @@ pub fn load_pytorch_linear_weights(state: StateDict) -> StateDict {
 /// # Arguments
 /// * `state` - The loaded state dict from HuggingFace
 /// * `model_prefix` - The prefix to strip (e.g., "model", "bert", "transformer")
+#[must_use]
 pub fn load_huggingface_weights(state: StateDict, model_prefix: &str) -> StateDict {
     StateDictMapper::new()
         .strip_prefix(format!("{}.", model_prefix))
@@ -282,6 +288,7 @@ pub fn load_huggingface_weights(state: StateDict, model_prefix: &str) -> StateDi
 ///     ("fc2.bias", "decoder.bias"),
 /// ]);
 /// ```
+#[must_use]
 pub fn create_key_mapping(mappings: Vec<(&str, &str)>) -> StateDictMapper {
     let mut mapper = StateDictMapper::new();
     for (from, to) in mappings {
@@ -293,6 +300,7 @@ pub fn create_key_mapping(mappings: Vec<(&str, &str)>) -> StateDictMapper {
 /// Load partial state dict (for transfer learning)
 ///
 /// Strips a prefix and keeps only those keys.
+#[must_use]
 pub fn load_partial(state: StateDict, prefix: &str) -> StateDict {
     StateDictMapper::new()
         .strip_prefix(format!("{}.", prefix))

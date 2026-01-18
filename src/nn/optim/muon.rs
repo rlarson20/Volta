@@ -15,6 +15,7 @@ pub struct Muon {
 }
 
 impl Muon {
+    #[must_use]
     pub fn new(
         params: Vec<Tensor>,
         lr: f32,

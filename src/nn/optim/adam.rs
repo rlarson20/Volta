@@ -13,6 +13,7 @@ pub struct Adam {
 }
 
 impl Adam {
+    #[must_use]
     pub fn new(
         params: Vec<Tensor>,
         lr: f32,

@@ -106,6 +106,7 @@ impl RawTensor {
     ///
     /// # Panics
     /// Panics if `data.len()` != `shape.product()`
+    #[must_use]
     pub fn new(data: Vec<f32>, shape: &[usize], requires_grad: bool) -> Tensor {
         assert_eq!(
             data.len(),
@@ -159,22 +160,26 @@ impl RawTensor {
     }
 
     /// Create a tensor filled with zeros
+    #[must_use]
     pub fn zeros(shape: &[usize]) -> Tensor {
         let size = shape.iter().product();
         Self::new(vec![0.0; size], shape, false)
     }
     /// Create a tensor filled with ones
+    #[must_use]
     pub fn ones(shape: &[usize]) -> Tensor {
         let size = shape.iter().product();
         Self::new(vec![1.0; size], shape, false)
     }
     /// Create a tensor with random values uniformly distributed in [0, 1)
+    #[must_use]
     pub fn rand(shape: &[usize]) -> Tensor {
         let size = shape.iter().product();
         let data: Vec<f32> = with_rng(|rng| (0..size).map(|_| rng.random::<f32>()).collect());
         Self::new(data, shape, false)
     }
     /// Create a tensor with values from standard normal distribution N(0, 1)
+    #[must_use]
     pub fn randn(shape: &[usize]) -> Tensor {
         let size = shape.iter().product();
         let normal = Normal::new(0.0, 1.0).unwrap();
@@ -195,6 +200,7 @@ impl RawTensor {
     /// limit = sqrt(6 / (`fan_in` + `fan_out`))
     ///
     /// This helps maintain gradient variance across layers.
+    #[must_use]
     pub fn xavier_uniform(shape: &[usize]) -> Tensor {
         let fan_in = shape[0];
         let fan_out = shape[1];
@@ -212,6 +218,7 @@ impl RawTensor {
     ///
     /// Draws samples from `N(0, sqrt(2 / fan_in))` where `fan_in`
     /// is the number of input connections.
+    #[must_use]
     pub fn he_initialization(shape: &[usize]) -> Tensor {
         assert!(
             !shape.is_empty(),
@@ -1074,6 +1081,7 @@ pub struct DataLoader {
 }
 
 impl DataLoader {
+    #[must_use]
     pub fn new(
         data: Vec<f32>,
         targets: Vec<f32>,
@@ -1124,6 +1132,7 @@ impl DataLoader {
     /// // Batches will now be automatically on GPU
     /// # }
     /// ```
+    #[must_use]
     pub fn with_device(mut self, device: crate::device::Device) -> Self {
         self.device = Some(device);
         self
@@ -1193,18 +1202,22 @@ impl Iterator for DataLoader {
 pub use RawTensor as new_tensor;
 
 // Tensor constructors
+#[must_use]
 pub fn zeros(shape: &[usize]) -> Tensor {
     RawTensor::zeros(shape)
 }
 
+#[must_use]
 pub fn ones(shape: &[usize]) -> Tensor {
     RawTensor::ones(shape)
 }
 
+#[must_use]
 pub fn rand(shape: &[usize]) -> Tensor {
     RawTensor::rand(shape)
 }
 
+#[must_use]
 pub fn randn(shape: &[usize]) -> Tensor {
     RawTensor::randn(shape)
 }

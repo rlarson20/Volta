@@ -24,6 +24,7 @@ impl SGD {
     /// * `lr` - Learning rate (typical: 0.01 to 0.1)
     /// * `momentum` - Momentum coefficient (typical: 0.9, or 0.0 for no momentum)
     /// * `weight_decay` - L2 penalty (typical: 1e-4, or 0.0 for none)
+    #[must_use]
     pub fn new(params: Vec<Tensor>, lr: f32, momentum: f32, weight_decay: f32) -> Self {
         // Create velocity state matching the device of each parameter
         let velocity = if momentum > 0.0 {

@@ -13,16 +13,19 @@ pub enum Device {
 
 impl Device {
     /// Check if this is a CPU device
+    #[must_use]
     pub fn is_cpu(&self) -> bool {
         matches!(self, Device::CPU)
     }
 
     /// Check if this is a GPU device
+    #[must_use]
     pub fn is_gpu(&self) -> bool {
         matches!(self, Device::GPU(_))
     }
 
     /// Get device name for display
+    #[must_use]
     pub fn name(&self) -> &str {
         match self {
             Device::CPU => "CPU",
@@ -49,6 +52,7 @@ impl Device {
     /// # }
     /// ```
     #[cfg(feature = "gpu")]
+    #[must_use]
     pub fn gpu() -> Option<Self> {
         crate::gpu::get_gpu_context().map(|ctx| Device::GPU(ctx.device_name().to_string()))
     }

@@ -13,6 +13,7 @@ impl Dropout {
     ///
     /// # Arguments
     /// * `p` - Probability of an element being zeroed out (default: 0.5)
+    #[must_use]
     pub fn new(p: f32) -> Self {
         assert!(
             (0.0..=1.0).contains(&p),

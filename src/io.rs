@@ -38,6 +38,7 @@ pub struct StateDictDiff {
 
 impl StateDictDiff {
     /// Returns true if there are no missing, unexpected, or shape‑mismatched keys.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.missing_keys.is_empty()
             && self.unexpected_keys.is_empty()
@@ -86,6 +87,7 @@ impl TensorData {
         }
     }
 
+    #[must_use]
     pub fn to_tensor(&self, requires_grad: bool) -> Tensor {
         crate::RawTensor::new(self.data.clone(), &self.shape, requires_grad)
     }
@@ -98,6 +100,7 @@ impl TensorData {
 /// - `loaded`   = state loaded from disk or another model
 ///
 /// This function **does not mutate any tensors** and is purely informational.
+#[must_use]
 pub fn diff_state_dict(expected: &StateDict, loaded: &StateDict) -> StateDictDiff {
     let mut diff = StateDictDiff::default();
 
@@ -171,7 +174,19 @@ fn safetensors_dtype_to_volta(dtype: safetensors::Dtype) -> DType {
         safetensors::Dtype::I64 => DType::I64,
         safetensors::Dtype::U8 => DType::U8,
         safetensors::Dtype::BOOL => DType::Bool,
-        _ => DType::F32, // Fallback for unsupported types
+        safetensors::Dtype::F4
+        | safetensors::Dtype::F6_E2M3
+        | safetensors::Dtype::F6_E3M2
+        | safetensors::Dtype::I8
+        | safetensors::Dtype::F8_E5M2
+        | safetensors::Dtype::F8_E4M3
+        | safetensors::Dtype::F8_E8M0
+        | safetensors::Dtype::I16
+        | safetensors::Dtype::U16
+        | safetensors::Dtype::U32
+        | safetensors::Dtype::C64
+        | safetensors::Dtype::U64
+        | _ => DType::F32, // Fallback for unsupported types
     }
 }
 
@@ -238,6 +253,7 @@ pub struct TypedTensorData {
 
 impl TypedTensorData {
     /// Convert to f32 TensorData
+    #[must_use]
     pub fn to_tensor_data(&self) -> TensorData {
         let storage = Storage::from_bytes(self.data.clone(), self.dtype);
         TensorData {
@@ -247,11 +263,13 @@ impl TypedTensorData {
     }
 
     /// Create a Storage with native dtype
+    #[must_use]
     pub fn to_storage(&self) -> Storage {
         Storage::from_bytes(self.data.clone(), self.dtype)
     }
 
     /// Get number of elements
+    #[must_use]
     pub fn numel(&self) -> usize {
         self.shape.iter().product()
     }

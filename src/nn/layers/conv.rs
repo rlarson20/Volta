@@ -36,6 +36,7 @@ impl GradFn for Im2colGradFn {
 }
 
 impl Conv2d {
+    #[must_use]
     pub fn new(
         in_ch: usize,
         out_ch: usize,
@@ -84,6 +85,7 @@ impl Conv2d {
     /// // Parameters are now on GPU
     /// # }
     /// ```
+    #[must_use]
     pub fn new_on_device(
         in_ch: usize,
         out_ch: usize,

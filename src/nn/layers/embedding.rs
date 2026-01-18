@@ -37,6 +37,7 @@ impl Embedding {
     /// Creates a new Embedding layer
     ///
     /// Weights are initialized uniformly in the range [-0.1, 0.1]
+    #[must_use]
     pub fn new(vocab_size: usize, embedding_dim: usize) -> Self {
         assert!(vocab_size > 0, "vocab_size must be positive");
         assert!(embedding_dim > 0, "embedding_dim must be positive");
@@ -69,6 +70,7 @@ impl Embedding {
     ///
     /// # Panics
     /// Panics if any index is >= vocab_size
+    #[must_use]
     pub fn forward(&self, indices: &[usize]) -> Tensor {
         assert!(!indices.is_empty(), "indices cannot be empty");
 
@@ -261,7 +263,7 @@ mod tests {
     fn test_embedding_invalid_index() {
         let embedding = Embedding::new(10, 4);
         let indices = vec![5, 15]; // 15 is out of bounds
-        embedding.forward(&indices);
+        let _ = embedding.forward(&indices);
     }
 
     #[test]

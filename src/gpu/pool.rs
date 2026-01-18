@@ -63,6 +63,7 @@ pub struct BufferPool {
 
 impl BufferPool {
     /// Create a new buffer pool with the given configuration
+    #[must_use]
     pub fn new(config: BufferPoolConfig) -> Self {
         BufferPool {
             buckets: Mutex::new(HashMap::new()),
@@ -72,6 +73,7 @@ impl BufferPool {
     }
 
     /// Create a buffer pool with default configuration
+    #[must_use]
     pub fn with_defaults() -> Self {
         Self::new(BufferPoolConfig::default())
     }
@@ -100,6 +102,7 @@ impl BufferPool {
     ///
     /// This rounds up to the next power of 2, ensuring all buffers in a bucket
     /// have the same size and can be safely reused.
+    #[must_use]
     pub fn allocation_size(min_size: usize) -> usize {
         if min_size == 0 {
             return 0;

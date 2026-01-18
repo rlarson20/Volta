@@ -53,6 +53,7 @@ pub enum ResourceStatus {
 ///     ResourceStatus::Healthy => {}
 /// }
 /// ```
+#[must_use]
 pub fn check_system_resources() -> ResourceStatus {
     let memory_ratio = get_process_memory_ratio();
     let pending_count = crate::gpu::gpu_pending_count();
@@ -148,6 +149,7 @@ fn get_process_memory_ratio() -> f64 {
 ///
 /// println!("Current memory usage: {}MB", get_process_memory_mb());
 /// ```
+#[must_use]
 pub fn get_process_memory_mb() -> usize {
     let ratio = get_process_memory_ratio();
     const SYSTEM_MEMORY_MB: usize = 24 * 1024;

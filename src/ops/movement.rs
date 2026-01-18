@@ -911,6 +911,7 @@ impl RawTensor {
     ///
     /// For shape [3, 4, 5], strides are [20, 5, 1]
     /// This tells us how many elements to skip to move one step in each dimension.
+    #[must_use]
     pub fn compute_strides(shape: &[usize]) -> Vec<usize> {
         let mut strides = vec![1; shape.len()];
         for i in (0..shape.len().saturating_sub(1)).rev() {

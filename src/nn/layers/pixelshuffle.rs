@@ -36,6 +36,7 @@ impl PixelShuffle {
     ///
     /// # Panics
     /// Panics if upscale_factor is 0
+    #[must_use]
     pub fn new(upscale_factor: usize) -> Self {
         assert!(
             upscale_factor > 0,

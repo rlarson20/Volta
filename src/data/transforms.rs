@@ -7,6 +7,7 @@ pub fn normalize(data: &mut [f32], mean: f32, std: f32) {
 
 /// Convert label indices to one-hot encoding
 /// labels: [0, 1, 2, ...] -> one-hot vectors concatenated
+#[must_use]
 pub fn to_one_hot(labels: &[u8], num_classes: usize) -> Vec<f32> {
     let mut one_hot = vec![0.0; labels.len() * num_classes];
 

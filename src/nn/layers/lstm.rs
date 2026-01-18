@@ -29,6 +29,7 @@ pub struct LSTMCell {
 
 impl LSTMCell {
     /// Create a new LSTM cell
+    #[must_use]
     pub fn new(input_size: usize, hidden_size: usize, bias: bool) -> Self {
         // Initialize weights using Xavier/Glorot uniform
         let weight_ih = RawTensor::xavier_uniform(&[4 * hidden_size, input_size]);

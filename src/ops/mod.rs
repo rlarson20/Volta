@@ -22,16 +22,19 @@ pub use unary::{UnaryGradFn, UnaryOp};
 
 impl RawTensor {
     /// Create empty (zero-filled) tensor
+    #[must_use]
     pub fn empty(shape: &[usize]) -> Tensor {
         let size = shape.iter().product();
         Self::new(vec![0.0; size], shape, false)
     }
     /// Create tensor filled with constant value
+    #[must_use]
     pub fn constant(value: f32, shape: &[usize]) -> Tensor {
         let size = shape.iter().product();
         Self::new(vec![value; size], shape, false)
     }
     /// Create tensor from existing Vec
+    #[must_use]
     pub fn from_vec(data: Vec<f32>, shape: &[usize]) -> Tensor {
         Self::new(data, shape, false)
     }

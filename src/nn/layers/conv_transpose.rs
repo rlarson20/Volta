@@ -18,6 +18,7 @@ pub struct ConvTranspose2d {
 }
 
 impl ConvTranspose2d {
+    #[must_use]
     pub fn new(
         in_ch: usize,
         out_ch: usize,

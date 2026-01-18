@@ -39,6 +39,7 @@ pub struct SystemMonitor {
 
 impl SystemMonitor {
     /// Create a new system monitor
+    #[must_use]
     pub fn new() -> Self {
         Self {
             start_time: Instant::now(),

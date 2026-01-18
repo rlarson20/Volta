@@ -47,6 +47,7 @@ pub fn get_gpu_context() -> Option<&'static GpuContext> {
 }
 
 /// Check if GPU is available
+#[must_use]
 pub fn is_gpu_available() -> bool {
     get_gpu_context().is_some()
 }
@@ -79,6 +80,7 @@ pub fn is_gpu_available() -> bool {
 ///     eprintln!("Warning: GPU sync timed out");
 /// }
 /// ```
+#[must_use]
 pub fn gpu_sync() -> bool {
     get_gpu_context().map(|ctx| ctx.sync()).unwrap_or(true) // No GPU = success
 }
@@ -99,6 +101,7 @@ pub fn gpu_sync() -> bool {
 /// let _ = t.relu();
 /// println!("Pending ops: {}", gpu_pending_count());
 /// ```
+#[must_use]
 pub fn gpu_pending_count() -> u32 {
     get_gpu_context()
         .map(|ctx| ctx.pending_count())
@@ -109,6 +112,7 @@ pub fn gpu_pending_count() -> u32 {
 ///
 /// Returns the number of pending submissions that triggers automatic
 /// synchronization. Returns 0 if GPU is not available.
+#[must_use]
 pub fn gpu_sync_threshold() -> u32 {
     get_gpu_context()
         .map(|ctx| ctx.sync_threshold())
@@ -136,6 +140,7 @@ pub fn gpu_sync_threshold() -> u32 {
 /// gpu_cleanup();
 /// println!("GPU memory released");
 /// ```
+#[must_use]
 pub fn gpu_cleanup() -> bool {
     if let Some(ctx) = get_gpu_context() {
         ctx.sync(); // Ensure all work complete before clearing
@@ -171,6 +176,7 @@ pub fn gpu_cleanup() -> bool {
 /// gpu_compact();
 /// println!("GPU memory compacted and released");
 /// ```
+#[must_use]
 pub fn gpu_compact() -> bool {
     if let Some(ctx) = get_gpu_context() {
         // Step 1: Clear buffer pools (drops wgpu::Buffer instances)
@@ -222,6 +228,7 @@ pub fn gpu_compact() -> bool {
 ///     println!("Pooled buffers: {}, Staging buffers: {}", buffers, staging);
 /// }
 /// ```
+#[must_use]
 pub fn gpu_pool_stats() -> Option<(usize, usize)> {
     get_gpu_context().map(|ctx| {
         let buffer_stats = ctx.buffer_pool().stats();

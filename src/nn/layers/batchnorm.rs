@@ -17,10 +17,12 @@ pub struct BatchNorm2d {
 }
 
 impl BatchNorm2d {
+    #[must_use]
     pub fn new(num_features: usize) -> Self {
         Self::new_with_params(num_features, 1e-5, 0.1)
     }
 
+    #[must_use]
     pub fn new_with_params(num_features: usize, eps: f32, momentum: f32) -> Self {
         let gamma = RawTensor::ones(&[num_features]);
         gamma.borrow_mut().requires_grad = true;
@@ -190,10 +192,12 @@ pub struct BatchNorm1d {
 }
 
 impl BatchNorm1d {
+    #[must_use]
     pub fn new(num_features: usize) -> Self {
         Self::new_with_params(num_features, 1e-5, 0.1)
     }
 
+    #[must_use]
     pub fn new_with_params(num_features: usize, eps: f32, momentum: f32) -> Self {
         let gamma = RawTensor::ones(&[num_features]);
         gamma.borrow_mut().requires_grad = true;

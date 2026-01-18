@@ -10,6 +10,7 @@ use crate::tensor::{Tensor, TensorOps};
 pub struct Flatten;
 
 impl Flatten {
+    #[must_use]
     pub fn new() -> Self {
         Flatten
     }

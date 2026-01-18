@@ -21,6 +21,7 @@ pub struct SequentialBuilder {
 
 impl SequentialBuilder {
     /// Create a new empty builder
+    #[must_use]
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
@@ -30,6 +31,7 @@ impl SequentialBuilder {
     /// Add an unnamed layer to the sequence
     ///
     /// The layer will be assigned a numeric index in the state dict
+    #[must_use]
     pub fn add_unnamed(mut self, layer: Box<dyn Module>) -> Self {
         self.entries.push(LayerEntry { name: None, layer });
         self
@@ -55,6 +57,7 @@ impl SequentialBuilder {
     }
 
     /// Build the Sequential model from the accumulated layers
+    #[must_use]
     pub fn build(self) -> Sequential {
         Sequential {
             layers: self.entries,

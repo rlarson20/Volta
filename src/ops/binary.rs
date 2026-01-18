@@ -391,6 +391,7 @@ impl RawTensor {
     /// Examples:
     /// - (3, 1) + (1, 4) -> (3, 4)
     /// - (5, 3, 1) + (1, 4) -> (5, 3, 4)
+    #[must_use]
     pub fn broadcast_shape(shape_a: &[usize], shape_b: &[usize]) -> Vec<usize> {
         let max_len = shape_a.len().max(shape_b.len());
         let mut result = vec![1; max_len];
@@ -555,7 +556,9 @@ impl RawTensor {
         // Mod and Cmplt are non-differentiable
         let requires_grad = match op {
             BinaryOp::Mod | BinaryOp::Cmplt => false,
-            _ => req_a || req_b,
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Max => {
+                req_a || req_b
+            }
         };
 
         // If both operands are already on the same GPU and we have a matching

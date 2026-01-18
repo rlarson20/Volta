@@ -35,6 +35,7 @@ pub enum DType {
 
 impl DType {
     /// Returns the size in bytes of a single element of this dtype
+    #[must_use]
     pub fn size_of(&self) -> usize {
         match self {
             DType::F16 | DType::BF16 => 2,
@@ -45,6 +46,7 @@ impl DType {
     }
 
     /// Returns the name of this dtype as a string
+    #[must_use]
     pub fn name(&self) -> &'static str {
         match self {
             DType::F16 => "f16",
@@ -59,17 +61,20 @@ impl DType {
     }
 
     /// Returns true if this is a floating-point type
+    #[must_use]
     pub fn is_float(&self) -> bool {
         matches!(self, DType::F16 | DType::BF16 | DType::F32 | DType::F64)
     }
 
     /// Returns true if this is an integer type
+    #[must_use]
     pub fn is_int(&self) -> bool {
         matches!(self, DType::I32 | DType::I64 | DType::U8)
     }
 
     /// Determines the result dtype when two dtypes are combined in an operation.
     /// Follows type promotion rules similar to PyTorch/NumPy.
+    #[must_use]
     pub fn promote(a: DType, b: DType) -> DType {
         use DType::*;
 

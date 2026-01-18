@@ -10,6 +10,7 @@ pub struct ProgressBar {
 
 impl ProgressBar {
     /// Create a new progress bar
+    #[must_use]
     pub fn new(total: usize, prefix: &str) -> Self {
         Self {
             total,

@@ -283,7 +283,9 @@ mod tests {
             TrendDirection::Increasing(rate) => {
                 assert!(rate > 0.0, "Expected positive rate");
             }
-            _ => panic!("Expected increasing trend"),
+            TrendDirection::Decreasing(_) | TrendDirection::Stable => {
+                panic!("Expected increasing trend")
+            }
         }
     }
 
@@ -295,7 +297,9 @@ mod tests {
             TrendDirection::Decreasing(rate) => {
                 assert!(rate > 0.0, "Expected positive rate");
             }
-            _ => panic!("Expected decreasing trend"),
+            TrendDirection::Increasing(_) | TrendDirection::Stable => {
+                panic!("Expected decreasing trend")
+            }
         }
     }
 
