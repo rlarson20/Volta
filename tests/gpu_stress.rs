@@ -41,7 +41,7 @@ mod gpu_stress_tests {
         let pending_before_sync = gpu_pending_count();
         println!("Before final sync, pending: {}", pending_before_sync);
 
-        gpu_sync();
+        let _ = gpu_sync();
 
         let pending_after_sync = gpu_pending_count();
         println!("After final sync, pending: {}", pending_after_sync);
@@ -60,7 +60,7 @@ mod gpu_stress_tests {
         let t = gpu_tensor(1024);
 
         // Start clean
-        gpu_sync();
+        let _ = gpu_sync();
         assert_eq!(gpu_pending_count(), 0);
 
         // Do 10 operations
@@ -76,7 +76,7 @@ mod gpu_stress_tests {
             pending
         );
 
-        gpu_sync();
+        let _ = gpu_sync();
     }
 
     /// Test 3: Rapid buffer allocation and deallocation
@@ -100,7 +100,7 @@ mod gpu_stress_tests {
             println!("After operations, pending: {}", gpu_pending_count());
 
             // Sync and drop (tensors go back to pool)
-            gpu_sync();
+            let _ = gpu_sync();
             drop(tensors);
         }
     }
@@ -117,7 +117,7 @@ mod gpu_stress_tests {
         let t = gpu_tensor(256);
 
         // Start clean
-        gpu_sync();
+        let _ = gpu_sync();
         assert_eq!(gpu_pending_count(), 0);
 
         // Do threshold + 5 operations
@@ -143,7 +143,7 @@ mod gpu_stress_tests {
             final_pending
         );
 
-        gpu_sync();
+        let _ = gpu_sync();
     }
 
     /// Test 5: Stress test - long chain of operations
@@ -165,7 +165,7 @@ mod gpu_stress_tests {
         }
 
         println!("Final pending before sync: {}", gpu_pending_count());
-        gpu_sync();
+        let _ = gpu_sync();
         println!("After sync: {}", gpu_pending_count());
     }
 
@@ -178,7 +178,7 @@ mod gpu_stress_tests {
         let medium = gpu_tensor(1024);
         let large = gpu_tensor(16384);
 
-        gpu_sync();
+        let _ = gpu_sync();
 
         for i in 0..50 {
             let _ = small.relu();
@@ -190,7 +190,7 @@ mod gpu_stress_tests {
             }
         }
 
-        gpu_sync();
+        let _ = gpu_sync();
     }
 
     /// Test 7: Copy operations tracking
@@ -201,7 +201,7 @@ mod gpu_stress_tests {
         let data: Vec<f32> = (0..1024).map(|i| i as f32).collect();
         let t = RawTensor::from_vec(data.clone(), &[1024]).to_device(Device::gpu().unwrap());
 
-        gpu_sync();
+        let _ = gpu_sync();
         let before = gpu_pending_count();
         println!("Before reading back: pending = {}", before);
 
@@ -214,7 +214,7 @@ mod gpu_stress_tests {
         // Verify data is correct
         assert_eq!(result.len(), data.len());
 
-        gpu_sync();
+        let _ = gpu_sync();
     }
 
     /// Test 8: Staging buffer pooling
@@ -246,7 +246,7 @@ mod gpu_stress_tests {
             );
         }
 
-        gpu_sync();
+        let _ = gpu_sync();
         println!("Staging buffer pool test complete");
     }
 
@@ -357,7 +357,7 @@ mod gpu_stress_tests {
             }
         }
 
-        gpu_sync();
+        let _ = gpu_sync();
         println!("Final memory: {}MB", get_process_memory_mb());
     }
 
@@ -389,7 +389,7 @@ mod gpu_stress_tests {
             if iteration % 10 == 0 {
                 match check_system_resources() {
                     ResourceStatus::Critical(msg) => {
-                        gpu_sync(); // Try to clean up before aborting
+                        let _ = gpu_sync(); // Try to clean up before aborting
                         panic!("Test aborted at iteration {} - {}", iteration, msg);
                     }
                     ResourceStatus::Warning(msg) => {
@@ -400,7 +400,7 @@ mod gpu_stress_tests {
             }
         }
 
-        gpu_sync();
+        let _ = gpu_sync();
     }
 
     /// Test 12: System monitor profiling
@@ -430,7 +430,7 @@ mod gpu_stress_tests {
             }
         }
 
-        gpu_sync();
+        let _ = gpu_sync();
         monitor.record_sync();
         monitor.checkpoint("operations_complete");
 
@@ -483,7 +483,7 @@ mod gpu_stress_tests {
             }
         }
 
-        gpu_sync();
+        let _ = gpu_sync();
 
         // Get trend data
         let trends = ews.trends();
@@ -560,7 +560,7 @@ mod gpu_stress_tests {
             }
         }
 
-        gpu_sync();
+        let _ = gpu_sync();
         monitor.record_sync();
         monitor.checkpoint("test_complete");
 

@@ -96,7 +96,7 @@ fn bench_matmul_cpu_vs_gpu(c: &mut Criterion) {
             setup_tensors.push(tensor_b.clone());
             b.iter(|| {
                 let result = black_box(&a).matmul(black_box(&tensor_b));
-                gpu_sync();
+                let _ = gpu_sync();
                 result
             })
         });
@@ -151,7 +151,7 @@ fn bench_matmul_cpu_vs_gpu(c: &mut Criterion) {
             buffers, staging
         );
     }
-    gpu_compact();
+    let _ = gpu_compact();
 
     // Cooldown period to allow GPU to fully drain command queues
     // This prevents accumulated stress from affecting subsequent benchmarks
@@ -226,7 +226,7 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
             setup_tensors.push(tensor_b.clone());
             b.iter(|| {
                 let result = black_box(&a).add(black_box(&tensor_b));
-                gpu_sync();
+                let _ = gpu_sync();
                 result
             })
         });
@@ -247,7 +247,7 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
             setup_tensors.push(tensor_b.clone());
             b.iter(|| {
                 let result = black_box(&a).elem_mul(black_box(&tensor_b));
-                gpu_sync();
+                let _ = gpu_sync();
                 result
             })
         });
@@ -302,7 +302,7 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
             buffers, staging
         );
     }
-    gpu_compact();
+    let _ = gpu_compact();
 
     // Brief cooldown to ensure clean state for next benchmark
     std::thread::sleep(std::time::Duration::from_millis(200));
@@ -372,7 +372,7 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
             setup_tensors.push(a.clone());
             b.iter(|| {
                 let result = black_box(&a).exp();
-                gpu_sync();
+                let _ = gpu_sync();
                 result
             })
         });
@@ -390,7 +390,7 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
             setup_tensors.push(a.clone());
             b.iter(|| {
                 let result = black_box(&a).relu();
-                gpu_sync();
+                let _ = gpu_sync();
                 result
             })
         });
@@ -445,7 +445,7 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
             buffers, staging
         );
     }
-    gpu_compact();
+    let _ = gpu_compact();
 
     // Brief cooldown to ensure clean state for next benchmark
     std::thread::sleep(std::time::Duration::from_millis(200));
@@ -515,7 +515,7 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
             setup_tensors.push(a.clone());
             b.iter(|| {
                 let result = black_box(&a).sum();
-                gpu_sync();
+                let _ = gpu_sync();
                 result
             })
         });
@@ -533,7 +533,7 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
             setup_tensors.push(a.clone());
             b.iter(|| {
                 let result = black_box(&a).mean();
-                gpu_sync();
+                let _ = gpu_sync();
                 result
             })
         });
@@ -588,7 +588,7 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
             buffers, staging
         );
     }
-    gpu_compact();
+    let _ = gpu_compact();
 
     // Brief cooldown to ensure clean state for next benchmark
     std::thread::sleep(std::time::Duration::from_millis(200));
@@ -648,7 +648,7 @@ fn bench_memory_transfer(c: &mut Criterion) {
             let a = random_tensor(*s);
             b.iter(|| {
                 let result = black_box(&a).to_device(Device::gpu().unwrap());
-                gpu_sync(); // Ensure transfer completes for accurate timing
+                let _ = gpu_sync(); // Ensure transfer completes for accurate timing
                 result
             })
         });
@@ -689,7 +689,7 @@ fn bench_memory_transfer(c: &mut Criterion) {
             buffers, staging
         );
     }
-    gpu_compact();
+    let _ = gpu_compact();
 
     // Brief cooldown to ensure clean state for next benchmark
     std::thread::sleep(std::time::Duration::from_millis(200));
@@ -887,7 +887,7 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
             buffers, staging
         );
     }
-    gpu_compact();
+    let _ = gpu_compact();
 
     // Brief cooldown to ensure clean state for next benchmark
     std::thread::sleep(std::time::Duration::from_millis(200));

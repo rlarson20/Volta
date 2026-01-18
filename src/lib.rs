@@ -387,7 +387,7 @@ mod misc_tests {
     #[test]
     #[should_panic(expected = "Cannot broadcast")]
     fn test_broadcast_incompatible() {
-        RawTensor::broadcast_shape(&[3, 2], &[4, 3]);
+        let _ = RawTensor::broadcast_shape(&[3, 2], &[4, 3]);
     }
 
     #[test]

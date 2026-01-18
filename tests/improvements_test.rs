@@ -58,7 +58,7 @@ fn test_tensor_size_validation() {
     // Test that very large tensors are rejected
     let large_data = vec![0.0; 101_000_000]; // Over limit
     let result = std::panic::catch_unwind(|| {
-        RawTensor::new(large_data, &[101_000_000], false);
+        let _ = RawTensor::new(large_data, &[101_000_000], false);
     });
     assert!(result.is_err());
 }
@@ -69,8 +69,8 @@ fn test_conv2d_safety_improvements() {
 
     // Test that invalid parameters are caught
     let result = std::panic::catch_unwind(|| {
-        Conv2d::new(3, 16, 5, 1, 1, true); // Valid
-        Conv2d::new(3, 16, 0, 1, 1, true); // Invalid kernel size 0
+        let _ = Conv2d::new(3, 16, 5, 1, 1, true); // Valid
+        let _ = Conv2d::new(3, 16, 0, 1, 1, true); // Invalid kernel size 0
     });
     assert!(result.is_err()); // Should panic on invalid kernel size
 }
@@ -186,7 +186,7 @@ fn test_broadcast_safety_improvements() {
     let _result = std::panic::catch_unwind(|| {
         let a = RawTensor::new(vec![1.0, 2.0], &[2], true);
         let b = RawTensor::new(vec![3.0, 4.0], &[2], true);
-        RawTensor::broadcast_shape(&[2], &[3]); // Incompatible
+        let _ = RawTensor::broadcast_shape(&[2], &[3]); // Incompatible
         a.add(&b);
     });
     // Should handle gracefully
