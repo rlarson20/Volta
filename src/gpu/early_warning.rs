@@ -58,6 +58,7 @@ impl EarlyWarningSystem {
     ///
     /// # Arguments
     /// * `max_history` - Maximum number of samples to keep (default: 10)
+    #[must_use]
     pub fn new() -> Self {
         Self::with_capacity(10)
     }
@@ -66,6 +67,7 @@ impl EarlyWarningSystem {
     ///
     /// # Arguments
     /// * `max_history` - Maximum number of samples to keep
+    #[must_use]
     pub fn with_capacity(max_history: usize) -> Self {
         Self {
             memory_trend: VecDeque::with_capacity(max_history),
@@ -129,7 +131,9 @@ impl EarlyWarningSystem {
             TrendDirection::Increasing(rate) if rate > 0.08 => {
                 HealthStatus::Warning(format!("Memory increasing: {:.1}%/sample", rate * 100.0))
             }
-            _ => HealthStatus::Healthy,
+            TrendDirection::Increasing(_)
+            | TrendDirection::Decreasing(_)
+            | TrendDirection::Stable => HealthStatus::Healthy,
         }
     }
 
@@ -149,7 +153,9 @@ impl EarlyWarningSystem {
                 "Pending ops increasing: {:.1}%/sample",
                 rate * 100.0
             )),
-            _ => HealthStatus::Healthy,
+            TrendDirection::Increasing(_)
+            | TrendDirection::Decreasing(_)
+            | TrendDirection::Stable => HealthStatus::Healthy,
         }
     }
 
@@ -167,6 +173,7 @@ impl EarlyWarningSystem {
     ///
     /// Returns the current memory and pending operation trends for
     /// debugging and analysis.
+    #[must_use]
     pub fn trends(&self) -> TrendData {
         TrendData {
             memory_samples: self.memory_trend.iter().copied().collect(),

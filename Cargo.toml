@@ -72,3 +72,12 @@ harness = false
 [[bench]]
 name = "gpu_comparison"
 harness = false
+
+# Defensive lints: Source: https://corrode.dev/blog/defensive-programming/
+[lints.clippy]
+# indexing_slicing = "deny"          # Prevents direct indexing into slices and vectors
+fallible_impl_from = "deny"        # Warns about `From` implementations that can panic and should be `TryFrom` instead.
+wildcard_enum_match_arm = "deny"   # Disallows wildcard `_` patterns.
+unneeded_field_pattern = "deny"    # Identifies when you’re ignoring too many struct fields with `..` unnecessarily.
+fn_params_excessive_bools = "deny" # Warns when a function has too many boolean parameters (4 or more by default).
+must_use_candidate = "deny"        # Suggests adding `#[must_use]` to types that are good candidates for it.

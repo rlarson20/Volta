@@ -155,7 +155,7 @@ fn reduce_scalar(input: &GpuBuffer, pipeline: &wgpu::ComputePipeline) -> Option<
     ctx.maybe_sync();
 
     // Read back the result
-    Some(result_buffer.to_vec()[0])
+    result_buffer.to_vec().first().copied()
 }
 
 /// High-level interface for GPU kernel execution
@@ -171,6 +171,7 @@ impl GpuKernels {
     ///
     /// # Returns
     /// A new buffer containing the result
+    #[must_use]
     pub fn binary_op(a: &GpuBuffer, b: &GpuBuffer, op: &str) -> Option<GpuBuffer> {
         assert_eq!(a.len(), b.len(), "Buffer sizes must match for binary ops");
 
@@ -241,6 +242,7 @@ impl GpuKernels {
     }
 
     /// Execute a unary operation
+    #[must_use]
     pub fn unary_op(input: &GpuBuffer, op: &str) -> Option<GpuBuffer> {
         let ctx = get_gpu_context()?;
         let result = GpuBuffer::zeros(input.len())?;
@@ -314,6 +316,7 @@ impl GpuKernels {
     ///
     /// # Returns
     /// A new buffer containing the gradient with respect to x
+    #[must_use]
     pub fn unary_backward(out_grad: &GpuBuffer, x: &GpuBuffer, op: &str) -> Option<GpuBuffer> {
         assert_eq!(
             out_grad.len(),
@@ -396,6 +399,7 @@ impl GpuKernels {
     ///
     /// # Returns
     /// A new buffer containing the gradient with respect to a
+    #[must_use]
     pub fn binary_backward_a(
         out_grad: &GpuBuffer,
         a: &GpuBuffer,
@@ -485,6 +489,7 @@ impl GpuKernels {
     ///
     /// # Returns
     /// A new buffer containing the gradient with respect to b
+    #[must_use]
     pub fn binary_backward_b(
         out_grad: &GpuBuffer,
         a: &GpuBuffer,
@@ -580,6 +585,7 @@ impl GpuKernels {
     ///
     /// # Returns
     /// A tuple of (gradient wrt a, gradient wrt b)
+    #[must_use]
     pub fn binary_backward_broadcast(
         out_grad: &GpuBuffer,
         a: &GpuBuffer,
@@ -721,6 +727,7 @@ impl GpuKernels {
     ///
     /// # Returns
     /// A tuple of (gradient wrt a, gradient wrt b)
+    #[must_use]
     pub fn binary_backward_broadcast_safe(
         out_grad: &GpuBuffer,
         a: &GpuBuffer,
@@ -930,6 +937,7 @@ impl GpuKernels {
     /// * `m` - Number of rows in A
     /// * `k` - Number of columns in A / rows in B
     /// * `n` - Number of columns in B
+    #[must_use]
     pub fn matmul(a: &GpuBuffer, b: &GpuBuffer, m: usize, k: usize, n: usize) -> Option<GpuBuffer> {
         assert_eq!(a.len(), m * k, "A buffer size doesn't match dimensions");
         assert_eq!(b.len(), k * n, "B buffer size doesn't match dimensions");
@@ -1017,6 +1025,7 @@ impl GpuKernels {
     /// * `m` - Number of rows in grad / rows in dA
     /// * `k` - Number of columns in grad / rows in B
     /// * `n` - Number of columns in B / columns in grad
+    #[must_use]
     pub fn matmul_backward_a(
         grad: &GpuBuffer,
         b: &GpuBuffer,
@@ -1114,6 +1123,7 @@ impl GpuKernels {
     /// * `m` - Number of rows in A / rows in grad
     /// * `k` - Number of columns in A / rows in dB
     /// * `n` - Number of columns in grad / columns in B
+    #[must_use]
     pub fn matmul_backward_b(
         a: &GpuBuffer,
         grad: &GpuBuffer,
@@ -1201,24 +1211,28 @@ impl GpuKernels {
     }
 
     /// Sum all elements in a buffer
+    #[must_use]
     pub fn sum(input: &GpuBuffer) -> Option<f32> {
         let ctx = get_gpu_context()?;
         reduce_scalar(input, &ctx.pipelines().sum_reduce)
     }
 
     /// Find the maximum value in a buffer
+    #[must_use]
     pub fn max(input: &GpuBuffer) -> Option<f32> {
         let ctx = get_gpu_context()?;
         reduce_scalar(input, &ctx.pipelines().max_reduce)
     }
 
     /// Compute the mean of all elements in a buffer
+    #[must_use]
     pub fn mean(input: &GpuBuffer) -> Option<f32> {
         let ctx = get_gpu_context()?;
         reduce_scalar(input, &ctx.pipelines().mean_reduce)
     }
 
     /// Sum backward: broadcast scalar gradient to all elements
+    #[must_use]
     pub fn sum_backward(grad: f32, input_size: usize) -> Option<GpuBuffer> {
         let ctx = get_gpu_context()?;
         let result = GpuBuffer::zeros(input_size)?;
@@ -1305,6 +1319,7 @@ impl GpuKernels {
     }
 
     /// Mean backward: broadcast scalar gradient / count to all elements
+    #[must_use]
     pub fn mean_backward(grad: f32, input_size: usize) -> Option<GpuBuffer> {
         let ctx = get_gpu_context()?;
         let result = GpuBuffer::zeros(input_size)?;
@@ -1391,6 +1406,7 @@ impl GpuKernels {
     }
 
     /// Max backward: sparse gradient - only max element receives gradient
+    #[must_use]
     pub fn max_backward(grad: f32, input_size: usize, max_index: usize) -> Option<GpuBuffer> {
         let ctx = get_gpu_context()?;
         let result = GpuBuffer::zeros(input_size)?;
@@ -1480,6 +1496,7 @@ impl GpuKernels {
     }
 
     /// Permute tensor axes
+    #[must_use]
     pub fn permute(
         input: &GpuBuffer,
         old_shape: &[usize],
@@ -1503,6 +1520,7 @@ impl GpuKernels {
     }
 
     /// Expand (broadcast) tensor to larger shape
+    #[must_use]
     pub fn expand(
         input: &GpuBuffer,
         old_shape: &[usize],
@@ -1531,6 +1549,7 @@ impl GpuKernels {
     }
 
     /// Pad tensor with zeros
+    #[must_use]
     pub fn pad(
         input: &GpuBuffer,
         old_shape: &[usize],
@@ -1580,6 +1599,7 @@ impl GpuKernels {
     }
 
     /// Shrink tensor to subregion
+    #[must_use]
     pub fn shrink(
         input: &GpuBuffer,
         old_shape: &[usize],

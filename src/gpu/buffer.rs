@@ -36,6 +36,7 @@ impl GpuBuffer {
     /// Create a new GPU buffer from CPU data
     ///
     /// This copies the data from CPU to GPU memory.
+    #[must_use]
     pub fn from_slice(data: &[f32]) -> Option<Self> {
         let ctx = get_gpu_context()?;
         let byte_size = std::mem::size_of_val(data);
@@ -83,6 +84,7 @@ impl GpuBuffer {
     /// First attempts to acquire a buffer from the pool for reuse.
     /// If none available, allocates a new buffer with power-of-2 size
     /// for efficient pooling.
+    #[must_use]
     pub fn zeros(len: usize) -> Option<Self> {
         let ctx = get_gpu_context()?;
         let byte_size = len * std::mem::size_of::<f32>();
@@ -129,6 +131,7 @@ impl GpuBuffer {
     /// Copy data from GPU back to CPU
     ///
     /// This is a relatively expensive operation - try to minimize transfers!
+    #[must_use]
     pub fn to_vec(&self) -> Vec<f32> {
         let ctx = get_gpu_context().expect("GPU context should exist if buffer exists");
         let buffer = self.buffer.as_ref().expect("Buffer should not be taken");
@@ -209,16 +212,19 @@ impl GpuBuffer {
     }
 
     /// Get the underlying wgpu buffer (for use in compute passes)
+    #[must_use]
     pub fn buffer(&self) -> &wgpu::Buffer {
         self.buffer.as_ref().expect("Buffer should not be taken")
     }
 
     /// Get the number of elements
+    #[must_use]
     pub fn len(&self) -> usize {
         self.len
     }
 
     /// Check if buffer is empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -228,6 +234,7 @@ impl GpuBuffer {
     /// # Arguments
     /// * `offset` - Starting element offset in this buffer
     /// * `len` - Number of elements to copy
+    #[must_use]
     pub fn copy_region(&self, offset: usize, len: usize) -> Option<Self> {
         let ctx = get_gpu_context()?;
         let src_buffer = self.buffer.as_ref().expect("Buffer should not be taken");

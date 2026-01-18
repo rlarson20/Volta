@@ -46,11 +46,7 @@ impl Clone for Storage {
                 dtype: *dtype,
             },
             #[cfg(feature = "gpu")]
-            Storage::Gpu {
-                buffer,
-                dtype,
-                cpu_cache: _,
-            } => Storage::Gpu {
+            Storage::Gpu { buffer, dtype, .. } => Storage::Gpu {
                 buffer: buffer.clone(),
                 dtype: *dtype,
                 cpu_cache: RefCell::new(None),
@@ -337,9 +333,7 @@ impl Storage {
             Storage::Cpu { data, .. } => data,
             #[cfg(feature = "gpu")]
             Storage::Gpu {
-                buffer,
-                cpu_cache,
-                dtype: _,
+                buffer, cpu_cache, ..
             } => {
                 // Ensure cache is populated (lazy transfer from GPU)
                 {
