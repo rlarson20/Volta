@@ -186,7 +186,11 @@ mod unary_tests {
         z.backward();
 
         // ∂z/∂x = ∂z/∂y * ∂y/∂x = 2y * 1/(2√x) = 2*2 * 1/4 = 1.0
-        assert_relative_eq!(x.grad().unwrap()[0], 1.0, epsilon = 1e-6);
+        assert_relative_eq!(
+            x.grad().unwrap().first().copied().unwrap_or(f32::NAN),
+            1.0,
+            epsilon = 1e-6
+        );
     }
 
     #[test]
@@ -195,9 +199,17 @@ mod unary_tests {
         let y = x.exp2().log2(); // should recover x
         y.backward();
 
-        assert_relative_eq!(y.borrow().data[0], 2.0, epsilon = 1e-6);
+        assert_relative_eq!(
+            y.borrow().data.first().copied().unwrap_or(f32::NAN),
+            2.0,
+            epsilon = 1e-6
+        );
         // Chain rule: ∂(log2(2^x))/∂x = 1
-        assert_relative_eq!(x.grad().unwrap()[0], 1.0, epsilon = 1e-6);
+        assert_relative_eq!(
+            x.grad().unwrap().first().copied().unwrap_or(f32::NAN),
+            1.0,
+            epsilon = 1e-6
+        );
     }
 }
 
@@ -566,8 +578,8 @@ mod misc_tests {
 
         assert_eq!(z.borrow().shape, vec![2, 2, 2]);
         // dot product of two [1,1,1] vecs is 3.0
-        assert_eq!(z.borrow().data[0], 3.0);
-        assert_eq!(z.borrow().data[7], 3.0);
+        assert_eq!(z.borrow().data.first().copied().unwrap_or(f32::NAN), 3.0);
+        assert_eq!(z.borrow().data.get(7).copied().unwrap_or(f32::NAN), 3.0);
     }
     #[test]
     #[allow(clippy::identity_op)]
@@ -588,7 +600,7 @@ mod misc_tests {
         assert_eq!(c.borrow().shape, vec![2, 2, 2, 1]);
 
         // Values: Row (1,1,1) dot Col (2,2,2) = 3*2 = 6
-        assert_eq!(c.borrow().data[0], 6.0);
+        assert_eq!(c.borrow().data.first().copied().unwrap_or(f32::NAN), 6.0);
 
         let loss = c.sum();
         loss.backward();
@@ -1016,7 +1028,7 @@ mod misc_tests {
         model.forward(&x).sum().backward();
 
         // Params have grads
-        assert!(model.parameters()[0].grad().is_some());
+        assert!(model.parameters().first().unwrap().grad().is_some());
 
         model.zero_grad();
 
@@ -1042,7 +1054,7 @@ mod misc_tests {
         // Initialize deliberately far from solution (w=0)
         let layer = Linear::new(1, 1, false);
         // Force weight to 0.0
-        layer.weight.borrow_mut().data[0] = 0.0;
+        *layer.weight.borrow_mut().data.first_mut().unwrap() = 0.0;
 
         let model = Sequential::new(vec![Box::new(layer)]);
 
@@ -1059,7 +1071,7 @@ mod misc_tests {
             loss.backward();
             opt.step();
 
-            losses.push(loss.borrow().data[0]);
+            losses.push(loss.borrow().data.first().copied().unwrap_or(f32::NAN));
         }
 
         let final_loss = *losses.last().unwrap();
@@ -1109,7 +1121,12 @@ mod misc_tests {
 
             // Return final loss
             let pred = model.forward(&x).reshape(&[4]);
-            RawTensor::mse_loss(&pred, &y).borrow().data[0]
+            RawTensor::mse_loss(&pred, &y)
+                .borrow()
+                .data
+                .first()
+                .copied()
+                .unwrap_or(f32::NAN)
         }
 
         let adam_loss = train_model(true);
@@ -1273,9 +1290,9 @@ mod misc_tests {
         // Should have gamma and beta
         assert_eq!(params.len(), 2);
         // gamma shape [16]
-        assert_eq!(params[0].borrow().shape, vec![16]);
+        assert_eq!(params.first().unwrap().borrow().shape, vec![16]);
         // beta shape [16]
-        assert_eq!(params[1].borrow().shape, vec![16]);
+        assert_eq!(params.get(1).unwrap().borrow().shape, vec![16]);
     }
 
     #[test]
@@ -1376,7 +1393,9 @@ mod misc_tests {
         let grad_data = grad.unwrap();
         // Each embedding contributes 1.0 per dimension from sum
         // Index 3 appears twice, so should have accumulated grad of 2.0 per dim
-        let grad_at_idx3_sum: f32 = (0..16).map(|d| grad_data[3 * 16 + d]).sum();
+        let grad_at_idx3_sum: f32 = (0..16)
+            .map(|d| grad_data.get(3 * 16 + d).copied().unwrap_or(f32::NAN))
+            .sum();
         let expected_sum = 2.0 * 16.0; // 2 occurrences * 16 dimensions
         assert!(
             (grad_at_idx3_sum - expected_sum).abs() < 1e-4,
@@ -1398,7 +1417,7 @@ mod misc_tests {
         let grad = embedding.weight.grad().unwrap();
         // Index 2 should have grad of 3.0 per dimension (appears 3 times)
         for d in 0..4 {
-            let grad_val = grad[2 * 4 + d];
+            let grad_val = grad.get(2 * 4 + d).copied().unwrap_or(f32::NAN);
             assert!(
                 (grad_val - 3.0).abs() < 1e-5,
                 "Expected grad 3.0 for index 2, got {}",
@@ -1408,7 +1427,7 @@ mod misc_tests {
 
         // Index 5 should have grad of 1.0 per dimension (appears once)
         for d in 0..4 {
-            let grad_val = grad[5 * 4 + d];
+            let grad_val = grad.get(5 * 4 + d).copied().unwrap_or(f32::NAN);
             assert!(
                 (grad_val - 1.0).abs() < 1e-5,
                 "Expected grad 1.0 for index 5, got {}",
@@ -1494,8 +1513,8 @@ mod axis_reduce_tests {
 
         // Each row should sum to 1.0
         let data = y.borrow();
-        let row0_sum: f32 = data.data[0..3].iter().sum();
-        let row1_sum: f32 = data.data[3..6].iter().sum();
+        let row0_sum: f32 = data.data.get(0..3).unwrap().iter().sum();
+        let row1_sum: f32 = data.data.get(3..6).unwrap().iter().sum();
 
         approx::assert_relative_eq!(row0_sum, 1.0, epsilon = 1e-6);
         approx::assert_relative_eq!(row1_sum, 1.0, epsilon = 1e-6);
@@ -1519,7 +1538,7 @@ mod axis_reduce_tests {
 
         // Loss should be positive scalar
         assert_eq!(loss.borrow().shape, vec![1]);
-        assert!(loss.borrow().data[0] > 0.0);
+        assert!(loss.borrow().data.first().copied().unwrap_or(f32::NAN) > 0.0);
 
         // Gradients should exist and have correct shape
         assert_eq!(logits.grad().unwrap().len(), 4);
@@ -1563,7 +1582,7 @@ mod axis_reduce_tests {
         w.borrow_mut().grad = Some(Storage::cpu(vec![0.0])); // Artificial zero gradient
         opt.step();
 
-        let new_val = w.borrow().data[0];
+        let new_val = w.borrow().data.first().copied().unwrap_or(f32::NAN);
         approx::assert_relative_eq!(new_val, 0.99, epsilon = 1e-6);
     }
 
@@ -1577,8 +1596,8 @@ mod axis_reduce_tests {
         // mean(dim=1) -> [2, 5]
         let m = x.mean_dim(1, false);
         assert_eq!(m.borrow().shape, vec![2]);
-        assert!((m.borrow().data[0] - 2.0).abs() < 1e-6);
-        assert!((m.borrow().data[1] - 5.0).abs() < 1e-6);
+        assert!((m.borrow().data.first().copied().unwrap_or(f32::NAN) - 2.0).abs() < 1e-6);
+        assert!((m.borrow().data.get(1).copied().unwrap_or(f32::NAN) - 5.0).abs() < 1e-6);
 
         // Check gradient
         m.sum().backward();
@@ -1668,12 +1687,12 @@ mod axis_reduce_tests {
         // Original PyTorch [3,2]: [1,2, 3,4, 5,6]
         // Transposed [2,3]: [1,3,5, 2,4,6]
         let encoder_weight = &volta_state.get("encoder.weight").unwrap().data;
-        assert_eq!(encoder_weight[0], 1.0);
-        assert_eq!(encoder_weight[1], 3.0);
-        assert_eq!(encoder_weight[2], 5.0);
-        assert_eq!(encoder_weight[3], 2.0);
-        assert_eq!(encoder_weight[4], 4.0);
-        assert_eq!(encoder_weight[5], 6.0);
+        assert_eq!(encoder_weight.first().copied().unwrap_or(f32::NAN), 1.0);
+        assert_eq!(encoder_weight.get(1).copied().unwrap_or(f32::NAN), 3.0);
+        assert_eq!(encoder_weight.get(2).copied().unwrap_or(f32::NAN), 5.0);
+        assert_eq!(encoder_weight.get(3).copied().unwrap_or(f32::NAN), 2.0);
+        assert_eq!(encoder_weight.get(4).copied().unwrap_or(f32::NAN), 4.0);
+        assert_eq!(encoder_weight.get(5).copied().unwrap_or(f32::NAN), 6.0);
 
         // Create Volta model with named layers
         let mut model = Sequential::builder()
@@ -1699,9 +1718,9 @@ mod axis_reduce_tests {
 
         // Verify layer names
         let names = model.layer_names();
-        assert_eq!(names[0], Some("encoder"));
-        assert_eq!(names[1], None); // ReLU is unnamed
-        assert_eq!(names[2], Some("decoder"));
+        assert_eq!(names.first().copied().unwrap_or(None), Some("encoder"));
+        assert_eq!(names.get(1).copied().unwrap_or(None), None); // ReLU is unnamed
+        assert_eq!(names.get(2).copied().unwrap_or(None), Some("decoder"));
     }
 }
 
@@ -2381,15 +2400,43 @@ mod gpu_tests {
         let b_grad = b.grad().unwrap();
 
         // Each a element received gradient from 4 b elements
-        assert_abs_diff_eq!(a_grad[0], 4.0, epsilon = 1e-3);
-        assert_abs_diff_eq!(a_grad[1], 4.0, epsilon = 1e-3);
-        assert_abs_diff_eq!(a_grad[2], 4.0, epsilon = 1e-3);
+        assert_abs_diff_eq!(
+            a_grad.first().copied().unwrap_or(f32::NAN),
+            4.0,
+            epsilon = 1e-3
+        );
+        assert_abs_diff_eq!(
+            a_grad.get(1).copied().unwrap_or(f32::NAN),
+            4.0,
+            epsilon = 1e-3
+        );
+        assert_abs_diff_eq!(
+            a_grad.get(2).copied().unwrap_or(f32::NAN),
+            4.0,
+            epsilon = 1e-3
+        );
 
         // Each b element received gradient from 3 a elements
-        assert_abs_diff_eq!(b_grad[0], 3.0, epsilon = 1e-3);
-        assert_abs_diff_eq!(b_grad[1], 3.0, epsilon = 1e-3);
-        assert_abs_diff_eq!(b_grad[2], 3.0, epsilon = 1e-3);
-        assert_abs_diff_eq!(b_grad[3], 3.0, epsilon = 1e-3);
+        assert_abs_diff_eq!(
+            b_grad.first().copied().unwrap_or(f32::NAN),
+            3.0,
+            epsilon = 1e-3
+        );
+        assert_abs_diff_eq!(
+            b_grad.get(1).copied().unwrap_or(f32::NAN),
+            3.0,
+            epsilon = 1e-3
+        );
+        assert_abs_diff_eq!(
+            b_grad.get(2).copied().unwrap_or(f32::NAN),
+            3.0,
+            epsilon = 1e-3
+        );
+        assert_abs_diff_eq!(
+            b_grad.get(3).copied().unwrap_or(f32::NAN),
+            3.0,
+            epsilon = 1e-3
+        );
     }
 
     #[cfg(feature = "gpu")]
@@ -2447,6 +2494,10 @@ mod gpu_tests {
 
         // a should accumulate gradient from all 1000 positions
         let a_grad = a.grad().unwrap();
-        assert_abs_diff_eq!(a_grad[0], 1000.0, epsilon = 1e-2);
+        assert_abs_diff_eq!(
+            a_grad.first().copied().unwrap_or(f32::NAN),
+            1000.0,
+            epsilon = 1e-2
+        );
     }
 }

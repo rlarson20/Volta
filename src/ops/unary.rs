@@ -43,7 +43,10 @@ pub struct UnaryGradFn {
 
 impl GradFn for UnaryGradFn {
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
-        let x = parents[0].borrow();
+        let x = parents
+            .first()
+            .map(|p| p.borrow())
+            .expect("unary ops require 1 parent");
 
         // Check GPU path - if both out_grad and x are on GPU, use GPU backward
         #[cfg(feature = "gpu")]

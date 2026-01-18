@@ -204,8 +204,10 @@ impl SGD {
 
         if self.momentum > 0.0 {
             // Get mutable access to CPU velocity state
-            let vel_slice = self.velocity[i]
-                .as_mut_slice()
+            let vel_slice = self
+                .velocity
+                .get_mut(i)
+                .and_then(|v| v.as_mut_slice())
                 .expect("Velocity should be CPU storage");
 
             // Update velocity: v = momentum·v - lr·grad

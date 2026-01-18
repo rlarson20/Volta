@@ -111,7 +111,7 @@ fn main() {
             loss.backward();
             optimizer.step();
 
-            epoch_loss += loss.borrow().data[0];
+            epoch_loss += loss.borrow().data.first().copied().unwrap_or(0.0);
             num_batches += 1;
             progress.update(num_batches);
         }
@@ -133,18 +133,20 @@ fn main() {
         let output = model.forward(&test_x);
         let pred_data = &output.borrow().data;
         let target_data = &test_y.borrow().data;
-        let batch_size = test_y.borrow().shape[0];
+        let batch_size = test_y.borrow().shape.first().copied().unwrap_or(1);
 
         for i in 0..batch_size {
             let pred_class = (0..10)
                 .max_by(|&a, &b| {
-                    pred_data[i * 10 + a]
-                        .partial_cmp(&pred_data[i * 10 + b])
-                        .unwrap()
+                    let val_a = pred_data.get(i * 10 + a).copied().unwrap_or(f32::NAN);
+                    let val_b = pred_data.get(i * 10 + b).copied().unwrap_or(f32::NAN);
+                    val_a.partial_cmp(&val_b).unwrap()
                 })
                 .unwrap();
 
-            let true_class = (0..10).position(|j| target_data[i * 10 + j] > 0.5).unwrap();
+            let true_class = (0..10)
+                .position(|j| target_data.get(i * 10 + j).copied().unwrap_or(0.0) > 0.5)
+                .unwrap();
 
             if pred_class == true_class {
                 total_correct += 1;

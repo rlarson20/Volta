@@ -330,8 +330,8 @@ mod tests {
 
         let trends = ews.trends();
         assert_eq!(trends.memory_samples.len(), 2);
-        assert_eq!(trends.memory_samples[0], 100);
-        assert_eq!(trends.memory_samples[1], 200);
+        assert_eq!(*trends.memory_samples.first().unwrap_or(&0), 100);
+        assert_eq!(*trends.memory_samples.get(1).unwrap_or(&0), 200);
     }
 
     #[test]

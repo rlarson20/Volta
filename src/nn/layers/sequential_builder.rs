@@ -92,8 +92,8 @@ mod tests {
 
         assert_eq!(model.len(), 2);
         let names = model.layer_names();
-        assert_eq!(names[0], None);
-        assert_eq!(names[1], None);
+        assert_eq!(names.first().copied().unwrap_or(None), None);
+        assert_eq!(names.get(1).copied().unwrap_or(None), None);
     }
 
     #[test]
@@ -105,8 +105,8 @@ mod tests {
 
         assert_eq!(model.len(), 2);
         let names = model.layer_names();
-        assert_eq!(names[0], Some("encoder"));
-        assert_eq!(names[1], Some("decoder"));
+        assert_eq!(names.first().copied().unwrap_or(None), Some("encoder"));
+        assert_eq!(names.get(1).copied().unwrap_or(None), Some("decoder"));
     }
 
     #[test]
@@ -119,9 +119,9 @@ mod tests {
 
         assert_eq!(model.len(), 3);
         let names = model.layer_names();
-        assert_eq!(names[0], Some("fc1"));
-        assert_eq!(names[1], None);
-        assert_eq!(names[2], Some("fc2"));
+        assert_eq!(names.first().copied().unwrap_or(None), Some("fc1"));
+        assert_eq!(names.get(1).copied().unwrap_or(None), None);
+        assert_eq!(names.get(2).copied().unwrap_or(None), Some("fc2"));
     }
 
     #[test]
@@ -132,6 +132,6 @@ mod tests {
 
         assert_eq!(model.len(), 1);
         let names = model.layer_names();
-        assert_eq!(names[0], None); // Empty string treated as unnamed
+        assert_eq!(names.first().copied().unwrap_or(None), None); // Empty string treated as unnamed
     }
 }

@@ -51,7 +51,7 @@ impl CharVocab {
     }
 
     fn decode_char(&self, idx: usize) -> char {
-        self.idx_to_char[idx]
+        *self.idx_to_char.get(idx).unwrap_or(&' ')
     }
 }
 
@@ -122,7 +122,7 @@ fn forward_and_compute_loss(
     for (logits, &target_idx) in all_logits.iter().zip(&all_targets) {
         // Create one-hot target
         let mut target_one_hot = vec![0.0; vocab_size];
-        target_one_hot[target_idx] = 1.0;
+        *target_one_hot.get_mut(target_idx).unwrap_or(&mut 0.0) = 1.0;
         let target_tensor = RawTensor::new(target_one_hot, &[1, vocab_size], false);
 
         // Cross entropy loss
@@ -181,7 +181,7 @@ fn generate(
 
         // Simple argmax for deterministic generation
         let mut max_idx = 0;
-        let mut max_val = scaled[0];
+        let mut max_val = *scaled.first().unwrap_or(&f32::NAN);
         for (i, &val) in scaled.iter().enumerate().skip(1) {
             if val > max_val {
                 max_val = val;
@@ -218,7 +218,7 @@ fn main() {
     println!("Training data length: {} characters", data.len());
     println!(
         "Sample vocabulary: {:?}\n",
-        &vocab.idx_to_char[..10.min(vocab.size())]
+        &vocab.idx_to_char.get(..10.min(vocab.size())).unwrap_or(&[])
     );
 
     // Hyperparameters
@@ -268,8 +268,8 @@ fn main() {
                 continue;
             }
 
-            let inputs = &data[start..end];
-            let targets = &data[start + 1..end + 1];
+            let inputs = data.get(start..end).unwrap_or(&[]);
+            let targets = data.get(start + 1..end + 1).unwrap_or(&[]);
 
             // Forward pass
             let loss = forward_and_compute_loss(&model, inputs, targets, vocab.size());
@@ -278,7 +278,7 @@ fn main() {
             loss.backward();
             optimizer.step();
 
-            epoch_loss += loss.borrow().data[0];
+            epoch_loss += loss.borrow().data.first().copied().unwrap_or(f32::NAN);
         }
 
         let avg_loss = epoch_loss / num_batches as f32;

@@ -31,7 +31,7 @@ impl Module for Flatten {
         }
 
         let batch_size = shape.first().copied().unwrap_or(1);
-        let flattened_size: usize = shape[1..].iter().product();
+        let flattened_size: usize = shape.get(1..).map_or(1, |s| s.iter().product());
 
         x.reshape(&[batch_size, flattened_size])
     }

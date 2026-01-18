@@ -370,8 +370,14 @@ pub struct MatMulGradFn;
 
 impl GradFn for MatMulGradFn {
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
-        let x = parents[0].borrow();
-        let y = parents[1].borrow();
+        let x = parents
+            .first()
+            .map(|p| p.borrow())
+            .expect("matmul requires 2 parents");
+        let y = parents
+            .get(1)
+            .map(|p| p.borrow())
+            .expect("matmul requires 2 parents");
 
         // Check if we can do GPU backward (same pattern as unary/binary)
         #[cfg(feature = "gpu")]

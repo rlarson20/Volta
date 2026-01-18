@@ -22,7 +22,7 @@ impl Generator {
     }
 
     fn forward(&self, z: &volta::Tensor) -> volta::Tensor {
-        let batch = z.borrow().shape[0];
+        let batch = *z.borrow().shape.first().unwrap_or(&1);
 
         // z: [batch, latent_dim] -> [batch, 256*7*7]
         let x = self.fc.forward(z).relu();
@@ -151,7 +151,11 @@ fn main() {
             // Real images
             let start = batch_idx * batch_size * 784;
             let end = start + batch_size * 784;
-            let batch_data = train_data[start..end].to_vec();
+            let batch_data = if let Some(slice) = train_data.get(start..end) {
+                slice.to_vec()
+            } else {
+                vec![0.0; batch_size * 784]
+            };
             let real_images = RawTensor::new(batch_data, &[batch_size, 1, 28, 28], false);
             let real_labels = RawTensor::ones(&[batch_size, 1]);
 
@@ -170,7 +174,7 @@ fn main() {
 
             // Total discriminator loss
             let d_loss = d_loss_real.add(&d_loss_fake);
-            total_d_loss += d_loss.borrow().data[0];
+            total_d_loss += d_loss.borrow().data.first().copied().unwrap_or(f32::NAN);
 
             d_loss.backward();
             d_optimizer.step();
@@ -186,7 +190,7 @@ fn main() {
             let d_fake = discriminator.forward(&fake_images);
             let g_loss = bce_with_logits_loss(&d_fake, &real_labels); // Use real labels
 
-            total_g_loss += g_loss.borrow().data[0];
+            total_g_loss += g_loss.borrow().data.first().copied().unwrap_or(f32::NAN);
 
             g_loss.backward();
             g_optimizer.step();
@@ -208,6 +212,9 @@ fn main() {
     let gen_data = &generated.borrow().data;
 
     // Show first 10 pixels
-    println!("Generated image (first 10 pixels): {:?}", &gen_data[0..10]);
+    println!(
+        "Generated image (first 10 pixels): {:?}",
+        &gen_data.get(0..10).unwrap_or(&[])
+    );
     println!("Values should be in [-1, 1] range (tanh output)");
 }

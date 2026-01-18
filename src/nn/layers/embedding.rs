@@ -89,7 +89,9 @@ impl Embedding {
             );
             let start = idx * self.dim;
             let end = start + self.dim;
-            output_data.extend_from_slice(&weight_data[start..end]);
+            if let Some(slice) = weight_data.get(start..end) {
+                output_data.extend_from_slice(slice);
+            }
         }
 
         drop(weight_borrowed);
@@ -214,12 +216,18 @@ mod tests {
 
         // Check that the first embedding matches the first row of weight
         for i in 0..4 {
-            assert_eq!(output_data[i], weight_data[i]);
+            assert_eq!(
+                output_data.get(i).copied().unwrap_or(f32::NAN),
+                weight_data.get(i).copied().unwrap_or(f32::NAN)
+            );
         }
 
         // Check that the second embedding (index 5) matches row 5 of weight
         for i in 0..4 {
-            assert_eq!(output_data[4 + i], weight_data[5 * 4 + i]);
+            assert_eq!(
+                output_data.get(4 + i).copied().unwrap_or(f32::NAN),
+                weight_data.get(5 * 4 + i).copied().unwrap_or(f32::NAN)
+            );
         }
     }
 
@@ -242,7 +250,7 @@ mod tests {
         // Each embedding contributes 1.0 per dimension (from sum)
         // So index 2 should have grad of 2.0 per dimension
         for d in 0..4 {
-            let grad_at_idx2 = grad_data[2 * 4 + d];
+            let grad_at_idx2 = grad_data.get(2 * 4 + d).copied().unwrap_or(f32::NAN);
             assert!(
                 (grad_at_idx2 - 2.0).abs() < 1e-5,
                 "Expected grad ~2.0 for repeated index, got {}",
@@ -252,7 +260,7 @@ mod tests {
 
         // Indices 7 should have grad of 1.0 per dimension
         for d in 0..4 {
-            let grad_at_idx7 = grad_data[7 * 4 + d];
+            let grad_at_idx7 = grad_data.get(7 * 4 + d).copied().unwrap_or(f32::NAN);
             assert!(
                 (grad_at_idx7 - 1.0).abs() < 1e-5,
                 "Expected grad ~1.0 for single index, got {}",
@@ -275,6 +283,6 @@ mod tests {
         let params = embedding.parameters();
 
         assert_eq!(params.len(), 1);
-        assert_eq!(params[0].borrow().shape, vec![50, 16]);
+        assert_eq!(params.first().unwrap().borrow().shape, vec![50, 16]);
     }
 }

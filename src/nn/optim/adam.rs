@@ -149,11 +149,15 @@ impl Adam {
         }
 
         // Get mutable access to CPU state
-        let m_slice = self.m[i]
-            .as_mut_slice()
+        let m_slice = self
+            .m
+            .get_mut(i)
+            .and_then(|s| s.as_mut_slice())
             .expect("State should be CPU storage");
-        let v_slice = self.v[i]
-            .as_mut_slice()
+        let v_slice = self
+            .v
+            .get_mut(i)
+            .and_then(|s| s.as_mut_slice())
             .expect("State should be CPU storage");
 
         // Update biased moments

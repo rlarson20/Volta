@@ -434,7 +434,10 @@ mod io_tests {
         // Verify weights are different initially
         let p1 = model.parameters();
         let p2 = model2.parameters();
-        assert_ne!(p1[0].borrow().data, p2[0].borrow().data);
+        assert_ne!(
+            p1.first().unwrap().borrow().data,
+            p2.first().unwrap().borrow().data
+        );
 
         // Load
         let loaded_state = load_state_dict(path_str).unwrap();

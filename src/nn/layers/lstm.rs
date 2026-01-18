@@ -131,7 +131,9 @@ impl LSTMCell {
         let mut gate_data = Vec::with_capacity(batch_size * self.hidden_size);
         for i in 0..batch_size {
             let row_start = i * 4 * self.hidden_size;
-            gate_data.extend_from_slice(&data[row_start + start..row_start + end]);
+            if let Some(slice) = data.get(row_start + start..row_start + end) {
+                gate_data.extend_from_slice(slice);
+            }
         }
 
         RawTensor::new(

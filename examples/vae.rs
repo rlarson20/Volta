@@ -78,7 +78,7 @@ fn main() {
         for batch_idx in 0..num_batches {
             let start = batch_idx * batch_size * input_dim;
             let end = start + batch_size * input_dim;
-            let batch_data = train_data[start..end].to_vec();
+            let batch_data = train_data.get(start..end).unwrap_or(&[]).to_vec();
             let x = RawTensor::new(batch_data.clone(), &[batch_size, input_dim], false);
 
             // Encoder forward
@@ -102,9 +102,14 @@ fn main() {
             let kl_loss = kl_divergence_gaussian(&mu, &logvar);
             let loss = recon_loss.add(&kl_loss);
 
-            total_loss += loss.borrow().data[0];
-            total_recon += recon_loss.borrow().data[0];
-            total_kl += kl_loss.borrow().data[0];
+            total_loss += loss.borrow().data.first().copied().unwrap_or(f32::NAN);
+            total_recon += recon_loss
+                .borrow()
+                .data
+                .first()
+                .copied()
+                .unwrap_or(f32::NAN);
+            total_kl += kl_loss.borrow().data.first().copied().unwrap_or(f32::NAN);
 
             loss.backward();
         }
@@ -127,7 +132,7 @@ fn main() {
 
     // Test reconstruction
     println!("\nTesting reconstruction on first image:");
-    let test_img = train_data[0..input_dim].to_vec();
+    let test_img = train_data.get(0..input_dim).unwrap_or(&[]).to_vec();
     let x_test = RawTensor::new(test_img.clone(), &[1, input_dim], false);
 
     let h = enc_fc1.forward(&x_test).relu();
@@ -147,8 +152,14 @@ fn main() {
     let orig_data = &x_test.borrow().data;
 
     // Show first 10 pixels
-    println!("Original (first 10 pixels): {:?}", &orig_data[0..10]);
-    println!("Reconstructed (first 10):    {:?}", &recon_data[0..10]);
+    println!(
+        "Original (first 10 pixels): {:?}",
+        &orig_data.get(0..10).unwrap_or(&[])
+    );
+    println!(
+        "Reconstructed (first 10):    {:?}",
+        &recon_data.get(0..10).unwrap_or(&[])
+    );
 
     let mse = orig_data
         .iter()

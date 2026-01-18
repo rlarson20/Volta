@@ -56,7 +56,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         opt.step();
 
         if epoch % 20 == 0 {
-            println!("Epoch {:>3}: Loss = {:.6}", epoch, loss.borrow().data[0]);
+            let loss_val = loss.borrow().data.first().copied().unwrap_or(f32::NAN);
+            println!("Epoch {:>3}: Loss = {:.6}", epoch, loss_val);
         }
     }
     println!("--- Training Complete ---");
@@ -65,15 +66,26 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Let's see how well the model learned the XOR function.
     println!("\n--- Inference After Training ---");
     let final_predictions = model.forward(&x_data);
+    let x_data_borrowed = x_data.borrow();
+    let x_data_slice = &x_data_borrowed.data;
+    let y_data_borrowed = y_data.borrow();
+    let y_data_slice = &y_data_borrowed.data;
+    let final_borrowed = final_predictions.borrow();
+    let final_slice = &final_borrowed.data;
+
     for i in 0..4 {
-        let input_slice = &x_data.borrow().data[i * 2..(i * 2) + 2];
-        println!(
-            "Input: [{:.0}, {:.0}] -> Target: {:.0}, Predicted: {:.4}",
-            input_slice[0],
-            input_slice[1],
-            y_data.borrow().data[i],
-            final_predictions.borrow().data[i]
-        );
+        let x_data_ref = x_data_slice.get(i * 2..(i * 2) + 2);
+        let y_val = y_data_slice.get(i).copied().unwrap_or(f32::NAN);
+        let pred_val = final_slice.get(i).copied().unwrap_or(f32::NAN);
+        if let Some(input_slice) = x_data_ref {
+            println!(
+                "Input: [{:.0}, {:.0}] -> Target: {:.0}, Predicted: {:.4}",
+                input_slice.first().copied().unwrap_or(f32::NAN),
+                input_slice.get(1).copied().unwrap_or(f32::NAN),
+                y_val,
+                pred_val
+            );
+        }
     }
 
     // // 6. Showcase Model Persistence

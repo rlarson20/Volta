@@ -69,7 +69,7 @@ fn train_with_device_constructors(x_data: Vec<f32>, y_data: Vec<f32>, device: De
     // Verify parameters are on correct device
     {
         let params = model.parameters();
-        let param_device = params[0].borrow().device.clone();
+        let param_device = params.first().unwrap().borrow().device.clone();
         println!("Parameters device: {}", param_device.name());
     }
 
@@ -99,14 +99,14 @@ fn train_with_to_device(x_data: Vec<f32>, y_data: Vec<f32>, device: Device) {
     ]);
 
     {
-        let initial_device = model.parameters()[0].borrow().device.clone();
+        let initial_device = model.parameters().first().unwrap().borrow().device.clone();
         println!("Initial parameters device: {}", initial_device.name());
     }
 
     // Move entire model to device
     model.to_device(device.clone());
     {
-        let final_device = model.parameters()[0].borrow().device.clone();
+        let final_device = model.parameters().first().unwrap().borrow().device.clone();
         println!("After to_device(): {}", final_device.name());
     }
 
@@ -186,17 +186,21 @@ fn train_model(model: &Sequential, opt: &mut Adam, x: &Tensor, y: &Tensor, epoch
         let loss = mse_loss(&predictions, y);
 
         if epoch == 0 {
-            initial_loss = loss.borrow().data[0];
+            initial_loss = loss.borrow().data.first().copied().unwrap_or(f32::NAN);
         }
         if epoch == epochs - 1 {
-            final_loss = loss.borrow().data[0];
+            final_loss = loss.borrow().data.first().copied().unwrap_or(f32::NAN);
         }
 
         loss.backward();
         opt.step();
 
         if epoch % 20 == 0 {
-            println!("  Epoch {:>3}: Loss = {:.6}", epoch, loss.borrow().data[0]);
+            println!(
+                "  Epoch {:>3}: Loss = {:.6}",
+                epoch,
+                loss.borrow().data.first().copied().unwrap_or(f32::NAN)
+            );
         }
     }
 
@@ -210,13 +214,14 @@ fn train_model(model: &Sequential, opt: &mut Adam, x: &Tensor, y: &Tensor, epoch
     let final_preds = model.forward(x);
     let pred_data = &final_preds.borrow().data;
     let y_data = &y.borrow().data;
+    let x_data = &x.borrow().data;
     for i in 0..4 {
         println!(
             "    Input: [{:.0}, {:.0}] -> Target: {:.0}, Predicted: {:.4}",
-            x.borrow().data[i * 2],
-            x.borrow().data[i * 2 + 1],
-            y_data[i],
-            pred_data[i]
+            x_data.get(i * 2).copied().unwrap_or(f32::NAN),
+            x_data.get(i * 2 + 1).copied().unwrap_or(f32::NAN),
+            y_data.get(i).copied().unwrap_or(f32::NAN),
+            pred_data.get(i).copied().unwrap_or(f32::NAN)
         );
     }
 }

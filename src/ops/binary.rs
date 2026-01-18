@@ -450,7 +450,9 @@ impl RawTensor {
         // Pad from_shape with leading 1s to match rank
         let mut padded_from = vec![1; to_shape.len()];
         let offset = to_shape.len() - from_shape.len();
-        padded_from[offset..].copy_from_slice(from_shape);
+        if let Some(dest) = padded_from.get_mut(offset..) {
+            dest.copy_from_slice(from_shape);
+        }
         let from_strides_padded = Self::compute_strides(&padded_from);
         let to_strides = Self::compute_strides(to_shape);
 
@@ -496,7 +498,9 @@ impl RawTensor {
         // Pad target_shape with leading 1s to match ranks
         let mut padded_target = vec![1; grad_shape.len()];
         let offset = grad_shape.len() - target_shape.len();
-        padded_target[offset..].copy_from_slice(target_shape);
+        if let Some(dest) = padded_target.get_mut(offset..) {
+            dest.copy_from_slice(target_shape);
+        }
 
         // Find dimensions that need summing (where target was 1, grad is >1)
         let mut sum_axes = Vec::new();

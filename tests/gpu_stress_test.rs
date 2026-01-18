@@ -70,7 +70,8 @@ mod gpu_extended_tests {
             .unwrap()
             .to_vec();
         for (i, &val) in res_recip.iter().enumerate() {
-            let expected = 1.0 / [1.0, 2.0, 4.0, 8.0][i];
+            let expected_vals = [1.0, 2.0, 4.0, 8.0];
+            let expected = 1.0 / expected_vals.get(i).copied().unwrap_or(f32::NAN);
             assert!(
                 (val - expected).abs() < 1e-5,
                 "Recip failed at index {}: got {}, expected {}",
@@ -83,7 +84,8 @@ mod gpu_extended_tests {
         // Test Exp2
         let res_exp2 = gpu::GpuKernels::unary_op(&buf, "exp2").unwrap().to_vec();
         for (i, &val) in res_exp2.iter().enumerate() {
-            let expected = 2_f32.powf([-1.0, 0.0, 1.0, 4.0][i]);
+            let exp_vals = [-1.0, 0.0, 1.0, 4.0];
+            let expected = 2_f32.powf(exp_vals.get(i).copied().unwrap_or(f32::NAN));
             assert!(
                 (val - expected).abs() < 1e-4,
                 "Exp2 failed at index {}: got {}, expected {}",
@@ -99,7 +101,8 @@ mod gpu_extended_tests {
             .unwrap()
             .to_vec();
         for (i, &val) in res_log2.iter().enumerate() {
-            let expected = [0.0, 1.0, 2.0, 3.0][i];
+            let expected_vals = [0.0, 1.0, 2.0, 3.0];
+            let expected = expected_vals.get(i).copied().unwrap_or(f32::NAN);
             assert!(
                 (val - expected).abs() < 1e-5,
                 "Log2 failed at index {}: got {}, expected {}",
@@ -112,7 +115,8 @@ mod gpu_extended_tests {
         // Test Sin
         let res_sin = gpu::GpuKernels::unary_op(&buf, "sin").unwrap().to_vec();
         for (i, &val) in res_sin.iter().enumerate() {
-            let expected = [-1.0_f32.sin(), 0.0_f32.sin(), 1.0_f32.sin(), 4.0_f32.sin()][i];
+            let expected_vals = [-1.0_f32.sin(), 0.0_f32.sin(), 1.0_f32.sin(), 4.0_f32.sin()];
+            let expected = expected_vals.get(i).copied().unwrap_or(f32::NAN);
             assert!(
                 (val - expected).abs() < 1e-5,
                 "Sin failed at index {}: got {}, expected {}",
@@ -127,11 +131,11 @@ mod gpu_extended_tests {
         let expected_vals = [0.5403023, 1.0, 0.5403023, -0.6536436]; // cos([-1, 0, 1, 4])
         for (i, &val) in res_cos.iter().enumerate() {
             assert!(
-                (val - expected_vals[i]).abs() < 1e-5,
+                (val - expected_vals.get(i).copied().unwrap_or(f32::NAN)).abs() < 1e-5,
                 "Cos failed at index {}: got {}, expected {}",
                 i,
                 val,
-                expected_vals[i]
+                expected_vals.get(i).copied().unwrap_or(f32::NAN)
             );
         }
     }

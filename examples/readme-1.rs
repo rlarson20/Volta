@@ -28,7 +28,11 @@ fn main() {
         let loss = mse_loss(&pred, &y);
 
         if epoch % 20 == 0 {
-            println!("Epoch {}: loss = {:.6}", epoch, loss.borrow().data[0]);
+            println!(
+                "Epoch {}: loss = {:.6}",
+                epoch,
+                loss.borrow().data.first().copied().unwrap_or(f32::NAN)
+            );
         }
 
         loss.backward();

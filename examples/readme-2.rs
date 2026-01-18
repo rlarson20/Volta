@@ -27,5 +27,8 @@ fn main() {
     loss.backward();
     optim.step();
 
-    println!("Loss: {:?}", loss.borrow().data[0]);
+    println!(
+        "Loss: {:?}",
+        loss.borrow().data.first().copied().unwrap_or(f32::NAN)
+    );
 }

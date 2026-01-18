@@ -415,7 +415,9 @@ impl RawTensor {
             let mut remaining = idx;
             for i in (0..shape.len()).rev() {
                 if let Some(&dim_size) = shape.get(i) {
-                    coords[i] = remaining % dim_size;
+                    if let Some(slot) = coords.get_mut(i) {
+                        *slot = remaining % dim_size;
+                    }
                     remaining /= dim_size;
                 }
             }

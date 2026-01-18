@@ -17,9 +17,9 @@ use volta::{
 /// Output shape: [batch, features]
 fn extract_timestep(batch: &volta::Tensor, t: usize) -> volta::Tensor {
     let borrowed = batch.borrow();
-    let batch_size = borrowed.shape[0];
-    let seq_len = borrowed.shape[1];
-    let features = borrowed.shape[2];
+    let batch_size = *borrowed.shape.first().unwrap_or(&1);
+    let seq_len = *borrowed.shape.get(1).unwrap_or(&1);
+    let features = *borrowed.shape.get(2).unwrap_or(&1);
 
     assert!(
         t < seq_len,
@@ -33,7 +33,9 @@ fn extract_timestep(batch: &volta::Tensor, t: usize) -> volta::Tensor {
     for b in 0..batch_size {
         let start = b * seq_len * features + t * features;
         let end = start + features;
-        data.extend_from_slice(&borrowed.data[start..end]);
+        if let Some(slice) = borrowed.data.get(start..end) {
+            data.extend_from_slice(slice);
+        }
     }
 
     RawTensor::new(data, &[batch_size, features], false)
@@ -168,7 +170,7 @@ fn main() {
             loss.backward();
             optimizer.step();
 
-            epoch_loss += loss.borrow().data[0];
+            epoch_loss += loss.borrow().data.first().copied().unwrap_or(f32::NAN);
             num_batches += 1;
             progress.update(num_batches);
         }
@@ -207,18 +209,23 @@ fn main() {
 
         let pred_data = &logits.borrow().data;
         let target_data = &test_y.borrow().data;
-        let batch_size = test_y.borrow().shape[0];
+        let batch_size = *test_y.borrow().shape.first().unwrap_or(&1);
 
         for i in 0..batch_size {
             let pred_class = (0..10)
                 .max_by(|&a, &b| {
-                    pred_data[i * 10 + a]
-                        .partial_cmp(&pred_data[i * 10 + b])
+                    pred_data
+                        .get(i * 10 + a)
+                        .copied()
+                        .unwrap_or(f32::NAN)
+                        .partial_cmp(&pred_data.get(i * 10 + b).copied().unwrap_or(f32::NAN))
                         .unwrap()
                 })
                 .unwrap();
 
-            let true_class = (0..10).position(|j| target_data[i * 10 + j] > 0.5).unwrap();
+            let true_class = (0..10)
+                .position(|j| target_data.get(i * 10 + j).copied().unwrap_or(f32::NAN) > 0.5)
+                .unwrap();
 
             if pred_class == true_class {
                 total_correct += 1;

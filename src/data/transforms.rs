@@ -41,8 +41,8 @@ mod tests {
 
         // Expected: [1,0,0, 0,0,1, 0,1,0]
         assert_eq!(one_hot.len(), 9);
-        assert_eq!(one_hot[0], 1.0); // label 0
-        assert_eq!(one_hot[5], 1.0); // label 2
-        assert_eq!(one_hot[7], 1.0); // label 1
+        assert_eq!(one_hot.first().copied().unwrap_or(f32::NAN), 1.0); // label 0
+        assert_eq!(one_hot.get(5).copied().unwrap_or(f32::NAN), 1.0); // label 2
+        assert_eq!(one_hot.get(7).copied().unwrap_or(f32::NAN), 1.0); // label 1
     }
 }
