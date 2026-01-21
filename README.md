@@ -5,6 +5,7 @@
 [![Build Status](https://img.shields.io/github/actions/workflow/status/rlarson20/volta/ci.yml?branch=main)](https://github.com/rlarson20/volta/actions)
 [![Crates.io](https://img.shields.io/crates/v/volta.svg)](https://crates.io/crates/volta)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/rlarson20/Volta)
 
 Volta is a minimal deep learning and automatic differentiation library built from scratch in pure Rust, heavily inspired by PyTorch. It provides a dynamic computation graph, NumPy-style broadcasting, and common neural network primitives.
 
@@ -226,6 +227,7 @@ fn main() {
 ```
 
 **Weight Mapping Features:**
+
 - `rename(from, to)` - Rename individual keys
 - `rename_prefix(old, new)` - Rename all keys with prefix
 - `strip_prefix(prefix)` - Remove prefix from keys
