@@ -195,6 +195,8 @@ impl GpuContext {
     /// 1. Finds a suitable GPU adapter
     /// 2. Creates a device and queue
     /// 3. Compiles all our compute shaders
+    /// # Errors
+    /// Whatever errors come from async (TODO: inspect this deeper)
     pub fn new() -> Result<Self, String> {
         // wgpu is async, but we want a sync API for simplicity
         // pollster::block_on runs async code synchronously
@@ -426,6 +428,8 @@ impl GpuContext {
     ///
     /// Use this instead of `sync()` in critical paths where you need
     /// error handling for GPU failures.
+    /// # Errors
+    /// Whatever errors come from async
     pub fn sync_checked(&self) -> Result<(), GpuSyncError> {
         let timeout_count = self.consecutive_timeouts.load(Ordering::Relaxed);
 

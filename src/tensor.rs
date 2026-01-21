@@ -179,6 +179,8 @@ impl RawTensor {
         Self::new(data, shape, false)
     }
     /// Create a tensor with values from standard normal distribution N(0, 1)
+    /// # Panics
+    /// unwrap new `Normal` dist
     #[must_use]
     pub fn randn(shape: &[usize]) -> Tensor {
         let size = shape.iter().product();
@@ -218,6 +220,8 @@ impl RawTensor {
     ///
     /// Draws samples from `N(0, sqrt(2 / fan_in))` where `fan_in`
     /// is the number of input connections.
+    /// # Panics
+    /// empty shape
     #[must_use]
     pub fn he_initialization(shape: &[usize]) -> Tensor {
         assert!(
@@ -533,6 +537,8 @@ impl RawTensor {
     /// let x = `Tensor::new(vec`![1,2,3,4,5,6], &\[2,3\], true);
     /// `x.sum_dim(1`, false) // -> [6, 15] shape \[2\]
     /// `x.sum_dim(1`, true)  // -> [\[6\], \[15\]] shape \[2,1\]
+    /// # Panics
+    /// dim out of bounds
     pub fn sum_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
         let (data, shape, req_grad, device) = {
             let s = self_t.borrow();
@@ -648,6 +654,8 @@ impl RawTensor {
     /// Max along a specific axis
     ///
     /// Returns maximum value along dimension and stores indices for backward pass.
+    /// # Panics
+    /// dim out of bounds
     pub fn max_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
         let (data, shape, req_grad, device) = {
             let s = self_t.borrow();
@@ -753,6 +761,8 @@ impl RawTensor {
     /// Mean along a specific axis
     ///
     /// Implemented as `sum_dim(dim)` / size(dim)
+    /// # Panics
+    /// dim out of bounds
     pub fn mean_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
         let (shape, device) = {
             let t = self_t.borrow();
@@ -790,6 +800,8 @@ impl RawTensor {
     ///
     /// # Returns
     /// (`max_error`, `mean_error`, passed)
+    /// # Panics
+    /// tensor doesn't have gradient
     pub fn check_gradients<F>(
         tensor: &Tensor,
         loss_fn: F,

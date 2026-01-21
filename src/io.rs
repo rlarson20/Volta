@@ -146,12 +146,16 @@ pub fn load_state_dict_checked<M: Module + ?Sized>(
     diff
 }
 
+/// # Errors
+/// file opening errors
 pub fn save_state_dict(state: &StateDict, path: &str) -> Result<()> {
     let mut file = File::create(path)?;
     let encoded = bincode::encode_to_vec(state, config::standard()).map_err(Error::other)?;
     file.write_all(&encoded)?;
     Ok(())
 }
+/// # Errors
+/// file opening errors
 pub fn load_state_dict(path: &str) -> Result<StateDict> {
     let mut file = File::open(path)?;
     let mut buffer = Vec::new();
@@ -210,6 +214,8 @@ fn volta_dtype_to_safetensors(dtype: DType) -> safetensors::Dtype {
 /// converted to f32 to match the existing `StateDict` format.
 ///
 /// For native dtype loading, use `load_safetensors_raw()`.
+/// # Errors
+/// file opening errors
 pub fn load_safetensors<P: AsRef<Path>>(path: P) -> Result<StateDict> {
     let mut file = File::open(path)?;
     let mut buffer = Vec::new();
@@ -279,6 +285,8 @@ impl TypedTensorData {
 ///
 /// Returns a map of tensor names to `TypedTensorData`, preserving the original
 /// dtype (F16, BF16, etc.) without conversion.
+/// # Errors
+/// file opening errors
 pub fn load_safetensors_raw<P: AsRef<Path>>(path: P) -> Result<BTreeMap<String, TypedTensorData>> {
     let mut file = File::open(path)?;
     let mut buffer = Vec::new();
@@ -306,6 +314,10 @@ pub fn load_safetensors_raw<P: AsRef<Path>>(path: P) -> Result<BTreeMap<String, 
 /// Save a `StateDict` to `SafeTensors` format
 ///
 /// All tensors are saved as F32 since `StateDict` uses f32.
+/// # Panics
+/// failing to create `TensorView`
+/// # Errors
+/// returns nothing on success
 pub fn save_safetensors<P: AsRef<Path>>(state: &StateDict, path: P) -> Result<()> {
     use safetensors::tensor::{Dtype, TensorView};
 
@@ -328,6 +340,10 @@ pub fn save_safetensors<P: AsRef<Path>>(state: &StateDict, path: P) -> Result<()
 }
 
 /// Save typed tensor data to `SafeTensors` format with native dtypes
+/// # Panics
+/// failing to create `TensorView`
+/// # Errors
+/// returns nothing on success
 pub fn save_safetensors_typed<P: AsRef<Path>>(
     tensors: &BTreeMap<String, TypedTensorData>,
     path: P,
@@ -371,6 +387,10 @@ pub fn save_safetensors_typed<P: AsRef<Path>>(
 /// let state = load_state_dict_with_mapping("model.bin", &mapper)?;
 /// # Ok::<(), std::io::Error>(())
 /// ```
+/// # Panics
+/// unwrapping string ref
+/// # Errors
+/// returns result state dict
 pub fn load_state_dict_with_mapping<P: AsRef<Path>>(
     path: P,
     mapper: &mapping::StateDictMapper,
@@ -395,6 +415,8 @@ pub fn load_state_dict_with_mapping<P: AsRef<Path>>(
 /// let state = load_safetensors_with_mapping("pytorch_model.safetensors", &mapper)?;
 /// # Ok::<(), std::io::Error>(())
 /// ```
+/// # Errors
+/// returns result state dict
 pub fn load_safetensors_with_mapping<P: AsRef<Path>>(
     path: P,
     mapper: &mapping::StateDictMapper,

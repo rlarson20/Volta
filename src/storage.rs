@@ -105,6 +105,8 @@ impl Storage {
     }
 
     /// Create new CPU storage from raw bytes with a specific dtype
+    /// # Panics
+    /// Byte length not divisible by dtype size
     #[must_use]
     pub fn from_bytes(data: Vec<u8>, dtype: DType) -> Self {
         assert!(
@@ -184,6 +186,8 @@ impl Storage {
 
     /// Get data as f32 slice. Only valid if dtype is F32.
     /// Panics if dtype is not F32.
+    /// # Panics
+    /// Wrong storage datatype
     pub fn as_f32_slice(&self) -> &[f32] {
         match self {
             Storage::Cpu { data, dtype } => {
@@ -249,6 +253,8 @@ impl Storage {
     // ========== Other Dtype Access ==========
 
     /// Get data as f64 slice. Only valid if dtype is F64.
+    /// # Panics
+    /// Wrong storage datatype
     pub fn as_f64_slice(&self) -> Option<&[f64]> {
         match self {
             Storage::Cpu { data, dtype } if *dtype == DType::F64 => Some(cast_slice(data)),
@@ -278,6 +284,8 @@ impl Storage {
     }
 
     /// Get data as f16 slice. Only valid if dtype is F16.
+    /// # Panics
+    /// Wrong storage datatype
     pub fn as_f16_slice(&self) -> Option<&[f16]> {
         match self {
             Storage::Cpu { data, dtype } if *dtype == DType::F16 => Some(cast_slice(data)),
@@ -307,6 +315,8 @@ impl Storage {
     }
 
     /// Get data as bf16 slice. Only valid if dtype is BF16.
+    /// # Panics
+    /// Wrong storage datatype
     pub fn as_bf16_slice(&self) -> Option<&[bf16]> {
         match self {
             Storage::Cpu { data, dtype } if *dtype == DType::BF16 => Some(cast_slice(data)),
@@ -336,6 +346,8 @@ impl Storage {
     }
 
     /// Get raw bytes
+    /// # Panics
+    /// unwrap `as_ref` pointer
     pub fn as_bytes(&self) -> &[u8] {
         match self {
             Storage::Cpu { data, .. } => data,
@@ -361,6 +373,8 @@ impl Storage {
     // ========== Conversion ==========
 
     /// Convert to `Vec<f32>` (always works, may involve conversion)
+    /// # Panics
+    ///`as_f64_slice` can panic
     pub fn to_f32_vec(&self) -> Vec<f32> {
         match self.dtype() {
             DType::F32 => self.as_f32_slice().to_vec(),
@@ -570,6 +584,8 @@ impl Storage {
         self.as_f32_slice().iter()
     }
 
+    /// # Panics
+    /// wrong data type
     pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, f32> {
         self.as_f32_slice_mut()
             .expect("Mutable iteration requires F32 CPU storage")

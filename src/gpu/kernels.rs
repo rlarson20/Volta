@@ -171,6 +171,8 @@ impl GpuKernels {
     ///
     /// # Returns
     /// A new buffer containing the result
+    /// # Panics
+    /// Mismatched buffer sizes
     #[must_use]
     pub fn binary_op(a: &GpuBuffer, b: &GpuBuffer, op: &str) -> Option<GpuBuffer> {
         assert_eq!(a.len(), b.len(), "Buffer sizes must match for binary ops");
@@ -242,6 +244,8 @@ impl GpuKernels {
     }
 
     /// Execute a unary operation
+    /// # Panics
+    /// Unknown unary op
     #[must_use]
     pub fn unary_op(input: &GpuBuffer, op: &str) -> Option<GpuBuffer> {
         let ctx = get_gpu_context()?;
@@ -316,6 +320,8 @@ impl GpuKernels {
     ///
     /// # Returns
     /// A new buffer containing the gradient with respect to x
+    /// # Panics
+    /// `out_grad` and `x` size mismatch
     #[must_use]
     pub fn unary_backward(out_grad: &GpuBuffer, x: &GpuBuffer, op: &str) -> Option<GpuBuffer> {
         assert_eq!(
@@ -399,6 +405,8 @@ impl GpuKernels {
     ///
     /// # Returns
     /// A new buffer containing the gradient with respect to a
+    /// # Panics
+    /// `out_grad` and `a` shape mismatch
     #[must_use]
     pub fn binary_backward_a(
         out_grad: &GpuBuffer,
@@ -489,6 +497,8 @@ impl GpuKernels {
     ///
     /// # Returns
     /// A new buffer containing the gradient with respect to b
+    /// # Panics
+    /// `out_grad` and `b` must have same shape
     #[must_use]
     pub fn binary_backward_b(
         out_grad: &GpuBuffer,
@@ -585,6 +595,8 @@ impl GpuKernels {
     ///
     /// # Returns
     /// A tuple of (gradient wrt a, gradient wrt b)
+    /// # Panics
+    /// Unknown binary backward op
     #[must_use]
     pub fn binary_backward_broadcast(
         out_grad: &GpuBuffer,
@@ -736,6 +748,8 @@ impl GpuKernels {
     ///
     /// # Returns
     /// A tuple of (gradient wrt a, gradient wrt b)
+    /// # Panics
+    /// Unknown binary backward op
     #[must_use]
     pub fn binary_backward_broadcast_safe(
         out_grad: &GpuBuffer,
@@ -955,6 +969,8 @@ impl GpuKernels {
     /// * `m` - Number of rows in A
     /// * `k` - Number of columns in A / rows in B
     /// * `n` - Number of columns in B
+    /// # Panics
+    /// Buffer size doesn't match dims
     #[must_use]
     pub fn matmul(a: &GpuBuffer, b: &GpuBuffer, m: usize, k: usize, n: usize) -> Option<GpuBuffer> {
         assert_eq!(a.len(), m * k, "A buffer size doesn't match dimensions");
@@ -1043,6 +1059,8 @@ impl GpuKernels {
     /// * `m` - Number of rows in grad / rows in dA
     /// * `k` - Number of columns in grad / rows in B
     /// * `n` - Number of columns in B / columns in grad
+    /// # Panics
+    /// Grad buffer size doesn't match dimensions
     #[must_use]
     pub fn matmul_backward_a(
         grad: &GpuBuffer,
@@ -1141,6 +1159,8 @@ impl GpuKernels {
     /// * `m` - Number of rows in A / rows in grad
     /// * `k` - Number of columns in A / rows in dB
     /// * `n` - Number of columns in grad / columns in B
+    /// # Panics
+    /// `A` buffer size doesn't match dimensions
     #[must_use]
     pub fn matmul_backward_b(
         a: &GpuBuffer,

@@ -4,6 +4,8 @@ use std::path::Path;
 
 /// Load MNIST images from IDX format file
 /// Returns flattened image data (all images concatenated)
+/// # Errors
+/// file opening errors
 pub fn load_mnist_images<P: AsRef<Path>>(path: P) -> Result<Vec<f32>> {
     let mut file = File::open(path)?;
 
@@ -37,6 +39,8 @@ pub fn load_mnist_images<P: AsRef<Path>>(path: P) -> Result<Vec<f32>> {
 
 /// Load MNIST labels from IDX format file
 /// Returns label indices (0-9)
+/// # Errors
+/// file opening errors
 pub fn load_mnist_labels<P: AsRef<Path>>(path: P) -> Result<Vec<u8>> {
     let mut file = File::open(path)?;
 

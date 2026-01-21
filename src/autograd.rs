@@ -31,6 +31,8 @@ impl RawTensor {
     /// 4. Accumulate gradients in each parent tensor
     ///
     /// Uses a `HashSet` to track visited nodes and avoid recomputation.
+    /// # Panics
+    /// Calling on tensor taht doesn't need gradients
     pub fn backward(tensor_ref: &Tensor) {
         enum Action {
             Visit(Tensor),

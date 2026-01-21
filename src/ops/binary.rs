@@ -393,6 +393,8 @@ impl RawTensor {
     /// Examples:
     /// - (3, 1) + (1, 4) -> (3, 4)
     /// - (5, 3, 1) + (1, 4) -> (5, 3, 4)
+    /// # Panics
+    /// broadcast failures
     #[must_use]
     pub fn broadcast_shape(shape_a: &[usize], shape_b: &[usize]) -> Vec<usize> {
         let max_len = shape_a.len().max(shape_b.len());
@@ -558,6 +560,8 @@ impl RawTensor {
     /// 2. Broadcast both inputs to that shape
     /// 3. Apply operation element-wise
     /// 4. Set up gradient tracking
+    /// # Panics
+    /// broadcast failure
     pub fn binary_op(self_t: &Tensor, other: &Tensor, op: BinaryOp) -> Tensor {
         let (data_a, shape_a, req_a) = {
             let s = self_t.borrow();

@@ -68,11 +68,7 @@ command = [ #TODO: organize these
     "clippy::cast_possible_truncation",
     "-A",                                         #TEMP IMP TO FIX!!!
     "clippy::cast_precision_loss",
-    "-A",                                         # TEMP
-    "clippy::missing_panics_doc",
-    "-A",                                         # TEMP
-    "clippy::missing_errors_doc",
-    "-A",                                         # TEMP
+    "-A",
     "clippy::too_many_lines",
     # Denys
     "-D",
@@ -139,6 +135,11 @@ command = [ #TODO: organize these
     "clippy::if_not_else",
     "-D",
     "clippy::missing_fields_in_debug",
+    "-D",
+    "clippy::missing_panics_doc",
+    "-D",
+    "clippy::missing_errors_doc",
+
 ]
 need_stdout = false
 

@@ -301,6 +301,8 @@ impl Conv2d {
         result
     }
 
+    /// # Panics
+    /// Input needs to be 4D
     pub fn forward(&self, x: &Tensor) -> Tensor {
         let (batch, in_channels, _height, _width) = {
             let x_borrow = x.borrow();

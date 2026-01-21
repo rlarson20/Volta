@@ -373,6 +373,8 @@ impl GradFn for MovementGradFn {
 // ===== MOVEMENT OPERATIONS =====
 impl RawTensor {
     /// Reshape tensor to new shape (same number of elements)
+    /// # Panics
+    /// Size mismatch
     pub fn reshape(self_t: &Tensor, new_shape: &[usize]) -> Tensor {
         let (data, old_shape, req_grad, device) = {
             let s = self_t.borrow();
@@ -474,6 +476,8 @@ impl RawTensor {
     ///
     /// # Arguments
     /// * `axes` - New ordering of axes (must be a valid permutation of 0..rank)
+    /// # Panics
+    /// invalid permutation axes
     pub fn permute(self_t: &Tensor, axes: &[usize]) -> Tensor {
         let req_grad = self_t.borrow().requires_grad;
         let old_shape = self_t.borrow().shape.clone();
@@ -504,6 +508,8 @@ impl RawTensor {
     ///
     /// Dimensions can only be expanded from size 1 to size N.
     /// Rank must remain the same.
+    /// # Panics
+    /// expand rank must match
     pub fn expand(self_t: &Tensor, new_shape: &[usize]) -> Tensor {
         const MAX_ALLOC: usize = 100_000_000;
 
@@ -597,6 +603,8 @@ impl RawTensor {
     ///
     /// # Arguments
     /// * `padding` - For each dimension, (`left_pad`, `right_pad`)
+    /// # Panics
+    /// padding must match rank
     pub fn pad(self_t: &Tensor, padding: &[(usize, usize)]) -> Tensor {
         const MAX_ALLOC: usize = 100_000_000;
         #[allow(clippy::too_many_arguments)]
@@ -727,6 +735,8 @@ impl RawTensor {
     ///
     /// # Arguments
     /// * `ranges` - For each dimension, (start, end) indices
+    /// # Panics
+    /// ranges length must match rank
     pub fn shrink(self_t: &Tensor, ranges: &[(usize, usize)]) -> Tensor {
         #[allow(clippy::too_many_arguments)]
         fn shrink_recursive(
@@ -845,6 +855,8 @@ impl RawTensor {
     /// Subsample tensor with specified strides
     ///
     /// Similar to slicing with step: array\[`::2`\] takes every other element
+    /// # Panics
+    /// Strides length must match rank
     pub fn stride_op(self_t: &Tensor, strides: &[usize]) -> Tensor {
         #[allow(clippy::too_many_arguments)]
         fn stride_recursive(

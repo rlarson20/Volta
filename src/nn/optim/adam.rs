@@ -64,6 +64,8 @@ impl Adam {
         }
     }
 
+    /// # Panics
+    /// unwrap params
     pub fn step(&mut self) {
         self.t += 1;
 

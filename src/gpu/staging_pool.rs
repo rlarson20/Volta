@@ -61,6 +61,8 @@ impl StagingBufferPool {
     ///
     /// # Arguments
     /// * `size_bytes` - Exact size in bytes of the staging buffer needed
+    /// # Panics
+    /// Unwrapping pool mutex
     pub fn acquire(&self, size_bytes: u64) -> Option<Buffer> {
         let mut pools = self.pools.lock().unwrap();
         let mut count = self.current_count.lock().unwrap();
@@ -92,6 +94,8 @@ impl StagingBufferPool {
     /// # Arguments
     /// * `buffer` - The staging buffer to return to the pool
     /// * `size_bytes` - Size of the buffer in bytes (must match buffer's actual size)
+    /// # Panics
+    /// Unwrapping pool mutex
     pub fn release(&self, buffer: Buffer, size_bytes: u64) -> bool {
         let mut pools = self.pools.lock().unwrap();
         let mut count = self.current_count.lock().unwrap();
@@ -126,6 +130,8 @@ impl StagingBufferPool {
     ///
     /// This drops all pooled buffers, freeing their GPU memory.
     /// Useful for cleanup or resetting state during testing.
+    /// # Panics
+    /// Unwrapping pool mutex
     pub fn clear(&self) {
         self.pools.lock().unwrap().clear();
         *self.current_count.lock().unwrap() = 0;
@@ -137,6 +143,8 @@ impl StagingBufferPool {
     }
 
     /// Get current number of pooled buffers
+    /// # Panics
+    /// Unwrapping count mutex
     pub fn size(&self) -> usize {
         *self.current_count.lock().unwrap()
     }
@@ -149,6 +157,8 @@ impl StagingBufferPool {
     /// Get statistics about pool usage
     ///
     /// Returns a snapshot of the current pool state for diagnostics.
+    /// # Panics
+    /// unwrapping mutex for `total_pooled`
     pub fn stats(&self) -> StagingPoolStats {
         StagingPoolStats {
             total_pooled: *self.current_count.lock().unwrap(),
