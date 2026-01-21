@@ -38,13 +38,18 @@ This library is functional for training MLPs, CNNs, RNNs, GANs, VAEs, and other 
   - **Named Layers:** Robust serialization with human-readable state dict keys
   - **Loss Functions:** MSE, Cross-Entropy, NLL, BCE, KL Divergence
   - **Examples:** MNIST, CIFAR, character LM, VAE, DCGAN, super-resolution, LSTM time series
+  - **GPU Training Pipeline:** GPU-accelerated forward pass for Conv2d with device-aware layers and GPU optimizer state storage
+  - **Benchmarking Suite:** Comprehensive Criterion benchmarks with 3 categories (tensor_ops, neural_networks, gpu_comparison) and HTML reports
+  - **Enhanced GPU Safety:** GPU buffer pooling, command queue throttling, CPU cache invalidation, and early warning system
+  - **Code Quality:** All `indexing_slicing` clippy errors resolved; ~400+ pedantic lints reduced to ~223 remaining
 
 - ⚠️ **What's in Progress:**
-  - **Performance:** Not yet a primary focus. BLAS acceleration available for macOS matmul, most ops use naive loops.
+  - **Performance:** Comprehensive benchmarking suite for performance tracking with `just bench` commands
   - **GPU Support:** Experimental WGPU-based acceleration via `gpu` feature:
     - ✅ Core ops on GPU: elementwise (unary/binary), matmul, reductions (sum/max/mean), movement ops (permute/expand/pad/shrink/stride)
     - ✅ GPU backward pass for autograd with lazy CPU↔GPU transfers
-    - ⚠️ Neural network layers still CPU-only (Linear, Conv2d forward passes being ported)
+    - ✅ GPU-accelerated forward pass implemented for Conv2d
+    - ⚠️ Neural network layer backward passes still being ported to GPU
     - ⚠️ Broadcasting preprocessing happens on CPU before GPU dispatch
 
 - ❌ **What's Missing:**
@@ -56,7 +61,7 @@ Add Volta to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-volta = "0.2.0"
+volta = "0.3.0"
 ```
 
 ### Enabling BLAS on macOS
@@ -65,7 +70,7 @@ For a significant performance boost in matrix multiplication on macOS, enable th
 
 ```toml
 [dependencies]
-volta = { version = "0.2.0", features = ["accelerate"] }
+volta = { version = "0.3.0", features = ["accelerate"] }
 ```
 
 ### Enabling GPU Support
@@ -74,14 +79,14 @@ For experimental GPU acceleration via WGPU, enable the `gpu` feature:
 
 ```toml
 [dependencies]
-volta = { version = "0.2.0", features = ["gpu"] }
+volta = { version = "0.3.0", features = ["gpu"] }
 ```
 
 Or combine both for maximum performance:
 
 ```toml
 [dependencies]
-volta = { version = "0.2.0", features = ["accelerate", "gpu"] }
+volta = { version = "0.3.0", features = ["accelerate", "gpu"] }
 ```
 
 ## Examples:
