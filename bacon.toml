@@ -186,6 +186,38 @@ need_stdout = true
 allow_warnings = true
 background = true
 
+[jobs.perf]
+command = ["cargo", "clippy", "--", "-D", "clippy::perf"]
+need_stdout = false
+
+[jobs.all]
+command = ["cargo", "clippy", "--", "-D", "clippy::all"]
+need_stdout = false
+
+[jobs.correctness]
+command = ["cargo", "clippy", "--", "-D", "clippy::correctness"]
+need_stdout = false
+
+[jobs.suspicious]
+command = ["cargo", "clippy", "--", "-D", "clippy::suspicious"]
+need_stdout = false
+
+[jobs.style]
+command = ["cargo", "clippy", "--", "-D", "clippy::style"]
+need_stdout = false
+
+[jobs.complexity]
+command = ["cargo", "clippy", "--", "-D", "clippy::complexity"]
+need_stdout = false
+
+[jobs.nursery]
+command = ["cargo", "clippy", "--", "-D", "clippy::nursery"]
+need_stdout = false
+
+[jobs.cargo]
+command = ["cargo", "clippy", "--", "-D", "clippy::cargo"]
+need_stdout = false
+
 # Run your long-running application (eg server) and have the result displayed in bacon.
 # For programs that never stop (eg a server), `background` is set to false
 # to have the cargo run output immediately displayed instead of waiting for
