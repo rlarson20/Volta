@@ -520,6 +520,339 @@ mod conv2d_tests {
         assert_eq!(y.borrow().shape, vec![1, 2, 3, 3]);
         assert!(conv.bias.is_none(), "Bias should be None");
     }
+
+    // ===== Comprehensive Parameter Configuration Tests =====
+
+    #[test]
+    fn test_conv2d_1x1_kernel() {
+        // 1x1 convolution is equivalent to per-pixel linear transformation
+        // Input: (1, 4, 8, 8), Conv: 8 filters, 1x1, stride=1, pad=0
+        // Output: (1, 8, 8, 8)
+        let conv = Conv2d::new(4, 8, 1, 1, 0, true);
+        let x = RawTensor::randn(&[1, 4, 8, 8]);
+        let y = conv.forward(&x);
+
+        assert_eq!(y.borrow().shape, vec![1, 8, 8, 8]);
+    }
+
+    #[test]
+    fn test_conv2d_5x5_kernel() {
+        // Larger kernel size
+        // Input: (1, 3, 16, 16), Conv: 8 filters, 5x5, stride=1, pad=2
+        // Output: (1, 8, 16, 16) since (16 + 4 - 5) / 1 + 1 = 16
+        let conv = Conv2d::new(3, 8, 5, 1, 2, true);
+        let x = RawTensor::randn(&[1, 3, 16, 16]);
+        let y = conv.forward(&x);
+
+        assert_eq!(y.borrow().shape, vec![1, 8, 16, 16]);
+    }
+
+    #[test]
+    fn test_conv2d_7x7_kernel() {
+        // Even larger kernel
+        // Input: (1, 3, 32, 32), Conv: 16 filters, 7x7, stride=1, pad=3
+        // Output: (1, 16, 32, 32)
+        let conv = Conv2d::new(3, 16, 7, 1, 3, true);
+        let x = RawTensor::randn(&[1, 3, 32, 32]);
+        let y = conv.forward(&x);
+
+        assert_eq!(y.borrow().shape, vec![1, 16, 32, 32]);
+    }
+
+    #[test]
+    fn test_conv2d_stride3() {
+        // Large stride
+        // Input: (1, 3, 16, 16), Conv: 8 filters, 3x3, stride=3, pad=1
+        // Output: (1, 8, 6, 6) since (16 + 2 - 3) / 3 + 1 = 6
+        let conv = Conv2d::new(3, 8, 3, 3, 1, true);
+        let x = RawTensor::randn(&[1, 3, 16, 16]);
+        let y = conv.forward(&x);
+
+        assert_eq!(y.borrow().shape, vec![1, 8, 6, 6]);
+    }
+
+    #[test]
+    fn test_conv2d_stride4() {
+        // Very large stride
+        // Input: (1, 3, 32, 32), Conv: 8 filters, 3x3, stride=4, pad=1
+        // Output: (1, 8, 8, 8) since (32 + 2 - 3) / 4 + 1 = 8
+        let conv = Conv2d::new(3, 8, 3, 4, 1, true);
+        let x = RawTensor::randn(&[1, 3, 32, 32]);
+        let y = conv.forward(&x);
+
+        assert_eq!(y.borrow().shape, vec![1, 8, 8, 8]);
+    }
+
+    #[test]
+    fn test_conv2d_padding2() {
+        // Larger padding
+        // Input: (1, 3, 8, 8), Conv: 8 filters, 3x3, stride=1, pad=2
+        // Output: (1, 8, 10, 10) since (8 + 4 - 3) / 1 + 1 = 10
+        let conv = Conv2d::new(3, 8, 3, 1, 2, true);
+        let x = RawTensor::randn(&[1, 3, 8, 8]);
+        let y = conv.forward(&x);
+
+        assert_eq!(y.borrow().shape, vec![1, 8, 10, 10]);
+    }
+
+    #[test]
+    fn test_conv2d_padding3() {
+        // Even larger padding
+        // Input: (1, 3, 8, 8), Conv: 8 filters, 3x3, stride=1, pad=3
+        // Output: (1, 8, 12, 12) since (8 + 6 - 3) / 1 + 1 = 12
+        let conv = Conv2d::new(3, 8, 3, 1, 3, true);
+        let x = RawTensor::randn(&[1, 3, 8, 8]);
+        let y = conv.forward(&x);
+
+        assert_eq!(y.borrow().shape, vec![1, 8, 12, 12]);
+    }
+
+    #[test]
+    fn test_conv2d_large_stride_small_output() {
+        // Large stride causing very small output
+        // Input: (1, 3, 32, 32), Conv: 8 filters, 5x5, stride=4, pad=2
+        // Output: (1, 8, 8, 8) since (32 + 4 - 5) / 4 + 1 = 8
+        let conv = Conv2d::new(3, 8, 5, 4, 2, true);
+        let x = RawTensor::randn(&[1, 3, 32, 32]);
+        let y = conv.forward(&x);
+
+        assert_eq!(y.borrow().shape, vec![1, 8, 8, 8]);
+    }
+
+    #[test]
+    fn test_conv2d_different_channels() {
+        // Test various input/output channel combinations
+        let test_cases = vec![
+            (1, 1, 8, 8),     // 1->1
+            (1, 16, 8, 8),    // 1->16
+            (3, 64, 16, 16),  // 3->64
+            (64, 128, 8, 8),  // 64->128
+            (128, 256, 4, 4), // 128->256
+        ];
+
+        for (in_ch, out_ch, h, w) in test_cases {
+            let conv = Conv2d::new(in_ch, out_ch, 3, 1, 1, true);
+            let x = RawTensor::randn(&[1, in_ch, h, w]);
+            let y = conv.forward(&x);
+
+            assert_eq!(
+                y.borrow().shape,
+                vec![1, out_ch, h, w],
+                "Failed for in_ch={}, out_ch={}",
+                in_ch,
+                out_ch
+            );
+        }
+    }
+
+    #[test]
+    fn test_conv2d_multiple_batch_sizes() {
+        // Test different batch sizes
+        let batch_sizes = vec![1, 2, 4, 8, 16];
+
+        for batch in batch_sizes {
+            let conv = Conv2d::new(3, 16, 3, 1, 1, true);
+            let x = RawTensor::randn(&[batch, 3, 32, 32]);
+            let y = conv.forward(&x);
+
+            assert_eq!(
+                y.borrow().shape,
+                vec![batch, 16, 32, 32],
+                "Failed for batch_size={}",
+                batch
+            );
+        }
+    }
+
+    #[test]
+    fn test_conv2d_small_input() {
+        // Test with minimal valid input sizes
+        // Input: (1, 2, 4, 4), Conv: 4 filters, 3x3, stride=1, pad=1
+        // Output: (1, 4, 4, 4)
+        let conv = Conv2d::new(2, 4, 3, 1, 1, true);
+        let x = RawTensor::randn(&[1, 2, 4, 4]);
+        let y = conv.forward(&x);
+
+        assert_eq!(y.borrow().shape, vec![1, 4, 4, 4]);
+    }
+
+    #[test]
+    fn test_conv2d_asymmetric_dimensions() {
+        // Test with non-square spatial dimensions
+        // Input: (1, 3, 16, 32), Conv: 8 filters, 3x3, stride=2, pad=1
+        // Output: (1, 8, 8, 16)
+        let conv = Conv2d::new(3, 8, 3, 2, 1, true);
+        let x = RawTensor::randn(&[1, 3, 16, 32]);
+        let y = conv.forward(&x);
+
+        assert_eq!(y.borrow().shape, vec![1, 8, 8, 16]);
+    }
+
+    #[test]
+    fn test_conv2d_5x5_stride2_padding2() {
+        // Classic architecture combination (e.g., early VGG layers)
+        // Input: (1, 3, 32, 32), Conv: 64 filters, 5x5, stride=2, pad=2
+        // Output: (1, 64, 16, 16)
+        let conv = Conv2d::new(3, 64, 5, 2, 2, true);
+        let x = RawTensor::randn(&[1, 3, 32, 32]);
+        let y = conv.forward(&x);
+
+        assert_eq!(y.borrow().shape, vec![1, 64, 16, 16]);
+    }
+
+    #[test]
+    fn test_conv2d_output_shape_calculation() {
+        // Verify output shape formula: (H + 2*pad - kernel) / stride + 1
+        let configs = vec![
+            // (in_h, in_w, kernel, stride, pad, expected_h, expected_w)
+            (32, 32, 3, 1, 1, 32, 32),
+            (32, 32, 3, 2, 1, 16, 16),
+            (28, 28, 5, 1, 2, 28, 28),
+            (28, 28, 5, 2, 2, 14, 14),
+            (14, 14, 3, 1, 1, 14, 14),
+            (8, 8, 3, 2, 1, 4, 4),
+            (16, 16, 7, 2, 3, 8, 8), // (16 + 6 - 7) / 2 + 1 = 15 / 2 + 1 = 8
+        ];
+
+        for (in_h, in_w, kernel, stride, pad, exp_h, exp_w) in configs {
+            let conv = Conv2d::new(3, 8, kernel, stride, pad, true);
+            let x = RawTensor::randn(&[1, 3, in_h, in_w]);
+            let y = conv.forward(&x);
+
+            assert_eq!(
+                y.borrow().shape,
+                vec![1, 8, exp_h, exp_w],
+                "Failed for input=({},{}), kernel={}, stride={}, pad={}",
+                in_h,
+                in_w,
+                kernel,
+                stride,
+                pad
+            );
+        }
+    }
+
+    // ===== Gradient Tests for Various Configurations =====
+
+    #[test]
+    fn test_conv2d_gradient_1x1() {
+        // Gradient check for 1x1 convolution
+        let conv = Conv2d::new(2, 4, 1, 1, 0, true);
+        let x = RawTensor::randn(&[1, 2, 4, 4]);
+        x.borrow_mut().requires_grad = true;
+
+        let (max_err, mean_err, passed) =
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 2e-2);
+
+        assert!(
+            passed,
+            "Conv2d 1x1 gradient check failed: max_error={:.6e}, mean_error={:.6e}",
+            max_err, mean_err
+        );
+    }
+
+    #[test]
+    fn test_conv2d_gradient_5x5() {
+        // Gradient check for 5x5 convolution
+        let conv = Conv2d::new(2, 4, 5, 1, 2, true);
+        let x = RawTensor::randn(&[1, 2, 8, 8]);
+        x.borrow_mut().requires_grad = true;
+
+        let (max_err, mean_err, passed) =
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 2e-2);
+
+        assert!(
+            passed,
+            "Conv2d 5x5 gradient check failed: max_error={:.6e}, mean_error={:.6e}",
+            max_err, mean_err
+        );
+    }
+
+    #[test]
+    fn test_conv2d_gradient_stride2() {
+        // Gradient check with stride 2
+        let conv = Conv2d::new(2, 4, 3, 2, 1, true);
+        let x = RawTensor::randn(&[1, 2, 8, 8]);
+        x.borrow_mut().requires_grad = true;
+
+        let (max_err, mean_err, passed) =
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 2e-2);
+
+        assert!(
+            passed,
+            "Conv2d stride2 gradient check failed: max_error={:.6e}, mean_error={:.6e}",
+            max_err, mean_err
+        );
+    }
+
+    #[test]
+    fn test_conv2d_gradient_no_bias() {
+        // Gradient check without bias
+        let conv = Conv2d::new(2, 4, 3, 1, 1, false);
+        let x = RawTensor::randn(&[1, 2, 6, 6]);
+        x.borrow_mut().requires_grad = true;
+
+        let (max_err, mean_err, passed) =
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 2e-2);
+
+        assert!(
+            passed,
+            "Conv2d no-bias gradient check failed: max_error={:.6e}, mean_error={:.6e}",
+            max_err, mean_err
+        );
+    }
+
+    #[test]
+    fn test_conv2d_gradient_multiple_channels() {
+        // Gradient check with more channels
+        let conv = Conv2d::new(4, 8, 3, 1, 1, true);
+        let x = RawTensor::randn(&[1, 4, 8, 8]);
+        x.borrow_mut().requires_grad = true;
+
+        let (max_err, mean_err, passed) =
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 2e-2);
+
+        assert!(
+            passed,
+            "Conv2d multi-channel gradient check failed: max_error={:.6e}, mean_error={:.6e}",
+            max_err, mean_err
+        );
+    }
+
+    #[test]
+    fn test_conv2d_parameter_gradients_shape() {
+        // Verify that parameter gradients have correct shapes
+        let conv = Conv2d::new(3, 16, 3, 1, 1, true);
+        let x = RawTensor::randn(&[2, 3, 32, 32]);
+        x.borrow_mut().requires_grad = true;
+
+        let y = conv.forward(&x);
+        let loss = y.sum();
+        loss.backward();
+
+        // Check weight gradient shape
+        if let Some(w_grad) = conv.weight.grad() {
+            assert_eq!(w_grad.len(), 3 * 16 * 3 * 3, "Weight grad has wrong size");
+        } else {
+            panic!("Weight gradient is None");
+        }
+
+        // Check bias gradient shape
+        if let Some(ref b) = conv.bias {
+            if let Some(b_grad) = b.grad() {
+                assert_eq!(b_grad.len(), 16, "Bias grad has wrong size");
+            } else {
+                panic!("Bias gradient is None");
+            }
+        }
+
+        // Check input gradient shape
+        if let Some(x_grad) = x.grad() {
+            assert_eq!(x_grad.len(), 2 * 3 * 32 * 32, "Input grad has wrong size");
+        } else {
+            panic!("Input gradient is None");
+        }
+    }
 }
 
 #[cfg(all(test, feature = "gpu"))]
@@ -726,5 +1059,465 @@ mod conv2d_gpu_tests {
                 gpu_val
             );
         }
+    }
+
+    // ===== Comprehensive CPU-GPU Consistency Tests =====
+
+    #[test]
+    fn test_conv2d_gpu_cpu_consistency_1x1_kernel() {
+        if Device::gpu().is_none() {
+            return;
+        }
+
+        let device = Device::gpu().unwrap();
+
+        // Test 1x1 kernel consistency with deterministic values
+        let x_cpu = RawTensor::new(vec![1.0; 256], &[1, 4, 8, 8], false);
+
+        // Create CPU conv with deterministic weights
+        let conv_cpu = Conv2d::new_on_device(4, 8, 1, 1, 0, true, Device::CPU);
+        #[allow(clippy::identity_op)]
+        let weight_size = 4 * 8 * 1 * 1;
+        conv_cpu.weight.borrow_mut().data = crate::storage::Storage::cpu(vec![1.0; weight_size]);
+        conv_cpu.bias.as_ref().unwrap().borrow_mut().data =
+            crate::storage::Storage::cpu(vec![0.0; 8]);
+
+        let y_cpu = conv_cpu.forward(&x_cpu);
+
+        // Create GPU conv with same weights
+        let x_gpu = x_cpu.to_device(device.clone());
+        let conv_gpu = Conv2d::new_on_device(4, 8, 1, 1, 0, true, device.clone());
+        conv_gpu.weight.borrow_mut().data = crate::storage::Storage::gpu(vec![1.0; weight_size]);
+        conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
+            crate::storage::Storage::gpu(vec![0.0; 8]);
+
+        let y_gpu = conv_gpu.forward(&x_gpu);
+
+        assert_eq!(y_cpu.borrow().shape, y_gpu.borrow().shape);
+
+        let y_cpu_data = y_cpu.borrow().data.to_vec();
+        let y_gpu_data = y_gpu.borrow().data.to_vec();
+
+        for (i, (cpu_val, gpu_val)) in y_cpu_data.iter().zip(y_gpu_data.iter()).enumerate() {
+            let abs_diff = (cpu_val - gpu_val).abs();
+            assert!(
+                abs_diff < 1e-4,
+                "1x1 kernel mismatch at index {}: CPU={}, GPU={}, diff={}",
+                i,
+                cpu_val,
+                gpu_val,
+                abs_diff
+            );
+        }
+    }
+
+    #[test]
+    fn test_conv2d_gpu_cpu_consistency_5x5_kernel() {
+        if Device::gpu().is_none() {
+            return;
+        }
+
+        let device = Device::gpu().unwrap();
+
+        // Test 5x5 kernel consistency
+        let x_cpu = RawTensor::new(vec![1.0; 768], &[1, 3, 16, 16], false);
+
+        let conv_cpu = Conv2d::new_on_device(3, 8, 5, 1, 2, true, Device::CPU);
+        let weight_size = 3 * 8 * 5 * 5;
+        conv_cpu.weight.borrow_mut().data = crate::storage::Storage::cpu(vec![1.0; weight_size]);
+        conv_cpu.bias.as_ref().unwrap().borrow_mut().data =
+            crate::storage::Storage::cpu(vec![0.0; 8]);
+
+        let y_cpu = conv_cpu.forward(&x_cpu);
+
+        let x_gpu = x_cpu.to_device(device.clone());
+        let conv_gpu = Conv2d::new_on_device(3, 8, 5, 1, 2, true, device.clone());
+        conv_gpu.weight.borrow_mut().data = crate::storage::Storage::gpu(vec![1.0; weight_size]);
+        conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
+            crate::storage::Storage::gpu(vec![0.0; 8]);
+
+        let y_gpu = conv_gpu.forward(&x_gpu);
+
+        assert_eq!(y_cpu.borrow().shape, y_gpu.borrow().shape);
+
+        let y_cpu_data = y_cpu.borrow().data.to_vec();
+        let y_gpu_data = y_gpu.borrow().data.to_vec();
+
+        for (i, (cpu_val, gpu_val)) in y_cpu_data.iter().zip(y_gpu_data.iter()).enumerate() {
+            let abs_diff = (cpu_val - gpu_val).abs();
+            assert!(
+                abs_diff < 1e-4,
+                "5x5 kernel mismatch at index {}: CPU={}, GPU={}, diff={}",
+                i,
+                cpu_val,
+                gpu_val,
+                abs_diff
+            );
+        }
+    }
+
+    #[test]
+    fn test_conv2d_gpu_cpu_consistency_stride2() {
+        if Device::gpu().is_none() {
+            return;
+        }
+
+        let device = Device::gpu().unwrap();
+
+        // Test stride 2 consistency
+        let x_cpu = RawTensor::new(vec![1.0; 768], &[1, 3, 16, 16], false);
+
+        let conv_cpu = Conv2d::new_on_device(3, 8, 3, 2, 1, true, Device::CPU);
+        let weight_size = 3 * 8 * 3 * 3;
+        conv_cpu.weight.borrow_mut().data = crate::storage::Storage::cpu(vec![1.0; weight_size]);
+        conv_cpu.bias.as_ref().unwrap().borrow_mut().data =
+            crate::storage::Storage::cpu(vec![0.0; 8]);
+
+        let y_cpu = conv_cpu.forward(&x_cpu);
+
+        let x_gpu = x_cpu.to_device(device.clone());
+        let conv_gpu = Conv2d::new_on_device(3, 8, 3, 2, 1, true, device.clone());
+        conv_gpu.weight.borrow_mut().data = crate::storage::Storage::gpu(vec![1.0; weight_size]);
+        conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
+            crate::storage::Storage::gpu(vec![0.0; 8]);
+
+        let y_gpu = conv_gpu.forward(&x_gpu);
+
+        assert_eq!(y_cpu.borrow().shape, y_gpu.borrow().shape);
+
+        let y_cpu_data = y_cpu.borrow().data.to_vec();
+        let y_gpu_data = y_gpu.borrow().data.to_vec();
+
+        for (i, (cpu_val, gpu_val)) in y_cpu_data.iter().zip(y_gpu_data.iter()).enumerate() {
+            let abs_diff = (cpu_val - gpu_val).abs();
+            assert!(
+                abs_diff < 1e-4,
+                "Stride2 mismatch at index {}: CPU={}, GPU={}, diff={}",
+                i,
+                cpu_val,
+                gpu_val,
+                abs_diff
+            );
+        }
+    }
+
+    #[test]
+    fn test_conv2d_gpu_cpu_consistency_stride4() {
+        if Device::gpu().is_none() {
+            return;
+        }
+
+        let device = Device::gpu().unwrap();
+
+        // Test stride 4 consistency
+        let x_cpu = RawTensor::new(vec![1.0; 3072], &[1, 3, 32, 32], false);
+
+        let conv_cpu = Conv2d::new_on_device(3, 8, 3, 4, 1, true, Device::CPU);
+        let weight_size = 3 * 8 * 3 * 3;
+        conv_cpu.weight.borrow_mut().data = crate::storage::Storage::cpu(vec![1.0; weight_size]);
+        conv_cpu.bias.as_ref().unwrap().borrow_mut().data =
+            crate::storage::Storage::cpu(vec![0.0; 8]);
+
+        let y_cpu = conv_cpu.forward(&x_cpu);
+
+        let x_gpu = x_cpu.to_device(device.clone());
+        let conv_gpu = Conv2d::new_on_device(3, 8, 3, 4, 1, true, device.clone());
+        conv_gpu.weight.borrow_mut().data = crate::storage::Storage::gpu(vec![1.0; weight_size]);
+        conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
+            crate::storage::Storage::gpu(vec![0.0; 8]);
+
+        let y_gpu = conv_gpu.forward(&x_gpu);
+
+        assert_eq!(y_cpu.borrow().shape, y_gpu.borrow().shape);
+
+        let y_cpu_data = y_cpu.borrow().data.to_vec();
+        let y_gpu_data = y_gpu.borrow().data.to_vec();
+
+        for (i, (cpu_val, gpu_val)) in y_cpu_data.iter().zip(y_gpu_data.iter()).enumerate() {
+            let abs_diff = (cpu_val - gpu_val).abs();
+            assert!(
+                abs_diff < 1e-4,
+                "Stride4 mismatch at index {}: CPU={}, GPU={}, diff={}",
+                i,
+                cpu_val,
+                gpu_val,
+                abs_diff
+            );
+        }
+    }
+
+    #[test]
+    fn test_conv2d_gpu_cpu_consistency_large_padding() {
+        if Device::gpu().is_none() {
+            return;
+        }
+
+        let device = Device::gpu().unwrap();
+
+        // Test large padding consistency
+        let x_cpu = RawTensor::new(vec![1.0; 192], &[1, 3, 8, 8], false);
+
+        let conv_cpu = Conv2d::new_on_device(3, 8, 3, 1, 3, true, Device::CPU);
+        let weight_size = 3 * 8 * 3 * 3;
+        conv_cpu.weight.borrow_mut().data = crate::storage::Storage::cpu(vec![1.0; weight_size]);
+        conv_cpu.bias.as_ref().unwrap().borrow_mut().data =
+            crate::storage::Storage::cpu(vec![0.0; 8]);
+
+        let y_cpu = conv_cpu.forward(&x_cpu);
+
+        let x_gpu = x_cpu.to_device(device.clone());
+        let conv_gpu = Conv2d::new_on_device(3, 8, 3, 1, 3, true, device.clone());
+        conv_gpu.weight.borrow_mut().data = crate::storage::Storage::gpu(vec![1.0; weight_size]);
+        conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
+            crate::storage::Storage::gpu(vec![0.0; 8]);
+
+        let y_gpu = conv_gpu.forward(&x_gpu);
+
+        assert_eq!(y_cpu.borrow().shape, y_gpu.borrow().shape);
+
+        let y_cpu_data = y_cpu.borrow().data.to_vec();
+        let y_gpu_data = y_gpu.borrow().data.to_vec();
+
+        for (i, (cpu_val, gpu_val)) in y_cpu_data.iter().zip(y_gpu_data.iter()).enumerate() {
+            let abs_diff = (cpu_val - gpu_val).abs();
+            assert!(
+                abs_diff < 1e-4,
+                "Large padding mismatch at index {}: CPU={}, GPU={}, diff={}",
+                i,
+                cpu_val,
+                gpu_val,
+                abs_diff
+            );
+        }
+    }
+
+    #[test]
+    fn test_conv2d_gpu_cpu_consistency_no_bias() {
+        if Device::gpu().is_none() {
+            return;
+        }
+
+        let device = Device::gpu().unwrap();
+
+        // Test without bias
+        let x_cpu = RawTensor::new(vec![1.0; 768], &[1, 3, 16, 16], false);
+
+        let conv_cpu = Conv2d::new_on_device(3, 8, 3, 1, 1, false, Device::CPU);
+        let weight_size = 3 * 8 * 3 * 3;
+        conv_cpu.weight.borrow_mut().data = crate::storage::Storage::cpu(vec![1.0; weight_size]);
+
+        let y_cpu = conv_cpu.forward(&x_cpu);
+
+        let x_gpu = x_cpu.to_device(device.clone());
+        let conv_gpu = Conv2d::new_on_device(3, 8, 3, 1, 1, false, device.clone());
+        conv_gpu.weight.borrow_mut().data = crate::storage::Storage::gpu(vec![1.0; weight_size]);
+
+        let y_gpu = conv_gpu.forward(&x_gpu);
+
+        assert_eq!(y_cpu.borrow().shape, y_gpu.borrow().shape);
+
+        let y_cpu_data = y_cpu.borrow().data.to_vec();
+        let y_gpu_data = y_gpu.borrow().data.to_vec();
+
+        for (i, (cpu_val, gpu_val)) in y_cpu_data.iter().zip(y_gpu_data.iter()).enumerate() {
+            let abs_diff = (cpu_val - gpu_val).abs();
+            assert!(
+                abs_diff < 1e-4,
+                "No bias mismatch at index {}: CPU={}, GPU={}, diff={}",
+                i,
+                cpu_val,
+                gpu_val,
+                abs_diff
+            );
+        }
+    }
+
+    #[test]
+    fn test_conv2d_gpu_cpu_consistency_batch_processing() {
+        if Device::gpu().is_none() {
+            return;
+        }
+
+        let device = Device::gpu().unwrap();
+
+        // Test different batch sizes
+        for batch in [1, 2, 4, 8] {
+            let size = batch * 3 * 16 * 16;
+            let x_cpu = RawTensor::new(vec![1.0; size], &[batch, 3, 16, 16], false);
+
+            let conv_cpu = Conv2d::new_on_device(3, 8, 3, 1, 1, true, Device::CPU);
+            let weight_size = 3 * 8 * 3 * 3;
+            conv_cpu.weight.borrow_mut().data =
+                crate::storage::Storage::cpu(vec![1.0; weight_size]);
+            conv_cpu.bias.as_ref().unwrap().borrow_mut().data =
+                crate::storage::Storage::cpu(vec![0.0; 8]);
+
+            let y_cpu = conv_cpu.forward(&x_cpu);
+
+            let x_gpu = x_cpu.to_device(device.clone());
+            let conv_gpu = Conv2d::new_on_device(3, 8, 3, 1, 1, true, device.clone());
+            conv_gpu.weight.borrow_mut().data =
+                crate::storage::Storage::gpu(vec![1.0; weight_size]);
+            conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
+                crate::storage::Storage::gpu(vec![0.0; 8]);
+
+            let y_gpu = conv_gpu.forward(&x_gpu);
+
+            assert_eq!(y_cpu.borrow().shape, y_gpu.borrow().shape);
+
+            let y_cpu_data = y_cpu.borrow().data.to_vec();
+            let y_gpu_data = y_gpu.borrow().data.to_vec();
+
+            for (i, (cpu_val, gpu_val)) in y_cpu_data.iter().zip(y_gpu_data.iter()).enumerate() {
+                let abs_diff = (cpu_val - gpu_val).abs();
+                assert!(
+                    abs_diff < 1e-4,
+                    "Batch {} mismatch at index {}: CPU={}, GPU={}, diff={}",
+                    batch,
+                    i,
+                    cpu_val,
+                    gpu_val,
+                    abs_diff
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_conv2d_gpu_cpu_consistency_asymmetric_dimensions() {
+        if Device::gpu().is_none() {
+            return;
+        }
+
+        let device = Device::gpu().unwrap();
+
+        // Test non-square spatial dimensions
+        let x_cpu = RawTensor::new(vec![1.0; 1536], &[1, 3, 16, 32], false);
+
+        let conv_cpu = Conv2d::new_on_device(3, 8, 3, 2, 1, true, Device::CPU);
+        let weight_size = 3 * 8 * 3 * 3;
+        conv_cpu.weight.borrow_mut().data = crate::storage::Storage::cpu(vec![1.0; weight_size]);
+        conv_cpu.bias.as_ref().unwrap().borrow_mut().data =
+            crate::storage::Storage::cpu(vec![0.0; 8]);
+
+        let y_cpu = conv_cpu.forward(&x_cpu);
+
+        let x_gpu = x_cpu.to_device(device.clone());
+        let conv_gpu = Conv2d::new_on_device(3, 8, 3, 2, 1, true, device.clone());
+        conv_gpu.weight.borrow_mut().data = crate::storage::Storage::gpu(vec![1.0; weight_size]);
+        conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
+            crate::storage::Storage::gpu(vec![0.0; 8]);
+
+        let y_gpu = conv_gpu.forward(&x_gpu);
+
+        assert_eq!(y_cpu.borrow().shape, y_gpu.borrow().shape);
+
+        let y_cpu_data = y_cpu.borrow().data.to_vec();
+        let y_gpu_data = y_gpu.borrow().data.to_vec();
+
+        for (i, (cpu_val, gpu_val)) in y_cpu_data.iter().zip(y_gpu_data.iter()).enumerate() {
+            let abs_diff = (cpu_val - gpu_val).abs();
+            assert!(
+                abs_diff < 1e-4,
+                "Asymmetric dimensions mismatch at index {}: CPU={}, GPU={}, diff={}",
+                i,
+                cpu_val,
+                gpu_val,
+                abs_diff
+            );
+        }
+    }
+
+    #[test]
+    fn test_conv2d_gpu_cpu_consistency_multiple_channels() {
+        if Device::gpu().is_none() {
+            return;
+        }
+
+        let device = Device::gpu().unwrap();
+
+        // Test various channel configurations
+        let test_cases = vec![(1, 1, 8, 8, 64), (3, 16, 16, 16, 768), (16, 32, 8, 8, 1024)];
+
+        for (in_ch, out_ch, h, w, size) in test_cases {
+            let x_cpu = RawTensor::new(vec![1.0; size], &[1, in_ch, h, w], false);
+
+            let conv_cpu = Conv2d::new_on_device(in_ch, out_ch, 3, 1, 1, true, Device::CPU);
+            let weight_size = in_ch * out_ch * 3 * 3;
+            conv_cpu.weight.borrow_mut().data =
+                crate::storage::Storage::cpu(vec![1.0; weight_size]);
+            conv_cpu.bias.as_ref().unwrap().borrow_mut().data =
+                crate::storage::Storage::cpu(vec![0.0; out_ch]);
+
+            let y_cpu = conv_cpu.forward(&x_cpu);
+
+            let x_gpu = x_cpu.to_device(device.clone());
+            let conv_gpu = Conv2d::new_on_device(in_ch, out_ch, 3, 1, 1, true, device.clone());
+            conv_gpu.weight.borrow_mut().data =
+                crate::storage::Storage::gpu(vec![1.0; weight_size]);
+            conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
+                crate::storage::Storage::gpu(vec![0.0; out_ch]);
+
+            let y_gpu = conv_gpu.forward(&x_gpu);
+
+            assert_eq!(y_cpu.borrow().shape, y_gpu.borrow().shape);
+
+            let y_cpu_data = y_cpu.borrow().data.to_vec();
+            let y_gpu_data = y_gpu.borrow().data.to_vec();
+
+            for (i, (cpu_val, gpu_val)) in y_cpu_data.iter().zip(y_gpu_data.iter()).enumerate() {
+                let abs_diff = (cpu_val - gpu_val).abs();
+                assert!(
+                    abs_diff < 1e-4,
+                    "Channel configuration ({},{}) mismatch at index {}: CPU={}, GPU={}, diff={}",
+                    in_ch,
+                    out_ch,
+                    i,
+                    cpu_val,
+                    gpu_val,
+                    abs_diff
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_conv2d_gpu_gradient_flow_consistency() {
+        if Device::gpu().is_none() {
+            return;
+        }
+
+        let device = Device::gpu().unwrap();
+
+        // Test that gradients flow correctly on GPU
+        let conv = Conv2d::new_on_device(2, 4, 3, 1, 1, true, device.clone());
+        let x = RawTensor::randn(&[1, 2, 6, 6]).to_device(device.clone());
+        x.borrow_mut().requires_grad = true;
+
+        let y = conv.forward(&x);
+        let loss = y.sum();
+        loss.backward();
+
+        // Verify all gradients exist
+        assert!(x.grad().is_some(), "Input should have gradients");
+        assert!(
+            conv.weight.grad().is_some(),
+            "Weights should have gradients"
+        );
+        assert!(
+            conv.bias.as_ref().unwrap().grad().is_some(),
+            "Bias should have gradients"
+        );
+
+        // Verify gradient shapes
+        let x_grad = x.grad().unwrap();
+        // 1 x 2 x 6 x 6
+        assert_eq!(x_grad.len(), 2 * 6 * 6, "Input grad shape mismatch");
+
+        let w_grad = conv.weight.grad().unwrap();
+        assert_eq!(w_grad.len(), 2 * 4 * 3 * 3, "Weight grad shape mismatch");
+
+        let b_grad = conv.bias.as_ref().unwrap().grad().unwrap();
+        assert_eq!(b_grad.len(), 4, "Bias grad shape mismatch");
     }
 }
