@@ -187,7 +187,11 @@ mod unary_tests {
 
         // ∂z/∂x = ∂z/∂y * ∂y/∂x = 2y * 1/(2√x) = 2*2 * 1/4 = 1.0
         assert_relative_eq!(
-            x.grad().unwrap().first().copied().unwrap_or(f32::NAN),
+            x.grad()
+                .unwrap()
+                .first()
+                .copied()
+                .expect("tensor data should exist"),
             1.0,
             epsilon = 1e-6
         );
@@ -200,13 +204,21 @@ mod unary_tests {
         y.backward();
 
         assert_relative_eq!(
-            y.borrow().data.first().copied().unwrap_or(f32::NAN),
+            y.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist"),
             2.0,
             epsilon = 1e-6
         );
         // Chain rule: ∂(log2(2^x))/∂x = 1
         assert_relative_eq!(
-            x.grad().unwrap().first().copied().unwrap_or(f32::NAN),
+            x.grad()
+                .unwrap()
+                .first()
+                .copied()
+                .expect("tensor data should exist"),
             1.0,
             epsilon = 1e-6
         );
@@ -578,8 +590,22 @@ mod misc_tests {
 
         assert_eq!(z.borrow().shape, vec![2, 2, 2]);
         // dot product of two [1,1,1] vecs is 3.0
-        assert_eq!(z.borrow().data.first().copied().unwrap_or(f32::NAN), 3.0);
-        assert_eq!(z.borrow().data.get(7).copied().unwrap_or(f32::NAN), 3.0);
+        assert_eq!(
+            z.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist"),
+            3.0
+        );
+        assert_eq!(
+            z.borrow()
+                .data
+                .get(7)
+                .copied()
+                .expect("tensor data should exist"),
+            3.0
+        );
     }
     #[test]
     #[allow(clippy::identity_op)]
@@ -600,7 +626,14 @@ mod misc_tests {
         assert_eq!(c.borrow().shape, vec![2, 2, 2, 1]);
 
         // Values: Row (1,1,1) dot Col (2,2,2) = 3*2 = 6
-        assert_eq!(c.borrow().data.first().copied().unwrap_or(f32::NAN), 6.0);
+        assert_eq!(
+            c.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist"),
+            6.0
+        );
 
         let loss = c.sum();
         loss.backward();
@@ -1111,7 +1144,13 @@ mod misc_tests {
             loss.backward();
             opt.step();
 
-            losses.push(loss.borrow().data.first().copied().unwrap_or(f32::NAN));
+            losses.push(
+                loss.borrow()
+                    .data
+                    .first()
+                    .copied()
+                    .expect("tensor data should exist"),
+            );
         }
 
         let final_loss = *losses.last().unwrap();
@@ -1166,7 +1205,7 @@ mod misc_tests {
                 .data
                 .first()
                 .copied()
-                .unwrap_or(f32::NAN)
+                .expect("tensor data should exist")
         }
 
         let adam_loss = train_model(true);
@@ -1434,7 +1473,12 @@ mod misc_tests {
         // Each embedding contributes 1.0 per dimension from sum
         // Index 3 appears twice, so should have accumulated grad of 2.0 per dim
         let grad_at_idx3_sum: f32 = (0..16)
-            .map(|d| grad_data.get(3 * 16 + d).copied().unwrap_or(f32::NAN))
+            .map(|d| {
+                grad_data
+                    .get(3 * 16 + d)
+                    .copied()
+                    .expect("tensor data should exist")
+            })
             .sum();
         let expected_sum = 2.0 * 16.0; // 2 occurrences * 16 dimensions
         assert!(
@@ -1457,7 +1501,10 @@ mod misc_tests {
         let grad = embedding.weight.grad().unwrap();
         // Index 2 should have grad of 3.0 per dimension (appears 3 times)
         for d in 0..4 {
-            let grad_val = grad.get(2 * 4 + d).copied().unwrap_or(f32::NAN);
+            let grad_val = grad
+                .get(2 * 4 + d)
+                .copied()
+                .expect("tensor data should exist");
             assert!(
                 (grad_val - 3.0).abs() < 1e-5,
                 "Expected grad 3.0 for index 2, got {}",
@@ -1467,7 +1514,10 @@ mod misc_tests {
 
         // Index 5 should have grad of 1.0 per dimension (appears once)
         for d in 0..4 {
-            let grad_val = grad.get(5 * 4 + d).copied().unwrap_or(f32::NAN);
+            let grad_val = grad
+                .get(5 * 4 + d)
+                .copied()
+                .expect("tensor data should exist");
             assert!(
                 (grad_val - 1.0).abs() < 1e-5,
                 "Expected grad 1.0 for index 5, got {}",
@@ -1679,6 +1729,568 @@ mod edge_case_tests {
         // This creates completely empty tensor, which is not allowed
         let _result = x.shrink(&[(0, 0), (0, 0)]);
     }
+
+    // ===== NUMERICAL EDGE CASE TESTS =====
+
+    // Division by zero tests
+    #[test]
+    fn test_div_by_zero_positive() {
+        // Division by zero should produce +inf (positive / positive_zero)
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], false);
+        let y = RawTensor::new(vec![0.0, 0.0, 0.0], &[3], false);
+        let z = x.div(&y);
+
+        // All results should be +inf
+        for &val in &z.borrow().data {
+            assert!(val.is_infinite(), "Expected infinity, got {}", val);
+            assert!(
+                val.is_sign_positive(),
+                "Expected positive infinity, got {}",
+                val
+            );
+        }
+    }
+
+    #[test]
+    fn test_div_by_zero_negative() {
+        // Division by zero should produce -inf (negative / positive_zero)
+        let x = RawTensor::new(vec![-1.0, -2.0, -3.0], &[3], false);
+        let y = RawTensor::new(vec![0.0, 0.0, 0.0], &[3], false);
+        let z = x.div(&y);
+
+        // All results should be -inf
+        for &val in &z.borrow().data {
+            assert!(val.is_infinite(), "Expected infinity, got {}", val);
+            assert!(
+                val.is_sign_negative(),
+                "Expected negative infinity, got {}",
+                val
+            );
+        }
+    }
+
+    #[test]
+    fn test_div_zero_by_zero() {
+        // 0.0 / 0.0 should produce NaN
+        let x = RawTensor::new(vec![0.0, 0.0, 0.0], &[3], false);
+        let y = RawTensor::new(vec![0.0, 0.0, 0.0], &[3], false);
+        let z = x.div(&y);
+
+        // All results should be NaN
+        for &val in &z.borrow().data {
+            assert!(val.is_nan(), "Expected NaN, got {}", val);
+        }
+    }
+
+    #[test]
+    fn test_div_by_negative_zero() {
+        // Division by -0.0 should produce -inf (positive / negative_zero)
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], false);
+        let y = RawTensor::new(vec![-0.0, -0.0, -0.0], &[3], false);
+        let z = x.div(&y);
+
+        // All results should be -inf
+        for &val in &z.borrow().data {
+            assert!(val.is_infinite(), "Expected infinity, got {}", val);
+            assert!(
+                val.is_sign_negative(),
+                "Expected negative infinity, got {}",
+                val
+            );
+        }
+    }
+
+    #[test]
+    fn test_div_backward_with_zero_denominator() {
+        // Test gradient with zero in denominator
+        // ∂(x/y)/∂x = 1/y (undefined when y=0, but should still compute)
+        let x = RawTensor::new(vec![6.0], &[1], true);
+        let y = RawTensor::new(vec![0.0], &[1], true);
+        let z = x.div(&y); // z = inf
+        z.backward();
+
+        // x.grad() = 1/0 = inf
+        assert!(
+            x.grad()
+                .unwrap()
+                .first()
+                .copied()
+                .expect("gradient should not be empty")
+                .is_infinite()
+        );
+        // y.grad() = -x/y² = -6/0 = -inf
+        assert!(
+            y.grad()
+                .unwrap()
+                .first()
+                .copied()
+                .expect("gradient should not be empty")
+                .is_infinite()
+        );
+    }
+
+    // Square root edge cases
+    #[test]
+    fn test_sqrt_of_negative() {
+        // sqrt of negative should produce NaN
+        let x = RawTensor::new(vec![-1.0, -4.0, -9.0], &[3], false);
+        let y = x.sqrt();
+
+        // All results should be NaN
+        for &val in &y.borrow().data {
+            assert!(val.is_nan(), "sqrt of negative should be NaN, got {}", val);
+        }
+    }
+
+    #[test]
+    fn test_sqrt_of_zero() {
+        // sqrt(0.0) = 0.0
+        let x = RawTensor::new(vec![0.0, 0.0, 0.0], &[3], false);
+        let y = x.sqrt();
+
+        for &val in &y.borrow().data {
+            assert_eq!(val, 0.0, "sqrt(0) should be 0, got {}", val);
+        }
+    }
+
+    #[test]
+    fn test_sqrt_gradient_near_zero() {
+        // Test that sqrt gradient doesn't panic at zero (it produces inf)
+        // ∂sqrt(x)/∂x = 1/(2*sqrt(x)), which is inf when x=0
+        let x = RawTensor::new(vec![0.0], &[1], true);
+        let y = x.sqrt();
+        y.backward();
+
+        // Gradient at x=0 is infinite
+        assert!(
+            x.grad()
+                .unwrap()
+                .first()
+                .copied()
+                .expect("gradient should not be empty")
+                .is_infinite()
+        );
+    }
+
+    #[test]
+    fn test_sqrt_gradient_negative() {
+        // Test sqrt gradient with negative input
+        // Forward pass produces NaN, backward should also handle it
+        let x = RawTensor::new(vec![-1.0], &[1], true);
+        let y = x.sqrt(); // y = NaN
+
+        // Check that forward produces NaN
+        assert!(
+            y.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should not be empty")
+                .is_nan()
+        );
+
+        // Backward should compute without panicking
+        y.backward();
+
+        // The gradient formula 1/(2*sqrt(x)) with x=-1 gives NaN
+        assert!(
+            x.grad()
+                .unwrap()
+                .first()
+                .copied()
+                .expect("gradient should not be empty")
+                .is_nan()
+        );
+    }
+
+    // Logarithm edge cases
+    #[test]
+    fn test_log_of_zero() {
+        // log(0) should produce -inf
+        let x = RawTensor::new(vec![0.0, 0.0, 0.0], &[3], false);
+        let y = x.log();
+
+        // All results should be -inf
+        for &val in &y.borrow().data {
+            assert!(val.is_infinite(), "log(0) should be infinite, got {}", val);
+            assert!(val.is_sign_negative(), "log(0) should be -inf, got {}", val);
+        }
+    }
+
+    #[test]
+    fn test_log_of_negative() {
+        // log of negative should produce NaN
+        let x = RawTensor::new(vec![-1.0, -2.0, -3.0], &[3], false);
+        let y = x.log();
+
+        // All results should be NaN
+        for &val in &y.borrow().data {
+            assert!(val.is_nan(), "log of negative should be NaN, got {}", val);
+        }
+    }
+
+    #[test]
+    fn test_log2_of_zero() {
+        // log2(0) should produce -inf
+        let x = RawTensor::new(vec![0.0, 0.0, 0.0], &[3], false);
+        let y = x.log2();
+
+        // All results should be -inf
+        for &val in &y.borrow().data {
+            assert!(val.is_infinite(), "log2(0) should be infinite, got {}", val);
+            assert!(
+                val.is_sign_negative(),
+                "log2(0) should be -inf, got {}",
+                val
+            );
+        }
+    }
+
+    #[test]
+    fn test_log2_of_negative() {
+        // log2 of negative should produce NaN
+        let x = RawTensor::new(vec![-1.0, -2.0, -4.0], &[3], false);
+        let y = x.log2();
+
+        // All results should be NaN
+        for &val in &y.borrow().data {
+            assert!(val.is_nan(), "log2 of negative should be NaN, got {}", val);
+        }
+    }
+
+    #[test]
+    fn test_log_gradient_at_zero() {
+        // Test log gradient at zero: ∂log(x)/∂x = 1/x, which is inf at x=0
+        let x = RawTensor::new(vec![0.0], &[1], true);
+        let y = x.log(); // y = -inf
+        y.backward();
+
+        // Gradient at x=0 is infinite
+        assert!(
+            x.grad()
+                .unwrap()
+                .first()
+                .copied()
+                .expect("gradient should not be empty")
+                .is_infinite()
+        );
+        assert!(
+            x.grad()
+                .unwrap()
+                .first()
+                .copied()
+                .expect("gradient should not be empty")
+                .is_sign_positive()
+        );
+    }
+
+    #[test]
+    fn test_log2_gradient_at_zero() {
+        // Test log2 gradient at zero: ∂log2(x)/∂x = 1/(x*ln(2)), which is inf at x=0
+        let x = RawTensor::new(vec![0.0], &[1], true);
+        let y = x.log2(); // y = -inf
+        y.backward();
+
+        // Gradient at x=0 is infinite
+        assert!(
+            x.grad()
+                .unwrap()
+                .first()
+                .copied()
+                .expect("gradient should not be empty")
+                .is_infinite()
+        );
+        assert!(
+            x.grad()
+                .unwrap()
+                .first()
+                .copied()
+                .expect("gradient should not be empty")
+                .is_sign_positive()
+        );
+    }
+
+    // NaN/Infinity propagation tests
+    #[test]
+    fn test_nan_propagation_add() {
+        // NaN should propagate through addition
+        let x = RawTensor::new(vec![1.0, f32::NAN, 3.0], &[3], false);
+        let y = RawTensor::new(vec![4.0, 5.0, 6.0], &[3], false);
+        let z = x.add(&y);
+
+        // NaN + anything = NaN
+        assert_eq!(
+            z.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should not be empty"),
+            5.0
+        );
+        assert!(
+            z.borrow()
+                .data
+                .get(1)
+                .copied()
+                .expect("tensor should have element at index 1")
+                .is_nan()
+        );
+        assert_eq!(
+            z.borrow()
+                .data
+                .get(2)
+                .copied()
+                .expect("tensor should have element at index 2"),
+            9.0
+        );
+    }
+
+    #[test]
+    fn test_nan_propagation_mul() {
+        // NaN should propagate through multiplication
+        let x = RawTensor::new(vec![2.0, f32::NAN, 4.0], &[3], false);
+        let y = RawTensor::new(vec![3.0, 5.0, 6.0], &[3], false);
+        let z = x.elem_mul(&y);
+
+        // NaN * anything = NaN
+        assert_eq!(
+            z.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should not be empty"),
+            6.0
+        );
+        assert!(
+            z.borrow()
+                .data
+                .get(1)
+                .copied()
+                .expect("tensor should have element at index 1")
+                .is_nan()
+        );
+        assert_eq!(
+            z.borrow()
+                .data
+                .get(2)
+                .copied()
+                .expect("tensor should have element at index 2"),
+            24.0
+        );
+    }
+
+    #[test]
+    fn test_inf_propagation_add() {
+        // Infinity should propagate correctly through addition
+        let x = RawTensor::new(vec![1.0, f32::INFINITY, f32::INFINITY], &[3], false);
+        let y = RawTensor::new(vec![4.0, 5.0, f32::NEG_INFINITY], &[3], false);
+        let z = x.add(&y);
+
+        assert_eq!(
+            z.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist"),
+            5.0
+        );
+        assert!(
+            z.borrow()
+                .data
+                .get(1)
+                .copied()
+                .expect("tensor data should exist")
+                .is_infinite()
+        ); // inf + 5 = inf
+        assert!(
+            z.borrow()
+                .data
+                .get(2)
+                .copied()
+                .expect("tensor data should exist")
+                .is_nan()
+        ); // inf + -inf = NaN
+    }
+
+    #[test]
+    fn test_inf_propagation_mul() {
+        // Infinity should propagate correctly through multiplication
+        let x = RawTensor::new(vec![2.0, f32::INFINITY, 0.0], &[3], false);
+        let y = RawTensor::new(vec![3.0, 5.0, f32::INFINITY], &[3], false);
+        let z = x.elem_mul(&y);
+
+        assert_eq!(
+            z.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist"),
+            6.0
+        );
+        assert!(
+            z.borrow()
+                .data
+                .get(1)
+                .copied()
+                .expect("tensor data should exist")
+                .is_infinite()
+        ); // inf * 5 = inf
+        assert!(
+            z.borrow()
+                .data
+                .get(2)
+                .copied()
+                .expect("tensor data should exist")
+                .is_nan()
+        ); // 0 * inf = NaN
+    }
+
+    #[test]
+    fn test_inf_through_sqrt() {
+        // sqrt(inf) = inf
+        let x = RawTensor::new(vec![f32::INFINITY], &[1], false);
+        let y = x.sqrt();
+
+        assert!(
+            y.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist")
+                .is_infinite()
+        );
+        assert!(
+            y.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist")
+                .is_sign_positive()
+        );
+    }
+
+    #[test]
+    fn test_inf_through_log() {
+        // log(inf) = inf
+        let x = RawTensor::new(vec![f32::INFINITY], &[1], false);
+        let y = x.log();
+
+        assert!(
+            y.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist")
+                .is_infinite()
+        );
+        assert!(
+            y.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist")
+                .is_sign_positive()
+        );
+    }
+
+    #[test]
+    fn test_inf_through_log2() {
+        // log2(inf) = inf
+        let x = RawTensor::new(vec![f32::INFINITY], &[1], false);
+        let y = x.log2();
+
+        assert!(
+            y.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist")
+                .is_infinite()
+        );
+        assert!(
+            y.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist")
+                .is_sign_positive()
+        );
+    }
+
+    #[test]
+    fn test_inf_through_exp() {
+        // exp(inf) = inf, exp(-inf) = 0
+        let x = RawTensor::new(vec![f32::INFINITY, f32::NEG_INFINITY], &[2], false);
+        let y = x.exp();
+
+        assert!(
+            y.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist")
+                .is_infinite()
+        ); // exp(inf) = inf
+        assert_eq!(
+            y.borrow()
+                .data
+                .get(1)
+                .copied()
+                .expect("tensor data should exist"),
+            0.0
+        ); // exp(-inf) = 0
+    }
+
+    #[test]
+    fn test_nan_sqrt_log_chain() {
+        // Test that NaN propagates through operation chain
+        let x = RawTensor::new(vec![-1.0], &[1], false);
+        let y = x.sqrt(); // NaN
+        let z = y.log(); // log(NaN) = NaN
+
+        assert!(
+            z.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist")
+                .is_nan()
+        );
+    }
+
+    #[test]
+    fn test_zero_operations_chain() {
+        // Test chain with zero divisions
+        let x = RawTensor::new(vec![1.0, 0.0, 2.0], &[3], false);
+        let y = RawTensor::new(vec![0.0, 1.0, 0.0], &[3], false);
+        let z = x.div(&y); // [inf, 0, inf]
+        let w = z.elem_mul(&z); // [inf, 0, inf] * [inf, 0, inf] = [inf, 0, inf]
+
+        assert!(
+            w.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist")
+                .is_infinite()
+        );
+        assert_eq!(
+            w.borrow()
+                .data
+                .get(1)
+                .copied()
+                .expect("tensor data should exist"),
+            0.0
+        );
+        assert!(
+            w.borrow()
+                .data
+                .get(2)
+                .copied()
+                .expect("tensor data should exist")
+                .is_infinite()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1782,7 +2394,14 @@ mod axis_reduce_tests {
 
         // Loss should be positive scalar
         assert_eq!(loss.borrow().shape, vec![1]);
-        assert!(loss.borrow().data.first().copied().unwrap_or(f32::NAN) > 0.0);
+        assert!(
+            loss.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist")
+                > 0.0
+        );
 
         // Gradients should exist and have correct shape
         assert_eq!(logits.grad().unwrap().len(), 4);
@@ -1826,7 +2445,12 @@ mod axis_reduce_tests {
         w.borrow_mut().grad = Some(Storage::cpu(vec![0.0])); // Artificial zero gradient
         opt.step();
 
-        let new_val = w.borrow().data.first().copied().unwrap_or(f32::NAN);
+        let new_val = w
+            .borrow()
+            .data
+            .first()
+            .copied()
+            .expect("tensor data should exist");
         approx::assert_relative_eq!(new_val, 0.99, epsilon = 1e-6);
     }
 
@@ -1840,8 +2464,26 @@ mod axis_reduce_tests {
         // mean(dim=1) -> [2, 5]
         let m = x.mean_dim(1, false);
         assert_eq!(m.borrow().shape, vec![2]);
-        assert!((m.borrow().data.first().copied().unwrap_or(f32::NAN) - 2.0).abs() < 1e-6);
-        assert!((m.borrow().data.get(1).copied().unwrap_or(f32::NAN) - 5.0).abs() < 1e-6);
+        assert!(
+            (m.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist")
+                - 2.0)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            (m.borrow()
+                .data
+                .get(1)
+                .copied()
+                .expect("tensor data should exist")
+                - 5.0)
+                .abs()
+                < 1e-6
+        );
 
         // Check gradient
         m.sum().backward();
@@ -1931,12 +2573,48 @@ mod axis_reduce_tests {
         // Original PyTorch [3,2]: [1,2, 3,4, 5,6]
         // Transposed [2,3]: [1,3,5, 2,4,6]
         let encoder_weight = &volta_state.get("encoder.weight").unwrap().data;
-        assert_eq!(encoder_weight.first().copied().unwrap_or(f32::NAN), 1.0);
-        assert_eq!(encoder_weight.get(1).copied().unwrap_or(f32::NAN), 3.0);
-        assert_eq!(encoder_weight.get(2).copied().unwrap_or(f32::NAN), 5.0);
-        assert_eq!(encoder_weight.get(3).copied().unwrap_or(f32::NAN), 2.0);
-        assert_eq!(encoder_weight.get(4).copied().unwrap_or(f32::NAN), 4.0);
-        assert_eq!(encoder_weight.get(5).copied().unwrap_or(f32::NAN), 6.0);
+        assert_eq!(
+            encoder_weight
+                .first()
+                .copied()
+                .expect("tensor data should exist"),
+            1.0
+        );
+        assert_eq!(
+            encoder_weight
+                .get(1)
+                .copied()
+                .expect("tensor data should exist"),
+            3.0
+        );
+        assert_eq!(
+            encoder_weight
+                .get(2)
+                .copied()
+                .expect("tensor data should exist"),
+            5.0
+        );
+        assert_eq!(
+            encoder_weight
+                .get(3)
+                .copied()
+                .expect("tensor data should exist"),
+            2.0
+        );
+        assert_eq!(
+            encoder_weight
+                .get(4)
+                .copied()
+                .expect("tensor data should exist"),
+            4.0
+        );
+        assert_eq!(
+            encoder_weight
+                .get(5)
+                .copied()
+                .expect("tensor data should exist"),
+            6.0
+        );
 
         // Create Volta model with named layers
         let mut model = Sequential::builder()
@@ -2645,39 +3323,39 @@ mod gpu_tests {
 
         // Each a element received gradient from 4 b elements
         assert_abs_diff_eq!(
-            a_grad.first().copied().unwrap_or(f32::NAN),
+            a_grad.first().copied().expect("tensor data should exist"),
             4.0,
             epsilon = 1e-3
         );
         assert_abs_diff_eq!(
-            a_grad.get(1).copied().unwrap_or(f32::NAN),
+            a_grad.get(1).copied().expect("tensor data should exist"),
             4.0,
             epsilon = 1e-3
         );
         assert_abs_diff_eq!(
-            a_grad.get(2).copied().unwrap_or(f32::NAN),
+            a_grad.get(2).copied().expect("tensor data should exist"),
             4.0,
             epsilon = 1e-3
         );
 
         // Each b element received gradient from 3 a elements
         assert_abs_diff_eq!(
-            b_grad.first().copied().unwrap_or(f32::NAN),
+            b_grad.first().copied().expect("tensor data should exist"),
             3.0,
             epsilon = 1e-3
         );
         assert_abs_diff_eq!(
-            b_grad.get(1).copied().unwrap_or(f32::NAN),
+            b_grad.get(1).copied().expect("tensor data should exist"),
             3.0,
             epsilon = 1e-3
         );
         assert_abs_diff_eq!(
-            b_grad.get(2).copied().unwrap_or(f32::NAN),
+            b_grad.get(2).copied().expect("tensor data should exist"),
             3.0,
             epsilon = 1e-3
         );
         assert_abs_diff_eq!(
-            b_grad.get(3).copied().unwrap_or(f32::NAN),
+            b_grad.get(3).copied().expect("tensor data should exist"),
             3.0,
             epsilon = 1e-3
         );
@@ -2739,7 +3417,7 @@ mod gpu_tests {
         // a should accumulate gradient from all 1000 positions
         let a_grad = a.grad().unwrap();
         assert_abs_diff_eq!(
-            a_grad.first().copied().unwrap_or(f32::NAN),
+            a_grad.first().copied().expect("tensor data should exist"),
             1000.0,
             epsilon = 1e-2
         );
