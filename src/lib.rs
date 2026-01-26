@@ -700,6 +700,46 @@ mod misc_tests {
             y.sum()
         });
         assert!(passed, "Sigmoid gradient check failed");
+
+        // Test recip gradient
+        let x = RawTensor::new(vec![1.0, 2.0, 4.0], &[3], true);
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let y = t.recip();
+            y.sum()
+        });
+        assert!(passed, "Recip gradient check failed");
+
+        // Test exp2 gradient
+        let x = RawTensor::new(vec![0.0, 1.0, 2.0], &[3], true);
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let y = t.exp2();
+            y.sum()
+        });
+        assert!(passed, "Exp2 gradient check failed");
+
+        // Test log2 gradient
+        let x = RawTensor::new(vec![1.0, 2.0, 4.0], &[3], true);
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let y = t.log2();
+            y.sum()
+        });
+        assert!(passed, "Log2 gradient check failed");
+
+        // Test cos gradient
+        let x = RawTensor::new(vec![0.0, 0.5, 1.0], &[3], true);
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let y = t.cos();
+            y.sum()
+        });
+        assert!(passed, "Cos gradient check failed");
+
+        // Test tanh gradient
+        let x = RawTensor::new(vec![0.0, 1.0, -1.0], &[3], true);
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let y = t.tanh();
+            y.sum()
+        });
+        assert!(passed, "Tanh gradient check failed");
     }
 
     #[test]

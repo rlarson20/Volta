@@ -32,7 +32,7 @@ impl RawTensor {
     ///
     /// Uses a `HashSet` to track visited nodes and avoid recomputation.
     /// # Panics
-    /// Calling on tensor taht doesn't need gradients
+    /// Calling on tensor that doesn't need gradients
     pub fn backward(tensor_ref: &Tensor) {
         enum Action {
             Visit(Tensor),
