@@ -1477,6 +1477,210 @@ mod misc_tests {
     }
 }
 
+// ===== EDGE CASE AND ERROR HANDLING TESTS =====
+// This module tests that invalid operations panic with appropriate error messages.
+// These tests document the validation behavior of shape operations.
+#[cfg(test)]
+mod edge_case_tests {
+    use super::*;
+
+    // ===== RESHAPE INVALID SIZE TESTS =====
+
+    #[test]
+    #[should_panic(expected = "Cannot reshape: size mismatch")]
+    fn test_reshape_invalid_size() {
+        // Attempt to reshape 6-element tensor to shape requiring 8 elements
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[6], false);
+        x.reshape(&[2, 4]); // 2*4 = 8, but we have 6 elements
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot reshape: size mismatch")]
+    fn test_reshape_smaller_target() {
+        // Attempt to reshape 12-element tensor to shape requiring 6 elements
+        let x = RawTensor::new(
+            vec![
+                1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+            ],
+            &[3, 4],
+            false,
+        );
+        x.reshape(&[2, 3]); // 2*3 = 6, but we have 12 elements
+    }
+
+    // Note: Zero-sized reshape doesn't panic because product of [0, 6] is 0,
+    // which doesn't match the non-zero size of the tensor, so it hits the
+    // size mismatch panic instead
+    #[test]
+    #[should_panic(expected = "Cannot reshape: size mismatch")]
+    fn test_reshape_zero_dimension() {
+        // Attempt to reshape to shape with zero dimension
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
+        x.reshape(&[0, 6]); // Product is 0, doesn't match 6 elements
+    }
+
+    // ===== PERMUTE INVALID AXES TESTS =====
+
+    #[test]
+    #[should_panic(expected = "Axes length must match rank")]
+    fn test_permute_wrong_length_too_short() {
+        // Attempt to permute rank-3 tensor with only 2 axes
+        let x = RawTensor::new(
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            &[2, 2, 2],
+            false,
+        );
+        x.permute(&[0, 1]); // Missing third axis
+    }
+
+    #[test]
+    #[should_panic(expected = "Axes length must match rank")]
+    fn test_permute_wrong_length_too_long() {
+        // Attempt to permute rank-2 tensor with 3 axes
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
+        x.permute(&[0, 1, 2]); // Too many axes for rank-2 tensor
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid permutation axes")]
+    fn test_permute_out_of_bounds_axis() {
+        // Attempt to permute with axis exceeding tensor rank
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
+        x.permute(&[0, 5]); // Axis 5 doesn't exist in rank-2 tensor
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid permutation axes")]
+    fn test_permute_duplicate_axes() {
+        // Attempt to permute with duplicate axes
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
+        x.permute(&[0, 0]); // Axis 0 appears twice
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid permutation axes")]
+    fn test_permute_non_contiguous_axes() {
+        // Attempt to permute with non-contiguous axes
+        let x = RawTensor::new(
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            &[2, 2, 2],
+            false,
+        );
+        x.permute(&[0, 1, 3]); // Axis 3 doesn't exist (should be 0, 1, 2)
+    }
+
+    // ===== PAD INVALID SIZE TESTS =====
+
+    #[test]
+    #[should_panic(expected = "Padding length must match rank")]
+    fn test_pad_wrong_length_too_short() {
+        // Attempt to pad rank-2 tensor with only 1 dimension of padding
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
+        x.pad(&[(1, 1)]); // Missing padding for second dimension
+    }
+
+    #[test]
+    #[should_panic(expected = "Padding length must match rank")]
+    fn test_pad_wrong_length_too_long() {
+        // Attempt to pad rank-2 tensor with 3 dimensions of padding
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
+        x.pad(&[(1, 1), (1, 1), (1, 1)]); // Too many padding specifications
+    }
+
+    #[test]
+    #[should_panic(expected = "Expand would create tensor with")]
+    fn test_pad_excessive_padding() {
+        // Attempt to pad with huge values that would exceed MAX_ALLOC
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
+        // This would create a tensor with (2 + 5000) * (2 + 5000) = ~25M elements
+        // To exceed 100M, we need even larger padding
+        x.pad(&[(50000, 50000), (50000, 50000)]); // Way over 100M elements
+    }
+
+    // ===== SHRINK INVALID RANGE TESTS =====
+
+    #[test]
+    #[should_panic(expected = "Ranges length must match rank")]
+    fn test_shrink_wrong_length_too_short() {
+        // Attempt to shrink rank-2 tensor with only 1 range
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
+        x.shrink(&[(0, 2)]); // Missing range for second dimension
+    }
+
+    #[test]
+    #[should_panic(expected = "Ranges length must match rank")]
+    fn test_shrink_wrong_length_too_long() {
+        // Attempt to shrink rank-2 tensor with 3 ranges
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
+        x.shrink(&[(0, 2), (0, 3), (0, 1)]); // Too many ranges
+    }
+
+    // NOTE: The following shrink tests document UNSAFE BEHAVIOR
+    // The shrink operation does NOT validate that ranges are within tensor bounds.
+    // These tests document the current behavior, which may lead to:
+    // - Out-of-bounds memory access in recursive functions
+    // - Silent data corruption
+    // - Undefined behavior
+    // Future work should add bounds checking to shrink() in movement.rs
+
+    #[test]
+    fn test_shrink_out_of_bounds_end() {
+        // Shrink with end exceeding tensor dimension
+        // Current behavior: May cause panic or silent memory corruption
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
+        // This creates new_shape [2, 10] but tensor only has 3 columns
+        // The recursive function may access invalid memory
+        let result = x.shrink(&[(0, 2), (0, 10)]);
+
+        // Current implementation creates a tensor with shape [2, 10]
+        // but the data is garbage (reads beyond bounds)
+        assert_eq!(result.borrow().shape, vec![2, 10]);
+        // The actual data values are undefined/corrupted
+    }
+
+    #[test]
+    fn test_shrink_start_exceeds_dimension() {
+        // Shrink with start position beyond tensor dimension
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
+        // Start at position 5, but dimension only has 3 elements
+        let result = x.shrink(&[(0, 2), (5, 10)]);
+
+        // Current implementation doesn't validate start < dimension
+        assert_eq!(result.borrow().shape, vec![2, 5]); // 10 - 5 = 5
+        // The actual data values are undefined/reads beyond valid range
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to subtract with overflow")]
+    fn test_shrink_invalid_range_order() {
+        // Shrink with start >= end (creates negative or zero size)
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
+        // For dimension 0: end (2) < start (3), causing underflow
+        // end - start = 2 - 3 = underflow in usize subtraction
+        // This panics in debug mode with overflow check
+        let _result = x.shrink(&[(3, 2), (0, 3)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot create tensor with zero elements")]
+    fn test_shrink_empty_range() {
+        // Shrink with start == end (zero-sized dimension)
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
+        // First dimension becomes 0-sized
+        // This panics because tensors cannot have zero elements
+        let _result = x.shrink(&[(0, 0), (0, 3)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot create tensor with zero elements")]
+    fn test_shrink_both_empty_ranges() {
+        // Shrink with all dimensions having start == end
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
+        // This creates completely empty tensor, which is not allowed
+        let _result = x.shrink(&[(0, 0), (0, 0)]);
+    }
+}
+
 #[cfg(test)]
 mod axis_reduce_tests {
     use super::*;
