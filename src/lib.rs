@@ -2291,6 +2291,304 @@ mod edge_case_tests {
                 .is_infinite()
         );
     }
+
+    // ===== SCALAR TENSOR EDGE CASES =====
+
+    #[test]
+    fn test_scalar_add() {
+        // Scalar + Scalar
+        let x = RawTensor::new(vec![5.0], &[1], false);
+        let y = RawTensor::new(vec![3.0], &[1], false);
+        let z = x.add(&y);
+
+        assert_eq!(z.borrow().shape, vec![1]);
+        assert_eq!(
+            z.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist"),
+            8.0
+        );
+    }
+
+    #[test]
+    fn test_scalar_mul() {
+        // Scalar * Scalar
+        let x = RawTensor::new(vec![4.0], &[1], false);
+        let y = RawTensor::new(vec![7.0], &[1], false);
+        let z = x.elem_mul(&y);
+
+        assert_eq!(z.borrow().shape, vec![1]);
+        assert_eq!(
+            z.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist"),
+            28.0
+        );
+    }
+
+    #[test]
+    fn test_scalar_sum() {
+        // Sum of scalar is itself
+        let x = RawTensor::new(vec![42.0], &[1], false);
+        let s = x.sum();
+
+        assert_eq!(s.borrow().shape, vec![1]);
+        assert_eq!(
+            s.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist"),
+            42.0
+        );
+    }
+
+    #[test]
+    fn test_scalar_mean() {
+        // Mean of scalar is itself
+        let x = RawTensor::new(vec![99.0], &[1], false);
+        let m = x.mean();
+
+        assert_eq!(m.borrow().shape, vec![1]);
+        assert_eq!(
+            m.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist"),
+            99.0
+        );
+    }
+
+    #[test]
+    fn test_scalar_max() {
+        // Max of scalar is itself
+        let x = RawTensor::new(vec![17.0], &[1], false);
+        let m = x.max_reduce();
+
+        assert_eq!(m.borrow().shape, vec![1]);
+        assert_eq!(
+            m.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist"),
+            17.0
+        );
+    }
+
+    #[test]
+    fn test_scalar_reshape() {
+        // Scalar can be reshaped to any shape with product 1
+        let x = RawTensor::new(vec![5.0], &[1], false);
+        let y = x.reshape(&[1, 1, 1]);
+
+        assert_eq!(y.borrow().shape, vec![1, 1, 1]);
+        assert_eq!(
+            y.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist"),
+            5.0
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Transpose expects 2D tensor")]
+    fn test_scalar_transpose_panics() {
+        // Scalar transpose is not supported - only 2D+ tensors
+        let x = RawTensor::new(vec![8.0], &[1], false);
+        let _y = x.transpose(); // Should panic
+    }
+
+    #[test]
+    fn test_scalar_gradient() {
+        // Gradient computation on scalar (using multiplication)
+        let x = RawTensor::new(vec![3.0], &[1], true);
+        let two = RawTensor::new(vec![2.0], &[1], false);
+        let y = x.elem_mul(&two); // y = 3 * 2 = 6
+        y.backward();
+
+        // dy/dx = 2
+        assert_eq!(
+            x.grad()
+                .unwrap()
+                .first()
+                .copied()
+                .expect("gradient should exist"),
+            2.0
+        );
+    }
+
+    #[test]
+    fn test_scalar_div_by_scalar() {
+        // Scalar / Scalar
+        let x = RawTensor::new(vec![10.0], &[1], false);
+        let y = RawTensor::new(vec![2.0], &[1], false);
+        let z = x.div(&y);
+
+        assert_eq!(z.borrow().shape, vec![1]);
+        assert_eq!(
+            z.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist"),
+            5.0
+        );
+    }
+
+    #[test]
+    fn test_scalar_sqrt() {
+        // Sqrt of scalar
+        let x = RawTensor::new(vec![16.0], &[1], false);
+        let y = x.sqrt();
+
+        assert_eq!(y.borrow().shape, vec![1]);
+        assert_eq!(
+            y.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist"),
+            4.0
+        );
+    }
+
+    // ===== SCALAR BROADCASTING EDGE CASES =====
+
+    #[test]
+    fn test_scalar_broadcasts_to_vector() {
+        // Scalar [1] broadcasts to vector [3]
+        let scalar = RawTensor::new(vec![5.0], &[1], false);
+        let vector = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], false);
+        let result = scalar.add(&vector);
+
+        assert_eq!(result.borrow().shape, vec![3]);
+        assert_eq!(result.borrow().data, vec![6.0, 7.0, 8.0]);
+    }
+
+    #[test]
+    fn test_vector_broadcasts_to_scalar() {
+        // Vector [3] broadcasts to scalar [1]
+        let vector = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], false);
+        let scalar = RawTensor::new(vec![10.0], &[1], false);
+        let result = vector.add(&scalar);
+
+        assert_eq!(result.borrow().shape, vec![3]);
+        assert_eq!(result.borrow().data, vec![11.0, 12.0, 13.0]);
+    }
+
+    #[test]
+    fn test_scalar_broadcasts_to_matrix() {
+        // Scalar [1] broadcasts to matrix [2, 3]
+        let scalar = RawTensor::new(vec![2.0], &[1], false);
+        let matrix = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
+        let result = scalar.elem_mul(&matrix);
+
+        assert_eq!(result.borrow().shape, vec![2, 3]);
+        assert_eq!(result.borrow().data, vec![2.0, 4.0, 6.0, 8.0, 10.0, 12.0]);
+    }
+
+    #[test]
+    fn test_scalar_broadcast_with_gradient() {
+        // Test gradient flow with scalar broadcasting
+        let scalar = RawTensor::new(vec![2.0], &[1], true);
+        let vector = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], true);
+        let result = scalar.elem_mul(&vector); // [2, 4, 6]
+        let sum = result.sum(); // 12
+        sum.backward();
+
+        // d(loss)/d(scalar) = sum of vector elements = 1+2+3 = 6
+        assert_eq!(
+            scalar
+                .grad()
+                .unwrap()
+                .first()
+                .copied()
+                .expect("gradient should exist"),
+            6.0
+        );
+
+        // d(loss)/d(vector) = scalar = 2 for each element
+        assert_eq!(vector.grad().unwrap(), vec![2.0, 2.0, 2.0]);
+    }
+
+    #[test]
+    fn test_scalar_comparison_ops() {
+        // Comparison operations with scalars
+        let scalar = RawTensor::new(vec![2.0], &[1], false);
+        let vector = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], false);
+
+        let lt = scalar.cmplt(&vector); // [2] < [1,2,3] -> [false, false, true]
+        assert_eq!(lt.borrow().shape, vec![3]);
+        assert_eq!(lt.borrow().data, vec![0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn test_scalar_max_elem() {
+        // Max operation with scalar broadcasting
+        let scalar = RawTensor::new(vec![5.0], &[1], false);
+        let vector = RawTensor::new(vec![3.0, 7.0, 2.0], &[3], false);
+        let result = scalar.max_elem(&vector);
+
+        assert_eq!(result.borrow().shape, vec![3]);
+        assert_eq!(result.borrow().data, vec![5.0, 7.0, 5.0]); // max(5,3), max(5,7), max(5,2)
+    }
+
+    // ===== EMPTY TENSOR CREATION ATTEMPTS (SHOULD PANIC) =====
+
+    #[test]
+    #[should_panic(expected = "Cannot create tensor with zero elements")]
+    fn test_create_empty_tensor_explicit() {
+        // Direct attempt to create tensor with zero elements
+        let _empty = RawTensor::new(vec![], &[0], false);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot create tensor with zero elements")]
+    fn test_create_empty_tensor_2d() {
+        // 2D tensor with zero in first dimension
+        let _empty = RawTensor::new(vec![], &[0, 5], false);
+    }
+
+    #[test]
+    #[should_panic(expected = "Data length must match shape")]
+    fn test_create_empty_tensor_with_data() {
+        // Attempt to create tensor with mismatched data (empty data, non-empty shape)
+        let _empty = RawTensor::new(vec![1.0], &[0], false);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot reshape: size mismatch")]
+    fn test_reshape_to_empty() {
+        // Attempt to reshape non-empty tensor to empty shape
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], false);
+        let _empty = x.reshape(&[0]); // Product is 0, doesn't match 3 elements
+    }
+
+    #[test]
+    fn test_operation_resulting_in_zero_valid() {
+        // Operations that result in value 0 are fine (not empty tensor)
+        let x = RawTensor::new(vec![5.0], &[1], false);
+        let y = RawTensor::new(vec![5.0], &[1], false);
+        let z = x.sub(&y); // Result is 0.0, but still has 1 element
+
+        assert_eq!(z.borrow().shape, vec![1]);
+        assert_eq!(
+            z.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist"),
+            0.0
+        );
+    }
 }
 
 #[cfg(test)]
