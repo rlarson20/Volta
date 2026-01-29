@@ -387,15 +387,19 @@ pub fn save_safetensors_typed<P: AsRef<Path>>(
 /// let state = load_state_dict_with_mapping("model.bin", &mapper)?;
 /// # Ok::<(), std::io::Error>(())
 /// ```
-/// # Panics
-/// unwrapping string ref
 /// # Errors
-/// returns result state dict
+/// returns result state dict or IO error
 pub fn load_state_dict_with_mapping<P: AsRef<Path>>(
     path: P,
     mapper: &mapping::StateDictMapper,
 ) -> Result<StateDict> {
-    let state = load_state_dict(path.as_ref().to_str().unwrap())?;
+    let path_str = path.as_ref().to_str().ok_or_else(|| {
+        Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Path contains invalid UTF-8 characters",
+        )
+    })?;
+    let state = load_state_dict(path_str)?;
     Ok(mapper.map(state))
 }
 
@@ -615,6 +619,43 @@ mod io_tests {
         let f16_loaded = loaded.get("f16_tensor").unwrap().to_storage().to_f32_vec();
         for (a, b) in f16_loaded.iter().zip([1.0f32, 2.0, 3.0, 4.0].iter()) {
             assert!((a - b).abs() < 0.01, "F16 conversion mismatch");
+        }
+    }
+
+    #[test]
+    fn test_non_utf8_path_handling() {
+        use std::path::PathBuf;
+
+        // Test that load_state_dict_with_mapping handles non-UTF8 paths gracefully
+        // This simulates what can happen on Windows with certain paths
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            // Create a path with invalid UTF-8 sequence
+            let os_str = std::ffi::OsStr::from_bytes(b"\xff\xfe\xfd");
+            let path = PathBuf::from(os_str);
+
+            let mapper = mapping::StateDictMapper::new();
+            let result = load_state_dict_with_mapping(&path, &mapper);
+
+            // Should return an error, not panic
+            assert!(result.is_err());
+        }
+
+        // On Windows, test with invalid UTF-16
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStringExt;
+            // Create an OsString from invalid UTF-16
+            let wide_str: Vec<u16> = vec![0xD800, 0xD800]; // Surrogate pair
+            let os_string = OsString::from_wide(&wide_str);
+            let path = PathBuf::from(os_string);
+
+            let mapper = mapping::StateDictMapper::new();
+            let result = load_state_dict_with_mapping(&path, &mapper);
+
+            // Should return an error, not panic
+            assert!(result.is_err());
         }
     }
 }

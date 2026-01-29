@@ -19,6 +19,11 @@ pub enum TernaryOp {
 pub struct MulAccGradFn;
 impl GradFn for MulAccGradFn {
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+        // SAFETY: MulAcc operation always creates 2 or 3 parents (x, y, optional w)
+        debug_assert!(
+            parents.len() >= 2,
+            "MulAcc grad requires at least 2 parents"
+        );
         let x_ref = parents.first().cloned().unwrap();
         let y_ref = parents.get(1).cloned().unwrap();
         let x_val = x_ref.borrow();
@@ -77,6 +82,8 @@ pub struct WhereGradFn {
 
 impl GradFn for WhereGradFn {
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+        // SAFETY: Where operation always creates exactly 2 parents (true_branch, false_branch)
+        debug_assert!(parents.len() >= 2, "Where grad requires 2 parents");
         let true_ref = parents.first().cloned().unwrap();
         let false_ref = parents.get(1).cloned().unwrap();
         let true_parent = true_ref.borrow();

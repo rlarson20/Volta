@@ -1,4 +1,3 @@
-use crate::device::Device;
 use crate::dtype::DType;
 use thiserror::Error;
 

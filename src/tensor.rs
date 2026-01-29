@@ -1,6 +1,7 @@
 use crate::Storage;
 use crate::autograd::GradFn;
 use crate::device::Device;
+use crate::{Result, VoltaError};
 use rand::Rng;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -97,6 +98,44 @@ impl std::fmt::Debug for RawTensor {
 
 // ===== TENSOR CONSTRUCTORS =====
 impl RawTensor {
+    /// Create a new tensor from data and shape (fallible)
+    ///
+    /// # Errors
+    ///
+    /// Returns `VoltaError::ShapeDataMismatch` if data length doesn't match shape
+    /// Returns `VoltaError::InvalidParameter` if tensor would be empty or too large
+    pub fn try_new(data: Vec<f32>, shape: &[usize], requires_grad: bool) -> Result<Tensor> {
+        let elements: usize = shape.iter().product();
+        if data.len() != elements {
+            return Err(VoltaError::ShapeDataMismatch {
+                shape: shape.to_vec(),
+                elements,
+                len: data.len(),
+            });
+        }
+        if elements == 0 {
+            return Err(VoltaError::InvalidParameter(
+                "Cannot create tensor with zero elements".to_string(),
+            ));
+        }
+        if elements > 100_000_000 {
+            return Err(VoltaError::InvalidParameter(format!(
+                "Tensor too large ({elements} elements > 100M) - check for memory issues"
+            )));
+        }
+
+        let raw = RawTensor {
+            data: Storage::cpu(data),
+            shape: shape.to_vec(),
+            grad: None,
+            requires_grad,
+            grad_fn: None,
+            parents: vec![],
+            device: Device::CPU,
+        };
+        Ok(Rc::new(RefCell::new(raw)))
+    }
+
     /// Create a new tensor from data and shape
     ///
     /// # Arguments
@@ -108,44 +147,25 @@ impl RawTensor {
     /// Panics if `data.len()` != `shape.product()`
     #[must_use]
     pub fn new(data: Vec<f32>, shape: &[usize], requires_grad: bool) -> Tensor {
-        assert_eq!(
-            data.len(),
-            shape.iter().product::<usize>(),
-            "Data length must match shape"
-        );
-        // Additional validation for reasonable tensor sizes
-        let total_size = shape.iter().product::<usize>();
-        assert!(total_size > 0, "Cannot create tensor with zero elements");
-        assert!(
-            total_size <= 100_000_000,
-            "Tensor too large (>100M elements) - check for memory issues"
-        );
-
-        let raw = RawTensor {
-            data: Storage::cpu(data),
-            shape: shape.to_vec(),
-            grad: None,
-            requires_grad,
-            grad_fn: None,
-            parents: vec![],
-            device: Device::CPU,
-        };
-        Rc::new(RefCell::new(raw))
+        Self::try_new(data, shape, requires_grad).expect("Data length must match shape")
     }
 
-    /// Create a new tensor from Storage and shape (internal use for GPU ops)
+    /// Create a new tensor from Storage and shape (internal use for GPU ops, fallible)
     #[allow(dead_code)]
-    pub(crate) fn new_with_storage(
+    pub(crate) fn try_new_with_storage(
         data: crate::storage::Storage,
         shape: &[usize],
         device: Device,
         requires_grad: bool,
-    ) -> Tensor {
-        assert_eq!(
-            data.len(),
-            shape.iter().product::<usize>(),
-            "Data length must match shape"
-        );
+    ) -> Result<Tensor> {
+        let elements: usize = shape.iter().product();
+        if data.len() != elements {
+            return Err(VoltaError::ShapeDataMismatch {
+                shape: shape.to_vec(),
+                elements,
+                len: data.len(),
+            });
+        }
 
         let raw = RawTensor {
             data,
@@ -156,7 +176,19 @@ impl RawTensor {
             parents: vec![],
             device,
         };
-        Rc::new(RefCell::new(raw))
+        Ok(Rc::new(RefCell::new(raw)))
+    }
+
+    /// Create a new tensor from Storage and shape (internal use for GPU ops)
+    #[allow(dead_code)]
+    pub(crate) fn new_with_storage(
+        data: crate::storage::Storage,
+        shape: &[usize],
+        device: Device,
+        requires_grad: bool,
+    ) -> Tensor {
+        Self::try_new_with_storage(data, shape, device, requires_grad)
+            .expect("Data length must match shape")
     }
 
     /// Create a tensor filled with zeros
@@ -178,16 +210,28 @@ impl RawTensor {
         let data: Vec<f32> = with_rng(|rng| (0..size).map(|_| rng.random::<f32>()).collect());
         Self::new(data, shape, false)
     }
+    /// Create a tensor with values from standard normal distribution N(0, 1) (fallible)
+    ///
+    /// # Errors
+    ///
+    /// Returns `VoltaError::InvalidParameter` if normal distribution parameters are invalid
+    /// Propagates errors from `try_new` for shape/data mismatches
+    pub fn try_randn(shape: &[usize]) -> Result<Tensor> {
+        let size = shape.iter().product();
+        let normal = Normal::new(0.0, 1.0).map_err(|e| {
+            VoltaError::InvalidParameter(format!("Invalid normal distribution: {e}"))
+        })?;
+        let data: Vec<f32> = with_rng(|rng| (0..size).map(|_| normal.sample(rng)).collect());
+
+        Self::try_new(data, shape, false)
+    }
+
     /// Create a tensor with values from standard normal distribution N(0, 1)
     /// # Panics
     /// unwrap new `Normal` dist
     #[must_use]
     pub fn randn(shape: &[usize]) -> Tensor {
-        let size = shape.iter().product();
-        let normal = Normal::new(0.0, 1.0).unwrap();
-        let data: Vec<f32> = with_rng(|rng| (0..size).map(|_| normal.sample(rng)).collect());
-
-        Self::new(data, shape, false)
+        Self::try_randn(shape).expect("Failed to create random tensor")
     }
 
     /// Create a tensor filled with random values from N(0, 1) with the same shape as the input
@@ -216,6 +260,42 @@ impl RawTensor {
         Self::new(data, shape, false)
     }
 
+    /// He (Kaiming) normal initialization suited for `ReLU` networks. (fallible)
+    ///
+    /// Draws samples from `N(0, sqrt(2 / fan_in))` where `fan_in`
+    /// is the number of input connections.
+    ///
+    /// # Errors
+    ///
+    /// Returns `VoltaError::InvalidParameter` if shape is empty or `fan_in` is zero
+    /// Propagates errors from normal distribution creation and tensor construction
+    pub fn try_he_initialization(shape: &[usize]) -> Result<Tensor> {
+        if shape.is_empty() {
+            return Err(VoltaError::InvalidParameter(
+                "He initialization requires at least one dimension".to_string(),
+            ));
+        }
+
+        let fan_in = match shape.len() {
+            1 | 2 => shape.first().copied().unwrap_or(1), // Linear weights: [in, out]
+            _ => shape.get(1..).unwrap_or(&[]).iter().product(), // Conv weights: [out, in, kH, kW, ...]
+        };
+        if fan_in == 0 {
+            return Err(VoltaError::InvalidParameter(
+                "fan_in must be positive for He initialization".to_string(),
+            ));
+        }
+
+        let std_val: f32 = 2.0 / fan_in as f32;
+        let std = std_val.sqrt();
+        let normal = Normal::new(0.0, std)
+            .map_err(|e| VoltaError::InvalidParameter(format!("Invalid He std: {e}")))?;
+        let size: usize = shape.iter().product();
+        let data: Vec<f32> = with_rng(|rng| (0..size).map(|_| normal.sample(rng)).collect());
+
+        Self::try_new(data, shape, false)
+    }
+
     /// He (Kaiming) normal initialization suited for `ReLU` networks.
     ///
     /// Draws samples from `N(0, sqrt(2 / fan_in))` where `fan_in`
@@ -224,23 +304,7 @@ impl RawTensor {
     /// empty shape
     #[must_use]
     pub fn he_initialization(shape: &[usize]) -> Tensor {
-        assert!(
-            !shape.is_empty(),
-            "He initialization requires at least one dimension"
-        );
-
-        let fan_in = match shape.len() {
-            1 | 2 => *shape.first().unwrap_or(&1), // Linear weights: [in, out]
-            _ => shape.get(1..).unwrap_or(&[]).iter().product(), // Conv weights: [out, in, kH, kW, ...]
-        };
-        assert!(fan_in > 0, "fan_in must be positive for He initialization");
-
-        let std = (2.0 / fan_in as f32).sqrt();
-        let normal = Normal::new(0.0, std).expect("valid He std");
-        let size: usize = shape.iter().product();
-        let data: Vec<f32> = with_rng(|rng| (0..size).map(|_| normal.sample(rng)).collect());
-
-        Self::new(data, shape, false)
+        Self::try_he_initialization(shape).expect("He initialization failed")
     }
 }
 
@@ -537,17 +601,19 @@ impl RawTensor {
     /// let x = `Tensor::new(vec`![1,2,3,4,5,6], &\[2,3\], true);
     /// `x.sum_dim(1`, false) // -> [6, 15] shape \[2\]
     /// `x.sum_dim(1`, true)  // -> [\[6\], \[15\]] shape \[2,1\]
-    /// # Panics
-    /// dim out of bounds
-    pub fn sum_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
+    ///
+    /// # Errors
+    ///
+    /// Returns `VoltaError::DimensionOutOfBounds` if dim is >= tensor rank
+    pub fn try_sum_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Result<Tensor> {
         let (data, shape, req_grad, device) = {
             let s = self_t.borrow();
-            assert!(
-                dim < s.shape.len(),
-                "dim {} out of bounds for shape {:?}",
-                dim,
-                s.shape
-            );
+            if dim >= s.shape.len() {
+                return Err(VoltaError::DimensionOutOfBounds {
+                    dim,
+                    shape: s.shape.clone(),
+                });
+            }
             (
                 s.data.clone(),
                 s.shape.clone(),
@@ -614,7 +680,21 @@ impl RawTensor {
                 keepdim,
             }));
         }
-        out
+        Ok(out)
+    }
+
+    /// # Arguments
+    /// * `dim` - Axis to reduce (0-indexed)
+    /// * `keepdim` - If true, keep reduced dimension as size 1
+    ///
+    /// # Examples
+    /// let x = `Tensor::new(vec`![1,2,3,4,5,6], &\[2,3\], true);
+    /// `x.sum_dim(1`, false) // -> [6, 15] shape \[2\]
+    /// `x.sum_dim(1`, true)  // -> [\[6\], \[15\]] shape \[2,1\]
+    /// # Panics
+    /// dim out of bounds
+    pub fn sum_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
+        Self::try_sum_dim(self_t, dim, keepdim).expect("Dimension out of bounds")
     }
 
     /// Move tensor data to a different device.

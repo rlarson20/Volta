@@ -39,10 +39,8 @@ impl Module for Linear {
             t.data = Storage::cpu(w.data.clone());
             t.shape.clone_from(&w.shape);
         }
-        if let Some(b) = state.get("bias")
-            && self.bias.is_some()
-        {
-            let bias_tensor = self.bias.as_ref().unwrap();
+        // Load bias if state has it and layer has bias
+        if let (Some(b), Some(bias_tensor)) = (state.get("bias"), self.bias.as_ref()) {
             let mut t = bias_tensor.borrow_mut();
             t.data = Storage::cpu(b.data.clone());
             t.shape.clone_from(&b.shape);

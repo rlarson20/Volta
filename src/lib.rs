@@ -17,10 +17,12 @@
 pub mod gpu;
 
 pub mod dtype;
+pub mod error;
 pub mod storage;
 
 // Add to re-exports:
 pub use dtype::DType;
+pub use error::{Result, VoltaError};
 pub use storage::Storage;
 
 #[cfg(feature = "gpu")]
