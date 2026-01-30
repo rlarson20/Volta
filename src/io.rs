@@ -146,12 +146,16 @@ pub fn load_state_dict_checked<M: Module + ?Sized>(
     diff
 }
 
+/// # Errors
+/// file opening errors
 pub fn save_state_dict(state: &StateDict, path: &str) -> Result<()> {
     let mut file = File::create(path)?;
     let encoded = bincode::encode_to_vec(state, config::standard()).map_err(Error::other)?;
     file.write_all(&encoded)?;
     Ok(())
 }
+/// # Errors
+/// file opening errors
 pub fn load_state_dict(path: &str) -> Result<StateDict> {
     let mut file = File::open(path)?;
     let mut buffer = Vec::new();
@@ -210,6 +214,8 @@ fn volta_dtype_to_safetensors(dtype: DType) -> safetensors::Dtype {
 /// converted to f32 to match the existing `StateDict` format.
 ///
 /// For native dtype loading, use `load_safetensors_raw()`.
+/// # Errors
+/// file opening errors
 pub fn load_safetensors<P: AsRef<Path>>(path: P) -> Result<StateDict> {
     let mut file = File::open(path)?;
     let mut buffer = Vec::new();
@@ -279,6 +285,8 @@ impl TypedTensorData {
 ///
 /// Returns a map of tensor names to `TypedTensorData`, preserving the original
 /// dtype (F16, BF16, etc.) without conversion.
+/// # Errors
+/// file opening errors
 pub fn load_safetensors_raw<P: AsRef<Path>>(path: P) -> Result<BTreeMap<String, TypedTensorData>> {
     let mut file = File::open(path)?;
     let mut buffer = Vec::new();
@@ -306,6 +314,10 @@ pub fn load_safetensors_raw<P: AsRef<Path>>(path: P) -> Result<BTreeMap<String, 
 /// Save a `StateDict` to `SafeTensors` format
 ///
 /// All tensors are saved as F32 since `StateDict` uses f32.
+/// # Panics
+/// failing to create `TensorView`
+/// # Errors
+/// returns nothing on success
 pub fn save_safetensors<P: AsRef<Path>>(state: &StateDict, path: P) -> Result<()> {
     use safetensors::tensor::{Dtype, TensorView};
 
@@ -328,6 +340,10 @@ pub fn save_safetensors<P: AsRef<Path>>(state: &StateDict, path: P) -> Result<()
 }
 
 /// Save typed tensor data to `SafeTensors` format with native dtypes
+/// # Panics
+/// failing to create `TensorView`
+/// # Errors
+/// returns nothing on success
 pub fn save_safetensors_typed<P: AsRef<Path>>(
     tensors: &BTreeMap<String, TypedTensorData>,
     path: P,
@@ -371,11 +387,19 @@ pub fn save_safetensors_typed<P: AsRef<Path>>(
 /// let state = load_state_dict_with_mapping("model.bin", &mapper)?;
 /// # Ok::<(), std::io::Error>(())
 /// ```
+/// # Errors
+/// returns result state dict or IO error
 pub fn load_state_dict_with_mapping<P: AsRef<Path>>(
     path: P,
     mapper: &mapping::StateDictMapper,
 ) -> Result<StateDict> {
-    let state = load_state_dict(path.as_ref().to_str().unwrap())?;
+    let path_str = path.as_ref().to_str().ok_or_else(|| {
+        Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Path contains invalid UTF-8 characters",
+        )
+    })?;
+    let state = load_state_dict(path_str)?;
     Ok(mapper.map(state))
 }
 
@@ -395,6 +419,8 @@ pub fn load_state_dict_with_mapping<P: AsRef<Path>>(
 /// let state = load_safetensors_with_mapping("pytorch_model.safetensors", &mapper)?;
 /// # Ok::<(), std::io::Error>(())
 /// ```
+/// # Errors
+/// returns result state dict
 pub fn load_safetensors_with_mapping<P: AsRef<Path>>(
     path: P,
     mapper: &mapping::StateDictMapper,
@@ -593,6 +619,43 @@ mod io_tests {
         let f16_loaded = loaded.get("f16_tensor").unwrap().to_storage().to_f32_vec();
         for (a, b) in f16_loaded.iter().zip([1.0f32, 2.0, 3.0, 4.0].iter()) {
             assert!((a - b).abs() < 0.01, "F16 conversion mismatch");
+        }
+    }
+
+    #[test]
+    fn test_non_utf8_path_handling() {
+        use std::path::PathBuf;
+
+        // Test that load_state_dict_with_mapping handles non-UTF8 paths gracefully
+        // This simulates what can happen on Windows with certain paths
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            // Create a path with invalid UTF-8 sequence
+            let os_str = std::ffi::OsStr::from_bytes(b"\xff\xfe\xfd");
+            let path = PathBuf::from(os_str);
+
+            let mapper = mapping::StateDictMapper::new();
+            let result = load_state_dict_with_mapping(&path, &mapper);
+
+            // Should return an error, not panic
+            assert!(result.is_err());
+        }
+
+        // On Windows, test with invalid UTF-16
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStringExt;
+            // Create an OsString from invalid UTF-16
+            let wide_str: Vec<u16> = vec![0xD800, 0xD800]; // Surrogate pair
+            let os_string = OsString::from_wide(&wide_str);
+            let path = PathBuf::from(os_string);
+
+            let mapper = mapping::StateDictMapper::new();
+            let result = load_state_dict_with_mapping(&path, &mapper);
+
+            // Should return an error, not panic
+            assert!(result.is_err());
         }
     }
 }

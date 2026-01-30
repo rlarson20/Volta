@@ -38,6 +38,9 @@ jobs:
         if: runner.os == 'macOS'
         run: cargo test --features accelerate
 
+      - name: Check (gpu feature)
+        run: cargo check --features gpu
+
       - name: Doc tests
         run: cargo test --doc
 

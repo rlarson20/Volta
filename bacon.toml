@@ -68,11 +68,7 @@ command = [ #TODO: organize these
     "clippy::cast_possible_truncation",
     "-A",                                         #TEMP IMP TO FIX!!!
     "clippy::cast_precision_loss",
-    "-A",                                         # TEMP
-    "clippy::missing_panics_doc",
-    "-A",                                         # TEMP
-    "clippy::missing_errors_doc",
-    "-A",                                         # TEMP
+    "-A",
     "clippy::too_many_lines",
     # Denys
     "-D",
@@ -139,6 +135,11 @@ command = [ #TODO: organize these
     "clippy::if_not_else",
     "-D",
     "clippy::missing_fields_in_debug",
+    "-D",
+    "clippy::missing_panics_doc",
+    "-D",
+    "clippy::missing_errors_doc",
+
 ]
 need_stdout = false
 
@@ -184,6 +185,38 @@ command = [
 need_stdout = true
 allow_warnings = true
 background = true
+
+[jobs.perf]
+command = ["cargo", "clippy", "--", "-D", "clippy::perf"]
+need_stdout = false
+
+[jobs.all]
+command = ["cargo", "clippy", "--", "-D", "clippy::all"]
+need_stdout = false
+
+[jobs.correctness]
+command = ["cargo", "clippy", "--", "-D", "clippy::correctness"]
+need_stdout = false
+
+[jobs.suspicious]
+command = ["cargo", "clippy", "--", "-D", "clippy::suspicious"]
+need_stdout = false
+
+[jobs.style]
+command = ["cargo", "clippy", "--", "-D", "clippy::style"]
+need_stdout = false
+
+[jobs.complexity]
+command = ["cargo", "clippy", "--", "-D", "clippy::complexity"]
+need_stdout = false
+
+[jobs.nursery]
+command = ["cargo", "clippy", "--", "-D", "clippy::nursery"]
+need_stdout = false
+
+[jobs.cargo]
+command = ["cargo", "clippy", "--", "-D", "clippy::cargo"]
+need_stdout = false
 
 # Run your long-running application (eg server) and have the result displayed in bacon.
 # For programs that never stop (eg a server), `background` is set to false

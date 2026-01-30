@@ -131,9 +131,13 @@ impl GpuBuffer {
     /// Copy data from GPU back to CPU
     ///
     /// This is a relatively expensive operation - try to minimize transfers!
+    /// # Panics
+    /// Panics if GPU context does not exist
     #[must_use]
     pub fn to_vec(&self) -> Vec<f32> {
+        // SAFETY: Buffer should only exist if GPU context is available
         let ctx = get_gpu_context().expect("GPU context should exist if buffer exists");
+        debug_assert!(self.buffer.is_some(), "Buffer should not be taken");
         let buffer = self.buffer.as_ref().expect("Buffer should not be taken");
 
         let byte_size = (self.len * std::mem::size_of::<f32>()) as u64;
@@ -212,8 +216,11 @@ impl GpuBuffer {
     }
 
     /// Get the underlying wgpu buffer (for use in compute passes)
+    /// # Panics
+    /// Panics if buffer is taken
     #[must_use]
     pub fn buffer(&self) -> &wgpu::Buffer {
+        debug_assert!(self.buffer.is_some(), "Buffer should not be taken");
         self.buffer.as_ref().expect("Buffer should not be taken")
     }
 
@@ -234,9 +241,12 @@ impl GpuBuffer {
     /// # Arguments
     /// * `offset` - Starting element offset in this buffer
     /// * `len` - Number of elements to copy
+    /// # Panics
+    /// Panics if buffer is taken
     #[must_use]
     pub fn copy_region(&self, offset: usize, len: usize) -> Option<Self> {
         let ctx = get_gpu_context()?;
+        debug_assert!(self.buffer.is_some(), "Buffer should not be taken");
         let src_buffer = self.buffer.as_ref().expect("Buffer should not be taken");
         let byte_size = len * std::mem::size_of::<f32>();
 

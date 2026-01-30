@@ -4,6 +4,7 @@
 //! that can be backed by either CPU memory or GPU buffers, with support
 //! for multiple data types (f16, bf16, f32, f64, etc.).
 
+use crate::VoltaError;
 use crate::device::Device;
 use crate::dtype::DType;
 #[cfg(feature = "gpu")]
@@ -105,15 +106,27 @@ impl Storage {
     }
 
     /// Create new CPU storage from raw bytes with a specific dtype
+    /// # Panics
+    /// Byte length not divisible by dtype size
     #[must_use]
     pub fn from_bytes(data: Vec<u8>, dtype: DType) -> Self {
-        assert!(
-            data.len().is_multiple_of(dtype.size_of()),
-            "Byte length {} is not divisible by dtype size {}",
-            data.len(),
-            dtype.size_of()
-        );
-        Storage::Cpu { data, dtype }
+        Self::try_from_bytes(data, dtype).expect("Byte length validation failed")
+    }
+
+    /// Create new CPU storage from raw bytes with a specific dtype (fallible)
+    ///
+    /// # Errors
+    ///
+    /// Returns `VoltaError::InvalidParameter` if byte length is not divisible by dtype size
+    pub fn try_from_bytes(data: Vec<u8>, dtype: DType) -> Result<Self, VoltaError> {
+        if !data.len().is_multiple_of(dtype.size_of()) {
+            return Err(VoltaError::InvalidParameter(format!(
+                "Byte length {} is not divisible by dtype size {}",
+                data.len(),
+                dtype.size_of()
+            )));
+        }
+        Ok(Storage::Cpu { data, dtype })
     }
 
     /// Create new GPU storage from f32 data (falls back to CPU if GPU unavailable)
@@ -182,13 +195,25 @@ impl Storage {
 
     // ========== F32 Access (Backward Compatible) ==========
 
-    /// Get data as f32 slice. Only valid if dtype is F32.
-    /// Panics if dtype is not F32.
-    pub fn as_f32_slice(&self) -> &[f32] {
+    /// Get data as f32 slice (fallible). Returns error if dtype is not F32.
+    ///
+    /// # Errors
+    ///
+    /// Returns `VoltaError::DTypeMismatch` if storage dtype is not F32
+    ///
+    /// # Panics
+    ///
+    /// Panics if GPU cache cannot be accessed (internal invariant violation)
+    pub fn try_as_f32_slice(&self) -> Result<&[f32], VoltaError> {
         match self {
             Storage::Cpu { data, dtype } => {
-                assert_eq!(*dtype, DType::F32, "Storage dtype is {dtype:?}, not F32");
-                cast_slice(data)
+                if *dtype != DType::F32 {
+                    return Err(VoltaError::DTypeMismatch {
+                        expected: DType::F32,
+                        actual: *dtype,
+                    });
+                }
+                Ok(cast_slice(data))
             }
             #[cfg(feature = "gpu")]
             Storage::Gpu {
@@ -196,7 +221,12 @@ impl Storage {
                 dtype,
                 cpu_cache,
             } => {
-                assert_eq!(*dtype, DType::F32, "Storage dtype is {dtype:?}, not F32");
+                if *dtype != DType::F32 {
+                    return Err(VoltaError::DTypeMismatch {
+                        expected: DType::F32,
+                        actual: *dtype,
+                    });
+                }
                 // Ensure cache is populated (lazy transfer from GPU)
                 {
                     let mut cache = cpu_cache.borrow_mut();
@@ -215,10 +245,18 @@ impl Storage {
                 // 4. We cast bytes to &[f32] using cast_slice
                 unsafe {
                     let bytes = (*cpu_cache.as_ptr()).as_ref().unwrap().as_slice();
-                    cast_slice(bytes)
+                    Ok(cast_slice(bytes))
                 }
             }
         }
+    }
+
+    /// Get data as f32 slice. Only valid if dtype is F32.
+    /// Panics if dtype is not F32.
+    /// # Panics
+    /// Wrong storage datatype
+    pub fn as_f32_slice(&self) -> &[f32] {
+        self.try_as_f32_slice().expect("Storage dtype is not F32")
     }
 
     /// Get data as mutable f32 slice. Only valid if dtype is F32.
@@ -249,6 +287,8 @@ impl Storage {
     // ========== Other Dtype Access ==========
 
     /// Get data as f64 slice. Only valid if dtype is F64.
+    /// # Panics
+    /// Wrong storage datatype
     pub fn as_f64_slice(&self) -> Option<&[f64]> {
         match self {
             Storage::Cpu { data, dtype } if *dtype == DType::F64 => Some(cast_slice(data)),
@@ -278,6 +318,8 @@ impl Storage {
     }
 
     /// Get data as f16 slice. Only valid if dtype is F16.
+    /// # Panics
+    /// Wrong storage datatype
     pub fn as_f16_slice(&self) -> Option<&[f16]> {
         match self {
             Storage::Cpu { data, dtype } if *dtype == DType::F16 => Some(cast_slice(data)),
@@ -307,6 +349,8 @@ impl Storage {
     }
 
     /// Get data as bf16 slice. Only valid if dtype is BF16.
+    /// # Panics
+    /// Wrong storage datatype
     pub fn as_bf16_slice(&self) -> Option<&[bf16]> {
         match self {
             Storage::Cpu { data, dtype } if *dtype == DType::BF16 => Some(cast_slice(data)),
@@ -336,9 +380,21 @@ impl Storage {
     }
 
     /// Get raw bytes
+    /// # Panics
+    /// unwrap `as_ref` pointer
     pub fn as_bytes(&self) -> &[u8] {
+        self.try_as_bytes()
+            .expect("Failed to get bytes from storage")
+    }
+
+    /// Get raw bytes (fallible)
+    ///
+    /// # Errors
+    ///
+    /// Returns `VoltaError::DeviceError` if GPU cache cannot be accessed
+    pub fn try_as_bytes(&self) -> Result<&[u8], VoltaError> {
         match self {
-            Storage::Cpu { data, .. } => data,
+            Storage::Cpu { data, .. } => Ok(data),
             #[cfg(feature = "gpu")]
             Storage::Gpu {
                 buffer, cpu_cache, ..
@@ -353,7 +409,11 @@ impl Storage {
                     }
                 }
                 // SAFETY: Similar to as_f32_slice(), cache is populated and stable
-                unsafe { (*cpu_cache.as_ptr()).as_ref().unwrap().as_slice() }
+                unsafe {
+                    (*cpu_cache.as_ptr()).as_deref().ok_or_else(|| {
+                        VoltaError::DeviceError("CPU cache not populated".to_string())
+                    })
+                }
             }
         }
     }
@@ -361,6 +421,8 @@ impl Storage {
     // ========== Conversion ==========
 
     /// Convert to `Vec<f32>` (always works, may involve conversion)
+    /// # Panics
+    ///`as_f64_slice` can panic
     pub fn to_f32_vec(&self) -> Vec<f32> {
         match self.dtype() {
             DType::F32 => self.as_f32_slice().to_vec(),
@@ -570,6 +632,8 @@ impl Storage {
         self.as_f32_slice().iter()
     }
 
+    /// # Panics
+    /// wrong data type
     pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, f32> {
         self.as_f32_slice_mut()
             .expect("Mutable iteration requires F32 CPU storage")

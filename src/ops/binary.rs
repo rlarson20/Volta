@@ -1,7 +1,7 @@
 use crate::autograd::GradFn;
 use crate::device::Device;
 use crate::storage::Storage;
-use crate::{RawTensor, Tensor};
+use crate::{RawTensor, Result, Tensor, VoltaError};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -85,6 +85,8 @@ pub struct BinaryGradFn {
 
 impl GradFn for BinaryGradFn {
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+        // SAFETY: Binary operations always create exactly 2 parents during forward pass
+        debug_assert!(parents.len() >= 2, "Binary grad requires 2 parents");
         let x_ref = parents.first().cloned().unwrap();
         let y_ref = parents.get(1).cloned().unwrap();
         let x_val = x_ref.borrow();
@@ -393,8 +395,45 @@ impl RawTensor {
     /// Examples:
     /// - (3, 1) + (1, 4) -> (3, 4)
     /// - (5, 3, 1) + (1, 4) -> (5, 3, 4)
+    /// # Panics
+    /// broadcast failures
     #[must_use]
     pub fn broadcast_shape(shape_a: &[usize], shape_b: &[usize]) -> Vec<usize> {
+        match Self::try_broadcast_shape(shape_a, shape_b) {
+            Ok(shape) => shape,
+            Err(VoltaError::BroadcastError(a, b)) => {
+                // Find the first incompatible dimension for better error message
+                let max_len = a.len().max(b.len());
+                for i in 0..max_len {
+                    let a_dim = if i < a.len() && !a.is_empty() {
+                        a.get(a.len() - 1 - i).copied().unwrap_or(1)
+                    } else {
+                        1
+                    };
+                    let b_dim = if i < b.len() && !b.is_empty() {
+                        b.get(b.len() - 1 - i).copied().unwrap_or(1)
+                    } else {
+                        1
+                    };
+                    if a_dim != b_dim && a_dim != 1 && b_dim != 1 {
+                        let dim = max_len - 1 - i;
+                        panic!(
+                            "Cannot broadcast shapes {shape_a:?} and {shape_b:?} at dimension {dim}"
+                        );
+                    }
+                }
+                panic!("Cannot broadcast shapes {shape_a:?} and {shape_b:?}");
+            }
+            Err(e) => panic!("Broadcast error: {e}"),
+        }
+    }
+
+    /// Compute the broadcast result shape (fallible)
+    ///
+    /// # Errors
+    ///
+    /// Returns `VoltaError::BroadcastError` if shapes cannot be broadcast together
+    pub fn try_broadcast_shape(shape_a: &[usize], shape_b: &[usize]) -> Result<Vec<usize>> {
         let max_len = shape_a.len().max(shape_b.len());
         let mut result = vec![1; max_len];
 
@@ -422,11 +461,14 @@ impl RawTensor {
                 } else if b_dim == 1 {
                     *slot = a_dim;
                 } else {
-                    panic!("Cannot broadcast shapes {shape_a:?} and {shape_b:?} at dimension {i}");
+                    return Err(VoltaError::BroadcastError(
+                        shape_a.to_vec(),
+                        shape_b.to_vec(),
+                    ));
                 }
             }
         }
-        result
+        Ok(result)
     }
 
     /// Broadcast data from one shape to another
@@ -558,6 +600,8 @@ impl RawTensor {
     /// 2. Broadcast both inputs to that shape
     /// 3. Apply operation element-wise
     /// 4. Set up gradient tracking
+    /// # Panics
+    /// broadcast failure
     pub fn binary_op(self_t: &Tensor, other: &Tensor, op: BinaryOp) -> Tensor {
         let (data_a, shape_a, req_a) = {
             let s = self_t.borrow();

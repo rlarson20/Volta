@@ -58,6 +58,8 @@ impl SystemMonitor {
     ///
     /// # Arguments
     /// * `label` - Descriptive name for this checkpoint
+    /// # Panics
+    /// unwrap `last_time` mutex
     pub fn checkpoint(&self, label: &str) {
         let current_memory_mb = crate::gpu::monitor::get_process_memory_mb();
         let _peak = self
@@ -128,6 +130,8 @@ impl SystemMonitor {
     ///
     /// Useful for starting fresh profiling sessions without creating
     /// a new monitor instance.
+    /// # Panics
+    /// unwrap `last_checkpoint_time` mutex
     pub fn reset(&self) {
         self.peak_memory_mb.store(0, Ordering::Relaxed);
         self.operation_count.store(0, Ordering::Relaxed);

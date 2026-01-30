@@ -64,11 +64,15 @@ impl Adam {
         }
     }
 
+    /// # Panics
+    /// unwrap params
     pub fn step(&mut self) {
         self.t += 1;
 
         // Process each parameter based on its device
         for i in 0..self.params.len() {
+            // SAFETY: We're iterating over valid indices 0..self.params.len()
+            debug_assert!(i < self.params.len(), "Parameter index out of bounds");
             let param = self.params.get(i).unwrap();
             let p = param.borrow();
 
@@ -149,6 +153,9 @@ impl Adam {
         }
 
         // Get mutable access to CPU state
+        // SAFETY: Optimizer state is created as CPU storage for CPU parameters
+        debug_assert!(self.m.len() == self.params.len(), "State length mismatch");
+        debug_assert!(self.v.len() == self.params.len(), "State length mismatch");
         let m_slice = self
             .m
             .get_mut(i)

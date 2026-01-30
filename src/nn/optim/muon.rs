@@ -103,6 +103,8 @@ impl Muon {
         // We apply LR outside.
     }
 
+    /// # Panics
+    /// unwrap params
     pub fn step(&mut self) {
         for (i, param) in self.params.iter().enumerate() {
             let mut p = param.borrow_mut();

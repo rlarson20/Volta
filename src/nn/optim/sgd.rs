@@ -64,6 +64,8 @@ impl SGD {
     /// Perform one optimization step
     ///
     /// Updates all parameters using their accumulated gradients.
+    /// # Panics
+    /// unwrap params
     pub fn step(&mut self) {
         // Process each parameter based on its device
         for i in 0..self.params.len() {
