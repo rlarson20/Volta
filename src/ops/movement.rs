@@ -1,4 +1,5 @@
 use crate::autograd::GradFn;
+use crate::error::Result;
 use crate::{RawTensor, Tensor};
 
 /// Movement operations: reshape/reorder data without changing values
@@ -736,8 +737,92 @@ impl RawTensor {
     /// # Arguments
     /// * `ranges` - For each dimension, (start, end) indices
     /// # Panics
-    /// ranges length must match rank
+    /// Validate shrink ranges for bounds checking
+    ///
+    /// Ensures that:
+    /// - Ranks match (`ranges.len() == shape.len()`)
+    /// - Range order is valid (`start <= end` for each dimension)
+    /// - End bounds are within dimension size (`end <= dimension_size`)
+    /// - Resulting tensor is non-empty (at least one dimension has size > 0)
+    fn validate_shrink_ranges(shape: &[usize], ranges: &[(usize, usize)]) -> Result<()> {
+        use crate::error::VoltaError;
+
+        // Validate rank match
+        if ranges.len() != shape.len() {
+            return Err(VoltaError::InvalidParameter(format!(
+                "Shrink ranges length ({}) must match tensor rank ({})",
+                ranges.len(),
+                shape.len()
+            )));
+        }
+
+        // Validate each range
+        for (dim, (&(start, end), &dim_size)) in ranges.iter().zip(shape.iter()).enumerate() {
+            // Check range order
+            if start > end {
+                return Err(VoltaError::InvalidParameter(format!(
+                    "Invalid shrink range for dimension {dim}: start ({start}) exceeds end ({end})"
+                )));
+            }
+
+            // Check end bound
+            if end > dim_size {
+                return Err(VoltaError::DimensionOutOfBounds {
+                    dim,
+                    shape: shape.to_vec(),
+                });
+            }
+
+            // Check for empty range
+            if start == end {
+                return Err(VoltaError::InvalidParameter(format!(
+                    "Invalid shrink range for dimension {dim}: start equals end ({start}), creates zero-sized dimension"
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Shrink tensor to specified ranges for each dimension
+    ///
+    /// Extracts a subregion of the tensor by specifying start and end indices
+    /// for each dimension. The range `[start, end)` follows Python slicing conventions.
+    ///
+    /// # Arguments
+    /// * `ranges` - Slice of `(start, end)` tuples for each dimension
+    ///
+    /// # Returns
+    /// New tensor with shrunk dimensions
+    ///
+    /// # Panics
+    /// - If `ranges` length doesn't match tensor rank
+    /// - If any range has `start > end`
+    /// - If any range has `end > dimension size`
+    /// - If any range has `start == end` (zero-sized dimension)
     pub fn shrink(self_t: &Tensor, ranges: &[(usize, usize)]) -> Tensor {
+        Self::try_shrink(self_t, ranges).expect("Invalid shrink ranges")
+    }
+
+    /// Try to shrink tensor to specified ranges for each dimension
+    ///
+    /// Extracts a subregion of the tensor by specifying start and end indices
+    /// for each dimension. The range `[start, end)` follows Python slicing conventions.
+    ///
+    /// # Arguments
+    /// * `ranges` - Slice of `(start, end)` tuples for each dimension
+    ///
+    /// # Returns
+    /// * `Ok(Tensor)` - New tensor with shrunk dimensions
+    /// * `Err(VoltaError)` - If validation fails
+    ///
+    /// # Errors
+    /// * `VoltaError::InvalidParameter` - If:
+    ///   - Ranges length doesn't match tensor rank
+    ///   - Any range has `start > end`
+    ///   - Any range has `start == end` (zero-sized dimension)
+    /// * `VoltaError::DimensionOutOfBounds` - If any range has `end > dimension size`
+    pub fn try_shrink(self_t: &Tensor, ranges: &[(usize, usize)]) -> Result<Tensor> {
         #[allow(clippy::too_many_arguments)]
         fn shrink_recursive(
             result: &mut [f32],
@@ -791,11 +876,8 @@ impl RawTensor {
             )
         };
 
-        assert_eq!(
-            ranges.len(),
-            old_shape.len(),
-            "Ranges length must match rank"
-        );
+        // Validate ranges before any computation
+        Self::validate_shrink_ranges(&old_shape, ranges)?;
 
         let new_shape: Vec<usize> = ranges.iter().map(|(start, end)| end - start).collect();
 
@@ -814,7 +896,7 @@ impl RawTensor {
                     original_shape: old_shape,
                 }));
             }
-            return out;
+            return Ok(out);
         }
 
         // CPU fallback
@@ -849,7 +931,7 @@ impl RawTensor {
                 original_shape: old_shape,
             }));
         }
-        out
+        Ok(out)
     }
 
     /// Subsample tensor with specified strides

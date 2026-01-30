@@ -1649,87 +1649,249 @@ mod edge_case_tests {
         x.pad(&[(50000, 50000), (50000, 50000)]); // Way over 100M elements
     }
 
-    // ===== SHRINK INVALID RANGE TESTS =====
+    // ===== SHRINK VALIDATION TESTS =====
 
     #[test]
-    #[should_panic(expected = "Ranges length must match rank")]
     fn test_shrink_wrong_length_too_short() {
         // Attempt to shrink rank-2 tensor with only 1 range
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
-        x.shrink(&[(0, 2)]); // Missing range for second dimension
+        let result = RawTensor::try_shrink(&x, &[(0, 2)]);
+
+        assert!(result.is_err());
+        match result.as_ref().unwrap_err() {
+            VoltaError::InvalidParameter(msg) => {
+                assert!(
+                    msg.contains("length"),
+                    "Error message should mention length"
+                );
+                assert!(
+                    msg.contains("2"),
+                    "Error message should mention expected rank 2"
+                );
+                assert!(
+                    msg.contains("1"),
+                    "Error message should mention actual length 1"
+                );
+            }
+            VoltaError::ShapeDataMismatch { .. }
+            | VoltaError::DimensionOutOfBounds { .. }
+            | VoltaError::DTypeMismatch { .. }
+            | VoltaError::BroadcastError(..)
+            | VoltaError::DeviceError(_)
+            | VoltaError::Io(_)
+            | VoltaError::OpError(_) => {
+                panic!("Expected InvalidParameter error, got {:?}", result)
+            }
+        }
     }
 
     #[test]
-    #[should_panic(expected = "Ranges length must match rank")]
     fn test_shrink_wrong_length_too_long() {
         // Attempt to shrink rank-2 tensor with 3 ranges
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
-        x.shrink(&[(0, 2), (0, 3), (0, 1)]); // Too many ranges
-    }
+        let result = RawTensor::try_shrink(&x, &[(0, 2), (0, 3), (0, 1)]);
 
-    // NOTE: The following shrink tests document UNSAFE BEHAVIOR
-    // The shrink operation does NOT validate that ranges are within tensor bounds.
-    // These tests document the current behavior, which may lead to:
-    // - Out-of-bounds memory access in recursive functions
-    // - Silent data corruption
-    // - Undefined behavior
-    // Future work should add bounds checking to shrink() in movement.rs
+        assert!(result.is_err());
+        match result.as_ref().unwrap_err() {
+            VoltaError::InvalidParameter(msg) => {
+                assert!(
+                    msg.contains("length"),
+                    "Error message should mention length"
+                );
+                assert!(
+                    msg.contains("2"),
+                    "Error message should mention expected rank 2"
+                );
+                assert!(
+                    msg.contains("3"),
+                    "Error message should mention actual length 3"
+                );
+            }
+            VoltaError::ShapeDataMismatch { .. }
+            | VoltaError::DimensionOutOfBounds { .. }
+            | VoltaError::DTypeMismatch { .. }
+            | VoltaError::BroadcastError(..)
+            | VoltaError::DeviceError(_)
+            | VoltaError::Io(_)
+            | VoltaError::OpError(_) => {
+                panic!("Expected InvalidParameter error, got {:?}", result)
+            }
+        }
+    }
 
     #[test]
     fn test_shrink_out_of_bounds_end() {
         // Shrink with end exceeding tensor dimension
-        // Current behavior: May cause panic or silent memory corruption
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
-        // This creates new_shape [2, 10] but tensor only has 3 columns
-        // The recursive function may access invalid memory
-        let result = x.shrink(&[(0, 2), (0, 10)]);
+        let result = RawTensor::try_shrink(&x, &[(0, 2), (0, 10)]);
 
-        // Current implementation creates a tensor with shape [2, 10]
-        // but the data is garbage (reads beyond bounds)
-        assert_eq!(result.borrow().shape, vec![2, 10]);
-        // The actual data values are undefined/corrupted
+        assert!(result.is_err());
+        match result.as_ref().unwrap_err() {
+            VoltaError::DimensionOutOfBounds { dim, shape } => {
+                assert_eq!(*dim, 1, "Error should be for dimension 1");
+                assert_eq!(shape, &vec![2, 3], "Shape should match original tensor");
+            }
+            VoltaError::ShapeDataMismatch { .. }
+            | VoltaError::DTypeMismatch { .. }
+            | VoltaError::BroadcastError(..)
+            | VoltaError::DeviceError(_)
+            | VoltaError::Io(_)
+            | VoltaError::InvalidParameter(_)
+            | VoltaError::OpError(_) => {
+                panic!("Expected DimensionOutOfBounds error, got {:?}", result)
+            }
+        }
     }
 
     #[test]
     fn test_shrink_start_exceeds_dimension() {
         // Shrink with start position beyond tensor dimension
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
-        // Start at position 5, but dimension only has 3 elements
-        let result = x.shrink(&[(0, 2), (5, 10)]);
+        let result = RawTensor::try_shrink(&x, &[(0, 2), (5, 10)]);
 
-        // Current implementation doesn't validate start < dimension
-        assert_eq!(result.borrow().shape, vec![2, 5]); // 10 - 5 = 5
-        // The actual data values are undefined/reads beyond valid range
+        assert!(result.is_err());
+        match result.as_ref().unwrap_err() {
+            VoltaError::DimensionOutOfBounds { dim, shape } => {
+                assert_eq!(*dim, 1, "Error should be for dimension 1");
+                assert_eq!(shape, &vec![2, 3], "Shape should match original tensor");
+            }
+            VoltaError::ShapeDataMismatch { .. }
+            | VoltaError::DTypeMismatch { .. }
+            | VoltaError::BroadcastError(..)
+            | VoltaError::DeviceError(_)
+            | VoltaError::Io(_)
+            | VoltaError::InvalidParameter(_)
+            | VoltaError::OpError(_) => {
+                panic!("Expected DimensionOutOfBounds error, got {:?}", result)
+            }
+        }
     }
 
     #[test]
-    #[should_panic(expected = "attempt to subtract with overflow")]
     fn test_shrink_invalid_range_order() {
-        // Shrink with start >= end (creates negative or zero size)
+        // Shrink with start > end (creates negative size)
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
-        // For dimension 0: end (2) < start (3), causing underflow
-        // end - start = 2 - 3 = underflow in usize subtraction
-        // This panics in debug mode with overflow check
-        let _result = x.shrink(&[(3, 2), (0, 3)]);
+        let result = RawTensor::try_shrink(&x, &[(3, 2), (0, 3)]);
+
+        assert!(result.is_err());
+        match result.as_ref().unwrap_err() {
+            VoltaError::InvalidParameter(msg) => {
+                assert!(
+                    msg.contains("dimension 0"),
+                    "Error should mention dimension 0"
+                );
+                assert!(msg.contains("start"), "Error should mention start");
+                assert!(msg.contains("end"), "Error should mention end");
+                assert!(msg.contains("3"), "Error should include values");
+                assert!(msg.contains("2"), "Error should include values");
+            }
+            VoltaError::ShapeDataMismatch { .. }
+            | VoltaError::DimensionOutOfBounds { .. }
+            | VoltaError::DTypeMismatch { .. }
+            | VoltaError::BroadcastError(..)
+            | VoltaError::DeviceError(_)
+            | VoltaError::Io(_)
+            | VoltaError::OpError(_) => {
+                panic!("Expected InvalidParameter error, got {:?}", result)
+            }
+        }
     }
 
     #[test]
-    #[should_panic(expected = "Cannot create tensor with zero elements")]
     fn test_shrink_empty_range() {
         // Shrink with start == end (zero-sized dimension)
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
-        // First dimension becomes 0-sized
-        // This panics because tensors cannot have zero elements
-        let _result = x.shrink(&[(0, 0), (0, 3)]);
+        let result = RawTensor::try_shrink(&x, &[(0, 0), (0, 3)]);
+
+        assert!(result.is_err());
+        match result.as_ref().unwrap_err() {
+            VoltaError::InvalidParameter(msg) => {
+                assert!(
+                    msg.contains("dimension 0"),
+                    "Error should mention dimension 0"
+                );
+                assert!(
+                    msg.contains("zero-sized"),
+                    "Error should mention zero-sized dimension"
+                );
+            }
+            VoltaError::ShapeDataMismatch { .. }
+            | VoltaError::DimensionOutOfBounds { .. }
+            | VoltaError::DTypeMismatch { .. }
+            | VoltaError::BroadcastError(..)
+            | VoltaError::DeviceError(_)
+            | VoltaError::Io(_)
+            | VoltaError::OpError(_) => {
+                panic!("Expected InvalidParameter error, got {:?}", result)
+            }
+        }
     }
 
     #[test]
-    #[should_panic(expected = "Cannot create tensor with zero elements")]
     fn test_shrink_both_empty_ranges() {
         // Shrink with all dimensions having start == end
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
-        // This creates completely empty tensor, which is not allowed
-        let _result = x.shrink(&[(0, 0), (0, 0)]);
+        let result = RawTensor::try_shrink(&x, &[(0, 0), (0, 0)]);
+
+        assert!(result.is_err());
+        match result.as_ref().unwrap_err() {
+            VoltaError::InvalidParameter(msg) => {
+                assert!(
+                    msg.contains("zero-sized"),
+                    "Error should mention zero-sized dimension"
+                );
+            }
+            VoltaError::ShapeDataMismatch { .. }
+            | VoltaError::DimensionOutOfBounds { .. }
+            | VoltaError::DTypeMismatch { .. }
+            | VoltaError::BroadcastError(..)
+            | VoltaError::DeviceError(_)
+            | VoltaError::Io(_)
+            | VoltaError::OpError(_) => {
+                panic!("Expected InvalidParameter error, got {:?}", result)
+            }
+        }
+    }
+
+    #[test]
+    fn test_shrink_valid_boundary_cases() {
+        // Test edge cases that should succeed
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
+
+        // Shrink to exact dimension (end == dim_size)
+        let result = RawTensor::try_shrink(&x, &[(0, 2), (0, 3)]).unwrap();
+        assert_eq!(result.borrow().shape, vec![2, 3]);
+        assert_eq!(
+            result.borrow().data.to_vec(),
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        );
+
+        // Shrink to single element (end - start == 1 for each dimension)
+        let result = RawTensor::try_shrink(&x, &[(0, 1), (0, 1)]).unwrap();
+        assert_eq!(result.borrow().shape, vec![1, 1]);
+        assert_eq!(result.borrow().data.to_vec(), vec![1.0]);
+
+        // Shrink from non-zero start
+        let result = RawTensor::try_shrink(&x, &[(1, 2), (1, 3)]).unwrap();
+        assert_eq!(result.borrow().shape, vec![1, 2]);
+        assert_eq!(result.borrow().data.to_vec(), vec![5.0, 6.0]);
+    }
+
+    #[test]
+    fn test_shrink_panic_version_still_works() {
+        // Test that the panic-based API maintains backward compatibility
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
+
+        // Valid ranges should work with shrink()
+        let result = x.shrink(&[(0, 2), (1, 3)]);
+        assert_eq!(result.borrow().shape, vec![2, 2]);
+        assert_eq!(result.borrow().data.to_vec(), vec![2.0, 3.0, 5.0, 6.0]);
+
+        // Invalid ranges should panic
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            x.shrink(&[(0, 2), (0, 10)]); // end exceeds dimension
+        }));
+        assert!(result.is_err(), "shrink() should panic on invalid ranges");
     }
 
     // ===== NUMERICAL EDGE CASE TESTS =====
