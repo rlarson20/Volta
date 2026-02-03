@@ -66,7 +66,7 @@ impl GradFn for MulAccGradFn {
         vec![grad_x, grad_y, grad_z]
     }
     fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(MulAccGradFn)
+        Box::new(Self)
     }
 }
 
@@ -93,6 +93,10 @@ impl GradFn for WhereGradFn {
         drop(true_parent);
         drop(false_parent);
 
+        #[allow(
+            clippy::useless_let_if_seq,
+            reason = "will handle idiomatically after i finish the rest of these"
+        )]
         let mut grad_true = None;
         if needs_true {
             let mut data = vec![0.0; out_grad.data.len()];
@@ -108,6 +112,10 @@ impl GradFn for WhereGradFn {
             grad_true = Some(RawTensor::new(reduced, &self.true_shape, false));
         }
 
+        #[allow(
+            clippy::useless_let_if_seq,
+            reason = "will handle idiomatically after i finish the rest of these"
+        )]
         let mut grad_false = None;
         if needs_false {
             let mut data = vec![0.0; out_grad.data.len()];
@@ -127,7 +135,7 @@ impl GradFn for WhereGradFn {
     }
 
     fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(WhereGradFn {
+        Box::new(Self {
             condition: self.condition.clone(),
             true_shape: self.true_shape.clone(),
             false_shape: self.false_shape.clone(),
@@ -188,16 +196,16 @@ impl RawTensor {
                 #[cfg(feature = "gpu")]
                 {
                     if dev_x.is_gpu() && dev_x == dev_y && dev_x == dev_z {
-                        if let Some(prod) = RawTensor::gpu_mul(&data_x, &data_y) {
-                            if let Some(sum) = RawTensor::gpu_add(&prod, &data_z) {
-                                let out = Rc::new(RefCell::new(RawTensor {
+                        if let Some(prod) = Self::gpu_mul(&data_x, &data_y) {
+                            if let Some(sum) = Self::gpu_add(&prod, &data_z) {
+                                let out = Rc::new(RefCell::new(Self {
                                     data: sum,
-                                    shape: shape_x.clone(),
+                                    shape: shape_x,
                                     grad: None,
                                     requires_grad,
                                     grad_fn: None,
                                     parents: vec![x.clone(), y.clone(), z.clone()],
-                                    device: dev_x.clone(),
+                                    device: dev_x,
                                 }));
                                 if requires_grad {
                                     out.borrow_mut().grad_fn = Some(Box::new(MulAccGradFn));

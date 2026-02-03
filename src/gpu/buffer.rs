@@ -47,7 +47,7 @@ impl GpuBuffer {
             ctx.queue()
                 .write_buffer(&buffer, 0, bytemuck::cast_slice(data));
 
-            return Some(GpuBuffer {
+            return Some(Self {
                 buffer: Some(buffer),
                 len: data.len(),
                 pool: Some(ctx.buffer_pool_arc()),
@@ -72,7 +72,7 @@ impl GpuBuffer {
         ctx.queue()
             .write_buffer(&buffer, 0, bytemuck::cast_slice(data));
 
-        Some(GpuBuffer {
+        Some(Self {
             buffer: Some(buffer),
             len: data.len(),
             pool: Some(ctx.buffer_pool_arc()),
@@ -96,7 +96,7 @@ impl GpuBuffer {
             ctx.queue()
                 .write_buffer(&buffer, 0, bytemuck::cast_slice(&zeros));
 
-            return Some(GpuBuffer {
+            return Some(Self {
                 buffer: Some(buffer),
                 len,
                 pool: Some(ctx.buffer_pool_arc()),
@@ -121,7 +121,7 @@ impl GpuBuffer {
         ctx.queue()
             .write_buffer(&buffer, 0, bytemuck::cast_slice(&zeros));
 
-        Some(GpuBuffer {
+        Some(Self {
             buffer: Some(buffer),
             len,
             pool: Some(ctx.buffer_pool_arc()),
@@ -226,13 +226,13 @@ impl GpuBuffer {
 
     /// Get the number of elements
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.len
     }
 
     /// Check if buffer is empty
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.len == 0
     }
 
@@ -251,9 +251,7 @@ impl GpuBuffer {
         let byte_size = len * std::mem::size_of::<f32>();
 
         // Try to get a buffer from the pool first
-        let new_buffer = if let Some(pooled) = ctx.buffer_pool().acquire(byte_size) {
-            pooled
-        } else {
+        let new_buffer = ctx.buffer_pool().acquire(byte_size).unwrap_or_else(|| {
             // Allocate with the bucket size (power of 2) for consistent pooling
             let alloc_size = BufferPool::allocation_size(byte_size);
             ctx.device().create_buffer(&wgpu::BufferDescriptor {
@@ -264,7 +262,7 @@ impl GpuBuffer {
                     | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             })
-        };
+        });
 
         let mut encoder = ctx
             .device()
@@ -280,7 +278,7 @@ impl GpuBuffer {
         ctx.increment_pending();
         ctx.maybe_sync();
 
-        Some(GpuBuffer {
+        Some(Self {
             buffer: Some(new_buffer),
             len,
             pool: Some(ctx.buffer_pool_arc()),

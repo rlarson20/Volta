@@ -101,7 +101,7 @@ impl GradFn for UnaryGradFn {
                     .data
                     .iter()
                     .zip(&x.data)
-                    .map(|(&g, &x)| g * 2_f32.powf(x) * ln2)
+                    .map(|(&g, &x)| g * x.exp2() * ln2)
                     .collect()
             }
             UnaryOp::Log2 => {
@@ -131,7 +131,7 @@ impl GradFn for UnaryGradFn {
                 .zip(&x.data)
                 .map(|(&g, &x)| {
                     let t = x.tanh();
-                    g * (1.0 - t * t)
+                    g * t.mul_add(-t, 1.0)
                 })
                 .collect(),
             UnaryOp::Sigmoid => out_grad
@@ -154,12 +154,12 @@ impl GradFn for UnaryGradFn {
     }
 
     fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(UnaryGradFn { op: self.op })
+        Box::new(Self { op: self.op })
     }
 }
 // Map a `UnaryOp` to the corresponding GPU kernel name, if supported.
 #[cfg(feature = "gpu")]
-fn unary_kernel_name(op: UnaryOp) -> &'static str {
+const fn unary_kernel_name(op: UnaryOp) -> &'static str {
     match op {
         UnaryOp::Neg => "neg",
         UnaryOp::Exp => "exp",
@@ -178,7 +178,7 @@ fn unary_kernel_name(op: UnaryOp) -> &'static str {
 
 // Map a `UnaryOp` to the corresponding GPU backward kernel name, if supported.
 #[cfg(feature = "gpu")]
-fn unary_backward_kernel_name(op: UnaryOp) -> &'static str {
+const fn unary_backward_kernel_name(op: UnaryOp) -> &'static str {
     match op {
         UnaryOp::Neg => "neg_backward",
         UnaryOp::Exp => "exp_backward",
@@ -216,13 +216,13 @@ impl RawTensor {
         // kernel, try to execute the op there.
         #[cfg(feature = "gpu")]
         {
-            if RawTensor::common_gpu_device(&[t]).is_some()
+            if Self::common_gpu_device(&[t]).is_some()
                 && let kernel = unary_kernel_name(op)
-                && let Some(storage) = RawTensor::gpu_unary(&data, kernel)
+                && let Some(storage) = Self::gpu_unary(&data, kernel)
             {
-                let out = Rc::new(RefCell::new(RawTensor {
+                let out = Rc::new(RefCell::new(Self {
                     data: storage,
-                    shape: shape.clone(),
+                    shape,
                     grad: None,
                     requires_grad: req,
                     grad_fn: None,
@@ -245,7 +245,7 @@ impl RawTensor {
                 UnaryOp::Neg => -x,
                 UnaryOp::Recip => 1.0 / x,
                 UnaryOp::Sqrt => x.sqrt(),
-                UnaryOp::Exp2 => 2_f32.powf(x),
+                UnaryOp::Exp2 => x.exp2(),
                 UnaryOp::Exp => x.exp(),
                 UnaryOp::Log2 => x.log2(),
                 UnaryOp::Log => x.ln(),

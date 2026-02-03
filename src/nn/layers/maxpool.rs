@@ -21,8 +21,8 @@ struct MaxPool2dGradFn {
 impl MaxPool2d {
     /// Square-kernel constructor for convenience
     #[must_use]
-    pub fn new(kernel: usize, stride: usize, padding: usize) -> Self {
-        MaxPool2d {
+    pub const fn new(kernel: usize, stride: usize, padding: usize) -> Self {
+        Self {
             kernel: (kernel, kernel),
             stride: (stride, stride),
             padding: (padding, padding),
@@ -31,12 +31,12 @@ impl MaxPool2d {
 
     /// Arbitrary kernel/stride/padding constructor
     #[must_use]
-    pub fn with_params(
+    pub const fn with_params(
         kernel: (usize, usize),
         stride: (usize, usize),
         padding: (usize, usize),
     ) -> Self {
-        MaxPool2d {
+        Self {
             kernel,
             stride,
             padding,

@@ -48,7 +48,7 @@ impl GradFn for SumGradFn {
     }
 
     fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(SumGradFn {
+        Box::new(Self {
             input_shape: self.input_shape.clone(),
         })
     }
@@ -92,7 +92,7 @@ impl GradFn for MaxReduceGradFn {
     }
 
     fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(MaxReduceGradFn {
+        Box::new(Self {
             input_shape: self.input_shape.clone(),
             max_index: self.max_index,
         })
@@ -136,7 +136,7 @@ impl GradFn for MeanGradFn {
     }
 
     fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(MeanGradFn {
+        Box::new(Self {
             input_shape: self.input_shape.clone(),
         })
     }
@@ -166,8 +166,9 @@ impl RawTensor {
                 // Try GPU first if available
                 let sum: f32 = if device.is_gpu() {
                     #[cfg(feature = "gpu")]
+                    #[allow(clippy::option_if_let_else, reason = "can't figure out right now")]
                     {
-                        if let Some(result) = RawTensor::gpu_sum_reduce(&data) {
+                        if let Some(result) = Self::gpu_sum_reduce(&data) {
                             result
                         } else {
                             data.iter().sum()
@@ -180,19 +181,15 @@ impl RawTensor {
                 } else {
                     data.iter().sum()
                 };
-                (
-                    sum,
-                    Box::new(SumGradFn {
-                        input_shape: shape.clone(),
-                    }),
-                )
+                (sum, Box::new(SumGradFn { input_shape: shape }))
             }
             ReduceOp::Max => {
                 // Try GPU first if available
                 let (max_val, max_idx) = if device.is_gpu() {
                     #[cfg(feature = "gpu")]
                     {
-                        if let Some(result) = RawTensor::gpu_max_reduce(&data) {
+                        #[allow(clippy::option_if_let_else, reason = "can't figure out rn")]
+                        if let Some(result) = Self::gpu_max_reduce(&data) {
                             result
                         } else {
                             let (max_val, max_idx) = data
@@ -226,7 +223,7 @@ impl RawTensor {
                 (
                     max_val,
                     Box::new(MaxReduceGradFn {
-                        input_shape: shape.clone(),
+                        input_shape: shape,
                         max_index: max_idx,
                     }),
                 )
@@ -236,7 +233,8 @@ impl RawTensor {
                 let mean_val: f32 = if device.is_gpu() {
                     #[cfg(feature = "gpu")]
                     {
-                        if let Some(result) = RawTensor::gpu_mean_reduce(&data) {
+                        #[allow(clippy::option_if_let_else, reason = "can't figure out rn")]
+                        if let Some(result) = Self::gpu_mean_reduce(&data) {
                             result
                         } else {
                             let sum: f32 = data.iter().sum();
@@ -252,12 +250,7 @@ impl RawTensor {
                     let sum: f32 = data.iter().sum();
                     sum / (data.len() as f32)
                 };
-                (
-                    mean_val,
-                    Box::new(MeanGradFn {
-                        input_shape: shape.clone(),
-                    }),
-                )
+                (mean_val, Box::new(MeanGradFn { input_shape: shape }))
             }
         };
 

@@ -21,7 +21,7 @@ impl Dropout {
             (0.0..=1.0).contains(&p),
             "Dropout probability must be in [0, 1]"
         );
-        Dropout { p, training: true }
+        Self { p, training: true }
     }
 }
 

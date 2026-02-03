@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 /// Health status with predictive warnings based on trend analysis
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HealthStatus {
     /// Resources are healthy with stable or decreasing trends
     Healthy,
@@ -230,7 +230,7 @@ fn calculate_trend(values: &[f64]) -> TrendDirection {
     let sum_x2: f64 = (0..values.len()).map(|i| (i as f64).powi(2)).sum();
 
     // Calculate slope (rate of change)
-    let slope = (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - sum_x.powi(2));
+    let slope = n.mul_add(sum_xy, -(sum_x * sum_y)) / n.mul_add(sum_x2, -sum_x.powi(2));
 
     // Calculate average value for normalization
     let avg_y = sum_y / n;

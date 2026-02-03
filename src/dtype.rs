@@ -36,46 +36,46 @@ pub enum DType {
 impl DType {
     /// Returns the size in bytes of a single element of this dtype
     #[must_use]
-    pub fn size_of(&self) -> usize {
+    pub const fn size_of(&self) -> usize {
         match self {
-            DType::F16 | DType::BF16 => 2,
-            DType::F32 | DType::I32 => 4,
-            DType::F64 | DType::I64 => 8,
-            DType::U8 | DType::Bool => 1,
+            Self::F16 | Self::BF16 => 2,
+            Self::F32 | Self::I32 => 4,
+            Self::F64 | Self::I64 => 8,
+            Self::U8 | Self::Bool => 1,
         }
     }
 
     /// Returns the name of this dtype as a string
     #[must_use]
-    pub fn name(&self) -> &'static str {
+    pub const fn name(&self) -> &'static str {
         match self {
-            DType::F16 => "f16",
-            DType::BF16 => "bf16",
-            DType::F32 => "f32",
-            DType::F64 => "f64",
-            DType::I32 => "i32",
-            DType::I64 => "i64",
-            DType::U8 => "u8",
-            DType::Bool => "bool",
+            Self::F16 => "f16",
+            Self::BF16 => "bf16",
+            Self::F32 => "f32",
+            Self::F64 => "f64",
+            Self::I32 => "i32",
+            Self::I64 => "i64",
+            Self::U8 => "u8",
+            Self::Bool => "bool",
         }
     }
 
     /// Returns true if this is a floating-point type
     #[must_use]
-    pub fn is_float(&self) -> bool {
-        matches!(self, DType::F16 | DType::BF16 | DType::F32 | DType::F64)
+    pub const fn is_float(&self) -> bool {
+        matches!(self, Self::F16 | Self::BF16 | Self::F32 | Self::F64)
     }
 
     /// Returns true if this is an integer type
     #[must_use]
-    pub fn is_int(&self) -> bool {
-        matches!(self, DType::I32 | DType::I64 | DType::U8)
+    pub const fn is_int(&self) -> bool {
+        matches!(self, Self::I32 | Self::I64 | Self::U8)
     }
 
     /// Determines the result dtype when two dtypes are combined in an operation.
     /// Follows type promotion rules similar to PyTorch/NumPy.
     #[must_use]
-    pub fn promote(a: DType, b: DType) -> DType {
+    pub fn promote(a: Self, b: Self) -> Self {
         use DType::{Bool, F32, F64, I32, I64, U8};
 
         // Same type -> same type

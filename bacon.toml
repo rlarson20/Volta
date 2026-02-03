@@ -72,6 +72,8 @@ command = [ #TODO: organize these
     "clippy::too_many_lines",
     # Denys
     "-D",
+    "clippy::use-self",
+    "-D",
     "clippy::unreadable_literal",
     "-D",
     "clippy::redundant_else",

@@ -64,10 +64,8 @@ impl StagingBufferPool {
     /// # Panics
     /// Unwrapping pool mutex
     pub fn acquire(&self, size_bytes: u64) -> Option<Buffer> {
-        let mut pools = self.pools.lock().unwrap();
         let mut count = self.current_count.lock().unwrap();
-
-        if let Some(pool) = pools.get_mut(&size_bytes)
+        if let Some(pool) = self.pools.lock().unwrap().get_mut(&size_bytes)
             && let Some(buffer) = pool.pop()
         {
             *count = count.saturating_sub(1);
@@ -79,7 +77,7 @@ impl StagingBufferPool {
                     size_bytes, *count
                 );
             }
-
+            drop(count);
             return Some(buffer);
         }
 
@@ -97,7 +95,6 @@ impl StagingBufferPool {
     /// # Panics
     /// Unwrapping pool mutex
     pub fn release(&self, buffer: Buffer, size_bytes: u64) -> bool {
-        let mut pools = self.pools.lock().unwrap();
         let mut count = self.current_count.lock().unwrap();
 
         if *count >= self.max_total {
@@ -112,7 +109,12 @@ impl StagingBufferPool {
             return false; // Pool full, buffer will be dropped
         }
 
-        pools.entry(size_bytes).or_default().push(buffer);
+        self.pools
+            .lock()
+            .unwrap()
+            .entry(size_bytes)
+            .or_default()
+            .push(buffer);
         *count += 1;
 
         #[cfg(debug_assertions)]
@@ -122,7 +124,7 @@ impl StagingBufferPool {
                 size_bytes, *count
             );
         }
-
+        drop(count);
         true
     }
 
@@ -150,7 +152,7 @@ impl StagingBufferPool {
     }
 
     /// Get maximum pool capacity
-    pub fn capacity(&self) -> usize {
+    pub const fn capacity(&self) -> usize {
         self.max_total
     }
 

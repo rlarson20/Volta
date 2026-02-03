@@ -62,13 +62,13 @@ impl RawTensor {
         }
 
         let storage = match op {
-            BinaryOp::Add => RawTensor::gpu_add(&storage_a, &storage_b)?,
-            BinaryOp::Sub => RawTensor::gpu_sub(&storage_a, &storage_b)?,
-            BinaryOp::Mul => RawTensor::gpu_mul(&storage_a, &storage_b)?,
-            BinaryOp::Div => RawTensor::gpu_div(&storage_a, &storage_b)?,
-            BinaryOp::Max => RawTensor::gpu_max(&storage_a, &storage_b)?,
-            BinaryOp::Mod => RawTensor::gpu_mod(&storage_a, &storage_b)?,
-            BinaryOp::Cmplt => RawTensor::gpu_cmplt(&storage_a, &storage_b)?,
+            BinaryOp::Add => Self::gpu_add(&storage_a, &storage_b)?,
+            BinaryOp::Sub => Self::gpu_sub(&storage_a, &storage_b)?,
+            BinaryOp::Mul => Self::gpu_mul(&storage_a, &storage_b)?,
+            BinaryOp::Div => Self::gpu_div(&storage_a, &storage_b)?,
+            BinaryOp::Max => Self::gpu_max(&storage_a, &storage_b)?,
+            BinaryOp::Mod => Self::gpu_mod(&storage_a, &storage_b)?,
+            BinaryOp::Cmplt => Self::gpu_cmplt(&storage_a, &storage_b)?,
         };
 
         Some((shape_a, storage, device_a))
@@ -292,6 +292,7 @@ impl GradFn for BinaryGradFn {
                 let gy = if y_val.requires_grad {
                     let x_bc = RawTensor::broadcast_to(&x_val.data, &x_val.shape, &out_grad.shape);
                     let y_bc = RawTensor::broadcast_to(&y_val.data, &y_val.shape, &out_grad.shape);
+                    #[expect(clippy::suspicious_operation_groupings, reason = "∂(x/y)/∂y = -x/y²")]
                     let grad: Vec<f32> = out_grad
                         .data
                         .iter()
@@ -353,14 +354,14 @@ impl GradFn for BinaryGradFn {
     }
 
     fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(BinaryGradFn { op: self.op })
+        Box::new(Self { op: self.op })
     }
 }
 
 // Map a `BinaryOp` to the corresponding GPU backward kernel names, if supported.
 // Returns (kernel_for_grad_a, kernel_for_grad_b)
 #[cfg(feature = "gpu")]
-fn binary_backward_kernel_names(op: BinaryOp) -> Option<(&'static str, &'static str)> {
+const fn binary_backward_kernel_names(op: BinaryOp) -> Option<(&'static str, &'static str)> {
     match op {
         BinaryOp::Add => Some(("add_backward_a", "add_backward_b")),
         BinaryOp::Sub => Some(("sub_backward_a", "sub_backward_b")),
@@ -372,7 +373,7 @@ fn binary_backward_kernel_names(op: BinaryOp) -> Option<(&'static str, &'static 
 }
 
 /// Get the broadcast kernel name for a binary operation
-fn binary_backward_broadcast_kernel_name(op: BinaryOp) -> Option<&'static str> {
+const fn binary_backward_broadcast_kernel_name(op: BinaryOp) -> Option<&'static str> {
     match op {
         BinaryOp::Add => Some("add"),
         BinaryOp::Sub => Some("sub"),
@@ -625,11 +626,11 @@ impl RawTensor {
         // otherwise.
         #[cfg(feature = "gpu")]
         {
-            if RawTensor::common_gpu_device(&[self_t, other]).is_some()
+            if Self::common_gpu_device(&[self_t, other]).is_some()
                 && let Some((shape, storage, device)) =
                     Self::try_gpu_binary_result(self_t, other, op)
             {
-                let out = Rc::new(RefCell::new(RawTensor {
+                let out = Rc::new(RefCell::new(Self {
                     data: storage,
                     shape,
                     grad: None,

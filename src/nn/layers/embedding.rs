@@ -48,14 +48,14 @@ impl Embedding {
         let limit = 0.1;
         let data: Vec<f32> = with_rng(|rng| {
             (0..vocab_size * embedding_dim)
-                .map(|_| rng.random::<f32>() * 2.0 * limit - limit)
+                .map(|_| (rng.random::<f32>() * 2.0).mul_add(limit, -limit))
                 .collect()
         });
 
         let weight = RawTensor::new(data, &[vocab_size, embedding_dim], false);
         weight.borrow_mut().requires_grad = true;
 
-        Embedding {
+        Self {
             weight,
             vocab_size,
             dim: embedding_dim,

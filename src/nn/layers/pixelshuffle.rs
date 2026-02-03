@@ -42,7 +42,7 @@ impl PixelShuffle {
             upscale_factor > 0,
             "PixelShuffle: upscale_factor must be positive, got {upscale_factor}",
         );
-        PixelShuffle { upscale_factor }
+        Self { upscale_factor }
     }
 }
 

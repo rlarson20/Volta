@@ -42,7 +42,7 @@ impl SGD {
             vec![]
         };
 
-        SGD {
+        Self {
             params,
             lr,
             momentum,
@@ -91,7 +91,7 @@ impl SGD {
 
     /// GPU-accelerated step for a single parameter
     #[cfg(feature = "gpu")]
-    fn step_gpu_param(&mut self, i: usize) {
+    fn step_gpu_param(&self, i: usize) {
         use crate::gpu::OptimizerStepParams;
 
         // For simple SGD (no momentum), use the simple path
@@ -145,7 +145,7 @@ impl SGD {
 
     /// GPU step for simple SGD (no momentum)
     #[cfg(feature = "gpu")]
-    fn step_gpu_param_simple(&mut self, i: usize) {
+    fn step_gpu_param_simple(&self, i: usize) {
         use crate::gpu::OptimizerStepParams;
 
         let param = self.params.get(i).unwrap();
@@ -197,7 +197,7 @@ impl SGD {
         };
 
         // Apply weight decay to gradient
-        let mut active_grad = grad.clone();
+        let mut active_grad = grad;
         if self.weight_decay != 0.0 {
             for (g, theta) in active_grad.iter_mut().zip(p.data.iter()) {
                 *g += self.weight_decay * *theta;
@@ -214,7 +214,7 @@ impl SGD {
 
             // Update velocity: v = momentum·v - lr·grad
             for (v, &g) in vel_slice.iter_mut().zip(active_grad.iter()) {
-                *v = self.momentum * *v - self.lr * g;
+                *v = self.momentum.mul_add(*v, -(self.lr * g))
             }
 
             // Update parameters: θ = θ + v

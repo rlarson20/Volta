@@ -138,14 +138,12 @@ pub fn gpu_sync_threshold() -> u32 {
 /// ```
 #[must_use]
 pub fn gpu_cleanup() -> bool {
-    if let Some(ctx) = get_gpu_context() {
-        ctx.sync(); // Ensure all work complete before clearing
+    get_gpu_context().is_some_and(|ctx| {
+        ctx.sync();
         ctx.buffer_pool().clear();
         ctx.staging_pool().clear();
         true
-    } else {
-        false
-    }
+    })
 }
 
 /// Force GPU memory compaction to release accumulated buffers
@@ -174,6 +172,7 @@ pub fn gpu_cleanup() -> bool {
 /// ```
 #[must_use]
 pub fn gpu_compact() -> bool {
+    #[allow(clippy::option_if_let_else)]
     if let Some(ctx) = get_gpu_context() {
         // Step 1: Clear buffer pools (drops wgpu::Buffer instances)
         ctx.buffer_pool().clear();

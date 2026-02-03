@@ -34,7 +34,7 @@ impl BatchNorm2d {
         let running_mean = RawTensor::zeros(&[num_features]);
         let running_var = RawTensor::ones(&[num_features]);
 
-        BatchNorm2d {
+        Self {
             num_features,
             eps,
             momentum,
@@ -105,14 +105,14 @@ impl Module for BatchNorm2d {
                     let rm_val = rm.data.get(i).copied().unwrap_or(0.0);
                     let bm_val = bm_data.get(i).copied().unwrap_or(0.0);
                     if let Some(slot) = rm.data.get_mut(i) {
-                        *slot = (1.0 - m) * rm_val + m * bm_val;
+                        *slot = (1.0 - m).mul_add(rm_val, m * bm_val);
                     }
                     // Bessel correction for running_var update usually applied
                     let bv_val = bv_data.get(i).copied().unwrap_or(0.0);
                     let unbiased_var = bv_val * num_pixels / (num_pixels - 1.0);
                     let rv_val = rv.data.get(i).copied().unwrap_or(0.0);
                     if let Some(slot) = rv.data.get_mut(i) {
-                        *slot = (1.0 - m) * rv_val + m * unbiased_var;
+                        *slot = (1.0 - m).mul_add(rv_val, m * unbiased_var);
                     }
                 }
             }
@@ -221,7 +221,7 @@ impl BatchNorm1d {
         let running_mean = RawTensor::zeros(&[num_features]);
         let running_var = RawTensor::ones(&[num_features]);
 
-        BatchNorm1d {
+        Self {
             num_features,
             eps,
             momentum,
@@ -271,14 +271,14 @@ impl Module for BatchNorm1d {
                     let rm_val = rm.data.get(i).copied().unwrap_or(0.0);
                     let bm_val = bm_data.get(i).copied().unwrap_or(0.0);
                     if let Some(slot) = rm.data.get_mut(i) {
-                        *slot = (1.0 - m) * rm_val + m * bm_val;
+                        *slot = (1.0 - m).mul_add(rm_val, m * bm_val);
                     }
                     // Bessel correction for running_var update
                     let bv_val = bv_data.get(i).copied().unwrap_or(0.0);
                     let unbiased_var = bv_val * batch_size / (batch_size - 1.0);
                     let rv_val = rv.data.get(i).copied().unwrap_or(0.0);
                     if let Some(slot) = rv.data.get_mut(i) {
-                        *slot = (1.0 - m) * rv_val + m * unbiased_var;
+                        *slot = (1.0 - m).mul_add(rv_val, m * unbiased_var);
                     }
                 }
             }

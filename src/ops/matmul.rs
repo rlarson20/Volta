@@ -21,7 +21,7 @@ impl GradFn for TransposeGradFn {
     }
 
     fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(TransposeGradFn)
+        Box::new(Self)
     }
 }
 
@@ -166,17 +166,17 @@ impl RawTensor {
                 // Fallback to the existing CPU implementation if anything fails.
                 #[cfg(feature = "gpu")]
                 {
-                    if let Some(device) = RawTensor::common_gpu_device(&[self_t, other]) {
+                    if let Some(device) = Self::common_gpu_device(&[self_t, other]) {
                         if let Some(storage) = Self::gpu_matmul(&data_a, &data_b, m, n, p) {
                             let requires_grad = req_a || req_b;
-                            let out = Rc::new(RefCell::new(RawTensor {
+                            let out = Rc::new(RefCell::new(Self {
                                 data: storage,
                                 shape: vec![m, p],
                                 grad: None,
                                 requires_grad,
                                 grad_fn: None,
                                 parents: vec![self_t.clone(), other.clone()],
-                                device: device.clone(),
+                                device,
                             }));
                             if requires_grad {
                                 out.borrow_mut().grad_fn = Some(Box::new(MatMulGradFn));
@@ -673,6 +673,6 @@ impl GradFn for MatMulGradFn {
     }
 
     fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(MatMulGradFn)
+        Box::new(Self)
     }
 }

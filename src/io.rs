@@ -39,7 +39,7 @@ pub struct StateDictDiff {
 impl StateDictDiff {
     /// Returns true if there are no missing, unexpected, or shape‑mismatched keys.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.missing_keys.is_empty()
             && self.unexpected_keys.is_empty()
             && self.shape_mismatches.is_empty()
@@ -81,7 +81,7 @@ impl fmt::Display for StateDictDiff {
 impl TensorData {
     pub fn from_tensor(t: &Tensor) -> Self {
         let borrowed = t.borrow();
-        TensorData {
+        Self {
             data: borrowed.data.to_vec(),
             shape: borrowed.shape.clone(),
         }
@@ -168,7 +168,7 @@ pub fn load_state_dict(path: &str) -> Result<StateDict> {
 // ========== SafeTensors Support ==========
 
 /// Convert `SafeTensors` dtype to Volta `DType`
-fn safetensors_dtype_to_volta(dtype: safetensors::Dtype) -> DType {
+const fn safetensors_dtype_to_volta(dtype: safetensors::Dtype) -> DType {
     match dtype {
         safetensors::Dtype::F16 => DType::F16,
         safetensors::Dtype::BF16 => DType::BF16,
@@ -195,7 +195,7 @@ fn safetensors_dtype_to_volta(dtype: safetensors::Dtype) -> DType {
 }
 
 /// Convert Volta `DType` to `SafeTensors` dtype
-fn volta_dtype_to_safetensors(dtype: DType) -> safetensors::Dtype {
+const fn volta_dtype_to_safetensors(dtype: DType) -> safetensors::Dtype {
     match dtype {
         DType::F16 => safetensors::Dtype::F16,
         DType::BF16 => safetensors::Dtype::BF16,

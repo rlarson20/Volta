@@ -1618,16 +1618,18 @@ impl GpuKernels {
         }
 
         // Pack dim 2 into padding2 (left in upper 16 bits, right in lower 16 bits)
-        let mut padding2: u32 = 0;
-        if let Some(&(left2, right2)) = padding.get(2) {
-            padding2 = (left2 as u32) << 16 | (right2 as u32);
-        }
+        let padding2 = if let Some(&(left2, right2)) = padding.get(2) {
+            (left2 as u32) << 16 | (right2 as u32)
+        } else {
+            0
+        };
 
         // Pack dim 3 into _padding[0] (left in upper 16 bits, right in lower 16 bits)
-        let mut padding3: u32 = 0;
-        if let Some(&(left3, right3)) = padding.get(3) {
-            padding3 = (left3 as u32) << 16 | (right3 as u32);
-        }
+        let padding3 = if let Some(&(left3, right3)) = padding.get(3) {
+            (left3 as u32) << 16 | (right3 as u32)
+        } else {
+            0
+        };
 
         let params = MovementParams {
             old_shape: pad_to_u32_4(old_shape),

@@ -62,7 +62,7 @@ impl Linear {
         } else {
             None
         };
-        Linear { weight: w, bias: b }
+        Self { weight: w, bias: b }
     }
 
     /// Create a new linear layer on a specific device
@@ -103,7 +103,7 @@ impl Linear {
         } else {
             None
         };
-        Linear { weight: w, bias: b }
+        Self { weight: w, bias: b }
     }
 
     /// Forward pass through the layer

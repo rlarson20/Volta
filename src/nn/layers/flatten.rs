@@ -11,8 +11,8 @@ pub struct Flatten;
 
 impl Flatten {
     #[must_use]
-    pub fn new() -> Self {
-        Flatten
+    pub const fn new() -> Self {
+        Self
     }
 }
 

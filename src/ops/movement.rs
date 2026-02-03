@@ -364,7 +364,7 @@ impl GradFn for MovementGradFn {
     }
 
     fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(MovementGradFn {
+        Box::new(Self {
             op: self.op.clone(),
             original_shape: self.original_shape.clone(),
         })
@@ -443,7 +443,7 @@ impl RawTensor {
         // Try GPU path first if available
         #[cfg(feature = "gpu")]
         if device.is_gpu()
-            && let Some(storage) = RawTensor::gpu_permute(&data, &shape, &new_shape, axes)
+            && let Some(storage) = Self::gpu_permute(&data, &shape, &new_shape, axes)
         {
             return Self::new_with_storage(storage, &new_shape, device, false);
         }
@@ -543,7 +543,7 @@ impl RawTensor {
         // Try GPU path first if available
         #[cfg(feature = "gpu")]
         if device.is_gpu()
-            && let Some(storage) = RawTensor::gpu_expand(&data, &old_shape, new_shape)
+            && let Some(storage) = Self::gpu_expand(&data, &old_shape, new_shape)
         {
             let out = Self::new_with_storage(storage, new_shape, device, req_grad);
             if req_grad {
@@ -682,7 +682,7 @@ impl RawTensor {
         // Try GPU path first if available
         #[cfg(feature = "gpu")]
         if device.is_gpu()
-            && let Some(storage) = RawTensor::gpu_pad(&data, &old_shape, &new_shape, padding)
+            && let Some(storage) = Self::gpu_pad(&data, &old_shape, &new_shape, padding)
         {
             let out = Self::new_with_storage(storage, &new_shape, device, req_grad);
             if req_grad {
@@ -884,7 +884,7 @@ impl RawTensor {
         // Try GPU path first if available
         #[cfg(feature = "gpu")]
         if device.is_gpu()
-            && let Some(storage) = RawTensor::gpu_shrink(&data, &old_shape, &new_shape, ranges)
+            && let Some(storage) = Self::gpu_shrink(&data, &old_shape, &new_shape, ranges)
         {
             let out = Self::new_with_storage(storage, &new_shape, device, req_grad);
             if req_grad {
@@ -1008,7 +1008,7 @@ impl RawTensor {
         // Try GPU path first if available
         #[cfg(feature = "gpu")]
         if device.is_gpu()
-            && let Some(storage) = RawTensor::gpu_stride(&data, &old_shape, &new_shape, strides)
+            && let Some(storage) = Self::gpu_stride(&data, &old_shape, &new_shape, strides)
         {
             let out = Self::new_with_storage(storage, &new_shape, device, req_grad);
             if req_grad {

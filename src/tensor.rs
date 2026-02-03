@@ -73,7 +73,7 @@ where
 
 impl Clone for RawTensor {
     fn clone(&self) -> Self {
-        RawTensor {
+        Self {
             data: self.data.clone(),
             shape: self.shape.clone(),
             grad: self.grad.clone(),
@@ -124,7 +124,7 @@ impl RawTensor {
             )));
         }
 
-        let raw = RawTensor {
+        let raw = Self {
             data: Storage::cpu(data),
             shape: shape.to_vec(),
             grad: None,
@@ -167,7 +167,7 @@ impl RawTensor {
             });
         }
 
-        let raw = RawTensor {
+        let raw = Self {
             data,
             shape: shape.to_vec(),
             grad: None,
@@ -393,7 +393,7 @@ impl RawTensor {
     /// * `logvar` - Log variance of learned distribution
     pub fn kl_divergence_gaussian(mu: &Tensor, logvar: &Tensor) -> Tensor {
         // 1 + logvar
-        let one = RawTensor::ones(&mu.borrow().shape);
+        let one = Self::ones(&mu.borrow().shape);
         let term1 = one.add(logvar);
 
         // mu^2
@@ -406,7 +406,7 @@ impl RawTensor {
         let sum_terms = term1.sub(&mu_sq).sub(&var);
 
         // -0.5 * sum(...)
-        let half = RawTensor::new(vec![0.5], &[1], false);
+        let half = Self::new(vec![0.5], &[1], false);
         sum_terms.sum().elem_mul(&half).neg()
     }
 
@@ -427,9 +427,9 @@ impl RawTensor {
         let term1 = target.elem_mul(&log_pred);
 
         // (1-y) * log(1-y_hat)
-        let one = RawTensor::ones(&target.borrow().shape);
+        let one = Self::ones(&target.borrow().shape);
         let one_minus_target = one.sub(target);
-        let one_minus_pred = RawTensor::ones(&pred.borrow().shape).sub(pred);
+        let one_minus_pred = Self::ones(&pred.borrow().shape).sub(pred);
         let log_one_minus_pred = one_minus_pred.log();
         let term2 = one_minus_target.elem_mul(&log_one_minus_pred);
 
@@ -448,7 +448,7 @@ impl RawTensor {
     pub fn bce_with_logits_loss(logits: &Tensor, target: &Tensor) -> Tensor {
         // log(1 + exp(x))
         let exp_logits = logits.exp();
-        let one = RawTensor::ones(&logits.borrow().shape);
+        let one = Self::ones(&logits.borrow().shape);
         let one_plus_exp = one.add(&exp_logits);
         let log_term = one_plus_exp.log();
 
@@ -522,7 +522,7 @@ impl GradFn for SumDimGradFn {
     }
 
     fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(SumDimGradFn {
+        Box::new(Self {
             input_shape: self.input_shape.clone(),
             dim: self.dim,
             keepdim: self.keepdim,
@@ -581,7 +581,7 @@ impl GradFn for MaxDimGradFn {
     }
 
     fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(MaxDimGradFn {
+        Box::new(Self {
             input_shape: self.input_shape.clone(),
             max_indices: self.max_indices.clone(),
             dim: self.dim,
@@ -719,7 +719,7 @@ impl RawTensor {
         // Keep gradients on CPU for now – backward and accumulation are CPU-only.
         let new_grad = t.grad.clone();
 
-        let new_tensor = RawTensor {
+        let new_tensor = Self {
             data: new_data,
             shape: t.shape.clone(),
             grad: new_grad,
@@ -909,7 +909,7 @@ impl RawTensor {
             if let Some(val) = data_plus.get_mut(i) {
                 *val += epsilon;
             }
-            let tensor_plus = RawTensor::new(data_plus.to_vec(), &original_shape, requires_grad);
+            let tensor_plus = Self::new(data_plus.to_vec(), &original_shape, requires_grad);
             let loss_plus = loss_fn(&tensor_plus);
             assert!(
                 !loss_plus.borrow().data.is_empty(),
@@ -922,7 +922,7 @@ impl RawTensor {
             if let Some(val) = data_minus.get_mut(i) {
                 *val -= epsilon;
             }
-            let tensor_minus = RawTensor::new(data_minus.to_vec(), &original_shape, requires_grad);
+            let tensor_minus = Self::new(data_minus.to_vec(), &original_shape, requires_grad);
             let loss_minus = loss_fn(&tensor_minus);
             assert!(
                 !loss_minus.borrow().data.is_empty(),
@@ -1228,7 +1228,7 @@ impl DataLoader {
             indices.shuffle(&mut rand::rng());
         }
 
-        DataLoader {
+        Self {
             data,
             targets,
             data_shape: data_shape.to_vec(),

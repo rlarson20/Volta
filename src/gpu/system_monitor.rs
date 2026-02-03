@@ -77,6 +77,7 @@ impl SystemMonitor {
         let mut last_time = self.last_checkpoint_time.lock().unwrap();
         let time_delta = last_time.elapsed().as_secs_f64();
         *last_time = Instant::now();
+        drop(last_time);
 
         let ops_per_sec = if time_delta > 0.0 {
             ops_delta as f64 / time_delta

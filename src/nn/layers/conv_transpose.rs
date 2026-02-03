@@ -42,7 +42,7 @@ impl ConvTranspose2d {
             None
         };
 
-        ConvTranspose2d {
+        Self {
             weight: w,
             bias: b,
             stride: (stride, stride),
@@ -307,6 +307,10 @@ impl GradFn for ConvTranspose2dGradFn {
             }
         }
 
+        #[allow(
+            clippy::tuple_array_conversions,
+            reason = "just don't know hot to fix right now"
+        )]
         let grad_weight = RawTensor::new(
             grad_weight_data,
             &[weight_in_ch, out_channels, kh, kw],
@@ -330,7 +334,7 @@ impl GradFn for ConvTranspose2dGradFn {
     }
 
     fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(ConvTranspose2dGradFn {
+        Box::new(Self {
             input_shape: self.input_shape.clone(),
             weight: self.weight.clone(),
             stride: self.stride,

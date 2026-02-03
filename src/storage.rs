@@ -42,12 +42,12 @@ pub enum Storage {
 impl Clone for Storage {
     fn clone(&self) -> Self {
         match self {
-            Storage::Cpu { data, dtype } => Storage::Cpu {
+            Self::Cpu { data, dtype } => Self::Cpu {
                 data: data.clone(),
                 dtype: *dtype,
             },
             #[cfg(feature = "gpu")]
-            Storage::Gpu { buffer, dtype, .. } => Storage::Gpu {
+            Self::Gpu { buffer, dtype, .. } => Self::Gpu {
                 buffer: buffer.clone(),
                 dtype: *dtype,
                 cpu_cache: RefCell::new(None),
@@ -63,7 +63,7 @@ impl Storage {
     #[must_use]
     pub fn cpu(data: Vec<f32>) -> Self {
         let bytes: Vec<u8> = cast_slice(&data).to_vec();
-        Storage::Cpu {
+        Self::Cpu {
             data: bytes,
             dtype: DType::F32,
         }
@@ -79,7 +79,7 @@ impl Storage {
     #[must_use]
     pub fn cpu_f64(data: Vec<f64>) -> Self {
         let bytes: Vec<u8> = cast_slice(&data).to_vec();
-        Storage::Cpu {
+        Self::Cpu {
             data: bytes,
             dtype: DType::F64,
         }
@@ -89,7 +89,7 @@ impl Storage {
     #[must_use]
     pub fn cpu_f16(data: Vec<f16>) -> Self {
         let bytes: Vec<u8> = cast_slice(&data).to_vec();
-        Storage::Cpu {
+        Self::Cpu {
             data: bytes,
             dtype: DType::F16,
         }
@@ -99,7 +99,7 @@ impl Storage {
     #[must_use]
     pub fn cpu_bf16(data: Vec<bf16>) -> Self {
         let bytes: Vec<u8> = cast_slice(&data).to_vec();
-        Storage::Cpu {
+        Self::Cpu {
             data: bytes,
             dtype: DType::BF16,
         }
@@ -126,7 +126,7 @@ impl Storage {
                 dtype.size_of()
             )));
         }
-        Ok(Storage::Cpu { data, dtype })
+        Ok(Self::Cpu { data, dtype })
     }
 
     /// Create new GPU storage from f32 data (falls back to CPU if GPU unavailable)
@@ -137,8 +137,9 @@ impl Storage {
     #[cfg(feature = "gpu")]
     #[must_use]
     pub fn gpu(data: Vec<f32>) -> Self {
+        #[allow(clippy::option_if_let_else)]
         if let Some(buffer) = GpuBuffer::from_slice(&data) {
-            Storage::Gpu {
+            Self::Gpu {
                 buffer: std::sync::Arc::new(buffer),
                 dtype: DType::F32,
                 cpu_cache: RefCell::new(None), // Lazy initialization on first access
@@ -156,11 +157,11 @@ impl Storage {
     // ========== Dtype Access ==========
 
     /// Get the data type of this storage
-    pub fn dtype(&self) -> DType {
+    pub const fn dtype(&self) -> DType {
         match self {
-            Storage::Cpu { dtype, .. } => *dtype,
+            Self::Cpu { dtype, .. } => *dtype,
             #[cfg(feature = "gpu")]
-            Storage::Gpu { dtype, .. } => *dtype,
+            Self::Gpu { dtype, .. } => *dtype,
         }
     }
 
@@ -168,14 +169,14 @@ impl Storage {
     #[must_use]
     pub fn new_zeros(len: usize, device: &Device) -> Self {
         match device {
-            Device::CPU => Storage::cpu(vec![0.0; len]),
+            Device::CPU => Self::cpu(vec![0.0; len]),
             Device::GPU(_) => {
                 #[cfg(feature = "gpu")]
                 {
                     if is_gpu_available() {
                         // Create GPU zeros
                         if let Some(buffer) = GpuBuffer::zeros(len) {
-                            return Storage::Gpu {
+                            return Self::Gpu {
                                 buffer: std::sync::Arc::new(buffer),
                                 dtype: DType::F32,
                                 cpu_cache: RefCell::new(None),
@@ -183,11 +184,11 @@ impl Storage {
                         }
                     }
                     // Fall back to CPU
-                    Storage::cpu(vec![0.0; len])
+                    Self::cpu(vec![0.0; len])
                 }
                 #[cfg(not(feature = "gpu"))]
                 {
-                    Storage::cpu(vec![0.0; len])
+                    Self::cpu(vec![0.0; len])
                 }
             }
         }
@@ -206,7 +207,7 @@ impl Storage {
     /// Panics if GPU cache cannot be accessed (internal invariant violation)
     pub fn try_as_f32_slice(&self) -> Result<&[f32], VoltaError> {
         match self {
-            Storage::Cpu { data, dtype } => {
+            Self::Cpu { data, dtype } => {
                 if *dtype != DType::F32 {
                     return Err(VoltaError::DTypeMismatch {
                         expected: DType::F32,
@@ -216,7 +217,7 @@ impl Storage {
                 Ok(cast_slice(data))
             }
             #[cfg(feature = "gpu")]
-            Storage::Gpu {
+            Self::Gpu {
                 buffer,
                 dtype,
                 cpu_cache,
@@ -262,7 +263,7 @@ impl Storage {
     /// Get data as mutable f32 slice. Only valid if dtype is F32.
     pub fn as_f32_slice_mut(&mut self) -> Option<&mut [f32]> {
         match self {
-            Storage::Cpu { data, dtype } => {
+            Self::Cpu { data, dtype } => {
                 if *dtype == DType::F32 {
                     Some(cast_slice_mut(data))
                 } else {
@@ -270,7 +271,7 @@ impl Storage {
                 }
             }
             #[cfg(feature = "gpu")]
-            Storage::Gpu { .. } => None,
+            Self::Gpu { .. } => None,
         }
     }
 
@@ -291,9 +292,9 @@ impl Storage {
     /// Wrong storage datatype
     pub fn as_f64_slice(&self) -> Option<&[f64]> {
         match self {
-            Storage::Cpu { data, dtype } if *dtype == DType::F64 => Some(cast_slice(data)),
+            Self::Cpu { data, dtype } if *dtype == DType::F64 => Some(cast_slice(data)),
             #[cfg(feature = "gpu")]
-            Storage::Gpu {
+            Self::Gpu {
                 buffer,
                 dtype,
                 cpu_cache,
@@ -322,9 +323,9 @@ impl Storage {
     /// Wrong storage datatype
     pub fn as_f16_slice(&self) -> Option<&[f16]> {
         match self {
-            Storage::Cpu { data, dtype } if *dtype == DType::F16 => Some(cast_slice(data)),
+            Self::Cpu { data, dtype } if *dtype == DType::F16 => Some(cast_slice(data)),
             #[cfg(feature = "gpu")]
-            Storage::Gpu {
+            Self::Gpu {
                 buffer,
                 dtype,
                 cpu_cache,
@@ -353,9 +354,9 @@ impl Storage {
     /// Wrong storage datatype
     pub fn as_bf16_slice(&self) -> Option<&[bf16]> {
         match self {
-            Storage::Cpu { data, dtype } if *dtype == DType::BF16 => Some(cast_slice(data)),
+            Self::Cpu { data, dtype } if *dtype == DType::BF16 => Some(cast_slice(data)),
             #[cfg(feature = "gpu")]
-            Storage::Gpu {
+            Self::Gpu {
                 buffer,
                 dtype,
                 cpu_cache,
@@ -394,9 +395,9 @@ impl Storage {
     /// Returns `VoltaError::DeviceError` if GPU cache cannot be accessed
     pub fn try_as_bytes(&self) -> Result<&[u8], VoltaError> {
         match self {
-            Storage::Cpu { data, .. } => Ok(data),
+            Self::Cpu { data, .. } => Ok(data),
             #[cfg(feature = "gpu")]
-            Storage::Gpu {
+            Self::Gpu {
                 buffer, cpu_cache, ..
             } => {
                 // Ensure cache is populated (lazy transfer from GPU)
@@ -475,7 +476,7 @@ impl Storage {
 
     /// Convert storage to a different dtype
     #[must_use]
-    pub fn to_dtype(&self, target: DType) -> Storage {
+    pub fn to_dtype(&self, target: DType) -> Self {
         if self.dtype() == target {
             return self.clone();
         }
@@ -485,23 +486,23 @@ impl Storage {
 
         // Then convert to target dtype
         match target {
-            DType::F32 => Storage::cpu(f32_data),
+            DType::F32 => Self::cpu(f32_data),
             DType::F64 => {
                 let data: Vec<f64> = f32_data.iter().map(|&x| f64::from(x)).collect();
-                Storage::cpu_f64(data)
+                Self::cpu_f64(data)
             }
             DType::F16 => {
                 let data: Vec<f16> = f32_data.iter().map(|&x| f16::from_f32(x)).collect();
-                Storage::cpu_f16(data)
+                Self::cpu_f16(data)
             }
             DType::BF16 => {
                 let data: Vec<bf16> = f32_data.iter().map(|&x| bf16::from_f32(x)).collect();
-                Storage::cpu_bf16(data)
+                Self::cpu_bf16(data)
             }
             DType::I32 => {
                 let data: Vec<i32> = f32_data.iter().map(|&x| x as i32).collect();
                 let bytes: Vec<u8> = cast_slice(&data).to_vec();
-                Storage::Cpu {
+                Self::Cpu {
                     data: bytes,
                     dtype: DType::I32,
                 }
@@ -509,7 +510,7 @@ impl Storage {
             DType::I64 => {
                 let data: Vec<i64> = f32_data.iter().map(|&x| x as i64).collect();
                 let bytes: Vec<u8> = cast_slice(&data).to_vec();
-                Storage::Cpu {
+                Self::Cpu {
                     data: bytes,
                     dtype: DType::I64,
                 }
@@ -519,14 +520,14 @@ impl Storage {
                     .iter()
                     .map(|&x| x.clamp(0.0, 255.0) as u8)
                     .collect();
-                Storage::Cpu {
+                Self::Cpu {
                     data,
                     dtype: DType::U8,
                 }
             }
             DType::Bool => {
                 let data: Vec<u8> = f32_data.iter().map(|&x| u8::from(x != 0.0)).collect();
-                Storage::Cpu {
+                Self::Cpu {
                     data,
                     dtype: DType::Bool,
                 }
@@ -539,9 +540,9 @@ impl Storage {
     /// Get the number of elements
     pub fn len(&self) -> usize {
         match self {
-            Storage::Cpu { data, dtype } => data.len() / dtype.size_of(),
+            Self::Cpu { data, dtype } => data.len() / dtype.size_of(),
             #[cfg(feature = "gpu")]
-            Storage::Gpu { buffer, .. } => buffer.len(),
+            Self::Gpu { buffer, .. } => buffer.len(),
         }
     }
 
@@ -551,11 +552,11 @@ impl Storage {
     }
 
     /// Check if this is GPU storage
-    pub fn is_gpu(&self) -> bool {
+    pub const fn is_gpu(&self) -> bool {
         match self {
-            Storage::Cpu { .. } => false,
+            Self::Cpu { .. } => false,
             #[cfg(feature = "gpu")]
-            Storage::Gpu { .. } => true,
+            Self::Gpu { .. } => true,
         }
     }
 
@@ -565,7 +566,7 @@ impl Storage {
         match device {
             Device::CPU => {
                 let data = self.as_bytes().to_vec();
-                Storage::Cpu {
+                Self::Cpu {
                     data,
                     dtype: self.dtype(),
                 }
@@ -575,7 +576,7 @@ impl Storage {
                 {
                     if is_gpu_available() {
                         // Convert to f32 for GPU (GPU ops are f32 only for now)
-                        Storage::gpu(self.to_f32_vec())
+                        Self::gpu(self.to_f32_vec())
                     } else {
                         eprintln!("Warning: GPU requested but not available, using CPU");
                         self.clone()
@@ -594,8 +595,8 @@ impl Storage {
     #[cfg(feature = "gpu")]
     pub fn gpu_buffer(&self) -> Option<&GpuBuffer> {
         match self {
-            Storage::Gpu { buffer, .. } => Some(buffer.as_ref()),
-            Storage::Cpu { .. } => None,
+            Self::Gpu { buffer, .. } => Some(buffer.as_ref()),
+            Self::Cpu { .. } => None,
         }
     }
 
@@ -619,7 +620,7 @@ impl Storage {
     /// ```
     #[cfg(feature = "gpu")]
     pub fn invalidate_cpu_cache(&self) {
-        if let Storage::Gpu { cpu_cache, .. } = self {
+        if let Self::Gpu { cpu_cache, .. } = self {
             cpu_cache.borrow_mut().take();
         }
     }
@@ -802,7 +803,7 @@ impl PartialEq<Storage> for Vec<f32> {
 impl std::fmt::Debug for Storage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Storage::Cpu { data, dtype } => {
+            Self::Cpu { data, dtype } => {
                 write!(
                     f,
                     "Storage::Cpu({} elements, {})",
@@ -811,7 +812,7 @@ impl std::fmt::Debug for Storage {
                 )
             }
             #[cfg(feature = "gpu")]
-            Storage::Gpu { buffer, dtype, .. } => {
+            Self::Gpu { buffer, dtype, .. } => {
                 write!(f, "Storage::Gpu({} elements, {})", buffer.len(), dtype)
             }
         }

@@ -48,8 +48,8 @@ pub enum GpuSyncError {
 impl std::fmt::Display for GpuSyncError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            GpuSyncError::Timeout(msg) => write!(f, "GPU sync timeout: {msg}"),
-            GpuSyncError::GpuLost(msg) => write!(f, "GPU lost: {msg}"),
+            Self::Timeout(msg) => write!(f, "GPU sync timeout: {msg}"),
+            Self::GpuLost(msg) => write!(f, "GPU lost: {msg}"),
         }
     }
 }
@@ -246,7 +246,7 @@ impl GpuContext {
         // Step 6: Create the staging buffer pool for GPU→CPU transfers
         let staging_pool = Arc::new(StagingBufferPool::default());
 
-        Ok(GpuContext {
+        Ok(Self {
             device,
             queue,
             adapter_info,
@@ -265,17 +265,17 @@ impl GpuContext {
     }
 
     /// Get a reference to the wgpu device
-    pub fn device(&self) -> &wgpu::Device {
+    pub const fn device(&self) -> &wgpu::Device {
         &self.device
     }
 
     /// Get a reference to the command queue
-    pub fn queue(&self) -> &wgpu::Queue {
+    pub const fn queue(&self) -> &wgpu::Queue {
         &self.queue
     }
 
     /// Get the compiled pipelines
-    pub fn pipelines(&self) -> &ComputePipelines {
+    pub const fn pipelines(&self) -> &ComputePipelines {
         &self.pipelines
     }
 
@@ -415,7 +415,7 @@ impl GpuContext {
     }
 
     /// Get the sync threshold (diagnostic)
-    pub fn sync_threshold(&self) -> u32 {
+    pub const fn sync_threshold(&self) -> u32 {
         self.sync_threshold
     }
 

@@ -27,7 +27,7 @@ pub struct BufferPoolConfig {
 
 impl Default for BufferPoolConfig {
     fn default() -> Self {
-        BufferPoolConfig {
+        Self {
             max_buffers_per_bucket: 8,         // Keep up to 8 buffers of each size
             max_total_buffers: 64,             // Total pool capacity
             max_pooled_size: 64 * 1024 * 1024, // Pool buffers up to 64MB
@@ -65,7 +65,7 @@ impl BufferPool {
     /// Create a new buffer pool with the given configuration
     #[must_use]
     pub fn new(config: BufferPoolConfig) -> Self {
-        BufferPool {
+        Self {
             buckets: Mutex::new(HashMap::new()),
             config,
             total_count: Mutex::new(0),
@@ -84,7 +84,7 @@ impl BufferPool {
     /// - 1000 bytes → bucket 10 (1024 bytes)
     /// - 5000 bytes → bucket 13 (8192 bytes)
     /// - 1 byte → bucket 0 (1 byte)
-    fn size_to_bucket(size: usize) -> u32 {
+    const fn size_to_bucket(size: usize) -> u32 {
         if size == 0 {
             return 0;
         }
@@ -94,7 +94,7 @@ impl BufferPool {
     }
 
     /// Get the actual byte size for a bucket
-    fn bucket_to_size(bucket: u32) -> usize {
+    const fn bucket_to_size(bucket: u32) -> usize {
         1usize << bucket
     }
 
@@ -103,7 +103,7 @@ impl BufferPool {
     /// This rounds up to the next power of 2, ensuring all buffers in a bucket
     /// have the same size and can be safely reused.
     #[must_use]
-    pub fn allocation_size(min_size: usize) -> usize {
+    pub const fn allocation_size(min_size: usize) -> usize {
         if min_size == 0 {
             return 0;
         }
@@ -126,13 +126,13 @@ impl BufferPool {
         }
 
         let bucket = Self::size_to_bucket(min_size);
-        let mut buckets = self.buckets.lock().unwrap();
 
-        if let Some(queue) = buckets.get_mut(&bucket)
+        if let Some(queue) = self.buckets.lock().unwrap().get_mut(&bucket)
             && let Some(buffer) = queue.pop_front()
         {
             let mut count = self.total_count.lock().unwrap();
             *count = count.saturating_sub(1);
+            drop(count);
             return Some(buffer);
         }
 
@@ -150,6 +150,10 @@ impl BufferPool {
     /// * `size` - The buffer size in bytes
     /// # Panics
     /// Unwrapping bucket mutex
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "Attempts to fix by merging the constructon with its single usage leads to other errors, will come back to fix this."
+    )]
     pub fn release(&self, buffer: wgpu::Buffer, size: usize) -> bool {
         if size > self.config.max_pooled_size {
             return false; // Too large to pool
@@ -183,8 +187,7 @@ impl BufferPool {
     /// # Panics
     /// Unwrapping bucket mutex
     pub fn clear(&self) {
-        let mut buckets = self.buckets.lock().unwrap();
-        buckets.clear();
+        self.buckets.lock().unwrap().clear();
         *self.total_count.lock().unwrap() = 0;
     }
 
@@ -193,10 +196,12 @@ impl BufferPool {
     /// Unwrapping bucket mutex
     #[allow(dead_code)]
     pub fn stats(&self) -> BufferPoolStats {
-        let buckets = self.buckets.lock().unwrap();
         let total = *self.total_count.lock().unwrap();
 
-        let bucket_stats: Vec<(usize, usize)> = buckets
+        let bucket_stats: Vec<(usize, usize)> = self
+            .buckets
+            .lock()
+            .unwrap()
             .iter()
             .map(|(&bucket, queue)| (Self::bucket_to_size(bucket), queue.len()))
             .collect();

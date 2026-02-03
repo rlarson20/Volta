@@ -54,7 +54,7 @@ impl Conv2d {
         } else {
             None
         };
-        Conv2d {
+        Self {
             weight: w,
             bias: b,
             stride: (stride, stride),
@@ -106,7 +106,7 @@ impl Conv2d {
         } else {
             None
         };
-        Conv2d {
+        Self {
             weight: w,
             bias: b,
             stride: (stride, stride),
@@ -163,12 +163,8 @@ impl Conv2d {
                     &data, batch, channels, height, width, kh, kw, sh, sw, h_out, w_out,
                 )
             {
-                let out = RawTensor::new_with_storage(
-                    col_data,
-                    &[rows, cols],
-                    device.clone(),
-                    requires_grad,
-                );
+                let out =
+                    RawTensor::new_with_storage(col_data, &[rows, cols], device, requires_grad);
                 if requires_grad {
                     out.borrow_mut().parents = vec![x.clone()];
                     out.borrow_mut().grad_fn = Some(Box::new(Im2colGradFn {

@@ -51,6 +51,7 @@ impl Module for Sequential {
     fn load_state_dict(&mut self, state: &StateDict) {
         for (i, entry) in self.layers.iter_mut().enumerate() {
             // Try name first, fallback to numeric index
+            #[allow(clippy::option_if_let_else, reason = "Don't know how to fix right now")]
             let possible_prefixes: Vec<String> = if let Some(ref name) = entry.name {
                 vec![format!("{}.", name), format!("{}.", i)]
             } else {
@@ -92,7 +93,7 @@ impl Sequential {
     // Helper constructor for easier testing and building
     #[must_use]
     pub fn new(layers: Vec<Box<dyn Module>>) -> Self {
-        Sequential {
+        Self {
             layers: layers
                 .into_iter()
                 .map(|layer| LayerEntry { name: None, layer })
@@ -102,7 +103,7 @@ impl Sequential {
 
     /// Create a new `SequentialBuilder` for building models with named layers
     #[must_use]
-    pub fn builder() -> crate::nn::layers::SequentialBuilder {
+    pub const fn builder() -> crate::nn::layers::SequentialBuilder {
         crate::nn::layers::SequentialBuilder::new()
     }
 
@@ -145,13 +146,13 @@ impl Sequential {
 
     /// Get the number of layers in the sequential
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.layers.len()
     }
 
     /// Check if the sequential is empty
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.layers.is_empty()
     }
 }
@@ -159,8 +160,8 @@ impl Sequential {
 // Usage example
 #[allow(dead_code)]
 impl Sequential {
-    fn build_mlp(input_dim: usize, hidden_dim: usize, output_dim: usize) -> Sequential {
-        Sequential::new(vec![
+    fn build_mlp(input_dim: usize, hidden_dim: usize, output_dim: usize) -> Self {
+        Self::new(vec![
             Box::new(Linear::new(input_dim, hidden_dim, true)),
             Box::new(ReLU),
             Box::new(Linear::new(hidden_dim, output_dim, true)),

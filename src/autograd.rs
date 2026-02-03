@@ -112,7 +112,7 @@ impl RawTensor {
             if let Some(grad_fn) = grad_fn
                 && let Some(grad_out_data) = grad_data
             {
-                let grad_out = RawTensor {
+                let grad_out = Self {
                     data: grad_out_data,
                     shape,
                     grad: None,
@@ -143,7 +143,7 @@ impl RawTensor {
                                 parent.grad = Some(new_grad_storage);
                             }
                             Some(ref mut existing) => {
-                                RawTensor::accumulate_grad(existing, new_grad_storage);
+                                Self::accumulate_grad(existing, new_grad_storage);
                             }
                         }
                     }
@@ -159,7 +159,7 @@ impl RawTensor {
         #[cfg(feature = "gpu")]
         {
             if existing.is_gpu() && new_grad.is_gpu() {
-                if let Some(sum) = RawTensor::gpu_add(existing, &new_grad) {
+                if let Some(sum) = Self::gpu_add(existing, &new_grad) {
                     *existing = sum;
                     return;
                 }

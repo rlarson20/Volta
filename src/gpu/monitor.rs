@@ -7,7 +7,7 @@
 use std::process::Command;
 
 /// System resource health status
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourceStatus {
     /// Resources are healthy
     Healthy,

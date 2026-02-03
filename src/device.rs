@@ -4,7 +4,7 @@ use std::fmt;
 /// Compute device for tensor operations
 ///
 /// In progress adding GPU support with wgpu.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum Device {
     #[default]
     CPU,
@@ -14,22 +14,22 @@ pub enum Device {
 impl Device {
     /// Check if this is a CPU device
     #[must_use]
-    pub fn is_cpu(&self) -> bool {
-        matches!(self, Device::CPU)
+    pub const fn is_cpu(&self) -> bool {
+        matches!(self, Self::CPU)
     }
 
     /// Check if this is a GPU device
     #[must_use]
-    pub fn is_gpu(&self) -> bool {
-        matches!(self, Device::GPU(_))
+    pub const fn is_gpu(&self) -> bool {
+        matches!(self, Self::GPU(_))
     }
 
     /// Get device name for display
     #[must_use]
-    pub fn name(&self) -> &str {
+    pub const fn name(&self) -> &str {
         match self {
-            Device::CPU => "CPU",
-            Device::GPU(name) => name.as_str(),
+            Self::CPU => "CPU",
+            Self::GPU(name) => name.as_str(),
         }
     }
 
@@ -54,7 +54,7 @@ impl Device {
     #[cfg(feature = "gpu")]
     #[must_use]
     pub fn gpu() -> Option<Self> {
-        crate::gpu::get_gpu_context().map(|ctx| Device::GPU(ctx.device_name().to_string()))
+        crate::gpu::get_gpu_context().map(|ctx| Self::GPU(ctx.device_name().to_string()))
     }
 
     /// When GPU feature is disabled, gpu() always returns None

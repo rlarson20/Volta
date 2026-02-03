@@ -46,7 +46,7 @@ impl Adam {
             })
             .collect();
 
-        Adam {
+        Self {
             params,
             lr,
             betas,
@@ -95,7 +95,7 @@ impl Adam {
 
     /// GPU-accelerated step for a single parameter
     #[cfg(feature = "gpu")]
-    fn step_gpu_param(&mut self, i: usize) {
+    fn step_gpu_param(&self, i: usize) {
         use crate::gpu::OptimizerStepParams;
 
         let param = self.params.get(i).unwrap();
@@ -145,7 +145,7 @@ impl Adam {
         };
 
         // Apply weight decay to gradient
-        let mut active_grad = grad.clone();
+        let mut active_grad = grad;
         if self.weight_decay != 0.0 {
             for (g, theta) in active_grad.iter_mut().zip(p.data.iter()) {
                 *g += self.weight_decay * *theta;
@@ -172,11 +172,14 @@ impl Adam {
             let m_val = m_slice.get(j).copied().unwrap_or(0.0);
             let g_val = active_grad.get(j).copied().unwrap_or(0.0);
             if let Some(slot) = m_slice.get_mut(j) {
-                *slot = self.betas.0 * m_val + (1.0 - self.betas.0) * g_val;
+                *slot = self.betas.0.mul_add(m_val, (1.0 - self.betas.0) * g_val)
             }
             let v_val = v_slice.get(j).copied().unwrap_or(0.0);
             if let Some(slot) = v_slice.get_mut(j) {
-                *slot = self.betas.1 * v_val + (1.0 - self.betas.1) * g_val.powi(2);
+                *slot = self
+                    .betas
+                    .1
+                    .mul_add(v_val, (1.0 - self.betas.1) * g_val.powi(2))
             }
         }
 
