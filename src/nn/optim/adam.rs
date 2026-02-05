@@ -172,14 +172,14 @@ impl Adam {
             let m_val = m_slice.get(j).copied().unwrap_or(0.0);
             let g_val = active_grad.get(j).copied().unwrap_or(0.0);
             if let Some(slot) = m_slice.get_mut(j) {
-                *slot = self.betas.0.mul_add(m_val, (1.0 - self.betas.0) * g_val)
+                *slot = self.betas.0.mul_add(m_val, (1.0 - self.betas.0) * g_val);
             }
             let v_val = v_slice.get(j).copied().unwrap_or(0.0);
             if let Some(slot) = v_slice.get_mut(j) {
                 *slot = self
                     .betas
                     .1
-                    .mul_add(v_val, (1.0 - self.betas.1) * g_val.powi(2))
+                    .mul_add(v_val, (1.0 - self.betas.1) * g_val.powi(2));
             }
         }
 

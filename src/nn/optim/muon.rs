@@ -132,7 +132,7 @@ impl Muon {
                 // Update buffer
                 let velocity = self.velocity.get_mut(i).unwrap();
                 for (v, &g) in velocity.iter_mut().zip(grad.iter()) {
-                    *v = self.momentum.mul_add(*v, g)
+                    *v = self.momentum.mul_add(*v, g);
                 }
 
                 // Prepare update: Nesterov or standard momentum

@@ -214,7 +214,7 @@ impl SGD {
 
             // Update velocity: v = momentum·v - lr·grad
             for (v, &g) in vel_slice.iter_mut().zip(active_grad.iter()) {
-                *v = self.momentum.mul_add(*v, -(self.lr * g))
+                *v = self.momentum.mul_add(*v, -(self.lr * g));
             }
 
             // Update parameters: θ = θ + v
