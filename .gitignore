@@ -1,11 +1,10 @@
 /target
 
-*.md
 *.txt
-!README.md
 
 .bacon-locations
 .aider*
+responses/context.md
 
 *.bin
 # Data files
