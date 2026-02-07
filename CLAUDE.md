@@ -63,18 +63,22 @@ cargo test test_name -- --nocapture
 
 ### Benchmarking
 
-NOTE: BENCHMARKING IS NOT SAFE RIGHT NOW
-RUNNING `gpu_comparison` WILL CAUSE THE COMPUTER TO CRASH
-DO NOT PERFORM BENCHMARKING.
+**⚠️ WARNING:** The `gpu_comparison` benchmark is NOT SAFE and will crash your computer.
+DO NOT run `just bench-gpu` or `cargo bench --bench gpu_comparison`.
+
+The new `conv_algorithms` benchmark is SAFE and designed to stay under 16GB memory limit.
 
 ```bash
-# Run all benchmarks
+# Run all benchmarks (except gpu_comparison)
 just bench
+
+# Run convolution algorithm comparison (SAFE)
+just bench-conv
 
 # Run specific benchmark
 just bench-name tensor_ops
 just bench-name neural_networks
-just bench-name gpu_comparison
+just bench-name gpu_comparison # NOT FOR USE
 
 # CPU-only benchmarks (no acceleration)
 just bench-cpu
@@ -104,6 +108,51 @@ just ask <model>              # Ask an LLM for recommendations
 just ask-gpu <model>          # Ask an LLM for GPU-specific help
 just ask-err <model>          # Ask an LLM to diagnose build/test errors
 just ask-status <model>       # Get project status report from LLM
+```
+
+### Convolution Algorithm Benchmarks
+
+The `conv_algorithms` benchmark compares Direct vs im2col+GEMM convolution algorithms:
+
+**Benchmark Groups:**
+
+1. **`conv_algorithm_comparison`**: Compares algorithms across various scenarios
+   - Tiny/small/medium/large inputs
+   - Different kernel sizes (1x1, 3x3, 5x5, 7x7)
+   - ResNet-style layers
+
+2. **`conv_kernel_comparison`**: Varies kernel size (1-7)
+   - Fixed input: 8x64x56x56
+   - Shows how kernel size affects performance
+
+3. **`conv_batch_comparison`**: Varies batch size (1-32)
+   - Fixed input: 64x56x56
+   - Shows scaling with batch size
+
+4. **`conv_spatial_comparison`**: Different spatial dimensions
+   - MNIST (28x28), CIFAR (32x32)
+   - ImageNet variants (56x56, 112x112, 224x224)
+
+5. **`conv_auto_mode`**: Tests automatic algorithm selection
+   - Verifies Auto mode chooses correctly
+
+6. **`conv_memory_scaling`**: Shows memory usage patterns
+   - Scales channels, spatial dimensions, and batch size
+   - All benchmarks stay under 16GB limit
+
+**Memory Safety:**
+
+- All scenarios calculate im2col memory usage beforehand
+- Maximum memory used: ~1GB (very_large scenario)
+- Prints memory usage for each benchmark
+- Asserts <16GB limit before running
+
+**Example output:**
+
+```
+tiny: B=1, C=3→16, H=W=16, K=3x3, im2col memory: 0.02 MB
+small: B=4, C=3→16, H=W=32, K=3x3, im2col memory: 0.41 MB
+medium: B=8, C=64→128, H=W=28, K=3x3, im2col memory: 67.5 MB
 ```
 
 ## Architecture
@@ -180,7 +229,11 @@ Recent refactor introduced `VoltaError` types using `thiserror` for comprehensiv
 **Neural Network Layers (`src/nn/layers/`):**
 
 - `linear.rs`: Fully connected layer
-- `conv.rs`: 2D convolution with im2col + GEMM
+- `conv.rs`: 2D convolution with algorithm selection (Direct, im2col + GEMM, Auto)
+  - **Direct convolution**: Memory-efficient, computes each output pixel by iterating over kernel
+  - **im2col + GEMM**: Faster for large kernels, materializes intermediate matrix
+  - **Auto-selection**: Chooses algorithm based on input size, kernel size, batch size, and device
+  - **Full gradient support**: Both algorithms support forward and backward passes
 - `conv_transpose.rs`: Transposed convolution (for GANs/VAEs)
 - `maxpool.rs`: Max pooling with gradient support
 - `batchnorm.rs`: Batch normalization (1d and 2d)
@@ -211,7 +264,7 @@ WGPU-based acceleration for core tensor operations:
 - **Matrix multiplication**: matmul with configurable workgroup sizes
 - **Movement ops**: permute, expand, pad, shrink, stride
 - **Backward pass**: GPU-accelerated gradients for core operations
-- **Conv2d forward pass**: GPU-accelerated convolution
+- **Conv2d**: GPU-accelerated convolution (im2col and direct algorithms)
 
 **❌ Still CPU-only:**
 
@@ -377,11 +430,75 @@ See `examples/load_external_mnist.rs` for a complete end-to-end example.
 
 ### Conv2d Implementation
 
-Uses im2col (image-to-column) + GEMM approach in `src/nn/layers/conv.rs`:
+Uses algorithm selection in `src/nn/layers/conv.rs` with three available algorithms:
 
-- **Memory inefficient**: Materializes full matrix in memory
-- **OOM risk**: Large batch sizes or high-resolution images will easily run out of memory
-- **Correct gradients**: Fully tested and verified
+**1. Direct Convolution:**
+
+- Computes each output pixel by iterating over kernel directly
+- **Memory efficient**: No intermediate allocations
+- **Best for**: Small inputs/kernels, memory-constrained scenarios
+- **Trade-off**: Slower than im2col/iGEMM for larger inputs
+- **✅ Full gradient support**: Input and weight gradients computed directly
+
+**2. im2col + GEMM:**
+
+- Materializes intermediate matrix (B*H_out*W_out, C*K*K) then uses GEMM
+- **Fast**: Leverages optimized matrix multiplication
+- **Best for**: Large kernels, general training
+- **Trade-off**: High memory usage (can OOM on large inputs)
+- **✅ Full gradient support**: Gradients via col2im and GEMM
+
+**3. Implicit GEMM (iGEMM):**
+
+- Performs GEMM without materializing the im2col matrix
+- **Balanced**: Good trade-off between Direct and im2col
+- **Best for**: Medium-to-large inputs where memory is a concern
+- **Approach**: Tiled computation for cache efficiency
+- **✅ Full gradient support**: Tiled gradient computation matches forward pass
+- **🔧 Extensible**: Architecture supports future variants (Winograd, FFT, Direct-to-GEMM)
+
+**Algorithm Selection:**
+
+```rust
+// Auto-select based on input characteristics
+let conv = Conv2d::new(3, 16, 3, 1, 1, true);
+conv.set_algo(ConvAlgo::Auto); // Default behavior
+
+// Force specific algorithm
+conv.set_algo(ConvAlgo::Direct);  // Memory efficient
+conv.set_algo(ConvAlgo::Im2col);  // Faster but uses more memory
+conv.set_algo(ConvAlgo::IGEMM);   // Balanced approach
+```
+
+**Auto-selection logic:**
+
+- GPU: Always uses im2col (GPU-accelerated)
+- CPU small inputs: Uses direct for small kernels (≤3x3) and small batches (≤4)
+- CPU large inputs (>5M im2col elements): Uses direct to save memory
+- CPU medium inputs: Uses iGEMM for balanced performance/memory
+- **All algorithms support training** with full gradient computation
+
+**iGEMM Architecture:**
+The iGEMM implementation is designed with extensibility for future optimizations:
+
+- **Tiled (current)**: Cache-friendly blocking with configurable tile sizes
+- **Winograd (future)**: Transform-domain convolution for 3x3 kernels
+- **FFT (future)**: Frequency-domain convolution for large kernels (audio)
+- **Direct-to-GEMM (future)**: Hand-tuned micro-kernels for maximum performance
+
+To add a new iGEMM variant:
+
+1. Add variant to `IGEMMVariant` enum in `src/nn/layers/conv.rs`
+2. Implement forward/backward in `Conv2d::igemm_forward`
+3. Update `Conv2d::igemm_backward` to handle the variant
+4. Add tests and benchmarks
+
+**Recent improvements:**
+
+- ✅ Direct convolution now supports full gradient computation
+- ✅ iGEMM implementation with tiled forward and backward passes
+- ✅ Extensible architecture for future convolution algorithms
+- ✅ Memory-efficient training enabled for large inputs
 
 ### Performance Characteristics
 
@@ -396,8 +513,9 @@ Uses im2col (image-to-column) + GEMM approach in `src/nn/layers/conv.rs`:
 - **No distributed training**
 - **No learning rate schedulers**
 - **No RNN/Transformer layers** (LSTMCell exists but no full RNN/Transformer)
-- **im2col memory inefficiency**: Materializes full matrix
-- **Incomplete GPU support**: Neural network layer backward passes still CPU-only
+- **im2col memory inefficiency**: Addressed - direct convolution available for training with gradients
+- **GPU direct convolution gradients**: GPU backward pass still CPU-only (future work)
+- **Incomplete GPU support**: Some operations still CPU-only
 
 ## Code Conventions
 

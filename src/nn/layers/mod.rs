@@ -15,7 +15,7 @@ pub mod sigmoid;
 pub mod tanh;
 
 pub use batchnorm::{BatchNorm1d, BatchNorm2d};
-pub use conv::Conv2d;
+pub use conv::{Conv2d, ConvAlgo};
 pub use conv_transpose::ConvTranspose2d;
 pub use dropout::Dropout;
 pub use embedding::Embedding;

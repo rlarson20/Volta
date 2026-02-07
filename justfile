@@ -5,10 +5,15 @@ check:
 
 # ===== BENCHMARKING =====
 # Run all benchmarks
-bench:
+bench: # NOT FOR USE, RUNS THE GPU_COMPARISON
 	cargo bench --bench tensor_ops --
 	cargo bench --bench neural_networks --
 	cargo bench --bench gpu_comparison --
+	cargo bench --bench conv_algorithms --
+
+# Run convolution algorithm comparison benchmarks
+bench-conv:
+	cargo bench --bench conv_algorithms --
 
 # Run specific benchmark
 bench-name name:
@@ -19,12 +24,14 @@ bench-cpu:
 	cargo bench --bench tensor_ops --no-default-features --
 	cargo bench --bench neural_networks --no-default-features --
 	cargo bench --bench gpu_comparison --no-default-features --
+	cargo bench --bench conv_algorithms --no-default-features --
 
 # Benchmark with Accelerate (macOS BLAS)
 bench-accel:
 	cargo bench --features accelerate --no-default-features --bench tensor_ops --
 	cargo bench --features accelerate --no-default-features --bench neural_networks --
 	cargo bench --features accelerate --no-default-features --bench gpu_comparison --
+	cargo bench --features accelerate --no-default-features --bench conv_algorithms --
 
 # Benchmark GPU comparison
 bench-gpu:
@@ -35,12 +42,14 @@ bench-save:
 	cargo bench --bench tensor_ops -- --save-baseline main
 	cargo bench --bench neural_networks -- --save-baseline main
 	cargo bench --bench gpu_comparison -- --save-baseline main
+	cargo bench --bench conv_algorithms -- --save-baseline main
 
-# Compare against saved baseline
+# Compare against saved baseline (DO NOT USE, RUNNING)
 bench-compare:
 	cargo bench --bench tensor_ops -- --baseline main
 	cargo bench --bench neural_networks -- --baseline main
 	cargo bench --bench gpu_comparison -- --baseline main
+	cargo bench --bench conv_algorithms -- --baseline main
 
 bench-report:
 	open './target/criterion/report/index.html'

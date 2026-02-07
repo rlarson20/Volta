@@ -79,6 +79,27 @@ pub struct Im2colParams {
     pub _padding: [u32; 2],
 }
 
+/// Parameters for direct convolution operation
+/// Must match the `DirectConvParams` struct in `direct_conv.wgsl`
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct DirectConvParams {
+    pub batch_size: u32,
+    pub in_channels: u32,
+    pub out_channels: u32,
+    pub height: u32,
+    pub width: u32,
+    pub kernel_h: u32,
+    pub kernel_w: u32,
+    pub stride_h: u32,
+    pub stride_w: u32,
+    pub pad_h: u32,
+    pub pad_w: u32,
+    pub h_out: u32,
+    pub w_out: u32,
+    pub _padding: u32,
+}
+
 /// Parameters for binary backward operations with broadcasting
 /// Must match the `BinaryBackwardParams` struct in `binary_backward.wgsl`
 #[repr(C)]
@@ -2036,6 +2057,112 @@ impl GpuKernels {
             // Each workgroup handles one output row (one output position)
             let workgroup_count = (rows as u32).div_ceil(256);
             compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
+        }
+
+        ctx.queue().submit(Some(encoder.finish()));
+        ctx.increment_pending();
+        ctx.maybe_sync();
+
+        Some(result)
+    }
+
+    /// Direct convolution without im2col intermediate
+    /// Each thread computes one output pixel
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn direct_conv(
+        input: &GpuBuffer,
+        weight: &GpuBuffer,
+        batch_size: usize,
+        in_channels: usize,
+        out_channels: usize,
+        height: usize,
+        width: usize,
+        kernel_h: usize,
+        kernel_w: usize,
+        stride_h: usize,
+        stride_w: usize,
+        pad_h: usize,
+        pad_w: usize,
+        h_out: usize,
+        w_out: usize,
+    ) -> Option<GpuBuffer> {
+        let ctx = get_gpu_context()?;
+
+        // Output size: [B, out_channels, h_out, w_out]
+        let output_size = batch_size * out_channels * h_out * w_out;
+        let result = GpuBuffer::zeros(output_size)?;
+
+        // Create uniform buffer with direct conv parameters
+        let params = DirectConvParams {
+            batch_size: batch_size as u32,
+            in_channels: in_channels as u32,
+            out_channels: out_channels as u32,
+            height: height as u32,
+            width: width as u32,
+            kernel_h: kernel_h as u32,
+            kernel_w: kernel_w as u32,
+            stride_h: stride_h as u32,
+            stride_w: stride_w as u32,
+            pad_h: pad_h as u32,
+            pad_w: pad_w as u32,
+            h_out: h_out as u32,
+            w_out: w_out as u32,
+            _padding: 0,
+        };
+
+        let params_buffer = ctx
+            .device()
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Direct Conv Params"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+
+        let pipeline = &ctx.pipelines().direct_conv;
+        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Direct Conv Bind Group"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: input.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: weight.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: result.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Direct Conv Encoder"),
+            });
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Direct Conv Pass"),
+                timestamp_writes: None,
+            });
+
+            compute_pass.set_pipeline(pipeline);
+            compute_pass.set_bind_group(0, &bind_group, &[]);
+
+            // Workgroup dimensions: (out_channels, batch * h_out * w_out, 1)
+            // Each thread handles one output pixel
+            let workgroups_x = (out_channels as u32).div_ceil(16);
+            let workgroups_y = ((batch_size * h_out * w_out) as u32).div_ceil(16);
+            compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
         }
 
         ctx.queue().submit(Some(encoder.finish()));

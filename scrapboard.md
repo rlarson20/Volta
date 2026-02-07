@@ -11,6 +11,8 @@ me figuring out what exactly needs to get done
 
 ### `im2col`: non-naive method (FFT? way that dude did it in numpy? winograd algo?)
 
+in progress; added implicit GEMM, direct conv, algo selection
+
 ### `TensorOps`: every tensor op impl twice: once as `RawTensor`, once as `TensorOps` trait wrapper, remove parallel APIs
 
 delete, test, verify works even without TensorOps
@@ -58,35 +60,35 @@ declarative ops: look at JAX, ATen
 auto-gen backward pass from FP and derivative rules
 fix dev branching: single loc for CPU/GPU logic
 
-## Testing:
+## Testing
 
-## CI/CD:
+## CI/CD
 
-## Repo Hygiene:
+## Repo Hygiene
 
-## GPU:
+## GPU
 
-## Distributed Training:
+## Distributed Training
 
-## Parallelism:
+## Parallelism
 
-## SIMD:
+## SIMD
 
-## ML features:
+## ML features
 
-## Optimizers:
+## Optimizers
 
-## LR schedulers:
+## LR schedulers
 
-## Kernels:
+## Kernels
 
-## Layers:
+## Layers
 
-## Activation Functions:
+## Activation Functions
 
-## Architectures:
+## Architectures
 
-## Cargo:
+## Cargo
 
 ## Package
 
