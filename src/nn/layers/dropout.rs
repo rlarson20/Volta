@@ -14,7 +14,7 @@ impl Dropout {
     /// # Arguments
     /// * `p` - Probability of an element being zeroed out (default: 0.5)
     /// # Panics
-    /// dropout prob must be in [0,1]
+    /// dropout prob must be in \[0,1\]
     #[must_use]
     pub fn new(p: f32) -> Self {
         assert!(

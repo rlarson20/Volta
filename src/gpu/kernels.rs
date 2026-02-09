@@ -2532,7 +2532,7 @@ impl GpuKernels {
     }
 
     /// GPU-accelerated convolution backward: gradient with respect to input
-    /// Computes: ∂L/∂X[b,ic,ih,iw] = Σ ∂L/∂Y[b,oc,oh,ow] * W[oc,ic,kh,kw]
+    /// Computes: ∂L/∂X\[b,ic,ih,iw\] = Σ ∂L/∂Y\[b,oc,oh,ow\] * W\[oc,ic,kh,kw\]
     #[must_use]
     #[allow(clippy::too_many_arguments)]
     pub fn conv_backward_input(
@@ -2636,7 +2636,7 @@ impl GpuKernels {
     }
 
     /// GPU-accelerated convolution backward: gradient with respect to weights
-    /// Computes: ∂L/∂W[oc,ic,kh,kw] = Σ X[b,ic,oh*sh+kh-ph,ow*sw+kw-pw] * ∂L/∂Y[b,oc,oh,ow]
+    /// Computes: ∂L/∂W\[oc,ic,kh,kw\] = Σ X\[b,ic,oh*sh+kh-ph,ow*sw+kw-pw\] * ∂L/∂Y\[b,oc,oh,ow\]
     #[must_use]
     #[allow(clippy::too_many_arguments)]
     pub fn conv_backward_weight(
