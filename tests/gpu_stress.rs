@@ -5,9 +5,14 @@
 
 #[cfg(feature = "gpu")]
 mod gpu_stress_tests {
-    use volta::{Device, RawTensor, TensorOps, gpu_pending_count, gpu_sync, gpu_sync_threshold};
+    use volta::{
+        Device, RawTensor, TensorOps, gpu, gpu_pending_count, gpu_sync, gpu_sync_threshold,
+    };
 
     /// Helper to create a test tensor on GPU
+    ///
+    /// Note: This function assumes GPU is available. Callers must check
+    /// `gpu::is_gpu_available()` before calling this function.
     fn gpu_tensor(size: usize) -> volta::Tensor {
         let data: Vec<f32> = (0..size).map(|i| (i as f32) * 0.01).collect();
         RawTensor::from_vec(data, &[size])
@@ -19,6 +24,11 @@ mod gpu_stress_tests {
     /// This should trigger the timeout if the issue still exists.
     #[test]
     fn test_many_small_ops_pattern() {
+        if !gpu::is_gpu_available() {
+            println!("Skipping GPU stress test - no GPU available");
+            return;
+        }
+
         println!("Sync threshold: {}", gpu_sync_threshold());
 
         // Create 20 small tensors (matching the benchmark)
@@ -57,6 +67,11 @@ mod gpu_stress_tests {
     /// versus what the pending counter shows.
     #[test]
     fn test_submission_tracking_accuracy() {
+        if !gpu::is_gpu_available() {
+            println!("Skipping GPU stress test - no GPU available");
+            return;
+        }
+
         let t = gpu_tensor(1024);
 
         // Start clean
@@ -84,6 +99,11 @@ mod gpu_stress_tests {
     /// Stresses the buffer pool by creating and dropping many tensors.
     #[test]
     fn test_buffer_pool_churn() {
+        if !gpu::is_gpu_available() {
+            println!("Skipping GPU stress test - no GPU available");
+            return;
+        }
+
         for round in 0..5 {
             println!("Round {}", round);
 
@@ -111,6 +131,11 @@ mod gpu_stress_tests {
     /// exceed the threshold.
     #[test]
     fn test_auto_sync_threshold() {
+        if !gpu::is_gpu_available() {
+            println!("Skipping GPU stress test - no GPU available");
+            return;
+        }
+
         let threshold = gpu_sync_threshold();
         println!("Sync threshold: {}", threshold);
 
@@ -151,6 +176,11 @@ mod gpu_stress_tests {
     /// Run a very long chain to see if we can cause a timeout
     #[test]
     fn test_long_operation_chain() {
+        if !gpu::is_gpu_available() {
+            println!("Skipping GPU stress test - no GPU available");
+            return;
+        }
+
         let t = gpu_tensor(4096);
 
         println!("Starting long chain of 1000 operations");
@@ -174,6 +204,11 @@ mod gpu_stress_tests {
     /// Tests with both small and large tensors to see if size matters
     #[test]
     fn test_mixed_operation_sizes() {
+        if !gpu::is_gpu_available() {
+            println!("Skipping GPU stress test - no GPU available");
+            return;
+        }
+
         let small = gpu_tensor(64);
         let medium = gpu_tensor(1024);
         let large = gpu_tensor(16384);
@@ -198,8 +233,14 @@ mod gpu_stress_tests {
     /// Specifically test whether copy_region and to_vec track their submissions
     #[test]
     fn test_copy_operations_tracking() {
+        if !gpu::is_gpu_available() {
+            println!("Skipping GPU stress test - no GPU available");
+            return;
+        }
+
         let data: Vec<f32> = (0..1024).map(|i| i as f32).collect();
-        let t = RawTensor::from_vec(data.clone(), &[1024]).to_device(Device::gpu().unwrap());
+        let t = RawTensor::from_vec(data.clone(), &[1024])
+            .to_device(Device::gpu().expect("GPU should be available"));
 
         let _ = gpu_sync();
         let before = gpu_pending_count();
@@ -222,6 +263,11 @@ mod gpu_stress_tests {
     /// Verify staging buffers are reused across multiple GPU→CPU transfers
     #[test]
     fn test_staging_buffer_pooling() {
+        if !gpu::is_gpu_available() {
+            println!("Skipping GPU stress test - no GPU available");
+            return;
+        }
+
         println!("Testing staging buffer pool with multiple readbacks");
 
         // Create 10 tensors
@@ -256,6 +302,11 @@ mod gpu_stress_tests {
     /// Verify sync_checked() properly tracks consecutive timeouts
     #[test]
     fn test_sync_checked_timeout_handling() {
+        if !gpu::is_gpu_available() {
+            println!("Skipping GPU stress test - no GPU available");
+            return;
+        }
+
         use volta::get_gpu_context;
 
         let ctx = get_gpu_context().expect("GPU available");
@@ -306,6 +357,11 @@ mod gpu_stress_tests {
     /// Verify resource monitoring works and doesn't panic
     #[test]
     fn test_resource_monitoring() {
+        if !gpu::is_gpu_available() {
+            println!("Skipping GPU stress test - no GPU available");
+            return;
+        }
+
         use volta::gpu::monitor::{ResourceStatus, check_system_resources, get_process_memory_mb};
 
         // Check resources before starting
@@ -367,6 +423,11 @@ mod gpu_stress_tests {
     /// Enhanced version of test 1 with resource monitoring to abort early
     #[test]
     fn test_many_small_ops_with_monitoring() {
+        if !gpu::is_gpu_available() {
+            println!("Skipping GPU stress test - no GPU available");
+            return;
+        }
+
         use volta::gpu::monitor::{ResourceStatus, check_system_resources};
 
         // Pre-flight check
@@ -409,6 +470,11 @@ mod gpu_stress_tests {
     /// Demonstrate real-time performance profiling with SystemMonitor
     #[test]
     fn test_system_monitor_profiling() {
+        if !gpu::is_gpu_available() {
+            println!("Skipping GPU stress test - no GPU available");
+            return;
+        }
+
         use volta::gpu::system_monitor::SystemMonitor;
 
         let monitor = SystemMonitor::new();
@@ -449,6 +515,11 @@ mod gpu_stress_tests {
     /// Verify early warning system detects increasing memory trends
     #[test]
     fn test_early_warning_trend_detection() {
+        if !gpu::is_gpu_available() {
+            println!("Skipping GPU stress test - no GPU available");
+            return;
+        }
+
         use volta::gpu::early_warning::{EarlyWarningSystem, HealthStatus};
 
         let mut ews = EarlyWarningSystem::new();
@@ -505,6 +576,11 @@ mod gpu_stress_tests {
     /// Demonstrate using all monitoring tools together
     #[test]
     fn test_combined_monitoring_integration() {
+        if !gpu::is_gpu_available() {
+            println!("Skipping GPU stress test - no GPU available");
+            return;
+        }
+
         use volta::gpu::early_warning::{EarlyWarningSystem, HealthStatus as EWSHealthStatus};
         use volta::gpu::monitor::{ResourceStatus, check_system_resources};
         use volta::gpu::system_monitor::SystemMonitor;
