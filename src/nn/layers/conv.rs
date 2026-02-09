@@ -146,9 +146,60 @@ impl GradFn for Im2colGradFn {
     fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
         // out_grad has shape (B*H_out*W_out, C*K*K)
         // We need to convert it back to (B, C, H, W) using col2im
-        let grad_data = Conv2d::col2im(&out_grad.data, &self.input_shape, self.kernel, self.stride);
 
-        vec![Some(RawTensor::new(grad_data, &self.input_shape, false))]
+        // Try GPU-accelerated col2im first
+        let grad_storage = if out_grad.data.is_gpu() {
+            let (batch, channels, height, width) = (
+                self.input_shape.first().copied().unwrap_or(1),
+                self.input_shape.get(1).copied().unwrap_or(1),
+                self.input_shape.get(2).copied().unwrap_or(1),
+                self.input_shape.get(3).copied().unwrap_or(1),
+            );
+            let (kh, kw) = self.kernel;
+            let (sh, sw) = self.stride;
+            let h_out = (height - kh) / sh + 1;
+            let w_out = (width - kw) / sw + 1;
+
+            // Try GPU col2im
+            if let Some(gpu_storage) = RawTensor::gpu_col2im(
+                &out_grad.data,
+                batch,
+                channels,
+                height,
+                width,
+                kh,
+                kw,
+                sh,
+                sw,
+                h_out,
+                w_out,
+            ) {
+                gpu_storage
+            } else {
+                // Fallback to CPU - convert Vec<f32> to Storage
+                let cpu_data =
+                    Conv2d::col2im(&out_grad.data, &self.input_shape, self.kernel, self.stride);
+                crate::storage::Storage::cpu(cpu_data)
+            }
+        } else {
+            // CPU path - convert Vec<f32> to Storage
+            let cpu_data =
+                Conv2d::col2im(&out_grad.data, &self.input_shape, self.kernel, self.stride);
+            crate::storage::Storage::cpu(cpu_data)
+        };
+
+        // Determine device from storage
+        let device = if grad_storage.is_gpu() {
+            crate::Device::gpu().unwrap_or(crate::Device::CPU)
+        } else {
+            crate::Device::CPU
+        };
+
+        let grad_tensor =
+            RawTensor::try_new_with_storage(grad_storage, &self.input_shape, device, false)
+                .expect("col2im gradient shape mismatch");
+
+        vec![Some(grad_tensor)]
     }
 
     fn clone_box(&self) -> Box<dyn GradFn> {
@@ -3763,6 +3814,164 @@ mod conv2d_gpu_tests {
             assert!(
                 abs_diff < 1e-4,
                 "Non-square mismatch at index {}: CPU={}, GPU={}, diff={}",
+                i,
+                cpu_val,
+                gpu_val,
+                abs_diff
+            );
+        }
+    }
+
+    // ===== GPU col2im Tests =====
+
+    #[test]
+    fn test_conv2d_gpu_col2im_cpu_consistency() {
+        if Device::gpu().is_none() {
+            return;
+        }
+
+        let device = Device::gpu().unwrap();
+
+        // Create input data (use same values for fair comparison)
+        let x_data: Vec<f32> = (0..256).map(|i| i as f32).collect();
+
+        // Create CPU conv with im2col algorithm
+        let x_cpu = RawTensor::new(x_data.clone(), &[1, 4, 8, 8], true);
+        let conv_cpu = Conv2d::new_on_device(4, 8, 3, 1, 0, true, Device::CPU);
+        let weight_size = 4 * 8 * 3 * 3;
+        conv_cpu.weight.borrow_mut().data = crate::storage::Storage::cpu(vec![1.0; weight_size]);
+        conv_cpu.bias.as_ref().unwrap().borrow_mut().data =
+            crate::storage::Storage::cpu(vec![0.0; 8]);
+        conv_cpu.set_algo(ConvAlgo::Im2col);
+
+        let y_cpu = conv_cpu.forward(&x_cpu);
+        let loss_cpu = y_cpu.sum();
+        loss_cpu.backward();
+
+        // Create GPU conv with im2col algorithm
+        let x_gpu = RawTensor::new(x_data, &[1, 4, 8, 8], true).to_device(device.clone());
+        let conv_gpu = Conv2d::new_on_device(4, 8, 3, 1, 0, true, device.clone());
+        conv_gpu.weight.borrow_mut().data = crate::storage::Storage::gpu(vec![1.0; weight_size]);
+        conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
+            crate::storage::Storage::gpu(vec![0.0; 8]);
+        conv_gpu.set_algo(ConvAlgo::Im2col);
+
+        let y_gpu = conv_gpu.forward(&x_gpu);
+        let loss_gpu = y_gpu.sum();
+        loss_gpu.backward();
+
+        // Compare input gradients (this tests col2im)
+        let grad_cpu = x_cpu.grad().expect("CPU input should have gradient");
+        let grad_gpu = x_gpu.grad().expect("GPU input should have gradient");
+
+        let grad_cpu_data = grad_cpu.to_vec();
+        let grad_gpu_data = grad_gpu.to_vec();
+
+        assert_eq!(grad_cpu_data.len(), grad_gpu_data.len());
+
+        for (i, (cpu_val, gpu_val)) in grad_cpu_data.iter().zip(grad_gpu_data.iter()).enumerate() {
+            let abs_diff = (cpu_val - gpu_val).abs();
+            assert!(
+                abs_diff < 1e-4,
+                "GPU col2im mismatch at index {}: CPU={}, GPU={}, diff={}",
+                i,
+                cpu_val,
+                gpu_val,
+                abs_diff
+            );
+        }
+    }
+
+    #[test]
+    fn test_conv2d_gpu_im2col_backward() {
+        if Device::gpu().is_none() {
+            return;
+        }
+
+        let device = Device::gpu().unwrap();
+
+        // Create input on GPU with requires_grad=true
+        let x_gpu = RawTensor::new(
+            vec![
+                1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0,
+                16.0,
+            ],
+            &[1, 1, 4, 4],
+            true,
+        )
+        .to_device(device.clone());
+
+        // Create conv with im2col algorithm
+        let conv = Conv2d::new_on_device(1, 2, 3, 1, 0, true, device.clone());
+        conv.set_algo(ConvAlgo::Im2col);
+
+        // Forward pass
+        let y = conv.forward(&x_gpu);
+
+        // Backward pass (tests col2im)
+        let loss = y.sum();
+        loss.backward();
+
+        // Verify we got an input gradient
+        let grad_input = x_gpu.grad().expect("Input should have gradient");
+        assert_eq!(grad_input.len(), 16);
+
+        // Verify values are non-zero (col2im should have accumulated gradients)
+        let grad_data = grad_input.to_vec();
+        let has_non_zero = grad_data.iter().any(|&v| v.abs() > 1e-6);
+        assert!(has_non_zero, "col2im gradient should have non-zero values");
+    }
+
+    #[test]
+    fn test_conv2d_gpu_col2im_3x3_stride2() {
+        if Device::gpu().is_none() {
+            return;
+        }
+
+        let device = Device::gpu().unwrap();
+
+        // Test with stride 2 (more challenging case)
+        let x_data: Vec<f32> = (0..768).map(|i| i as f32).collect();
+
+        // CPU version
+        let x_cpu = RawTensor::new(x_data.clone(), &[1, 3, 16, 16], true);
+        let conv_cpu = Conv2d::new_on_device(3, 8, 3, 2, 1, true, Device::CPU);
+        let weight_size = 3 * 8 * 3 * 3;
+        conv_cpu.weight.borrow_mut().data = crate::storage::Storage::cpu(vec![1.0; weight_size]);
+        conv_cpu.bias.as_ref().unwrap().borrow_mut().data =
+            crate::storage::Storage::cpu(vec![0.0; 8]);
+        conv_cpu.set_algo(ConvAlgo::Im2col);
+
+        let y_cpu = conv_cpu.forward(&x_cpu);
+        let loss_cpu = y_cpu.sum();
+        loss_cpu.backward();
+
+        // GPU version
+        let x_gpu = RawTensor::new(x_data, &[1, 3, 16, 16], true).to_device(device.clone());
+        let conv_gpu = Conv2d::new_on_device(3, 8, 3, 2, 1, true, device.clone());
+        conv_gpu.weight.borrow_mut().data = crate::storage::Storage::gpu(vec![1.0; weight_size]);
+        conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
+            crate::storage::Storage::gpu(vec![0.0; 8]);
+        conv_gpu.set_algo(ConvAlgo::Im2col);
+
+        let y_gpu = conv_gpu.forward(&x_gpu);
+        let loss_gpu = y_gpu.sum();
+        loss_gpu.backward();
+
+        // Compare gradients (col2im with stride 2)
+        let grad_cpu = x_cpu.grad().expect("CPU input should have gradient");
+        let grad_gpu = x_gpu.grad().expect("GPU input should have gradient");
+
+        let grad_cpu_data = grad_cpu.to_vec();
+        let grad_gpu_data = grad_gpu.to_vec();
+
+        assert_eq!(grad_cpu_data.len(), grad_gpu_data.len());
+
+        for (i, (cpu_val, gpu_val)) in grad_cpu_data.iter().zip(grad_gpu_data.iter()).enumerate() {
+            let abs_diff = (cpu_val - gpu_val).abs();
+            assert!(
+                abs_diff < 1e-4,
+                "GPU col2im stride2 mismatch at index {}: CPU={}, GPU={}, diff={}",
                 i,
                 cpu_val,
                 gpu_val,

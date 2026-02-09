@@ -186,6 +186,7 @@ pub struct ComputePipelines {
 
     // Image-to-column transformation for convolution
     pub im2col: wgpu::ComputePipeline,
+    pub col2im: wgpu::ComputePipeline,
 
     // Direct convolution (memory efficient)
     pub direct_conv: wgpu::ComputePipeline,
@@ -595,6 +596,11 @@ impl GpuContext {
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/im2col.wgsl").into()),
         });
 
+        let col2im_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Col2im Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/col2im.wgsl").into()),
+        });
+
         let direct_conv_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Direct Conv Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/direct_conv.wgsl").into()),
@@ -938,6 +944,7 @@ impl GpuContext {
 
             // Image-to-column transformation
             im2col: create_pipeline(&im2col_shader, "im2col_main", "Im2col Pipeline"),
+            col2im: create_pipeline(&col2im_shader, "col2im_main", "Col2im Pipeline"),
 
             // Direct convolution
             direct_conv: create_pipeline(

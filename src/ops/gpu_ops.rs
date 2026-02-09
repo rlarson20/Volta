@@ -537,6 +537,37 @@ impl RawTensor {
         })
     }
 
+    /// GPU-accelerated col2im transformation for convolution gradient computation
+    ///
+    /// Transforms 2D matrix `(B*H_out*W_out, C*K_h*K_w)` back to 4D tensor `(B, C, H, W)`.
+    /// This is the inverse of im2col, accumulating gradients from output positions.
+    #[cfg(feature = "gpu")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn gpu_col2im(
+        col: &Storage,
+        batch_size: usize,
+        channels: usize,
+        height: usize,
+        width: usize,
+        kernel_h: usize,
+        kernel_w: usize,
+        stride_h: usize,
+        stride_w: usize,
+        h_out: usize,
+        w_out: usize,
+    ) -> Option<Storage> {
+        let buf_col = col.gpu_buffer()?;
+        let result = GpuKernels::col2im(
+            buf_col, batch_size, channels, height, width, kernel_h, kernel_w, stride_h, stride_w,
+            h_out, w_out,
+        )?;
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            dtype: crate::dtype::DType::F32,
+            cpu_cache: RefCell::new(None),
+        })
+    }
+
     /// GPU-accelerated direct convolution
     #[cfg(feature = "gpu")]
     #[allow(clippy::too_many_arguments)]
