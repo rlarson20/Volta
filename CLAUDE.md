@@ -155,6 +155,14 @@ small: B=4, C=3→16, H=W=32, K=3x3, im2col memory: 0.41 MB
 medium: B=8, C=64→128, H=W=28, K=3x3, im2col memory: 67.5 MB
 ```
 
+### Benchmarking Guidelines
+
+For benchmark changes:
+
+- Always implement resource cleanup (buffer pools, cache invalidation) after benchmark groups
+- Use size-bucketed buffer pools to prevent exhaustion
+- Add hard sync timeouts for GPU operations
+
 ## Architecture
 
 ### Core Design Philosophy
@@ -279,6 +287,15 @@ WGPU-based acceleration for core tensor operations:
 - CPU cache invalidation for GPU benchmarks
 - Early warning system for resource exhaustion
 
+**GPU Development Guidelines:**
+
+When implementing GPU operations:
+
+1. Ensure both forward and backward passes are GPU-resident
+2. Check for CPU fallback paths in binary ops (especially `to_f32_vec()`)
+3. Verify bind group layouts match between forward/backward
+4. Test with actual GPU tensors, not just CPU tensors
+
 ## Pre-commit Hooks
 
 The project uses pre-commit hooks configured in `.pre-commit-config.yaml`:
@@ -326,6 +343,12 @@ must_use_candidate = "deny"        # Suggests #[must_use] attributes
 - ~400+ pedantic lints reduced to ~223 remaining
 - Continual improvement toward full defensive compliance
 
+## Code Quality
+
+**Clippy Linting:**
+
+Run `cargo clippy --all-targets` (not just `cargo clippy --all`) to catch linting errors in tests and examples. Fix all clippy warnings before committing.
+
 ## Testing
 
 The test suite (tests in `src/lib.rs`) validates:
@@ -344,6 +367,19 @@ The test suite (tests in `src/lib.rs`) validates:
 - Scalar tensor and empty tensor edge case tests
 - Numerical edge case tests with improved error handling
 - Gradient checks for missing unary operations
+
+**Workflow Conventions:**
+
+- Always run `cargo test` before committing changes
+- If tests fail, fix them before proceeding with commit
+
+### Gradient Checks
+
+When implementing gradients, follow these guidelines:
+
+- Verify gradient accumulation works correctly
+- Avoid operations that produce non-deterministic results (e.g., argmax/argmin on ties)
+- Ensure gradient shapes match input tensor shapes
 
 ## Important Implementation Details
 
