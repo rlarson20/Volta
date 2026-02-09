@@ -1,6 +1,10 @@
 use crate::Storage;
 use crate::autograd::GradFn;
 use crate::device::Device;
+use crate::ops::binary::BinaryOp;
+use crate::ops::reduce::ReduceOp;
+use crate::ops::ternary::TernaryOp;
+use crate::ops::unary::UnaryOp;
 use crate::{Result, VoltaError};
 use rand::Rng;
 use rand::SeedableRng;
@@ -1065,79 +1069,79 @@ pub trait TensorOps {
 
 impl TensorOps for Tensor {
     fn add(&self, other: &Tensor) -> Tensor {
-        RawTensor::add(self, other)
+        RawTensor::binary_op(self, other, BinaryOp::Add)
     }
     fn sub(&self, other: &Tensor) -> Tensor {
-        RawTensor::sub(self, other)
+        RawTensor::binary_op(self, other, BinaryOp::Sub)
     }
     fn elem_mul(&self, other: &Tensor) -> Tensor {
-        RawTensor::elem_mul(self, other)
+        RawTensor::binary_op(self, other, BinaryOp::Mul)
     }
     fn div(&self, other: &Tensor) -> Tensor {
-        RawTensor::div(self, other)
+        RawTensor::binary_op(self, other, BinaryOp::Div)
     }
     fn max_elem(&self, other: &Tensor) -> Tensor {
-        RawTensor::max_elem(self, other)
+        RawTensor::binary_op(self, other, BinaryOp::Max)
     }
     fn modulo(&self, other: &Tensor) -> Tensor {
-        RawTensor::modulo(self, other)
+        RawTensor::binary_op(self, other, BinaryOp::Mod)
     }
     fn cmplt(&self, other: &Tensor) -> Tensor {
-        RawTensor::cmplt(self, other)
+        RawTensor::binary_op(self, other, BinaryOp::Cmplt)
     }
 
     fn neg(&self) -> Tensor {
-        RawTensor::neg(self)
+        RawTensor::unary_op(self, UnaryOp::Neg)
     }
     fn recip(&self) -> Tensor {
-        RawTensor::recip(self)
+        RawTensor::unary_op(self, UnaryOp::Recip)
     }
     fn sqrt(&self) -> Tensor {
-        RawTensor::sqrt(self)
+        RawTensor::unary_op(self, UnaryOp::Sqrt)
     }
     fn exp2(&self) -> Tensor {
-        RawTensor::exp2(self)
+        RawTensor::unary_op(self, UnaryOp::Exp2)
     }
     fn log2(&self) -> Tensor {
-        RawTensor::log2(self)
+        RawTensor::unary_op(self, UnaryOp::Log2)
     }
     fn exp(&self) -> Tensor {
-        RawTensor::exp(self)
+        RawTensor::unary_op(self, UnaryOp::Exp)
     }
     fn log(&self) -> Tensor {
-        RawTensor::log(self)
+        RawTensor::unary_op(self, UnaryOp::Log)
     }
     fn sin(&self) -> Tensor {
-        RawTensor::sin(self)
+        RawTensor::unary_op(self, UnaryOp::Sin)
     }
     fn cos(&self) -> Tensor {
-        RawTensor::cos(self)
+        RawTensor::unary_op(self, UnaryOp::Cos)
     }
     fn tanh(&self) -> Tensor {
-        RawTensor::tanh(self)
+        RawTensor::unary_op(self, UnaryOp::Tanh)
     }
     fn sigmoid(&self) -> Tensor {
-        RawTensor::sigmoid(self)
+        RawTensor::unary_op(self, UnaryOp::Sigmoid)
     }
     fn relu(&self) -> Tensor {
-        RawTensor::relu(self)
+        RawTensor::unary_op(self, UnaryOp::ReLU)
     }
 
     fn sum(&self) -> Tensor {
-        RawTensor::sum(self)
+        RawTensor::reduce_op(self, ReduceOp::Sum)
     }
     fn max_reduce(&self) -> Tensor {
-        RawTensor::max_reduce(self)
+        RawTensor::reduce_op(self, ReduceOp::Max)
     }
     fn mean(&self) -> Tensor {
-        RawTensor::mean(self)
+        RawTensor::reduce_op(self, ReduceOp::Mean)
     }
 
     fn mulacc(&self, y: &Tensor, z: &Tensor) -> Tensor {
-        RawTensor::mulacc(self, y, z)
+        RawTensor::ternary_op(self, y, z, TernaryOp::MulAcc)
     }
     fn where_op(&self, x: &Tensor, y: &Tensor) -> Tensor {
-        RawTensor::where_op(self, x, y)
+        RawTensor::ternary_op(self, x, y, TernaryOp::Where)
     }
 
     fn reshape(&self, new_shape: &[usize]) -> Tensor {

@@ -266,42 +266,4 @@ impl RawTensor {
         }
         out
     }
-
-    // Convenience methods for each unary operation
-    pub fn neg(t: &Tensor) -> Tensor {
-        Self::unary_op(t, UnaryOp::Neg)
-    }
-    pub fn recip(t: &Tensor) -> Tensor {
-        Self::unary_op(t, UnaryOp::Recip)
-    }
-    pub fn sqrt(t: &Tensor) -> Tensor {
-        Self::unary_op(t, UnaryOp::Sqrt)
-    }
-    pub fn exp2(t: &Tensor) -> Tensor {
-        Self::unary_op(t, UnaryOp::Exp2)
-    }
-    pub fn log2(t: &Tensor) -> Tensor {
-        Self::unary_op(t, UnaryOp::Log2)
-    }
-    pub fn exp(t: &Tensor) -> Tensor {
-        Self::unary_op(t, UnaryOp::Exp)
-    }
-    pub fn log(t: &Tensor) -> Tensor {
-        Self::unary_op(t, UnaryOp::Log)
-    }
-    pub fn sin(t: &Tensor) -> Tensor {
-        Self::unary_op(t, UnaryOp::Sin)
-    }
-    pub fn cos(t: &Tensor) -> Tensor {
-        Self::unary_op(t, UnaryOp::Cos)
-    }
-    pub fn tanh(t: &Tensor) -> Tensor {
-        Self::unary_op(t, UnaryOp::Tanh)
-    }
-    pub fn sigmoid(t: &Tensor) -> Tensor {
-        Self::unary_op(t, UnaryOp::Sigmoid)
-    }
-    pub fn relu(t: &Tensor) -> Tensor {
-        Self::unary_op(t, UnaryOp::ReLU)
-    }
 }

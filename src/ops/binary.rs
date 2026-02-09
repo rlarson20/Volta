@@ -687,25 +687,4 @@ impl RawTensor {
     }
 
     // Convenience methods for binary operations
-    pub fn add(self_t: &Tensor, other: &Tensor) -> Tensor {
-        Self::binary_op(self_t, other, BinaryOp::Add)
-    }
-    pub fn sub(self_t: &Tensor, other: &Tensor) -> Tensor {
-        Self::binary_op(self_t, other, BinaryOp::Sub)
-    }
-    pub fn elem_mul(self_t: &Tensor, other: &Tensor) -> Tensor {
-        Self::binary_op(self_t, other, BinaryOp::Mul)
-    }
-    pub fn div(self_t: &Tensor, other: &Tensor) -> Tensor {
-        Self::binary_op(self_t, other, BinaryOp::Div)
-    }
-    pub fn max_elem(self_t: &Tensor, other: &Tensor) -> Tensor {
-        Self::binary_op(self_t, other, BinaryOp::Max)
-    }
-    pub fn modulo(self_t: &Tensor, other: &Tensor) -> Tensor {
-        Self::binary_op(self_t, other, BinaryOp::Mod)
-    }
-    pub fn cmplt(self_t: &Tensor, other: &Tensor) -> Tensor {
-        Self::binary_op(self_t, other, BinaryOp::Cmplt)
-    }
 }

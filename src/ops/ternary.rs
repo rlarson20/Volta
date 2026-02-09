@@ -279,11 +279,4 @@ impl RawTensor {
             }
         }
     }
-
-    pub fn mulacc(x: &Tensor, y: &Tensor, z: &Tensor) -> Tensor {
-        Self::ternary_op(x, y, z, TernaryOp::MulAcc)
-    }
-    pub fn where_op(cond: &Tensor, x: &Tensor, y: &Tensor) -> Tensor {
-        Self::ternary_op(cond, x, y, TernaryOp::Where)
-    }
 }

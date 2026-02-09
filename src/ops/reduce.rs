@@ -269,14 +269,4 @@ impl RawTensor {
         }
         out
     }
-
-    pub fn sum(self_t: &Tensor) -> Tensor {
-        Self::reduce_op(self_t, ReduceOp::Sum)
-    }
-    pub fn max_reduce(self_t: &Tensor) -> Tensor {
-        Self::reduce_op(self_t, ReduceOp::Max)
-    }
-    pub fn mean(self_t: &Tensor) -> Tensor {
-        Self::reduce_op(self_t, ReduceOp::Mean)
-    }
 }
