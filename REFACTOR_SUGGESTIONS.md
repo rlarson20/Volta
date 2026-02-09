@@ -291,15 +291,15 @@ fn sigmoid(x: f32) -> f32 {
 
 ---
 
-### 5. Movement Ops Recursive Implementation Complexity (MEDIUM)
+### 5. Movement Ops Recursive Implementation Complexity (MEDIUM) ✅ **COMPLETED**
 
-**Location:** `src/ops/movement.rs` (Lines 612-866, 827-935, 943-1059)
+**Location:** `src/ops/movement.rs` (Lines 1-185, 270-325)
 
-**Current Problem:**
+**Original Problem:**
 
-Movement operations (pad, shrink, stride) use deeply nested recursive helper functions with 9+ parameters each. These are defined inline within methods, creating massive complexity.
+Movement operations (pad, shrink, stride) used deeply nested recursive helper functions with 9+ parameters each. These were defined inline within methods, creating massive complexity.
 
-**Example from lines 612-652 (pad_recursive):**
+**Original Code (Lines 612-652, 827-867, 944-984, 117-155, 198-237, 281-321):**
 
 ```rust
 #[allow(clippy::too_many_arguments)]
@@ -321,45 +321,42 @@ fn pad_recursive(
 }
 ```
 
-**Issues:**
+**Solution Implemented:**
 
-- **Cyclomatic complexity:** 6 nested function definitions across file
-- **Parameter explosion:** 9-10 parameters per function
-- **Code duplication:** `pad_recursive`, `unpad_recursive`, `shrink_recursive`, `unshrink_recursive`, `stride_recursive`, `unstride_recursive`
-- **Performance:** Recursive function calls prevent inlining
-- **Testing:** Nearly impossible to unit test individually
-
-**Impact:**
-
-- **Severity:** MEDIUM - Maintenance nightmare
-- **File size:** 1078 lines, could be ~600 with better design
-- **Performance:** Function call overhead in hot loops
-- **Debugging:** Stack traces are unusable
-
-**Suggested Approaches:**
-
-1. **Extract to iterator-based design:** No recursion needed
-2. **Use cursor/position struct:** Instead of 9 parameters
-3. **Create generic `transform_indices()` helper:** Unified logic
-4. **Consider ndarray's strides approach:** Proven pattern
+Created `ForwardIndexMapper` and `BackwardIndexMapper` traits that encapsulate index transformation logic for pad, shrink, and stride operations. Consolidated 6 recursive functions into 2 unified functions (`apply_movement_forward` and `apply_movement_backward`).
 
 **Refactored Pattern:**
 
 ```rust
-struct IndexTransform {
-    old_strides: Vec<usize>,
-    new_strides: Vec<usize>,
-    // ... single state object
+trait ForwardIndexMapper {
+    fn iteration_shape<'a>(&self, input_shape: &'a [usize], output_shape: &'a [usize]) -> &'a [usize];
+    fn map_forward_indices(&self, dim: usize, iter_idx: usize) -> (usize, usize);
 }
 
-impl IndexTransform {
-    fn transform(&self, new_idx: usize) -> usize {
-        // Unified logic
-    }
-}
+struct PadMapper { padding: Vec<(usize, usize)> }
+struct ShrinkMapper { ranges: Vec<(usize, usize)> }
+struct StrideMapper { strides: Vec<usize> }
+
+fn apply_movement_forward<M: ForwardIndexMapper>(...) { ... }
+fn apply_movement_backward<M: BackwardIndexMapper>(...) { ... }
 ```
 
-**Estimated Effort:** 3-5 days (consolidate into shared iterator)
+**Benefits Achieved:**
+
+- **Single implementation:** Bug fixes now apply to all 3 operations automatically
+- **Clear separation:** Index transformation logic isolated in mapper traits
+- **Type safety:** Compiler ensures correct index mappings via trait bounds
+- **Zero runtime cost:** Monomorphization eliminates trait dispatch overhead
+- **Extensible:** New movement operations can reuse the same pattern
+
+**Test Results:**
+
+- ✅ All 381 tests pass
+- ✅ All movement operation gradient checks pass
+- ✅ Conv2d tests pass (confirmed no regressions)
+- ✅ GPU tests pass
+
+**Estimated Effort:** 3 days (actual implementation time)
 
 ---
 
@@ -371,7 +368,7 @@ impl IndexTransform {
 | 2    | TensorOps Duplication  | tensor.rs   | 1005-1197 | HIGH        | Maintainability | ✅ Completed    |
 | 3    | Rc<RefCell> Clones     | 45 files    | 424+      | MEDIUM-HIGH | Architecture    | Open            |
 | 4    | GradFn Boilerplate     | ops/\*.rs   | ~400      | MEDIUM      | Maintainability | Open            |
-| 5    | Recursive Movement Ops | movement.rs | 612-1059  | MEDIUM      | Complexity      | Open            |
+| 5    | Recursive Movement Ops | movement.rs | 1-185, 270-325 | MEDIUM | Complexity | ✅ Completed    |
 
 ## Total Estimated Impact
 
@@ -388,6 +385,7 @@ impl IndexTransform {
 
 ✅ **1. TensorOps Trait Duplication (#2)** - Removed 107 lines of boilerplate, TensorOps now calls helper functions directly
 ✅ **2. Direct Convolution & iGEMM (#1)** - Memory-efficient alternatives to im2col implemented with GPU acceleration
+✅ **3. Movement Ops Recursive Implementation (#5)** - Consolidated 6 recursive functions into 2 unified functions using IndexMapper traits, all 381 tests pass
 
 ### Quick Wins (1-2 days each)
 

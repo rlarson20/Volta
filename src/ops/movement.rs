@@ -2,6 +2,376 @@ use crate::autograd::GradFn;
 use crate::error::Result;
 use crate::{RawTensor, Tensor};
 
+// ===== INDEX MAPPING TRAITS =====
+
+/// Defines how to map indices for forward movement operations
+///
+/// This trait encapsulates the index transformation logic for pad, shrink, and stride
+/// operations during the forward pass.
+trait ForwardIndexMapper {
+    /// Get the iteration shape for the forward pass
+    ///
+    /// Different operations iterate over different shapes:
+    /// - Pad: iterates over input (original) shape
+    /// - Shrink: iterates over output (shrunk) shape
+    /// - Stride: iterates over output (strided) shape
+    fn iteration_shape<'a>(
+        &self,
+        input_shape: &'a [usize],
+        output_shape: &'a [usize],
+    ) -> &'a [usize];
+
+    /// Map an iteration index to the corresponding input and output indices
+    ///
+    /// # Arguments
+    /// * `dim` - Current dimension being processed
+    /// * `iter_idx` - Index in the iteration shape for this dimension
+    ///
+    /// # Returns
+    /// * (`input_idx`, `output_idx`) - The corresponding indices in the input and output tensors
+    fn map_forward_indices(&self, dim: usize, iter_idx: usize) -> (usize, usize);
+}
+
+/// Mapper for pad operations: adds padding offset to index
+struct PadMapper {
+    padding: Vec<(usize, usize)>,
+}
+
+impl ForwardIndexMapper for PadMapper {
+    fn iteration_shape<'a>(
+        &self,
+        input_shape: &'a [usize],
+        _output_shape: &'a [usize],
+    ) -> &'a [usize] {
+        input_shape // Iterate over input (original) shape
+    }
+
+    fn map_forward_indices(&self, dim: usize, iter_idx: usize) -> (usize, usize) {
+        // Forward: output_idx = input_idx + pad_left
+        let pad_left = self.padding.get(dim).map_or(0, |p| p.0);
+        (iter_idx, iter_idx + pad_left)
+    }
+}
+
+/// Mapper for shrink operations: offsets by range start
+struct ShrinkMapper {
+    ranges: Vec<(usize, usize)>,
+}
+
+impl ForwardIndexMapper for ShrinkMapper {
+    fn iteration_shape<'a>(
+        &self,
+        _input_shape: &'a [usize],
+        output_shape: &'a [usize],
+    ) -> &'a [usize] {
+        output_shape // Iterate over output (shrunk) shape
+    }
+
+    fn map_forward_indices(&self, dim: usize, iter_idx: usize) -> (usize, usize) {
+        // Forward: input_idx (original) = output_idx (shrunk) + range_start
+        let range_start = self.ranges.get(dim).map_or(0, |r| r.0);
+        (iter_idx + range_start, iter_idx)
+    }
+}
+
+/// Mapper for stride operations: multiplies by stride
+struct StrideMapper {
+    strides: Vec<usize>,
+}
+
+impl ForwardIndexMapper for StrideMapper {
+    fn iteration_shape<'a>(
+        &self,
+        _input_shape: &'a [usize],
+        output_shape: &'a [usize],
+    ) -> &'a [usize] {
+        output_shape // Iterate over output (strided) shape
+    }
+
+    fn map_forward_indices(&self, dim: usize, iter_idx: usize) -> (usize, usize) {
+        // Forward: input_idx (original) = output_idx (strided) * stride
+        let stride = self.strides.get(dim).copied().unwrap_or(1);
+        (iter_idx * stride, iter_idx)
+    }
+}
+
+/// Defines how to map indices for backward movement operations
+///
+/// This trait encapsulates the index transformation logic for pad, shrink, and stride
+/// operations during the backward pass.
+trait BackwardIndexMapper {
+    /// Get the iteration shape for the backward pass
+    fn iteration_shape<'a>(
+        &self,
+        input_shape: &'a [usize],
+        output_shape: &'a [usize],
+    ) -> &'a [usize];
+
+    /// Map an iteration index to the corresponding input and output indices
+    ///
+    /// # Arguments
+    /// * `dim` - Current dimension being processed
+    /// * `iter_idx` - Index in the iteration shape for this dimension
+    /// * `input_dim_size` - Size of the input tensor in this dimension
+    /// * `output_dim_size` - Size of the output tensor in this dimension
+    ///
+    /// # Returns
+    /// * `Some((input_idx, output_idx))` - Valid indices for both tensors
+    /// * `None` - If the mapping is invalid and should be skipped
+    fn map_backward_indices(
+        &self,
+        dim: usize,
+        iter_idx: usize,
+        input_dim_size: usize,
+        output_dim_size: usize,
+    ) -> Option<(usize, usize)>;
+}
+
+/// Backward mapper for pad operations
+struct PadBackwardMapper {
+    padding: Vec<(usize, usize)>,
+}
+
+impl BackwardIndexMapper for PadBackwardMapper {
+    fn iteration_shape<'a>(
+        &self,
+        input_shape: &'a [usize],
+        _output_shape: &'a [usize],
+    ) -> &'a [usize] {
+        input_shape // Iterate over input (unpadded) shape
+    }
+
+    fn map_backward_indices(
+        &self,
+        dim: usize,
+        iter_idx: usize,
+        _input_dim_size: usize,
+        _output_dim_size: usize,
+    ) -> Option<(usize, usize)> {
+        // Backward: we iterate over input shape and map to padded output shape
+        // input_idx = iter_idx, output_idx = iter_idx + pad_left
+        let pad_left = self.padding.get(dim).map_or(0, |p| p.0);
+        Some((iter_idx, iter_idx + pad_left))
+    }
+}
+
+/// Backward mapper for shrink operations
+struct ShrinkBackwardMapper {
+    ranges: Vec<(usize, usize)>,
+}
+
+impl BackwardIndexMapper for ShrinkBackwardMapper {
+    fn iteration_shape<'a>(
+        &self,
+        _input_shape: &'a [usize],
+        output_shape: &'a [usize],
+    ) -> &'a [usize] {
+        output_shape // Iterate over output (shrunk) shape
+    }
+
+    fn map_backward_indices(
+        &self,
+        dim: usize,
+        iter_idx: usize,
+        _input_dim_size: usize,
+        _output_dim_size: usize,
+    ) -> Option<(usize, usize)> {
+        // Backward: we iterate over output shape and map to larger input shape
+        // output_idx = iter_idx, input_idx = iter_idx + range_start
+        let range_start = self.ranges.get(dim).map_or(0, |r| r.0);
+        Some((iter_idx + range_start, iter_idx))
+    }
+}
+
+/// Backward mapper for stride operations
+struct StrideBackwardMapper {
+    strides: Vec<usize>,
+}
+
+impl BackwardIndexMapper for StrideBackwardMapper {
+    fn iteration_shape<'a>(
+        &self,
+        _input_shape: &'a [usize],
+        output_shape: &'a [usize],
+    ) -> &'a [usize] {
+        output_shape // Iterate over output (strided) shape
+    }
+
+    fn map_backward_indices(
+        &self,
+        dim: usize,
+        iter_idx: usize,
+        input_dim_size: usize,
+        _output_dim_size: usize,
+    ) -> Option<(usize, usize)> {
+        // Backward: we iterate over output shape and map to larger input shape
+        // output_idx = iter_idx, input_idx = iter_idx * stride
+        let stride = self.strides.get(dim).copied().unwrap_or(1);
+        let input_idx = iter_idx * stride;
+        if input_idx < input_dim_size {
+            Some((input_idx, iter_idx))
+        } else {
+            None // Out of bounds
+        }
+    }
+}
+
+/// Context struct for movement operations
+///
+/// Holds all the shared parameters for recursive movement operations,
+/// reducing the number of function parameters from 10 to 4.
+struct MovementContext<'a> {
+    input_shape: &'a [usize],
+    output_shape: &'a [usize],
+    input_strides: &'a [usize],
+    output_strides: &'a [usize],
+}
+
+impl<'a> MovementContext<'a> {
+    fn new(
+        input_shape: &'a [usize],
+        output_shape: &'a [usize],
+        input_strides: &'a [usize],
+        output_strides: &'a [usize],
+    ) -> Self {
+        Self {
+            input_shape,
+            output_shape,
+            input_strides,
+            output_strides,
+        }
+    }
+}
+
+/// Unified recursive index transformation for backward movement operations
+///
+/// This function consolidates `unpad_recursive`, `unshrink_recursive`, and `unstride_recursive`.
+/// It copies data from the output gradient back to the input gradient position.
+///
+/// # Arguments
+/// * `result` - Output gradient buffer (accumulates values)
+/// * `grad` - Input gradient buffer (source of values)
+/// * `dim` - Current dimension being processed
+/// * `input_shape` - Shape of the input tensor (original shape)
+/// * `output_shape` - Shape of the output tensor (after operation)
+/// * `mapper` - Index mapping strategy
+/// * `input_offset` - Current linear offset in input buffer
+/// * `output_offset` - Current linear offset in output buffer
+/// * `input_strides` - Memory strides for input tensor
+/// * `output_strides` - Memory strides for output tensor
+fn apply_movement_backward<M: BackwardIndexMapper>(
+    ctx: &MovementContext<'_>,
+    result: &mut [f32],
+    grad: &[f32],
+    dim: usize,
+    mapper: &M,
+    input_offset: usize,
+    output_offset: usize,
+) {
+    // Base case: reached the innermost dimension
+    if dim == ctx.input_shape.len() {
+        if let Some(&val) = grad.get(output_offset)
+            && let Some(slot) = result.get_mut(input_offset)
+        {
+            *slot = val;
+        }
+        return;
+    }
+
+    // Get the iteration shape for this backward operation
+    let iter_shape = mapper.iteration_shape(ctx.input_shape, ctx.output_shape);
+    let dim_size = iter_shape.get(dim).copied().unwrap_or(1);
+    let input_dim_size = ctx.input_shape.get(dim).copied().unwrap_or(1);
+    let output_dim_size = ctx.output_shape.get(dim).copied().unwrap_or(1);
+
+    // Iterate according to the mapper's iteration shape
+    for iter_idx in 0..dim_size {
+        // Map iteration index to input and output indices
+        if let Some((input_idx, output_idx)) =
+            mapper.map_backward_indices(dim, iter_idx, input_dim_size, output_dim_size)
+        {
+            let input_stride = ctx.input_strides.get(dim).copied().unwrap_or(1);
+            let output_stride = ctx.output_strides.get(dim).copied().unwrap_or(1);
+
+            apply_movement_backward(
+                ctx,
+                result,
+                grad,
+                dim + 1,
+                mapper,
+                input_offset + input_idx * input_stride,
+                output_offset + output_idx * output_stride,
+            );
+        }
+    }
+}
+
+/// Unified recursive index transformation for forward movement operations
+///
+/// This function consolidates `pad_recursive`, `shrink_recursive`, and `stride_recursive`.
+/// It copies data from the input buffer to the output buffer with index transformation.
+///
+/// # Arguments
+/// * `result` - Output buffer (destination)
+/// * `data` - Input buffer (source)
+/// * `dim` - Current dimension being processed
+/// * `input_shape` - Shape of the input tensor
+/// * `output_shape` - Shape of the output tensor
+/// * `mapper` - Index mapping strategy
+/// * `input_offset` - Current linear offset in input buffer
+/// * `output_offset` - Current linear offset in output buffer
+/// * `input_strides` - Memory strides for input tensor
+/// * `output_strides` - Memory strides for output tensor
+fn apply_movement_forward<M: ForwardIndexMapper>(
+    ctx: &MovementContext<'_>,
+    result: &mut [f32],
+    data: &[f32],
+    dim: usize,
+    mapper: &M,
+    input_offset: usize,
+    output_offset: usize,
+) {
+    // Base case: reached the innermost dimension
+    if dim == ctx.input_shape.len() {
+        if let Some(&src) = data.get(input_offset)
+            && let Some(slot) = result.get_mut(output_offset)
+        {
+            *slot = src;
+        }
+        return;
+    }
+
+    // Get the iteration shape for this operation
+    let iter_shape = mapper.iteration_shape(ctx.input_shape, ctx.output_shape);
+    let dim_size = iter_shape.get(dim).copied().unwrap_or(1);
+    let input_dim_size = ctx.input_shape.get(dim).copied().unwrap_or(1);
+    let output_dim_size = ctx.output_shape.get(dim).copied().unwrap_or(1);
+
+    // Iterate through the dimension
+    for iter_idx in 0..dim_size {
+        // Map iteration index to input and output indices
+        let (input_idx, output_idx) = mapper.map_forward_indices(dim, iter_idx);
+
+        // Check bounds
+        if input_idx < input_dim_size && output_idx < output_dim_size {
+            let input_stride = ctx.input_strides.get(dim).copied().unwrap_or(1);
+            let output_stride = ctx.output_strides.get(dim).copied().unwrap_or(1);
+
+            apply_movement_forward(
+                ctx,
+                result,
+                data,
+                dim + 1,
+                mapper,
+                input_offset + input_idx * input_stride,
+                output_offset + output_idx * output_stride,
+            );
+        }
+    }
+}
+
+// ===== MOVEMENT OPERATIONS =====
+
 /// Movement operations: reshape/reorder data without changing values
 ///
 /// These operations don't modify data values, only how they're indexed.
@@ -113,47 +483,6 @@ impl GradFn for MovementGradFn {
                 RawTensor::new(grad_data, &self.original_shape, false)
             }
             MovementOp::Pad { padding } => {
-                #[allow(clippy::too_many_arguments)]
-                fn unpad_recursive(
-                    result: &mut [f32],
-                    grad: &[f32],
-                    dim: usize,
-                    old_shape: &[usize],
-                    _new_shape: &[usize],
-                    padding: &[(usize, usize)],
-                    old_offset: usize,
-                    new_offset: usize,
-                    old_strides: &[usize],
-                    new_strides: &[usize],
-                ) {
-                    if dim == old_shape.len() {
-                        if let Some(val) = grad.get(new_offset)
-                            && let Some(slot) = result.get_mut(old_offset)
-                        {
-                            *slot = *val;
-                        }
-                        return;
-                    }
-
-                    let dim_size = old_shape.get(dim).copied().unwrap_or(1);
-                    let pad_left = padding.get(dim).map_or(0, |p| p.0);
-                    for i in 0..dim_size {
-                        let new_i = i + pad_left;
-                        unpad_recursive(
-                            result,
-                            grad,
-                            dim + 1,
-                            old_shape,
-                            _new_shape,
-                            padding,
-                            old_offset + i * old_strides.get(dim).copied().unwrap_or(1),
-                            new_offset + new_i * new_strides.get(dim).copied().unwrap_or(1),
-                            old_strides,
-                            new_strides,
-                        );
-                    }
-                }
-
                 // Try GPU path
                 #[cfg(feature = "gpu")]
                 {
@@ -178,64 +507,20 @@ impl GradFn for MovementGradFn {
                 let mut result = vec![0.0; self.original_shape.iter().product()];
                 let old_strides = RawTensor::compute_strides(&self.original_shape);
                 let new_strides = RawTensor::compute_strides(&out_grad.shape);
-
-                unpad_recursive(
-                    &mut result,
-                    &out_grad.data,
-                    0,
+                let mapper = PadBackwardMapper {
+                    padding: padding.clone(),
+                };
+                let ctx = MovementContext::new(
                     &self.original_shape,
                     &out_grad.shape,
-                    padding,
-                    0,
-                    0,
                     &old_strides,
                     &new_strides,
                 );
+
+                apply_movement_backward(&ctx, &mut result, &out_grad.data, 0, &mapper, 0, 0);
                 RawTensor::new(result, &self.original_shape, false)
             }
             MovementOp::Shrink { ranges } => {
-                #[allow(clippy::too_many_arguments)]
-                fn unshrink_recursive(
-                    result: &mut [f32],
-                    grad: &[f32],
-                    dim: usize,
-                    old_shape: &[usize],
-                    new_shape: &[usize],
-                    ranges: &[(usize, usize)],
-                    old_offset: usize,
-                    new_offset: usize,
-                    old_strides: &[usize],
-                    new_strides: &[usize],
-                ) {
-                    if dim == old_shape.len() {
-                        if let Some(val) = grad.get(new_offset)
-                            && let Some(slot) = result.get_mut(old_offset)
-                        {
-                            *slot = *val;
-                        }
-
-                        return;
-                    }
-
-                    let dim_size = new_shape.get(dim).copied().unwrap_or(1);
-                    let range_start = ranges.get(dim).map_or(0, |r| r.0);
-                    for i in 0..dim_size {
-                        let old_i = i + range_start; //Offset by range start
-                        unshrink_recursive(
-                            result,
-                            grad,
-                            dim + 1,
-                            old_shape,
-                            new_shape,
-                            ranges,
-                            old_offset + old_i * old_strides.get(dim).copied().unwrap_or(1),
-                            new_offset + i * new_strides.get(dim).copied().unwrap_or(1),
-                            old_strides,
-                            new_strides,
-                        );
-                    }
-                }
-
                 // Try GPU path
                 #[cfg(feature = "gpu")]
                 {
@@ -260,66 +545,21 @@ impl GradFn for MovementGradFn {
                 let mut result = vec![0.0; self.original_shape.iter().product()];
                 let old_strides = RawTensor::compute_strides(&self.original_shape);
                 let new_strides = RawTensor::compute_strides(&out_grad.shape);
-
-                unshrink_recursive(
-                    &mut result,
-                    &out_grad.data,
-                    0,
+                let mapper = ShrinkBackwardMapper {
+                    ranges: ranges.clone(),
+                };
+                let ctx = MovementContext::new(
                     &self.original_shape,
                     &out_grad.shape,
-                    ranges,
-                    0,
-                    0,
                     &old_strides,
                     &new_strides,
                 );
+
+                apply_movement_backward(&ctx, &mut result, &out_grad.data, 0, &mapper, 0, 0);
                 RawTensor::new(result, &self.original_shape, false)
             }
             MovementOp::Stride { strides } => {
                 // Try GPU path
-                #[allow(clippy::too_many_arguments)]
-                fn unstride_recursive(
-                    result: &mut [f32],
-                    grad: &[f32],
-                    dim: usize,
-                    old_shape: &[usize],
-                    new_shape: &[usize],
-                    strides: &[usize],
-                    old_offset: usize,
-                    new_offset: usize,
-                    old_strides: &[usize],
-                    new_strides: &[usize],
-                ) {
-                    if dim == old_shape.len() {
-                        if let Some(val) = grad.get(new_offset)
-                            && let Some(slot) = result.get_mut(old_offset)
-                        {
-                            *slot = *val;
-                        }
-                        return;
-                    }
-
-                    let dim_size = new_shape.get(dim).copied().unwrap_or(1);
-                    let stride = strides.get(dim).copied().unwrap_or(1);
-                    for i in 0..dim_size {
-                        let old_i = i * stride;
-                        if old_i < old_shape.get(dim).copied().unwrap_or(1) {
-                            unstride_recursive(
-                                result,
-                                grad,
-                                dim + 1,
-                                old_shape,
-                                new_shape,
-                                strides,
-                                old_offset + old_i * old_strides.get(dim).copied().unwrap_or(1),
-                                new_offset + i * new_strides.get(dim).copied().unwrap_or(1),
-                                old_strides,
-                                new_strides,
-                            );
-                        }
-                    }
-                }
-
                 #[cfg(feature = "gpu")]
                 {
                     if out_grad.device.is_gpu()
@@ -343,19 +583,17 @@ impl GradFn for MovementGradFn {
                 let mut result = vec![0.0; self.original_shape.iter().product()];
                 let old_strides_mem = RawTensor::compute_strides(&self.original_shape);
                 let new_strides_mem = RawTensor::compute_strides(&out_grad.shape);
-
-                unstride_recursive(
-                    &mut result,
-                    &out_grad.data,
-                    0,
+                let mapper = StrideBackwardMapper {
+                    strides: strides.clone(),
+                };
+                let ctx = MovementContext::new(
                     &self.original_shape,
                     &out_grad.shape,
-                    strides,
-                    0,
-                    0,
                     &old_strides_mem,
                     &new_strides_mem,
                 );
+
+                apply_movement_backward(&ctx, &mut result, &out_grad.data, 0, &mapper, 0, 0);
                 RawTensor::new(result, &self.original_shape, false)
             }
         };
@@ -608,48 +846,6 @@ impl RawTensor {
     /// padding must match rank
     pub fn pad(self_t: &Tensor, padding: &[(usize, usize)]) -> Tensor {
         const MAX_ALLOC: usize = 100_000_000;
-        #[allow(clippy::too_many_arguments)]
-        fn pad_recursive(
-            result: &mut [f32],
-            data: &[f32],
-            dim: usize,
-            old_shape: &[usize],
-            _new_shape: &[usize],
-            padding: &[(usize, usize)],
-            old_offset: usize,
-            new_offset: usize,
-            old_strides: &[usize],
-            new_strides: &[usize],
-        ) {
-            if dim == old_shape.len() {
-                if let Some(&src) = data.get(old_offset)
-                    && let Some(slot) = result.get_mut(new_offset)
-                {
-                    *slot = src;
-                }
-                return;
-            }
-
-            let dim_size = old_shape.get(dim).copied().unwrap_or(1);
-            for i in 0..dim_size {
-                let pad_left = padding.get(dim).map_or(0, |p| p.0);
-                let new_i = i + pad_left;
-                let old_stride = old_strides.get(dim).copied().unwrap_or(1);
-                let new_stride = new_strides.get(dim).copied().unwrap_or(1);
-                pad_recursive(
-                    result,
-                    data,
-                    dim + 1,
-                    old_shape,
-                    _new_shape,
-                    padding,
-                    old_offset + i * old_stride,
-                    new_offset + new_i * new_stride,
-                    old_strides,
-                    new_strides,
-                );
-            }
-        }
 
         let (data, old_shape, req_grad, device) = {
             let s = self_t.borrow();
@@ -704,19 +900,12 @@ impl RawTensor {
         // Copy old data into padded positions
         let old_strides = Self::compute_strides(&old_shape);
         let new_strides = Self::compute_strides(&new_shape);
+        let mapper = PadMapper {
+            padding: padding.to_vec(),
+        };
+        let ctx = MovementContext::new(&old_shape, &new_shape, &old_strides, &new_strides);
 
-        pad_recursive(
-            &mut result,
-            &cpu_data,
-            0,
-            &old_shape,
-            &new_shape,
-            padding,
-            0,
-            0,
-            &old_strides,
-            &new_strides,
-        );
+        apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
 
         let out = Self::new(result, &new_shape, req_grad);
 
@@ -823,49 +1012,6 @@ impl RawTensor {
     ///   - Any range has `start == end` (zero-sized dimension)
     /// * `VoltaError::DimensionOutOfBounds` - If any range has `end > dimension size`
     pub fn try_shrink(self_t: &Tensor, ranges: &[(usize, usize)]) -> Result<Tensor> {
-        #[allow(clippy::too_many_arguments)]
-        fn shrink_recursive(
-            result: &mut [f32],
-            data: &[f32],
-            dim: usize,
-            old_shape: &[usize],
-            new_shape: &[usize],
-            ranges: &[(usize, usize)],
-            old_offset: usize,
-            new_offset: usize,
-            old_strides: &[usize],
-            new_strides: &[usize],
-        ) {
-            if dim == old_shape.len() {
-                if let Some(&src) = data.get(old_offset)
-                    && let Some(slot) = result.get_mut(new_offset)
-                {
-                    *slot = src;
-                }
-                return;
-            }
-
-            let dim_size = new_shape.get(dim).copied().unwrap_or(1);
-            let range_start = ranges.get(dim).map_or(0, |r| r.0);
-            for i in 0..dim_size {
-                let old_i = i + range_start;
-                let old_stride = old_strides.get(dim).copied().unwrap_or(1);
-                let new_stride = new_strides.get(dim).copied().unwrap_or(1);
-                shrink_recursive(
-                    result,
-                    data,
-                    dim + 1,
-                    old_shape,
-                    new_shape,
-                    ranges,
-                    old_offset + old_i * old_stride,
-                    new_offset + i * new_stride,
-                    old_strides,
-                    new_strides,
-                );
-            }
-        }
-
         let (data, old_shape, req_grad, device) = {
             let s = self_t.borrow();
             (
@@ -906,19 +1052,12 @@ impl RawTensor {
 
         let old_strides = Self::compute_strides(&old_shape);
         let new_strides = Self::compute_strides(&new_shape);
+        let mapper = ShrinkMapper {
+            ranges: ranges.to_vec(),
+        };
+        let ctx = MovementContext::new(&old_shape, &new_shape, &old_strides, &new_strides);
 
-        shrink_recursive(
-            &mut result,
-            &cpu_data,
-            0,
-            &old_shape,
-            &new_shape,
-            ranges,
-            0,
-            0,
-            &old_strides,
-            &new_strides,
-        );
+        apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
 
         let out = Self::new(result, &new_shape, req_grad);
 
@@ -940,49 +1079,6 @@ impl RawTensor {
     /// # Panics
     /// Strides length must match rank
     pub fn stride_op(self_t: &Tensor, strides: &[usize]) -> Tensor {
-        #[allow(clippy::too_many_arguments)]
-        fn stride_recursive(
-            result: &mut [f32],
-            data: &[f32],
-            dim: usize,
-            old_shape: &[usize],
-            new_shape: &[usize],
-            strides: &[usize],
-            old_offset: usize,
-            new_offset: usize,
-            old_strides: &[usize],
-            new_strides: &[usize],
-        ) {
-            if dim == old_shape.len() {
-                if let Some(&src) = data.get(old_offset)
-                    && let Some(slot) = result.get_mut(new_offset)
-                {
-                    *slot = src;
-                }
-                return;
-            }
-
-            let dim_size = new_shape.get(dim).copied().unwrap_or(1);
-            let stride = strides.get(dim).copied().unwrap_or(1);
-            for i in 0..dim_size {
-                let old_i = i * stride;
-                let old_stride = old_strides.get(dim).copied().unwrap_or(1);
-                let new_stride = new_strides.get(dim).copied().unwrap_or(1);
-                stride_recursive(
-                    result,
-                    data,
-                    dim + 1,
-                    old_shape,
-                    new_shape,
-                    strides,
-                    old_offset + old_i * old_stride,
-                    new_offset + i * new_stride,
-                    old_strides,
-                    new_strides,
-                );
-            }
-        }
-
         let (data, old_shape, req_grad, device) = {
             let s = self_t.borrow();
             (
@@ -1030,19 +1126,12 @@ impl RawTensor {
 
         let old_strides_mem = Self::compute_strides(&old_shape);
         let new_strides_mem = Self::compute_strides(&new_shape);
+        let mapper = StrideMapper {
+            strides: strides.to_vec(),
+        };
+        let ctx = MovementContext::new(&old_shape, &new_shape, &old_strides_mem, &new_strides_mem);
 
-        stride_recursive(
-            &mut result,
-            &cpu_data,
-            0,
-            &old_shape,
-            &new_shape,
-            strides,
-            0,
-            0,
-            &old_strides_mem,
-            &new_strides_mem,
-        );
+        apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
 
         let out = Self::new(result, &new_shape, req_grad);
 
