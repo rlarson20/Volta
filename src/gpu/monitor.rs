@@ -4,6 +4,7 @@
 //! pressure before system freezes occur. macOS-specific implementation
 //! using the `ps` command for memory tracking.
 
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
 /// System resource health status
