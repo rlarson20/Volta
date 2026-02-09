@@ -1,20 +1,26 @@
 # FILES READ THROUGH
 
-- `./REFACTOR_SUGGESTIONS.md`
+- `./REFACTOR_SUGGESTIONS.md` - been updating as suggestions done
 
 ## Rest of my solns
 
 tldr:
 me figuring out what exactly needs to get done
 
+### misc
+
+cargo machete says cblas and serde-json are no longer used
+
 ## Refactors:
 
 ### `im2col`: non-naive method (FFT? way that dude did it in numpy? winograd algo?)
 
 in progress; added implicit GEMM, direct conv, algo selection
+still has some components to add but workable
 
 ### `TensorOps`: every tensor op impl twice: once as `RawTensor`, once as `TensorOps` trait wrapper, remove parallel APIs
 
+done
 delete, test, verify works even without TensorOps
 
 ### 400~+ clones: look for hotspots, the ones mentioned might not be the best examples
@@ -63,6 +69,9 @@ fix dev branching: single loc for CPU/GPU logic
 ## Testing
 
 ## CI/CD
+
+command issue fixed
+no GPU on github actions, causes CI to fail, need to fix that
 
 ## Repo Hygiene
 

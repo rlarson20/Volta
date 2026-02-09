@@ -8,9 +8,33 @@ Whenever you're corrected on something, or you learn something about the codebas
 
 ## Learned Instructions
 
+### Recent Refactoring Work (2025-2026)
+
+**TensorOps Duplication Removal (COMPLETED):**
+- Eliminated 107 lines of boilerplate from tensor operations
+- TensorOps implementations now call helper functions directly (`binary_op()`, `unary_op()`, `reduce_op()`, `ternary_op()`)
+- When adding new operations, follow the pattern in `src/ops/` - implement the operation logic in the appropriate file, then add a thin wrapper in TensorOps trait
+
+**Conv2d Algorithm Improvements (COMPLETED):**
+- Direct convolution implemented with full gradient support (memory-efficient)
+- iGEMM (Implicit GEMM) implemented with tiled computation (balanced memory/performance)
+- im2col+GEMM remains available but is memory-intensive
+- Auto-selection chooses algorithm based on input size, kernel size, batch size, and device
+- All three algorithms support both forward and backward passes on GPU
+
+**See `REFACTOR_SUGGESTIONS.md` for ongoing and planned refactoring work.**
+
 ## Project Overview
 
 Volta is a PyTorch-like deep learning framework written in pure Rust. It's an educational project designed to demystify automatic differentiation engines and neural network computation graphs. The project is currently functional for CPU-based training of MLPs, CNNs, and RNNs with an extensive verified autograd engine.
+
+**Key Characteristics:**
+- **Educational focus**: Prioritizes correctness and clarity over performance
+- **PyTorch-like API**: Familiar patterns for ML practitioners
+- **Pure Rust**: No Python dependencies, suitable for Rust-native ML
+- **Verified gradients**: All operations validated with numerical gradient checking
+- **GPU acceleration**: Experimental WGPU-based support for core operations
+- **Extensible**: Clean architecture for adding new operations and layers
 
 ## Development Commands
 
@@ -50,15 +74,22 @@ just check
 # Run all tests with output
 cargo test -- --nocapture
 
-# Run specific test categories
-cargo test core                # Core tensor tests
+# Run specific test modules (organized by category in src/lib.rs)
+cargo test core                # Core tensor operations
 cargo test grad_check          # Numerical gradient validation
 cargo test broadcasting        # Broadcasting rules
 cargo test neural              # Neural network layers
-cargo test optimizer           # Optimizer convergence
+cargo test optimizer           # Optimizer convergence tests
+cargo test axis_reduce_tests   # Dimension reduction operations
+cargo test shape_tests         # Shape manipulation tests
 
 # Run a specific test
 cargo test test_name -- --nocapture
+
+# Run tests for specific functionality
+cargo test test_conv2d_forward        # Test conv2d forward pass
+cargo test test_gradcheck_conv2d      # Test conv2d gradients
+cargo test test_maxpool2d_backward     # Test maxpool backward
 ```
 
 ### Benchmarking
@@ -209,6 +240,17 @@ This byte-level storage design enables:
 - **Efficient GPU↔CPU transfers**: Lazy caching via `cpu_cache` in GPU variant
 - **SafeTensors compatibility**: Direct mapping to SafeTensors format dtype specification
 
+**Device Abstraction (`src/device.rs`):**
+
+```rust
+pub enum Device {
+    CPU,
+    GPU(String),  // GPU device identifier (e.g., "CUDA", "Metal")
+}
+```
+
+Tensors can be moved between devices using `to_device()`, and operations automatically dispatch based on tensor device location. The `Module` trait also supports `to_device()` for moving all parameters at once.
+
 **Error Handling (`src/error.rs`):**
 
 Recent refactor introduced `VoltaError` types using `thiserror` for comprehensive error handling:
@@ -225,6 +267,21 @@ Recent refactor introduced `VoltaError` types using `thiserror` for comprehensiv
 - Gradient accumulation in parent tensors
 - All operations verified with numerical gradient checking
 
+**Key Design Pattern - Computation Graph:**
+
+```rust
+// Each tensor stores its computation graph dependencies
+pub struct RawTensor {
+    pub parents: Vec<Tensor>,           // Input tensors to this operation
+    pub grad_fn: Option<Box<dyn GradFn>>, // How to compute gradients backward
+    // ...
+}
+
+// Backward traversal uses post-order DFS to build topological order
+// This ensures all gradients from a node's consumers are accumulated
+// before computing gradients for that node's parents
+```
+
 **Operation Organization (`src/ops/`):**
 
 - `unary.rs`: Element-wise ops (sigmoid, relu, sqrt, exp, log, sin, cos, tanh)
@@ -233,6 +290,16 @@ Recent refactor introduced `VoltaError` types using `thiserror` for comprehensiv
 - `reduce.rs`: Reduction ops (sum, mean, max_reduce)
 - `ternary.rs`: Three-operand ops (mulacc, where)
 - `movement.rs`: Shape manipulation (reshape, permute, expand, transpose, pad, shrink, stride)
+- `gpu_ops.rs`: GPU-specific operation implementations
+
+**Operation Pattern:**
+
+Each operation type follows a consistent pattern:
+1. **Enum definition** (e.g., `BinaryOp::Add`, `UnaryOp::Sigmoid`)
+2. **Forward implementation** in operation-specific functions
+3. **GradFn implementation** for backward pass
+4. **TensorOps wrapper** for user-facing API
+5. **GPU kernel** (in `src/gpu/kernels.rs`) for GPU acceleration
 
 **Neural Network Layers (`src/nn/layers/`):**
 
@@ -263,6 +330,27 @@ Recent refactor introduced `VoltaError` types using `thiserror` for comprehensiv
 ### GPU Support (`src/gpu/`)
 
 WGPU-based acceleration for core tensor operations:
+
+**GPU Architecture:**
+
+```rust
+// Global singleton GPU context (lazy initialization)
+static GPU_CONTEXT: OnceLock<Option<GpuContext>> = OnceLock::new();
+
+// GPU buffers are reference-counted for efficient sharing
+pub struct GpuBuffer {
+    buffer: wgpu::Buffer,
+    size: usize,
+}
+```
+
+**GPU Safety Systems:**
+
+- **Buffer Pooling**: 64-buffer pool to prevent allocation exhaustion
+- **Command Queue Throttling**: Prevents system hangs from queue buildup
+- **CPU Cache Invalidation**: Lazy caching with automatic invalidation
+- **Early Warning System**: Monitors GPU health and resource usage
+- **Staging Buffer Pool**: Efficient CPU↔GPU transfers
 
 **✅ GPU-accelerated operations:**
 
@@ -353,6 +441,19 @@ Run `cargo clippy --all-targets` (not just `cargo clippy --all`) to catch lintin
 
 The test suite (tests in `src/lib.rs`) validates:
 
+**Test Organization:**
+
+Tests are organized into modules by category:
+- **core**: Basic tensor operations, chain rule, shape manipulation
+- **grad_check**: Numerical gradient validation for all operations
+- **broadcasting**: NumPy-style broadcasting rules
+- **neural**: Neural network layer tests (Linear, Conv2d, MaxPool2d, etc.)
+- **optimizer**: Optimizer convergence tests (Adam, SGD)
+- **axis_reduce_tests**: Dimension reduction operations (sum_dim, max_dim, softmax)
+- **shape_tests**: Shape manipulation operations (reshape, permute, transpose)
+
+**Test Coverage:**
+
 - **Core operations**: Basic ops, chain rule, tensor shapes
 - **Gradient correctness**: All operations verified with numerical gradient checking
 - **Broadcasting**: NumPy-style broadcasting rules
@@ -372,6 +473,8 @@ The test suite (tests in `src/lib.rs`) validates:
 
 - Always run `cargo test` before committing changes
 - If tests fail, fix them before proceeding with commit
+- Use `check_gradients_simple()` for basic gradient validation
+- Use full `check_gradients()` for comprehensive validation
 
 ### Gradient Checks
 
@@ -384,6 +487,24 @@ When implementing gradients, follow these guidelines:
 ## Important Implementation Details
 
 ### Serialization (State Dicts)
+
+The framework supports multiple serialization formats for model weights:
+
+**Supported Formats:**
+- **bincode**: Binary format for Volta-native model saving/loading
+- **SafeTensors**: Industry-standard format for interoperability with PyTorch, HuggingFace, etc.
+
+**Key Types:**
+- `StateDict`: `BTreeMap<String, TensorData>` - Human-readable parameter names to tensor data
+- `TensorData`: Serializable struct containing `data: Vec<f32>` and `shape: Vec<usize>`
+- `StateDictDiff`: Debugging tool for comparing expected vs loaded state dicts
+
+**Key Functions:**
+- `save_state_dict()`: Save model weights to bincode format
+- `load_state_dict()`: Load model weights from bincode format
+- `load_safetensors()`: Load from SafeTensors format
+- `save_safetensors()`: Save to SafeTensors format
+- `load_safetensors_with_mapping()`: Load with automatic key/weight transformations
 
 #### Named Layer Support
 
@@ -545,13 +666,23 @@ To add a new iGEMM variant:
 
 ## Known Issues and Limitations
 
+**Current Limitations:**
+
 - **Single-threaded only**: Uses Rc<RefCell> instead of Arc<Mutex>
 - **No distributed training**
 - **No learning rate schedulers**
 - **No RNN/Transformer layers** (LSTMCell exists but no full RNN/Transformer)
-- **im2col memory inefficiency**: Addressed - direct convolution available for training with gradients
-- **GPU direct convolution gradients**: GPU backward pass still CPU-only (future work)
-- **Incomplete GPU support**: Some operations still CPU-only
+- **im2col memory inefficiency**: Addressed - direct convolution and iGEMM available as memory-efficient alternatives
+- **GPU direct convolution gradients**: GPU backward pass still CPU-only for some operations
+- **Incomplete GPU support**: Some operations still CPU-only (check `src/gpu/mod.rs` for current status)
+
+**Known Anti-Patterns (from REFACTOR_SUGGESTIONS.md):**
+
+1. **Excessive Clone Operations**: 424+ clone operations across 45 files due to Rc<RefCell> design
+2. **Gradient Function Boilerplate**: Each operation requires ~30 lines of repetitive GradFn code
+3. **Recursive Movement Ops**: Deep nesting in movement operations (pad, shrink, stride)
+
+**See `REFACTOR_SUGGESTIONS.md` for detailed analysis and ongoing refactoring work.**
 
 ## Code Conventions
 
@@ -565,19 +696,91 @@ When working with this codebase:
 6. **Error handling**: Return `VoltaError` results instead of panicking where possible
 7. **Defensive indexing**: Use `.get()`, iterators, or safe wrappers; avoid direct `[]` indexing
 
+### Adding New Operations
+
+To add a new tensor operation:
+
+1. **Implement the operation logic** in the appropriate file under `src/ops/`:
+   - `binary.rs` for element-wise binary operations (add, sub, mul, etc.)
+   - `unary.rs` for element-wise unary operations (sigmoid, relu, sqrt, etc.)
+   - `reduce.rs` for reduction operations (sum, mean, max)
+   - `movement.rs` for shape manipulation (reshape, permute, transpose)
+   - `matmul.rs` for matrix multiplication
+   - `ternary.rs` for three-operand operations
+
+2. **Add the enum variant** to the corresponding operation enum (e.g., `BinaryOp::NewOp`)
+
+3. **Implement forward pass** in the operation's helper function
+
+4. **Implement backward pass** by creating a GradFn struct that implements the `GradFn` trait
+
+5. **Add TensorOps wrapper** in `src/tensor.rs` that calls the appropriate helper function
+
+6. **Add gradient check test** in `src/lib.rs` to verify correctness
+
+7. **Update documentation** in CLAUDE.md if the operation is significant
+
+### Adding New Neural Network Layers
+
+To add a new neural network layer:
+
+1. **Create new file** in `src/nn/layers/` (e.g., `my_layer.rs`)
+
+2. **Implement the Module trait**:
+   ```rust
+   impl Module for MyLayer {
+       fn forward(&self, x: &Tensor) -> Tensor { /* ... */ }
+       fn parameters(&self) -> Vec<Tensor> { /* ... */ }
+       fn state_dict(&self) -> StateDict { /* ... */ }
+       fn load_state_dict(&mut self, state: &StateDict) { /* ... */ }
+   }
+   ```
+
+3. **Export the layer** in `src/nn/layers/mod.rs`
+
+4. **Add tests** in `src/lib.rs` for forward/backward passes
+
+5. **Add example** in `examples/` if the layer is complex
+
 ## Dependencies
 
-### Rust
+### Core Dependencies
 
 - `rand`, `rand_distr`: Random number generation
 - `approx`: Numerical approximations for gradient checking
 - `bincode`: Binary serialization for model weights
 - `matrixmultiply`: GEMM operations
-- `cblas-sys`: BLAS interface
-- `blas-src` (optional): macOS Accelerate framework
-- `wgpu` (optional): GPU compute via WebGPU
 - `half`, `bytemuck`: Dtype support (f16, bf16)
 - `safetensors`: SafeTensors format support for model loading
 - `thiserror`: Error handling
-- `serde_json`: for future config parsing
-- `criterion`: Benchmarking framework (dev dependency)
+
+### Optional Dependencies
+
+- `blas-src` (macOS only): BLAS interface for Accelerate framework
+- `wgpu`: GPU compute via WebGPU
+- `pollster`: Async executor for GPU operations
+
+### Development Dependencies
+
+- `criterion`: Benchmarking framework
+
+## Development Notes
+
+- **scrapboard.md**: Contains development notes, TODOs, and clippy linting progress
+- **REFACTOR_SUGGESTIONS.md**: Detailed analysis of completed and planned refactoring work
+- **responses/**: Directory containing LLM-assisted development recommendations
+- **sys-prompts/**: System prompts for external LLM assistance (maintainer use only)
+
+### Performance Notes
+
+- **Not optimized for speed**: Educational focus prioritizes correctness and clarity
+- **BLAS acceleration available**: macOS can use Accelerate framework for matmul
+- **Naive implementations**: Most operations use simple loops rather than SIMD
+- **GPU acceleration**: Available for core operations but not yet complete
+
+### Codebase Statistics
+
+- **Total files**: 50+ Rust source files
+- **Test coverage**: 381+ tests validating correctness and gradients
+- **Lines of code**: ~15,000+ lines (including tests and examples)
+- **Supported dtypes**: f16, bf16, f32, f64, i32, i64, u8, bool

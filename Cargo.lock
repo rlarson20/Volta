@@ -163,12 +163,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
-name = "cblas-sys"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7211d558677a4f41a6c0815295cff14d798209b631d8390586efc2f6b98b0f16"
-
-[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1278,7 +1272,6 @@ dependencies = [
  "bincode",
  "blas-src",
  "bytemuck",
- "cblas-sys",
  "criterion",
  "half",
  "matrixmultiply",
@@ -1286,7 +1279,6 @@ dependencies = [
  "rand",
  "rand_distr",
  "safetensors",
- "serde_json",
  "thiserror 2.0.18",
  "wgpu",
 ]
