@@ -190,9 +190,16 @@ pub struct ComputePipelines {
     // Direct convolution (memory efficient)
     pub direct_conv: wgpu::ComputePipeline,
 
+    // Implicit GEMM convolution (balanced performance/memory)
+    pub igemm: wgpu::ComputePipeline,
+
     // Convolution backward operations
     pub conv_backward_input: wgpu::ComputePipeline,
     pub conv_backward_weight: wgpu::ComputePipeline,
+
+    // iGEMM backward operations
+    pub igemm_backward_input: wgpu::ComputePipeline,
+    pub igemm_backward_weight: wgpu::ComputePipeline,
 }
 
 impl GpuContext {
@@ -593,6 +600,27 @@ impl GpuContext {
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/direct_conv.wgsl").into()),
         });
 
+        let igemm_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("iGEMM Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/igemm.wgsl").into()),
+        });
+
+        let igemm_backward_input_shader =
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("iGEMM Backward Input Shader"),
+                source: wgpu::ShaderSource::Wgsl(
+                    include_str!("shaders/igemm_backward_input.wgsl").into(),
+                ),
+            });
+
+        let igemm_backward_weight_shader =
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("iGEMM Backward Weight Shader"),
+                source: wgpu::ShaderSource::Wgsl(
+                    include_str!("shaders/igemm_backward_weight.wgsl").into(),
+                ),
+            });
+
         let conv_backward_input_shader =
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("Conv Backward Input Shader"),
@@ -918,6 +946,9 @@ impl GpuContext {
                 "Direct Conv Pipeline",
             ),
 
+            // Implicit GEMM convolution
+            igemm: create_pipeline(&igemm_shader, "igemm_main", "iGEMM Pipeline"),
+
             // Convolution backward
             conv_backward_input: create_pipeline(
                 &conv_backward_input_shader,
@@ -928,6 +959,18 @@ impl GpuContext {
                 &conv_backward_weight_shader,
                 "conv_backward_weight_main",
                 "Conv Backward Weight Pipeline",
+            ),
+
+            // iGEMM backward
+            igemm_backward_input: create_pipeline(
+                &igemm_backward_input_shader,
+                "igemm_backward_input_main",
+                "iGEMM Backward Input Pipeline",
+            ),
+            igemm_backward_weight: create_pipeline(
+                &igemm_backward_weight_shader,
+                "igemm_backward_weight_main",
+                "iGEMM Backward Weight Pipeline",
             ),
         }
     }

@@ -37,25 +37,29 @@ impl ConvAlgo {
         // Thresholds (tunable)
         const MAX_IM2COL_ELEMENTS: usize = 5_000_000; // ~20 MB for f32
 
-        // For GPU, prefer im2col (it's GPU-accelerated)
-        if has_gpu {
-            return Self::Im2col;
-        }
-
         // Memory heuristic: im2col creates (B*H_out*W_out, C*K*K) matrix
         // Estimate memory and decide
         let h_out = (height - kernel_size) + 1; // Assuming stride=1, pad=0 for heuristic
         let w_out = (width - kernel_size) + 1;
         let im2col_elements = batch * h_out * w_out * channels * kernel_size * kernel_size;
 
-        if im2col_elements > MAX_IM2COL_ELEMENTS {
-            // Large input - use direct to save memory
+        if has_gpu {
+            // On GPU: iGEMM is now GPU-accelerated, providing best balance
+            if im2col_elements > 1_000_000 {
+                // Medium-to-large inputs - iGEMM avoids im2col memory overhead
+                Self::IGEMM
+            } else {
+                // Small inputs - im2col is fast enough with low memory
+                Self::Im2col
+            }
+        } else if im2col_elements > MAX_IM2COL_ELEMENTS {
+            // Large input on CPU - use direct to save memory
             Self::Direct
         } else if kernel_size <= 3 && batch <= 4 {
-            // Small kernel and batch - direct is fast enough and memory efficient
+            // Small kernel and batch on CPU - direct is fast enough and memory efficient
             Self::Direct
         } else if im2col_elements > 1_000_000 {
-            // Medium-to-large inputs - iGEMM provides good balance
+            // Medium-to-large inputs on CPU - iGEMM provides good balance
             // Avoids im2col memory overhead while being faster than direct
             Self::IGEMM
         } else {
@@ -595,26 +599,18 @@ impl GradFn for IGEMMGradFn {
         let h_out = (padded_h - kernel_h) / stride_h + 1;
         let w_out = (padded_w - kernel_w) / stride_w + 1;
 
-        // Get gradient data
-        let out_grad_data = out_grad.data.to_vec();
-
-        // Get weight data (needed for input gradient)
-        let weight_data = weight.as_ref().map(|w| w.borrow().data.to_vec());
+        // Check if we're on GPU
+        let is_gpu = matches!(out_grad.device, Device::GPU(_));
 
         // Compute input gradient
         let grad_x = if let Some(ref x_tensor) = x
             && x_tensor.borrow().requires_grad
         {
-            let mut grad_x_data = vec![0.0f32; batch * in_ch * height * width];
-
-            if let Some(ref wd) = weight_data {
-                // Input gradient: full convolution of output grad with flipped weights
-                // Use same tiling as forward pass
-                let config = TileConfig::default();
-                Self::igemm_backward_input(
-                    &out_grad_data,
-                    wd,
-                    &mut grad_x_data,
+            #[cfg(feature = "gpu")]
+            let result = if is_gpu {
+                RawTensor::gpu_igemm_backward_input(
+                    &out_grad.data,
+                    &weight.as_ref().unwrap().borrow().data,
                     batch,
                     in_ch,
                     out_ch,
@@ -628,11 +624,57 @@ impl GradFn for IGEMMGradFn {
                     pad_w,
                     h_out,
                     w_out,
-                    &config,
-                );
-            }
+                )
+                .map(|storage| {
+                    RawTensor::new_with_storage(
+                        storage,
+                        &self.input_shape,
+                        out_grad.device.clone(),
+                        false,
+                    )
+                })
+            } else {
+                None
+            };
 
-            Some(RawTensor::new(grad_x_data, &self.input_shape, false))
+            #[cfg(not(feature = "gpu"))]
+            let result = None;
+
+            if let Some(r) = result {
+                Some(r)
+            } else {
+                // CPU fallback
+                let mut grad_x_data = vec![0.0f32; batch * in_ch * height * width];
+                let out_grad_data = out_grad.data.to_vec();
+                let weight_data = weight.as_ref().map(|w| w.borrow().data.to_vec());
+
+                if let Some(ref wd) = weight_data {
+                    // Input gradient: full convolution of output grad with flipped weights
+                    // Use same tiling as forward pass
+                    let config = TileConfig::default();
+                    Self::igemm_backward_input(
+                        &out_grad_data,
+                        wd,
+                        &mut grad_x_data,
+                        batch,
+                        in_ch,
+                        out_ch,
+                        height,
+                        width,
+                        kernel_h,
+                        kernel_w,
+                        stride_h,
+                        stride_w,
+                        pad_h,
+                        pad_w,
+                        h_out,
+                        w_out,
+                        &config,
+                    );
+                }
+
+                Some(RawTensor::new(grad_x_data, &self.input_shape, false))
+            }
         } else {
             None
         };
@@ -641,16 +683,11 @@ impl GradFn for IGEMMGradFn {
         let grad_w = if let Some(ref w_tensor) = weight
             && w_tensor.borrow().requires_grad
         {
-            let mut grad_w_data = vec![0.0f32; out_ch * in_ch * kernel_h * kernel_w];
-            let x_data = x.as_ref().map(|x| x.borrow().data.to_vec());
-
-            if let Some(ref xd) = x_data {
-                // Weight gradient: sum over outer products
-                let config = TileConfig::default();
-                Self::igemm_backward_weight(
-                    xd,
-                    &out_grad_data,
-                    &mut grad_w_data,
+            #[cfg(feature = "gpu")]
+            let result = if is_gpu {
+                RawTensor::gpu_igemm_backward_weight(
+                    &out_grad.data,
+                    &x.as_ref().unwrap().borrow().data,
                     batch,
                     in_ch,
                     out_ch,
@@ -664,11 +701,56 @@ impl GradFn for IGEMMGradFn {
                     pad_w,
                     h_out,
                     w_out,
-                    &config,
-                );
-            }
+                )
+                .map(|storage| {
+                    RawTensor::new_with_storage(
+                        storage,
+                        &self.weight_shape,
+                        out_grad.device.clone(),
+                        false,
+                    )
+                })
+            } else {
+                None
+            };
 
-            Some(RawTensor::new(grad_w_data, &self.weight_shape, false))
+            #[cfg(not(feature = "gpu"))]
+            let result = None;
+
+            if let Some(r) = result {
+                Some(r)
+            } else {
+                // CPU fallback
+                let mut grad_w_data = vec![0.0f32; out_ch * in_ch * kernel_h * kernel_w];
+                let out_grad_data = out_grad.data.to_vec();
+                let x_data = x.as_ref().map(|x| x.borrow().data.to_vec());
+
+                if let Some(ref xd) = x_data {
+                    // Weight gradient: sum over outer products
+                    let config = TileConfig::default();
+                    Self::igemm_backward_weight(
+                        xd,
+                        &out_grad_data,
+                        &mut grad_w_data,
+                        batch,
+                        in_ch,
+                        out_ch,
+                        height,
+                        width,
+                        kernel_h,
+                        kernel_w,
+                        stride_h,
+                        stride_w,
+                        pad_h,
+                        pad_w,
+                        h_out,
+                        w_out,
+                        &config,
+                    );
+                }
+
+                Some(RawTensor::new(grad_w_data, &self.weight_shape, false))
+            }
         } else {
             None
         };
@@ -1405,7 +1487,7 @@ impl Conv2d {
         stride_w: usize,
         variant: IGEMMVariant,
     ) -> Tensor {
-        let (x_data, x_shape, _x_device, x_requires_grad) = {
+        let (x_data, x_shape, x_device, x_requires_grad) = {
             let x_borrow = x.borrow();
             (
                 x_borrow.data.clone(),
@@ -1442,55 +1524,97 @@ impl Conv2d {
         let h_out = (padded_h - kernel_h) / stride_h + 1;
         let w_out = (padded_w - kernel_w) / stride_w + 1;
 
-        let x_data_cpu = x_data.to_vec();
-        let w_data_cpu = w_data.to_vec();
-
-        // Output tensor
-        let output_size = batch * out_ch * h_out * w_out;
-        let mut output = vec![0.0f32; output_size];
-
-        // Select variant implementation
-        match variant {
-            IGEMMVariant::Tiled => {
-                let config = TileConfig::default();
-                Self::igemm_tiled(
-                    &x_data_cpu,
-                    &w_data_cpu,
-                    &mut output,
-                    batch,
-                    in_ch,
-                    out_ch,
-                    height,
-                    width,
-                    kernel_h,
-                    kernel_w,
-                    stride_h,
-                    stride_w,
-                    pad_h,
-                    pad_w,
-                    h_out,
-                    w_out,
-                    &config,
-                );
+        // Try GPU path first
+        #[cfg(feature = "gpu")]
+        let gpu_result = {
+            let is_gpu = matches!(x_device, Device::GPU(_));
+            if is_gpu {
+                RawTensor::gpu_igemm(
+                    &x_data, &w_data, batch, in_ch, out_ch, height, width, kernel_h, kernel_w,
+                    stride_h, stride_w, pad_h, pad_w, h_out, w_out,
+                )
+            } else {
+                None
             }
+        };
+
+        #[cfg(not(feature = "gpu"))]
+        let gpu_result = None;
+
+        if let Some(storage) = gpu_result {
+            // Create GPU tensor with grad function
+            let result = RawTensor::new_with_storage(
+                storage,
+                &[batch, out_ch, h_out, w_out],
+                x_device.clone(),
+                x_requires_grad,
+            );
+
+            // Attach gradient function if input requires gradients
+            if x_requires_grad {
+                result.borrow_mut().parents = vec![x.clone(), weight.clone()];
+                result.borrow_mut().grad_fn = Some(Box::new(IGEMMGradFn {
+                    input_shape: x_shape,
+                    weight_shape: w_shape,
+                    padding: (pad_h, pad_w),
+                    stride: (stride_h, stride_w),
+                    _variant: variant,
+                }));
+            }
+
+            result
+        } else {
+            // Fall back to CPU path
+            let x_data_cpu = x_data.to_vec();
+            let w_data_cpu = w_data.to_vec();
+
+            // Output tensor
+            let output_size = batch * out_ch * h_out * w_out;
+            let mut output = vec![0.0f32; output_size];
+
+            // Select variant implementation
+            match variant {
+                IGEMMVariant::Tiled => {
+                    let config = TileConfig::default();
+                    Self::igemm_tiled(
+                        &x_data_cpu,
+                        &w_data_cpu,
+                        &mut output,
+                        batch,
+                        in_ch,
+                        out_ch,
+                        height,
+                        width,
+                        kernel_h,
+                        kernel_w,
+                        stride_h,
+                        stride_w,
+                        pad_h,
+                        pad_w,
+                        h_out,
+                        w_out,
+                        &config,
+                    );
+                }
+            }
+
+            // Create output tensor
+            let result = RawTensor::new(output, &[batch, out_ch, h_out, w_out], x_requires_grad);
+
+            // Attach gradient function if input requires gradients
+            if x_requires_grad {
+                result.borrow_mut().parents = vec![x.clone(), weight.clone()];
+                result.borrow_mut().grad_fn = Some(Box::new(IGEMMGradFn {
+                    input_shape: x_shape,
+                    weight_shape: w_shape,
+                    padding: (pad_h, pad_w),
+                    stride: (stride_h, stride_w),
+                    _variant: variant,
+                }));
+            }
+
+            result
         }
-
-        // Create output tensor
-        let result = RawTensor::new(output, &[batch, out_ch, h_out, w_out], x_requires_grad);
-
-        // Attach gradient function if input requires gradients
-        if x_requires_grad {
-            result.borrow_mut().parents = vec![x.clone(), weight.clone()];
-            result.borrow_mut().grad_fn = Some(Box::new(IGEMMGradFn {
-                input_shape: x_shape,
-                weight_shape: w_shape,
-                padding: (pad_h, pad_w),
-                stride: (stride_h, stride_w),
-                _variant: variant,
-            }));
-        }
-
-        result
     }
 
     /// Tiled iGEMM implementation

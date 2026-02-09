@@ -121,11 +121,78 @@ pub struct ConvBackwardInputParams {
     pub _padding: u32,
 }
 
+/// Parameters for iGEMM convolution operation
+/// Must match the `IGEMMParams` struct in `igemm.wgsl`
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct IGEMMParams {
+    pub batch_size: u32,
+    pub in_channels: u32,
+    pub out_channels: u32,
+    pub height: u32,
+    pub width: u32,
+    pub kernel_h: u32,
+    pub kernel_w: u32,
+    pub stride_h: u32,
+    pub stride_w: u32,
+    pub pad_h: u32,
+    pub pad_w: u32,
+    pub h_out: u32,
+    pub w_out: u32,
+    // Tile configuration
+    pub oc_tile: u32, // Output channels per tile
+    pub ic_tile: u32, // Input channels per tile
+    pub s_tile: u32,  // Spatial positions per tile
+    pub _padding: u32,
+}
+
 /// Parameters for convolution backward weight operation
 /// Must match the `ConvBackwardWeightParams` struct in `conv_backward_weight.wgsl`
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ConvBackwardWeightParams {
+    pub batch_size: u32,
+    pub in_channels: u32,
+    pub out_channels: u32,
+    pub height: u32,
+    pub width: u32,
+    pub kernel_h: u32,
+    pub kernel_w: u32,
+    pub stride_h: u32,
+    pub stride_w: u32,
+    pub pad_h: u32,
+    pub pad_w: u32,
+    pub h_out: u32,
+    pub w_out: u32,
+    pub _padding: u32,
+}
+
+/// Parameters for iGEMM convolution backward input operation
+/// Must match the `IGEMMBackwardInputParams` struct in `igemm_backward_input.wgsl`
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct IGEMMBackwardInputParams {
+    pub batch_size: u32,
+    pub in_channels: u32,
+    pub out_channels: u32,
+    pub height: u32,
+    pub width: u32,
+    pub kernel_h: u32,
+    pub kernel_w: u32,
+    pub stride_h: u32,
+    pub stride_w: u32,
+    pub pad_h: u32,
+    pub pad_w: u32,
+    pub h_out: u32,
+    pub w_out: u32,
+    pub _padding: u32,
+}
+
+/// Parameters for iGEMM convolution backward weight operation
+/// Must match the `IGEMMBackwardWeightParams` struct in `igemm_backward_weight.wgsl`
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct IGEMMBackwardWeightParams {
     pub batch_size: u32,
     pub in_channels: u32,
     pub out_channels: u32,
@@ -2214,6 +2281,125 @@ impl GpuKernels {
         Some(result)
     }
 
+    /// Implicit GEMM (iGEMM) convolution with tiled computation
+    /// Balances memory usage and performance by avoiding im2col materialization
+    /// while using tiling for better cache efficiency
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn igemm(
+        input: &GpuBuffer,
+        weight: &GpuBuffer,
+        batch_size: usize,
+        in_channels: usize,
+        out_channels: usize,
+        height: usize,
+        width: usize,
+        kernel_h: usize,
+        kernel_w: usize,
+        stride_h: usize,
+        stride_w: usize,
+        pad_h: usize,
+        pad_w: usize,
+        h_out: usize,
+        w_out: usize,
+    ) -> Option<GpuBuffer> {
+        let ctx = get_gpu_context()?;
+
+        // Output size: [B, out_channels, h_out, w_out]
+        let output_size = batch_size * out_channels * h_out * w_out;
+        let result = GpuBuffer::zeros(output_size)?;
+
+        // Tile configuration (can be tuned based on GPU architecture)
+        let oc_tile: u32 = 16; // Output channels per tile
+        let ic_tile: u32 = 16; // Input channels per tile
+        let s_tile: u32 = 16; // Spatial positions per tile
+
+        // Create uniform buffer with iGEMM parameters
+        let params = IGEMMParams {
+            batch_size: batch_size as u32,
+            in_channels: in_channels as u32,
+            out_channels: out_channels as u32,
+            height: height as u32,
+            width: width as u32,
+            kernel_h: kernel_h as u32,
+            kernel_w: kernel_w as u32,
+            stride_h: stride_h as u32,
+            stride_w: stride_w as u32,
+            pad_h: pad_h as u32,
+            pad_w: pad_w as u32,
+            h_out: h_out as u32,
+            w_out: w_out as u32,
+            oc_tile,
+            ic_tile,
+            s_tile,
+            _padding: 0,
+        };
+
+        let params_buffer = ctx
+            .device()
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("iGEMM Params"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+
+        let pipeline = &ctx.pipelines().igemm;
+        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("iGEMM Bind Group"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: input.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: weight.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: result.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("iGEMM Encoder"),
+            });
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("iGEMM Pass"),
+                timestamp_writes: None,
+            });
+
+            compute_pass.set_pipeline(pipeline);
+            compute_pass.set_bind_group(0, &bind_group, &[]);
+
+            // Calculate number of tiles
+            let num_oc_tiles = (out_channels as u32).div_ceil(oc_tile);
+            let total_spatial = (batch_size * h_out * w_out) as u32;
+            let num_spatial_tiles = total_spatial.div_ceil(s_tile);
+            let num_tiles = num_oc_tiles * num_spatial_tiles;
+
+            // Workgroup dimensions: (oc_tile, s_tile, num_tiles)
+            // Each workgroup processes one tile
+            compute_pass.dispatch_workgroups(oc_tile, s_tile, num_tiles);
+        }
+
+        ctx.queue().submit(Some(encoder.finish()));
+        ctx.increment_pending();
+        ctx.maybe_sync();
+
+        Some(result)
+    }
+
     /// GPU-accelerated convolution backward: gradient with respect to input
     /// Computes: ∂L/∂X[b,ic,ih,iw] = Σ ∂L/∂Y[b,oc,oh,ow] * W[oc,ic,kh,kw]
     #[must_use]
@@ -2403,6 +2589,212 @@ impl GpuKernels {
         {
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Conv Backward Weight Pass"),
+                timestamp_writes: None,
+            });
+
+            compute_pass.set_pipeline(pipeline);
+            compute_pass.set_bind_group(0, &bind_group, &[]);
+
+            // Workgroup: (out_channels, in_channels * kernel_h * kernel_w, 1)
+            let workgroups_x = (out_channels as u32).div_ceil(16);
+            let workgroups_y = ((in_channels * kernel_h * kernel_w) as u32).div_ceil(16);
+            compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+        }
+
+        ctx.queue().submit(Some(encoder.finish()));
+        ctx.increment_pending();
+        ctx.maybe_sync();
+
+        Some(result)
+    }
+
+    /// iGEMM convolution backward: gradient with respect to input
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn igemm_backward_input(
+        out_grad: &GpuBuffer,
+        weight: &GpuBuffer,
+        batch_size: usize,
+        in_channels: usize,
+        out_channels: usize,
+        height: usize,
+        width: usize,
+        kernel_h: usize,
+        kernel_w: usize,
+        stride_h: usize,
+        stride_w: usize,
+        pad_h: usize,
+        pad_w: usize,
+        h_out: usize,
+        w_out: usize,
+    ) -> Option<GpuBuffer> {
+        let ctx = get_gpu_context()?;
+
+        // Output size: [B, in_channels, height, width]
+        let output_size = batch_size * in_channels * height * width;
+        let result = GpuBuffer::zeros(output_size)?;
+
+        let params = IGEMMBackwardInputParams {
+            batch_size: batch_size as u32,
+            in_channels: in_channels as u32,
+            out_channels: out_channels as u32,
+            height: height as u32,
+            width: width as u32,
+            kernel_h: kernel_h as u32,
+            kernel_w: kernel_w as u32,
+            stride_h: stride_h as u32,
+            stride_w: stride_w as u32,
+            pad_h: pad_h as u32,
+            pad_w: pad_w as u32,
+            h_out: h_out as u32,
+            w_out: w_out as u32,
+            _padding: 0,
+        };
+
+        let params_buffer = ctx
+            .device()
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("iGEMM Backward Input Params"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+
+        let pipeline = &ctx.pipelines().igemm_backward_input;
+        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("iGEMM Backward Input Bind Group"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: out_grad.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: weight.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: result.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("iGEMM Backward Input Encoder"),
+            });
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("iGEMM Backward Input Pass"),
+                timestamp_writes: None,
+            });
+
+            compute_pass.set_pipeline(pipeline);
+            compute_pass.set_bind_group(0, &bind_group, &[]);
+
+            // Workgroup: (in_channels, batch * height * width, 1)
+            let workgroups_x = (in_channels as u32).div_ceil(16);
+            let workgroups_y = ((batch_size * height * width) as u32).div_ceil(16);
+            compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+        }
+
+        ctx.queue().submit(Some(encoder.finish()));
+        ctx.increment_pending();
+        ctx.maybe_sync();
+
+        Some(result)
+    }
+
+    /// iGEMM convolution backward: gradient with respect to weights
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn igemm_backward_weight(
+        out_grad: &GpuBuffer,
+        input: &GpuBuffer,
+        batch_size: usize,
+        in_channels: usize,
+        out_channels: usize,
+        height: usize,
+        width: usize,
+        kernel_h: usize,
+        kernel_w: usize,
+        stride_h: usize,
+        stride_w: usize,
+        pad_h: usize,
+        pad_w: usize,
+        h_out: usize,
+        w_out: usize,
+    ) -> Option<GpuBuffer> {
+        let ctx = get_gpu_context()?;
+
+        // Output size: [out_channels, in_channels, kernel_h, kernel_w]
+        let output_size = out_channels * in_channels * kernel_h * kernel_w;
+        let result = GpuBuffer::zeros(output_size)?;
+
+        let params = IGEMMBackwardWeightParams {
+            batch_size: batch_size as u32,
+            in_channels: in_channels as u32,
+            out_channels: out_channels as u32,
+            height: height as u32,
+            width: width as u32,
+            kernel_h: kernel_h as u32,
+            kernel_w: kernel_w as u32,
+            stride_h: stride_h as u32,
+            stride_w: stride_w as u32,
+            pad_h: pad_h as u32,
+            pad_w: pad_w as u32,
+            h_out: h_out as u32,
+            w_out: w_out as u32,
+            _padding: 0,
+        };
+
+        let params_buffer = ctx
+            .device()
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("iGEMM Backward Weight Params"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+
+        let pipeline = &ctx.pipelines().igemm_backward_weight;
+        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("iGEMM Backward Weight Bind Group"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: out_grad.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: input.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: result.buffer().as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("iGEMM Backward Weight Encoder"),
+            });
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("iGEMM Backward Weight Pass"),
                 timestamp_writes: None,
             });
 
