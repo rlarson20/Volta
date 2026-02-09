@@ -29,18 +29,18 @@ The im2col implementation materializes full matrices in memory, creating severe 
 
 **Status Update (as of 2026-02-09):**
 
-✅ **Mitigated** - Memory-efficient alternatives now exist:
+✅ **Mitigated for Training** - Memory-efficient alternatives available:
 
-- **Direct convolution** implemented (GPU-accelerated, lines 1247-1750)
-- **iGEMM (Implicit GEMM)** implemented (tiled, no full materialization)
+- **Direct convolution** (GPU-accelerated, lines 1247-1750)
+- **iGEMM (Implicit GEMM)** (tiled, no full materialization)
 - **Auto-selection** chooses Direct for small inputs, iGEMM for medium/large
 - All three algorithms support full forward + backward passes on GPU
 
-❌ **Not Fixed** - The underlying im2col memory issue remains:
+❌ **Not Fixed** - The im2col algorithm specifically (if chosen):
 
-- im2col+GEMM still materializes full matrices (only GPU-accelerated)
+- im2col+GEMM still materializes full matrices (now GPU-accelerated)
 - No streaming/chunked processing
-- Users must manually avoid im2col for large inputs
+- Users should use Direct or iGEMM for large inputs (auto-selection handles this)
 
 **Issues:**
 

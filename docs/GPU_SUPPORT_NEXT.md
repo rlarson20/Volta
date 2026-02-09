@@ -382,9 +382,12 @@ for (x, y) in dataloader {
 - ✅ **Binary backward with race-free broadcasting** (two-pass reduction)
 - ✅ **Movement backward fully GPU-accelerated** (all 5 operations)
 
-**Current State** (as of commit da14c30):
+**Current State** (as of February 9, 2026):
 - **All core operations**: 100% GPU forward + backward ✅
-- **Conv2d layers**: GPU-accelerated forward (backward uses optimized CPU im2col)
+- **Conv2d layers**: Fully GPU-accelerated forward + backward ✅
+  - Direct convolution: GPU forward + backward (input + weight gradients)
+  - im2col + GEMM: GPU forward + backward (via GPU col2im)
+  - iGEMM: GPU forward + backward (tiled computation)
 - **Linear layers**: Fully GPU-accelerated (forward ✅, backward ✅)
 - **Movement operations**: Fully GPU-accelerated (forward ✅, backward ✅)
 - **Binary operations**: Race-free broadcasting with two-pass reduction ✅

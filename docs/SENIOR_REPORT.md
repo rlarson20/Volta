@@ -12,7 +12,11 @@ Volta is a robust, educational-to-intermediate grade deep learning framework. It
 
 **Critical Bottleneck:** The architecture is fundamentally single-threaded (`Rc<RefCell>`). While this simplifies the DAG implementation, it makes multi-threaded data loading and parallel model execution (e.g., distributed training) impossible without a major refactor to `Arc<RwLock>` or an unsafe internal mutability pattern.
 
-**Performance Risk:** The implementation of core neural network primitives (specifically `Conv2d`) relies on explicitly materialized `im2col`, which will cause Out-Of-Memory (OOM) errors on any modern sized vision model.
+**Memory Risk (MITIGATED):** The original `im2col` implementation materialized full matrices in memory, which could cause OOM errors. As of February 2026, this is mitigated by:
+- **Direct convolution**: Memory-efficient algorithm with GPU acceleration
+- **iGEMM**: Tiled computation without full matrix materialization
+- **Auto-selection**: Chooses memory-efficient algorithms based on input size
+- Users can train modern vision models by using Direct or iGEMM algorithms instead of im2col
 
 ---
 
@@ -56,23 +60,39 @@ Recursively apply `to_device` to the `grad` optional storage inside `RawTensor::
 
 ## 2. ML Engineering
 
-### [CRITICAL] Category: Convolution Memory Footprint
+### [RESOLVED] Category: Convolution Memory Footprint
 
-**Location:** `src/nn/layers/conv.rs:117` (`im2col`)
+**Location:** `src/nn/layers/conv.rs` (Lines 119-298, 1247-1750)
 
-**Problem:**
-`Conv2d` is implemented via explicit `im2col` (image-to-column) followed by GEMM.
-The `im2col` function allocates a new tensor of shape `[Batch, C * K * K, H_out * W_out]`.
+**Original Problem:**
+`Conv2d` was implemented via explicit `im2col` (image-to-column) followed by GEMM.
+The `im2col` function allocated a new tensor of shape `[Batch, C * K * K, H_out * W_out]`.
 
-- For a standard ResNet layer (B=32, C=64, H=128, W=128, K=3), this intermediate buffer is ~2.5GB of float32 data.
-- This materialization happens for _every_ conv layer forward pass.
+**Resolution (February 2026):**
 
-**Impact:** Severe memory bloating. Will crash (OOM) on reasonably sized images/batches.
+✅ **Fully Addressed** - Multiple memory-efficient alternatives now available:
 
-**Recommendation:**
+1. **Direct Convolution** (lines 1247-1750):
+   - Memory-efficient algorithm with no intermediate allocations
+   - GPU-accelerated forward and backward passes
+   - Auto-selected for small inputs and small kernels
 
-1.  **Short Term:** Implement a "fused" Conv kernel in WGSL (`src/gpu/shaders/conv.wgsl`) that performs direct convolution without unrolling indices to memory.
-2.  **Medium Term:** Implement tiling or implicit GEMM where the indices are computed on the fly during matrix multiplication read.
+2. **iGEMM (Implicit GEMM)**:
+   - Tiled computation without materializing the full im2col matrix
+   - GPU-accelerated forward and backward passes
+   - Auto-selected for medium-to-large inputs
+
+3. **Auto-Selection Logic**:
+   - CPU: Direct for small inputs, iGEMM for medium/large
+   - GPU: All three algorithms available, iGEMM preferred for >1M elements
+   - Prevents OOM by avoiding im2col materialization on large inputs
+
+**What Remains:**
+- The original `im2col` algorithm is still available for backward compatibility
+- Users who explicitly select `ConvAlgo::Im2col` can still encounter OOM on large inputs
+- Default `ConvAlgo::Auto` avoids this issue
+
+**Impact:** Memory risk is now **opt-in only**. Users training modern vision models should use Direct or iGEMM (the default behavior).
 
 ### [HIGH] Category: Weight Initialization Performance
 

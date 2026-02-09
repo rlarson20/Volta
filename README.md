@@ -39,18 +39,20 @@ This library is functional for training MLPs, CNNs, RNNs, GANs, VAEs, and other 
   - **Named Layers:** Robust serialization with human-readable state dict keys
   - **Loss Functions:** MSE, Cross-Entropy, NLL, BCE, KL Divergence
   - **Examples:** MNIST, CIFAR, character LM, VAE, DCGAN, super-resolution, LSTM time series
-  - **GPU Training Pipeline:** GPU-accelerated forward pass for Conv2d with device-aware layers and GPU optimizer state storage
+  - **GPU Training Pipeline:** Fully GPU-accelerated training for Conv2d layers with device-aware constructors and GPU optimizer state storage
   - **Benchmarking Suite:** Comprehensive Criterion benchmarks with 3 categories (tensor_ops, neural_networks, gpu_comparison) and HTML reports
   - **Enhanced GPU Safety:** GPU buffer pooling, command queue throttling, CPU cache invalidation, and early warning system
   - **Code Quality:** All `indexing_slicing` clippy errors resolved; ~400+ pedantic lints reduced to ~223 remaining
+  - **GPU Convolution:** Fully GPU-accelerated Conv2d with Direct, im2col, and iGEMM algorithms
+    - All algorithms support both forward and backward passes on GPU
+    - Auto-selection chooses optimal algorithm based on input size and device
+    - Memory-efficient alternatives (Direct, iGEMM) prevent OOM on large inputs
 
 - ⚠️ **What's in Progress:**
   - **Performance:** Comprehensive benchmarking suite for performance tracking with `just bench` commands
   - **GPU Support:** Experimental WGPU-based acceleration via `gpu` feature:
     - ✅ Core ops on GPU: elementwise (unary/binary), matmul, reductions (sum/max/mean), movement ops (permute/expand/pad/shrink/stride)
     - ✅ GPU backward pass for autograd with lazy CPU↔GPU transfers
-    - ✅ GPU-accelerated forward pass implemented for Conv2d
-    - ⚠️ Neural network layer backward passes still being ported to GPU
     - ⚠️ Broadcasting preprocessing happens on CPU before GPU dispatch
 
 - ❌ **What's Missing:**

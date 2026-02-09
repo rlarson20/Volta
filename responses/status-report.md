@@ -101,25 +101,27 @@
 - **What’s missing**
   - Most ops/kernels still operate on f32 (often via `Storage::to_f32_vec()`), so “mixed precision compute” is not yet real beyond storage/serialization.
 
-### GPU Conv2d “end-to-end” training — **~70%**
+### GPU Conv2d "end-to-end" training — **100% COMPLETE ✅**
 
 - **What works now**
-  - `Conv2d` forward can use GPU `im2col` when input is on GPU (`Conv2d::im2col` calls `RawTensor::gpu_im2col`).
-  - Extensive CPU/GPU forward consistency tests exist and pass (`conv2d_gpu_tests::*`).
-- **Limitations**
-  - `Im2colGradFn::backward` uses `Conv2d::col2im` on CPU from `out_grad.data` (which, for GPU tensors, implies GPU→CPU readback). Correctness is covered; performance is not GPU-native for backward.
+  - `Conv2d` forward uses GPU acceleration for all three algorithms (Direct, im2col, iGEMM)
+  - `Conv2d` backward uses GPU acceleration for all three algorithms
+    - Direct convolution: GPU input and weight gradient computation
+    - im2col + GEMM: GPU col2im for input gradients
+    - iGEMM: GPU tiled gradient computation for input and weight gradients
+  - Auto-selection prefers iGEMM on GPU for inputs >1M elements
+- **No GPU→CPU transfer** during training loop for Conv2d layers
 
 ---
 
-## 4. Not Implemented (Expected for a “PyTorch-like” framework)
+## 4. Not Implemented (Expected for a "PyTorch-like" framework)
 
 Prioritized by impact/unblocking:
 
 1. **GPU forward broadcasting for elementwise ops** (enables typical DL patterns to remain on GPU).
-2. **GPU-native Conv2d backward (col2im) and broader CNN layer GPU coverage** (performance-critical for CNN training).
-3. **Compute kernels for non-f32 dtypes** (true mixed-precision / integer ops; today it’s mostly storage conversion).
-4. **Config-driven model building** is present only as a stub (`src/io/config.rs`) and not integrated.
-5. **Thread-safe / parallel execution** (currently `Rc<RefCell<_>>` and single-threaded by design).
+2. **Compute kernels for non-f32 dtypes** (true mixed-precision / integer ops; today it's mostly storage conversion).
+3. **Config-driven model building** is present only as a stub (`src/io/config.rs`) and not integrated.
+4. **Thread-safe / parallel execution** (currently `Rc<RefCell<_>>` and single-threaded by design).
 
 ---
 
@@ -257,18 +259,12 @@ fn main() {
      - Extend `Module` to support non-tensor inputs (larger API change).
    - Acceptance: a `Sequential` model with embedding → linear can run and backprop without panic.
 
-3. **GPU-native Conv2d backward (col2im on GPU)**
-   - Effort: **1–2 weeks**
-   - Impact: **High** for CNN training performance
-   - Acceptance:
-     - Backward through Conv2d does not require GPU→CPU roundtrips for gradients (verify via profiling hooks / cache invalidation behavior and benchmarks).
-
-4. **Clarify README “Available Examples” vs `Cargo.toml`**
+3. **Clarify README "Available Examples" vs `Cargo.toml`**
    - Effort: **0.5 day**
    - Impact: **Medium** (reduces contributor/user confusion)
    - Acceptance: README example list matches actual `[[example]]` entries and files.
 
-5. **Resolve `src/io/config.rs` (either implement or remove)**
+4. **Resolve `src/io/config.rs` (either implement or remove)**
    - Effort: **0.5 day to remove** or **2–4 days to implement**
    - Impact: **Medium** (avoid dead stubs / enable config-driven builds)
    - Acceptance: no dead stubs; if implemented, add parsing + model build tests.
@@ -280,13 +276,13 @@ fn main() {
 - **Milestone A (1 week): GPU usability**
   - GPU forward broadcasting for elementwise ops
   - README example list alignment
-- **Milestone B (1–2 weeks): CNN training acceleration**
-  - GPU-native Conv2d backward (col2im)
-  - Benchmarks demonstrating reduced CPU readbacks
-- **Milestone C (2–4 weeks): dtype compute**
+- **Milestone B (2–4 weeks): dtype compute**
   - Decide dtype scope (f16/bf16 first), implement kernels and promotion rules in ops
+- **Milestone C (optional): Performance optimization**
+  - Profile Conv2d training on real datasets
+  - Optimize based on profiling data
 
-Critical path: **GPU forward broadcasting → GPU Conv2d backward → dtype compute**.
+Critical path: **GPU forward broadcasting → dtype compute → performance optimization**.
 
 ---
 

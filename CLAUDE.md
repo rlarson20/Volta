@@ -20,7 +20,7 @@ Whenever you're corrected on something, or you learn something about the codebas
 - iGEMM (Implicit GEMM) implemented with tiled computation (balanced memory/performance)
 - im2col+GEMM remains available but is memory-intensive
 - Auto-selection chooses algorithm based on input size, kernel size, batch size, and device
-- All three algorithms support both forward and backward passes on GPU
+- All three algorithms support both forward and backward passes on GPU with zero CPU fallback
 
 **See `REFACTOR_SUGGESTIONS.md` for ongoing and planned refactoring work.**
 
@@ -360,11 +360,14 @@ pub struct GpuBuffer {
 - **Matrix multiplication**: matmul with configurable workgroup sizes
 - **Movement ops**: permute, expand, pad, shrink, stride
 - **Backward pass**: GPU-accelerated gradients for core operations
-- **Conv2d**: GPU-accelerated convolution (im2col and direct algorithms)
+- **Conv2d**: Fully GPU-accelerated convolution (Direct, im2col, and iGEMM algorithms)
+  - Forward passes for all three algorithms
+  - Backward passes (input and weight gradients) for all three algorithms
+  - Auto-selection prefers iGEMM on GPU for inputs >1M elements
 
 **❌ Still CPU-only:**
 
-- Neural network layer backward passes (Conv2d backward, Linear backward)
+- Linear backward pass (gradient computation for Linear layers)
 - Broadcasting preprocessing
 - Loss functions
 
@@ -673,7 +676,6 @@ To add a new iGEMM variant:
 - **No learning rate schedulers**
 - **No RNN/Transformer layers** (LSTMCell exists but no full RNN/Transformer)
 - **im2col memory inefficiency**: Addressed - direct convolution and iGEMM available as memory-efficient alternatives
-- **GPU direct convolution gradients**: GPU backward pass still CPU-only for some operations
 - **Incomplete GPU support**: Some operations still CPU-only (check `src/gpu/mod.rs` for current status)
 
 **Known Anti-Patterns (from REFACTOR_SUGGESTIONS.md):**
