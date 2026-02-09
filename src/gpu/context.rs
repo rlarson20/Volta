@@ -189,6 +189,10 @@ pub struct ComputePipelines {
 
     // Direct convolution (memory efficient)
     pub direct_conv: wgpu::ComputePipeline,
+
+    // Convolution backward operations
+    pub conv_backward_input: wgpu::ComputePipeline,
+    pub conv_backward_weight: wgpu::ComputePipeline,
 }
 
 impl GpuContext {
@@ -589,6 +593,22 @@ impl GpuContext {
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/direct_conv.wgsl").into()),
         });
 
+        let conv_backward_input_shader =
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Conv Backward Input Shader"),
+                source: wgpu::ShaderSource::Wgsl(
+                    include_str!("shaders/conv_backward_input.wgsl").into(),
+                ),
+            });
+
+        let conv_backward_weight_shader =
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Conv Backward Weight Shader"),
+                source: wgpu::ShaderSource::Wgsl(
+                    include_str!("shaders/conv_backward_weight.wgsl").into(),
+                ),
+            });
+
         // Helper to create a compute pipeline
         let create_pipeline = |shader: &wgpu::ShaderModule, entry_point: &str, label: &str| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -896,6 +916,18 @@ impl GpuContext {
                 &direct_conv_shader,
                 "direct_conv_main",
                 "Direct Conv Pipeline",
+            ),
+
+            // Convolution backward
+            conv_backward_input: create_pipeline(
+                &conv_backward_input_shader,
+                "conv_backward_input_main",
+                "Conv Backward Input Pipeline",
+            ),
+            conv_backward_weight: create_pipeline(
+                &conv_backward_weight_shader,
+                "conv_backward_weight_main",
+                "Conv Backward Weight Pipeline",
             ),
         }
     }

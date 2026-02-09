@@ -194,99 +194,88 @@ impl GradFn for DirectConvGradFn {
         let h_out = (padded_h - kernel_h) / stride_h + 1;
         let w_out = (padded_w - kernel_w) / stride_w + 1;
 
-        // Get gradient data
-        let out_grad_data = out_grad.data.to_vec();
+        // Determine if we can use GPU acceleration
+        #[cfg(feature = "gpu")]
+        let use_gpu = matches!(&out_grad.data, Storage::Gpu { .. })
+            && x.as_ref().is_some_and(|t| t.borrow().data.is_gpu())
+            && weight.as_ref().is_some_and(|t| t.borrow().data.is_gpu());
 
-        // Get weight data once (needed for both input and weight gradients)
-        let weight_data = weight
-            .as_ref()
-            .map(|w_tensor| w_tensor.borrow().data.to_vec());
+        #[cfg(not(feature = "gpu"))]
+        let use_gpu = false;
+
         // Compute input gradient if input requires grad
         let grad_x = if let Some(ref x_tensor) = x
             && x_tensor.borrow().requires_grad
         {
-            let mut grad_x_data = vec![0.0f32; batch * in_ch * height * width];
-            let _x_data = x_tensor.borrow().data.to_vec();
-
-            // Input gradient: full convolution of output gradient with flipped weights
-            // For each input position, accumulate contributions from all output positions
-            // that use this input value with the corresponding (flipped) weight
-            for b in 0..batch {
-                for ic in 0..in_ch {
-                    for ih in 0..height {
-                        for iw in 0..width {
-                            let mut sum = 0.0f32;
-
-                            // Iterate over all output positions and kernel positions
-                            // to find which ones contribute to this input position
-                            for oc in 0..out_ch {
-                                for oh in 0..h_out {
-                                    for ow in 0..w_out {
-                                        // Get output gradient
-                                        let out_idx = b * (out_ch * h_out * w_out)
-                                            + oc * (h_out * w_out)
-                                            + oh * w_out
-                                            + ow;
-                                        let dout = if let Some(&val) = out_grad_data.get(out_idx) {
-                                            val
-                                        } else {
-                                            0.0
-                                        };
-
-                                        // Starting position in input for this output position
-                                        let h_start = oh * stride_h;
-                                        let w_start = ow * stride_w;
-
-                                        // Check if this input position (ih, iw) is in the receptive field
-                                        // of output position (oh, ow)
-                                        let h_offset =
-                                            ih as isize - h_start as isize + pad_h as isize;
-                                        let w_offset =
-                                            iw as isize - w_start as isize + pad_w as isize;
-
-                                        if h_offset >= 0
-                                            && w_offset >= 0
-                                            && h_offset < kernel_h as isize
-                                            && w_offset < kernel_w as isize
-                                        {
-                                            let kh = h_offset as usize;
-                                            let kw = w_offset as usize;
-
-                                            // Get the corresponding weight value
-                                            // Note: weights are indexed as (oc, ic, kh, kw)
-                                            let w_val = if let Some(ref wd) = weight_data {
-                                                let w_idx = oc * (in_ch * kernel_h * kernel_w)
-                                                    + ic * (kernel_h * kernel_w)
-                                                    + kh * kernel_w
-                                                    + kw;
-                                                if let Some(&val) = wd.get(w_idx) {
-                                                    val
-                                                } else {
-                                                    0.0
-                                                }
-                                            } else {
-                                                0.0
-                                            };
-
-                                            sum += dout * w_val;
-                                        }
-                                    }
-                                }
-                            }
-
-                            let in_idx = b * (in_ch * height * width)
-                                + ic * (height * width)
-                                + ih * width
-                                + iw;
-                            if let Some(slot) = grad_x_data.get_mut(in_idx) {
-                                *slot = sum;
-                            }
-                        }
-                    }
-                }
+            #[cfg(feature = "gpu")]
+            if use_gpu {
+                // GPU acceleration
+                RawTensor::gpu_conv_backward_input(
+                    &out_grad.data,
+                    &weight.as_ref().unwrap().borrow().data,
+                    batch,
+                    in_ch,
+                    out_ch,
+                    height,
+                    width,
+                    kernel_h,
+                    kernel_w,
+                    stride_h,
+                    stride_w,
+                    pad_h,
+                    pad_w,
+                    h_out,
+                    w_out,
+                )
+                .map(|storage| {
+                    RawTensor::new_with_storage(
+                        storage,
+                        &self.input_shape,
+                        out_grad.device.clone(),
+                        false,
+                    )
+                })
+            } else {
+                // CPU fallback
+                Some(self.compute_input_gradient_cpu(
+                    &out_grad.data.to_vec(),
+                    &weight.as_ref().unwrap().borrow().data.to_vec(),
+                    batch,
+                    in_ch,
+                    out_ch,
+                    height,
+                    width,
+                    kernel_h,
+                    kernel_w,
+                    stride_h,
+                    stride_w,
+                    pad_h,
+                    pad_w,
+                    h_out,
+                    w_out,
+                ))
             }
 
-            Some(RawTensor::new(grad_x_data, &self.input_shape, false))
+            #[cfg(not(feature = "gpu"))]
+            {
+                self.compute_input_gradient_cpu(
+                    &out_grad.data.to_vec(),
+                    &weight.as_ref().unwrap().borrow().data.to_vec(),
+                    batch,
+                    in_ch,
+                    out_ch,
+                    height,
+                    width,
+                    kernel_h,
+                    kernel_w,
+                    stride_h,
+                    stride_w,
+                    pad_h,
+                    pad_w,
+                    h_out,
+                    w_out,
+                )
+            }
         } else {
             None
         };
@@ -295,81 +284,75 @@ impl GradFn for DirectConvGradFn {
         let grad_w = if let Some(ref w_tensor) = weight
             && w_tensor.borrow().requires_grad
         {
-            let mut grad_w_data = vec![0.0f32; out_ch * in_ch * kernel_h * kernel_w];
-            let x_data = x.as_ref().map(|x_tensor| x_tensor.borrow().data.to_vec());
-            // Weight gradient: sum of outer products of input patches and output gradients
-            // ∂L/∂W[o,ic,kh,kw] = sum_{b,oh,ow} X[b,ic,oh*sh+kh-ph,ow*sw+kw-pw] * ∂L/∂Y[b,o,oh,ow]
-            for b in 0..batch {
-                for oc in 0..out_ch {
-                    for oh in 0..h_out {
-                        for ow in 0..w_out {
-                            // Get output gradient
-                            let out_idx = b * (out_ch * h_out * w_out)
-                                + oc * (h_out * w_out)
-                                + oh * w_out
-                                + ow;
-                            let dout = if let Some(&val) = out_grad_data.get(out_idx) {
-                                val
-                            } else {
-                                0.0
-                            };
-
-                            // Starting position in input (accounting for padding)
-                            let h_start = oh * stride_h;
-                            let w_start = ow * stride_w;
-
-                            // Accumulate gradient for each weight element
-                            for ic in 0..in_ch {
-                                for kh in 0..kernel_h {
-                                    for kw in 0..kernel_w {
-                                        let h_pos = h_start + kh;
-                                        let w_pos = w_start + kw;
-
-                                        // Check if within padded bounds
-                                        let in_h = h_pos as isize - pad_h as isize;
-                                        let in_w = w_pos as isize - pad_w as isize;
-
-                                        if in_h >= 0
-                                            && in_h < height as isize
-                                            && in_w >= 0
-                                            && in_w < width as isize
-                                        {
-                                            let in_h = in_h as usize;
-                                            let in_w = in_w as usize;
-
-                                            // Get input value
-                                            let in_val = if let Some(ref xd) = x_data {
-                                                let in_idx = b * (in_ch * height * width)
-                                                    + ic * (height * width)
-                                                    + in_h * width
-                                                    + in_w;
-                                                if let Some(&val) = xd.get(in_idx) {
-                                                    val
-                                                } else {
-                                                    0.0
-                                                }
-                                            } else {
-                                                0.0
-                                            };
-
-                                            // Accumulate weight gradient
-                                            let w_idx = oc * (in_ch * kernel_h * kernel_w)
-                                                + ic * (kernel_h * kernel_w)
-                                                + kh * kernel_w
-                                                + kw;
-                                            if let Some(slot) = grad_w_data.get_mut(w_idx) {
-                                                *slot += in_val * dout;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            #[cfg(feature = "gpu")]
+            if use_gpu {
+                // GPU acceleration
+                RawTensor::gpu_conv_backward_weight(
+                    &out_grad.data,
+                    &x.as_ref().unwrap().borrow().data,
+                    batch,
+                    in_ch,
+                    out_ch,
+                    height,
+                    width,
+                    kernel_h,
+                    kernel_w,
+                    stride_h,
+                    stride_w,
+                    pad_h,
+                    pad_w,
+                    h_out,
+                    w_out,
+                )
+                .map(|storage| {
+                    RawTensor::new_with_storage(
+                        storage,
+                        &self.weight_shape,
+                        out_grad.device.clone(),
+                        false,
+                    )
+                })
+            } else {
+                // CPU fallback
+                Some(self.compute_weight_gradient_cpu(
+                    &out_grad.data.to_vec(),
+                    &x.as_ref().unwrap().borrow().data.to_vec(),
+                    batch,
+                    in_ch,
+                    out_ch,
+                    height,
+                    width,
+                    kernel_h,
+                    kernel_w,
+                    stride_h,
+                    stride_w,
+                    pad_h,
+                    pad_w,
+                    h_out,
+                    w_out,
+                ))
             }
 
-            Some(RawTensor::new(grad_w_data, &self.weight_shape, false))
+            #[cfg(not(feature = "gpu"))]
+            {
+                self.compute_weight_gradient_cpu(
+                    &out_grad.data.to_vec(),
+                    &x.as_ref().unwrap().borrow().data.to_vec(),
+                    batch,
+                    in_ch,
+                    out_ch,
+                    height,
+                    width,
+                    kernel_h,
+                    kernel_w,
+                    stride_h,
+                    stride_w,
+                    pad_h,
+                    pad_w,
+                    h_out,
+                    w_out,
+                )
+            }
         } else {
             None
         };
@@ -379,6 +362,194 @@ impl GradFn for DirectConvGradFn {
 
     fn clone_box(&self) -> Box<dyn GradFn> {
         Box::new(self.clone())
+    }
+}
+
+impl DirectConvGradFn {
+    /// CPU implementation of input gradient computation
+    #[allow(clippy::too_many_arguments)]
+    fn compute_input_gradient_cpu(
+        &self,
+        out_grad_data: &[f32],
+        weight_data: &[f32],
+        batch: usize,
+        in_ch: usize,
+        out_ch: usize,
+        height: usize,
+        width: usize,
+        kernel_h: usize,
+        kernel_w: usize,
+        stride_h: usize,
+        stride_w: usize,
+        pad_h: usize,
+        pad_w: usize,
+        h_out: usize,
+        w_out: usize,
+    ) -> Tensor {
+        let mut grad_x_data = vec![0.0f32; batch * in_ch * height * width];
+
+        // Input gradient: full convolution of output gradient with flipped weights
+        // For each input position, accumulate contributions from all output positions
+        // that use this input value with the corresponding (flipped) weight
+        for b in 0..batch {
+            for ic in 0..in_ch {
+                for ih in 0..height {
+                    for iw in 0..width {
+                        let mut sum = 0.0f32;
+
+                        // Iterate over all output positions and kernel positions
+                        // to find which ones contribute to this input position
+                        for oc in 0..out_ch {
+                            for oh in 0..h_out {
+                                for ow in 0..w_out {
+                                    // Get output gradient
+                                    let out_idx = b * (out_ch * h_out * w_out)
+                                        + oc * (h_out * w_out)
+                                        + oh * w_out
+                                        + ow;
+                                    let dout = if let Some(&val) = out_grad_data.get(out_idx) {
+                                        val
+                                    } else {
+                                        0.0
+                                    };
+
+                                    // Starting position in input for this output position
+                                    let h_start = oh * stride_h;
+                                    let w_start = ow * stride_w;
+
+                                    // Check if this input position (ih, iw) is in the receptive field
+                                    // of output position (oh, ow)
+                                    let h_offset = ih as isize - h_start as isize + pad_h as isize;
+                                    let w_offset = iw as isize - w_start as isize + pad_w as isize;
+
+                                    if h_offset >= 0
+                                        && w_offset >= 0
+                                        && h_offset < kernel_h as isize
+                                        && w_offset < kernel_w as isize
+                                    {
+                                        let kh = h_offset as usize;
+                                        let kw = w_offset as usize;
+
+                                        // Get the corresponding weight value
+                                        // Note: weights are indexed as (oc, ic, kh, kw)
+                                        let w_idx = oc * (in_ch * kernel_h * kernel_w)
+                                            + ic * (kernel_h * kernel_w)
+                                            + kh * kernel_w
+                                            + kw;
+                                        let w_val = if let Some(&val) = weight_data.get(w_idx) {
+                                            val
+                                        } else {
+                                            0.0
+                                        };
+
+                                        sum += dout * w_val;
+                                    }
+                                }
+                            }
+                        }
+
+                        let in_idx =
+                            b * (in_ch * height * width) + ic * (height * width) + ih * width + iw;
+                        if let Some(slot) = grad_x_data.get_mut(in_idx) {
+                            *slot = sum;
+                        }
+                    }
+                }
+            }
+        }
+
+        RawTensor::new(grad_x_data, &self.input_shape, false)
+    }
+
+    /// CPU implementation of weight gradient computation
+    #[allow(clippy::too_many_arguments)]
+    fn compute_weight_gradient_cpu(
+        &self,
+        out_grad_data: &[f32],
+        x_data: &[f32],
+        batch: usize,
+        in_ch: usize,
+        out_ch: usize,
+        height: usize,
+        width: usize,
+        kernel_h: usize,
+        kernel_w: usize,
+        stride_h: usize,
+        stride_w: usize,
+        pad_h: usize,
+        pad_w: usize,
+        h_out: usize,
+        w_out: usize,
+    ) -> Tensor {
+        let mut grad_w_data = vec![0.0f32; out_ch * in_ch * kernel_h * kernel_w];
+
+        // Weight gradient: sum of outer products of input patches and output gradients
+        // ∂L/∂W[o,ic,kh,kw] = sum_{b,oh,ow} X[b,ic,oh*sh+kh-ph,ow*sw+kw-pw] * ∂L/∂Y[b,o,oh,ow]
+        for b in 0..batch {
+            for oc in 0..out_ch {
+                for oh in 0..h_out {
+                    for ow in 0..w_out {
+                        // Get output gradient
+                        let out_idx =
+                            b * (out_ch * h_out * w_out) + oc * (h_out * w_out) + oh * w_out + ow;
+                        let dout = if let Some(&val) = out_grad_data.get(out_idx) {
+                            val
+                        } else {
+                            0.0
+                        };
+
+                        // Starting position in input (accounting for padding)
+                        let h_start = oh * stride_h;
+                        let w_start = ow * stride_w;
+
+                        // Accumulate gradient for each weight element
+                        for ic in 0..in_ch {
+                            for kh in 0..kernel_h {
+                                for kw in 0..kernel_w {
+                                    let h_pos = h_start + kh;
+                                    let w_pos = w_start + kw;
+
+                                    // Check if within padded bounds
+                                    let in_h = h_pos as isize - pad_h as isize;
+                                    let in_w = w_pos as isize - pad_w as isize;
+
+                                    if in_h >= 0
+                                        && in_h < height as isize
+                                        && in_w >= 0
+                                        && in_w < width as isize
+                                    {
+                                        let in_h = in_h as usize;
+                                        let in_w = in_w as usize;
+
+                                        // Get input value
+                                        let in_idx = b * (in_ch * height * width)
+                                            + ic * (height * width)
+                                            + in_h * width
+                                            + in_w;
+                                        let in_val = if let Some(&val) = x_data.get(in_idx) {
+                                            val
+                                        } else {
+                                            0.0
+                                        };
+
+                                        // Accumulate weight gradient
+                                        let w_idx = oc * (in_ch * kernel_h * kernel_w)
+                                            + ic * (kernel_h * kernel_w)
+                                            + kh * kernel_w
+                                            + kw;
+                                        if let Some(slot) = grad_w_data.get_mut(w_idx) {
+                                            *slot += in_val * dout;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        RawTensor::new(grad_w_data, &self.weight_shape, false)
     }
 }
 

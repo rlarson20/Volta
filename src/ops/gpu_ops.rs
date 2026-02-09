@@ -585,6 +585,102 @@ impl RawTensor {
         })
     }
 
+    /// GPU-accelerated convolution backward: gradient with respect to input
+    #[cfg(feature = "gpu")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn gpu_conv_backward_input(
+        out_grad: &Storage,
+        weight: &Storage,
+        batch_size: usize,
+        in_channels: usize,
+        out_channels: usize,
+        height: usize,
+        width: usize,
+        kernel_h: usize,
+        kernel_w: usize,
+        stride_h: usize,
+        stride_w: usize,
+        pad_h: usize,
+        pad_w: usize,
+        h_out: usize,
+        w_out: usize,
+    ) -> Option<Storage> {
+        let buf_out_grad = out_grad.gpu_buffer()?;
+        let buf_weight = weight.gpu_buffer()?;
+
+        let result = crate::gpu::GpuKernels::conv_backward_input(
+            buf_out_grad,
+            buf_weight,
+            batch_size,
+            in_channels,
+            out_channels,
+            height,
+            width,
+            kernel_h,
+            kernel_w,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            h_out,
+            w_out,
+        )?;
+
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            dtype: crate::dtype::DType::F32,
+            cpu_cache: RefCell::new(None),
+        })
+    }
+
+    /// GPU-accelerated convolution backward: gradient with respect to weights
+    #[cfg(feature = "gpu")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn gpu_conv_backward_weight(
+        out_grad: &Storage,
+        input: &Storage,
+        batch_size: usize,
+        in_channels: usize,
+        out_channels: usize,
+        height: usize,
+        width: usize,
+        kernel_h: usize,
+        kernel_w: usize,
+        stride_h: usize,
+        stride_w: usize,
+        pad_h: usize,
+        pad_w: usize,
+        h_out: usize,
+        w_out: usize,
+    ) -> Option<Storage> {
+        let buf_out_grad = out_grad.gpu_buffer()?;
+        let buf_input = input.gpu_buffer()?;
+
+        let result = crate::gpu::GpuKernels::conv_backward_weight(
+            buf_out_grad,
+            buf_input,
+            batch_size,
+            in_channels,
+            out_channels,
+            height,
+            width,
+            kernel_h,
+            kernel_w,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            h_out,
+            w_out,
+        )?;
+
+        Some(Storage::Gpu {
+            buffer: Arc::new(result),
+            dtype: crate::dtype::DType::F32,
+            cpu_cache: RefCell::new(None),
+        })
+    }
+
     // ===== MOVEMENT BACKWARD OPERATIONS =====
 
     /// GPU-accelerated permute backward operation
