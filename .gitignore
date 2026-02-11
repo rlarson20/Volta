@@ -10,3 +10,6 @@ responses/context.md
 # Data files
 data/*
 node_modules/
+
+#mutants output
+mutants.out/
