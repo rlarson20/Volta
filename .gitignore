@@ -3,7 +3,6 @@
 *.txt
 
 .bacon-locations
-.aider*
 responses/context.md
 
 *.bin

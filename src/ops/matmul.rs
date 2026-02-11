@@ -128,8 +128,6 @@ impl RawTensor {
     /// - (m,n) @ (n,) -> (m,)    [matrix-vector]
     /// - (n,) @ (n,p) -> (p,)    [vector-matrix]
     /// - (n,) @ (n,) -> scalar   [dot product]
-    ///   TODO: since i updated the device stuff, fix the unused vars since it'll probably be
-    ///   relevant somewhere
     /// # Panics
     /// Dimension mismatch
     pub fn matmul(self_t: &Tensor, other: &Tensor) -> Tensor {
