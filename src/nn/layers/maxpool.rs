@@ -489,7 +489,7 @@ mod tests {
         loss.backward();
 
         let grad = x.grad().unwrap();
-        let grad_data = grad.to_vec();
+        let grad_data = grad.clone();
 
         // Only max positions should receive gradient (value 1.0 from sum)
         // Window 1 max: [1,1] position, index 5 (value 8.0)
@@ -524,8 +524,7 @@ mod tests {
             if ![5, 7, 13, 15].contains(&i) {
                 assert_eq!(
                     g, 0.0,
-                    "Non-max position at index {} should have zero gradient",
-                    i
+                    "Non-max position at index {i} should have zero gradient"
                 );
             }
         }
@@ -555,7 +554,7 @@ mod tests {
         loss.backward();
 
         let grad = x.grad().unwrap();
-        let grad_data = grad.to_vec();
+        let grad_data = grad.clone();
 
         // Position 4 (center) should be max in all 4 windows
         // So it should accumulate gradient of 4.0
@@ -567,7 +566,7 @@ mod tests {
         // All other positions should have zero gradient
         for (i, &g) in grad_data.iter().enumerate() {
             if i != 4 {
-                assert_eq!(g, 0.0, "Non-max position {} should have zero gradient", i);
+                assert_eq!(g, 0.0, "Non-max position {i} should have zero gradient");
             }
         }
     }
@@ -588,7 +587,7 @@ mod tests {
         loss.backward();
 
         let grad = x.grad().unwrap();
-        let grad_data = grad.to_vec();
+        let grad_data = grad.clone();
 
         // With overlapping windows, gradients should accumulate
         // Sum of input gradients should equal number of outputs (9)
@@ -616,7 +615,7 @@ mod tests {
         let loss = y.sum();
         loss.backward();
         let grad = x.grad().unwrap();
-        assert_eq!(grad.to_vec().first().copied().unwrap(), 1.0);
+        assert_eq!(grad.clone().first().copied().unwrap(), 1.0);
     }
 
     #[test]
@@ -634,7 +633,7 @@ mod tests {
         let loss = y.sum();
         loss.backward();
         let grad = x.grad().unwrap();
-        let grad_data = grad.to_vec();
+        let grad_data = grad.clone();
 
         // Only the last position (value 15.0) should have gradient
         assert_eq!(
@@ -644,7 +643,7 @@ mod tests {
         );
         for (i, &g) in grad_data.iter().enumerate() {
             if i != 15 {
-                assert_eq!(g, 0.0, "Non-max position {} should have zero gradient", i);
+                assert_eq!(g, 0.0, "Non-max position {i} should have zero gradient");
             }
         }
     }
@@ -681,7 +680,7 @@ mod tests {
         loss.backward();
 
         let grad = x.grad().unwrap();
-        let grad_data = grad.to_vec();
+        let grad_data = grad.clone();
 
         // Each batch should have its own gradients
         // Each batch has 16 elements (1 channel * 4 * 4)
@@ -705,7 +704,7 @@ mod tests {
         loss.backward();
 
         let grad = x.grad().unwrap();
-        let grad_data = grad.to_vec();
+        let grad_data = grad.clone();
 
         // Each channel should have its own gradients
         // Each channel has 16 elements (4x4)
@@ -717,7 +716,7 @@ mod tests {
                 .unwrap()
                 .iter()
                 .sum();
-            assert!(channel_sum > 0.0, "Channel {} should have gradients", c);
+            assert!(channel_sum > 0.0, "Channel {c} should have gradients");
         }
     }
 }

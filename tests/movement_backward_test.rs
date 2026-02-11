@@ -47,9 +47,7 @@ fn test_permute_backward_cpu_vs_gpu() {
 
     assert!(
         tensors_approx_eq(&cpu_grad, &gpu_grad, 1e-5),
-        "Permute backward: CPU and GPU gradients should match.\nCPU: {:?}\nGPU: {:?}",
-        cpu_grad,
-        gpu_grad
+        "Permute backward: CPU and GPU gradients should match.\nCPU: {cpu_grad:?}\nGPU: {gpu_grad:?}"
     );
 }
 
@@ -82,9 +80,7 @@ fn test_expand_backward_cpu_vs_gpu() {
 
     assert!(
         tensors_approx_eq(&cpu_grad, &gpu_grad, 1e-5),
-        "Expand backward: CPU and GPU gradients should match.\nCPU: {:?}\nGPU: {:?}",
-        cpu_grad,
-        gpu_grad
+        "Expand backward: CPU and GPU gradients should match.\nCPU: {cpu_grad:?}\nGPU: {gpu_grad:?}"
     );
 
     // Gradient should be [2, 2, 2] since we broadcast over 2 positions
@@ -124,9 +120,7 @@ fn test_pad_backward_cpu_vs_gpu() {
 
     assert!(
         tensors_approx_eq(&cpu_grad, &gpu_grad, 1e-5),
-        "Pad backward: CPU and GPU gradients should match.\nCPU: {:?}\nGPU: {:?}",
-        cpu_grad,
-        gpu_grad
+        "Pad backward: CPU and GPU gradients should match.\nCPU: {cpu_grad:?}\nGPU: {gpu_grad:?}"
     );
 }
 
@@ -160,9 +154,7 @@ fn test_shrink_backward_cpu_vs_gpu() {
 
     assert!(
         tensors_approx_eq(&cpu_grad, &gpu_grad, 1e-5),
-        "Shrink backward: CPU and GPU gradients should match.\nCPU: {:?}\nGPU: {:?}",
-        cpu_grad,
-        gpu_grad
+        "Shrink backward: CPU and GPU gradients should match.\nCPU: {cpu_grad:?}\nGPU: {gpu_grad:?}"
     );
 }
 
@@ -196,9 +188,7 @@ fn test_stride_backward_cpu_vs_gpu() {
 
     assert!(
         tensors_approx_eq(&cpu_grad, &gpu_grad, 1e-5),
-        "Stride backward: CPU and GPU gradients should match.\nCPU: {:?}\nGPU: {:?}",
-        cpu_grad,
-        gpu_grad
+        "Stride backward: CPU and GPU gradients should match.\nCPU: {cpu_grad:?}\nGPU: {gpu_grad:?}"
     );
 }
 
@@ -228,9 +218,7 @@ fn test_movement_backward_chain_cpu_vs_gpu() {
 
     assert!(
         tensors_approx_eq(&cpu_grad, &gpu_grad, 1e-5),
-        "Chained movement backward: CPU and GPU gradients should match.\nCPU: {:?}\nGPU: {:?}",
-        cpu_grad,
-        gpu_grad
+        "Chained movement backward: CPU and GPU gradients should match.\nCPU: {cpu_grad:?}\nGPU: {gpu_grad:?}"
     );
 }
 
@@ -256,9 +244,7 @@ fn test_expand_backward_multiple_dims() {
 
     assert!(
         tensors_approx_eq(&cpu_grad, &gpu_grad, 1e-5),
-        "Multi-dim expand backward: CPU and GPU gradients should match.\nCPU: {:?}\nGPU: {:?}",
-        cpu_grad,
-        gpu_grad
+        "Multi-dim expand backward: CPU and GPU gradients should match.\nCPU: {cpu_grad:?}\nGPU: {gpu_grad:?}"
     );
 
     // Should sum over 2*2=4 positions for each element

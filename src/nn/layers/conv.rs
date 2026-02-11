@@ -2017,8 +2017,7 @@ mod conv2d_tests {
 
         assert!(
             passed,
-            "Conv2d gradient check failed: max_error={:.6e}, mean_error={:.6e}",
-            max_err, mean_err
+            "Conv2d gradient check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
         );
     }
 
@@ -2176,9 +2175,7 @@ mod conv2d_tests {
             assert_eq!(
                 y.borrow().shape,
                 vec![1, out_ch, h, w],
-                "Failed for in_ch={}, out_ch={}",
-                in_ch,
-                out_ch
+                "Failed for in_ch={in_ch}, out_ch={out_ch}"
             );
         }
     }
@@ -2196,8 +2193,7 @@ mod conv2d_tests {
             assert_eq!(
                 y.borrow().shape,
                 vec![batch, 16, 32, 32],
-                "Failed for batch_size={}",
-                batch
+                "Failed for batch_size={batch}"
             );
         }
     }
@@ -2260,12 +2256,7 @@ mod conv2d_tests {
             assert_eq!(
                 y.borrow().shape,
                 vec![1, 8, exp_h, exp_w],
-                "Failed for input=({},{}), kernel={}, stride={}, pad={}",
-                in_h,
-                in_w,
-                kernel,
-                stride,
-                pad
+                "Failed for input=({in_h},{in_w}), kernel={kernel}, stride={stride}, pad={pad}"
             );
         }
     }
@@ -2284,8 +2275,7 @@ mod conv2d_tests {
 
         assert!(
             passed,
-            "Conv2d 1x1 gradient check failed: max_error={:.6e}, mean_error={:.6e}",
-            max_err, mean_err
+            "Conv2d 1x1 gradient check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
         );
     }
 
@@ -2301,8 +2291,7 @@ mod conv2d_tests {
 
         assert!(
             passed,
-            "Conv2d 5x5 gradient check failed: max_error={:.6e}, mean_error={:.6e}",
-            max_err, mean_err
+            "Conv2d 5x5 gradient check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
         );
     }
 
@@ -2318,8 +2307,7 @@ mod conv2d_tests {
 
         assert!(
             passed,
-            "Conv2d stride2 gradient check failed: max_error={:.6e}, mean_error={:.6e}",
-            max_err, mean_err
+            "Conv2d stride2 gradient check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
         );
     }
 
@@ -2335,8 +2323,7 @@ mod conv2d_tests {
 
         assert!(
             passed,
-            "Conv2d no-bias gradient check failed: max_error={:.6e}, mean_error={:.6e}",
-            max_err, mean_err
+            "Conv2d no-bias gradient check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
         );
     }
 
@@ -2352,8 +2339,7 @@ mod conv2d_tests {
 
         assert!(
             passed,
-            "Conv2d multi-channel gradient check failed: max_error={:.6e}, mean_error={:.6e}",
-            max_err, mean_err
+            "Conv2d multi-channel gradient check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
         );
     }
 
@@ -2422,11 +2408,7 @@ mod conv2d_tests {
             let abs_diff = (direct_val - im2col_val).abs();
             assert!(
                 abs_diff < 1e-5,
-                "Direct vs im2col mismatch at index {}: direct={}, im2col={}, diff={}",
-                i,
-                direct_val,
-                im2col_val,
-                abs_diff
+                "Direct vs im2col mismatch at index {i}: direct={direct_val}, im2col={im2col_val}, diff={abs_diff}"
             );
         }
     }
@@ -2458,11 +2440,7 @@ mod conv2d_tests {
             let abs_diff = (direct_val - im2col_val).abs();
             assert!(
                 abs_diff < 1e-5,
-                "Padding test mismatch at index {}: direct={}, im2col={}, diff={}",
-                i,
-                direct_val,
-                im2col_val,
-                abs_diff
+                "Padding test mismatch at index {i}: direct={direct_val}, im2col={im2col_val}, diff={abs_diff}"
             );
         }
     }
@@ -2497,8 +2475,7 @@ mod conv2d_tests {
 
         assert!(
             passed,
-            "Direct conv gradient check failed: max_error={:.6e}, mean_error={:.6e}",
-            max_err, mean_err
+            "Direct conv gradient check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
         );
     }
 
@@ -2516,8 +2493,7 @@ mod conv2d_tests {
 
         assert!(
             passed,
-            "Direct conv with padding gradient check failed: max_error={:.6e}, mean_error={:.6e}",
-            max_err, mean_err
+            "Direct conv with padding gradient check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
         );
     }
 
@@ -2535,8 +2511,7 @@ mod conv2d_tests {
 
         assert!(
             passed,
-            "Direct conv stride2 gradient check failed: max_error={:.6e}, mean_error={:.6e}",
-            max_err, mean_err
+            "Direct conv stride2 gradient check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
         );
     }
 
@@ -2554,8 +2529,7 @@ mod conv2d_tests {
 
         assert!(
             passed,
-            "Direct conv 1x1 gradient check failed: max_error={:.6e}, mean_error={:.6e}",
-            max_err, mean_err
+            "Direct conv 1x1 gradient check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
         );
     }
 
@@ -2573,8 +2547,7 @@ mod conv2d_tests {
 
         assert!(
             passed,
-            "Direct conv no-bias gradient check failed: max_error={:.6e}, mean_error={:.6e}",
-            max_err, mean_err
+            "Direct conv no-bias gradient check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
         );
     }
 
@@ -2666,11 +2639,7 @@ mod conv2d_tests {
             let abs_diff = (direct_val - im2col_val).abs();
             assert!(
                 abs_diff < 1e-4,
-                "Input gradient mismatch at index {}: direct={}, im2col={}, diff={}",
-                i,
-                direct_val,
-                im2col_val,
-                abs_diff
+                "Input gradient mismatch at index {i}: direct={direct_val}, im2col={im2col_val}, diff={abs_diff}"
             );
         }
 
@@ -2689,11 +2658,7 @@ mod conv2d_tests {
             let abs_diff = (direct_val - im2col_val).abs();
             assert!(
                 abs_diff < 1e-4,
-                "Weight gradient mismatch at index {}: direct={}, im2col={}, diff={}",
-                i,
-                direct_val,
-                im2col_val,
-                abs_diff
+                "Weight gradient mismatch at index {i}: direct={direct_val}, im2col={im2col_val}, diff={abs_diff}"
             );
         }
     }
@@ -2721,8 +2686,7 @@ mod conv2d_tests {
 
             assert!(
                 passed,
-                "Direct conv gradient check failed for config ({},{},{},{},{}): max_error={:.6e}, mean_error={:.6e}",
-                in_ch, out_ch, kernel, stride, padding, max_err, mean_err
+                "Direct conv gradient check failed for config ({in_ch},{out_ch},{kernel},{stride},{padding}): max_error={max_err:.6e}, mean_error={mean_err:.6e}"
             );
         }
     }
@@ -2794,11 +2758,7 @@ mod conv2d_tests {
             let abs_diff = (direct_val - igemm_val).abs();
             assert!(
                 abs_diff < 1e-5,
-                "Mismatch at index {}: Direct={}, IGEMM={}, diff={}",
-                i,
-                direct_val,
-                igemm_val,
-                abs_diff
+                "Mismatch at index {i}: Direct={direct_val}, IGEMM={igemm_val}, diff={abs_diff}"
             );
         }
     }
@@ -2817,8 +2777,7 @@ mod conv2d_tests {
 
         assert!(
             passed,
-            "iGEMM gradient check failed: max_error={:.6e}, mean_error={:.6e}",
-            max_err, mean_err
+            "iGEMM gradient check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
         );
     }
 
@@ -2866,11 +2825,7 @@ mod conv2d_tests {
             let abs_diff = (direct_val - igemm_val).abs();
             assert!(
                 abs_diff < 1e-4,
-                "Input grad mismatch at index {}: Direct={}, IGEMM={}, diff={}",
-                i,
-                direct_val,
-                igemm_val,
-                abs_diff
+                "Input grad mismatch at index {i}: Direct={direct_val}, IGEMM={igemm_val}, diff={abs_diff}"
             );
         }
 
@@ -2885,11 +2840,7 @@ mod conv2d_tests {
             let abs_diff = (direct_val - igemm_val).abs();
             assert!(
                 abs_diff < 1e-4,
-                "Weight grad mismatch at index {}: Direct={}, IGEMM={}, diff={}",
-                i,
-                direct_val,
-                igemm_val,
-                abs_diff
+                "Weight grad mismatch at index {i}: Direct={direct_val}, IGEMM={igemm_val}, diff={abs_diff}"
             );
         }
     }
@@ -2945,8 +2896,7 @@ mod conv2d_tests {
 
         assert!(
             passed,
-            "iGEMM no-bias gradient check failed: max_error={:.6e}, mean_error={:.6e}",
-            max_err, mean_err
+            "iGEMM no-bias gradient check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
         );
     }
 }
@@ -3016,11 +2966,7 @@ mod conv2d_gpu_tests {
             let abs_diff = (cpu_val - gpu_val).abs();
             assert!(
                 abs_diff < 1e-4,
-                "Mismatch at index {}: CPU={}, GPU={}, abs_diff={}",
-                i,
-                cpu_val,
-                gpu_val,
-                abs_diff
+                "Mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, abs_diff={abs_diff}"
             );
         }
     }
@@ -3109,11 +3055,7 @@ mod conv2d_gpu_tests {
             let abs_diff = (cpu_val - gpu_val).abs();
             assert!(
                 abs_diff < 1e-4,
-                "Mismatch at index {}: CPU={}, GPU={}, abs_diff={}",
-                i,
-                cpu_val,
-                gpu_val,
-                abs_diff
+                "Mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, abs_diff={abs_diff}"
             );
         }
     }
@@ -3149,10 +3091,7 @@ mod conv2d_gpu_tests {
             let abs_diff = (cpu_val - gpu_val).abs();
             assert!(
                 abs_diff < 1e-4,
-                "Padding mismatch at index {}: CPU={}, GPU={}",
-                i,
-                cpu_val,
-                gpu_val
+                "Padding mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}"
             );
         }
     }
@@ -3198,11 +3137,7 @@ mod conv2d_gpu_tests {
             let abs_diff = (cpu_val - gpu_val).abs();
             assert!(
                 abs_diff < 1e-4,
-                "1x1 kernel mismatch at index {}: CPU={}, GPU={}, diff={}",
-                i,
-                cpu_val,
-                gpu_val,
-                abs_diff
+                "1x1 kernel mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
             );
         }
     }
@@ -3243,11 +3178,7 @@ mod conv2d_gpu_tests {
             let abs_diff = (cpu_val - gpu_val).abs();
             assert!(
                 abs_diff < 1e-4,
-                "5x5 kernel mismatch at index {}: CPU={}, GPU={}, diff={}",
-                i,
-                cpu_val,
-                gpu_val,
-                abs_diff
+                "5x5 kernel mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
             );
         }
     }
@@ -3288,11 +3219,7 @@ mod conv2d_gpu_tests {
             let abs_diff = (cpu_val - gpu_val).abs();
             assert!(
                 abs_diff < 1e-4,
-                "Stride2 mismatch at index {}: CPU={}, GPU={}, diff={}",
-                i,
-                cpu_val,
-                gpu_val,
-                abs_diff
+                "Stride2 mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
             );
         }
     }
@@ -3333,11 +3260,7 @@ mod conv2d_gpu_tests {
             let abs_diff = (cpu_val - gpu_val).abs();
             assert!(
                 abs_diff < 1e-4,
-                "Stride4 mismatch at index {}: CPU={}, GPU={}, diff={}",
-                i,
-                cpu_val,
-                gpu_val,
-                abs_diff
+                "Stride4 mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
             );
         }
     }
@@ -3378,11 +3301,7 @@ mod conv2d_gpu_tests {
             let abs_diff = (cpu_val - gpu_val).abs();
             assert!(
                 abs_diff < 1e-4,
-                "Large padding mismatch at index {}: CPU={}, GPU={}, diff={}",
-                i,
-                cpu_val,
-                gpu_val,
-                abs_diff
+                "Large padding mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
             );
         }
     }
@@ -3419,11 +3338,7 @@ mod conv2d_gpu_tests {
             let abs_diff = (cpu_val - gpu_val).abs();
             assert!(
                 abs_diff < 1e-4,
-                "No bias mismatch at index {}: CPU={}, GPU={}, diff={}",
-                i,
-                cpu_val,
-                gpu_val,
-                abs_diff
+                "No bias mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
             );
         }
     }
@@ -3468,12 +3383,7 @@ mod conv2d_gpu_tests {
                 let abs_diff = (cpu_val - gpu_val).abs();
                 assert!(
                     abs_diff < 1e-4,
-                    "Batch {} mismatch at index {}: CPU={}, GPU={}, diff={}",
-                    batch,
-                    i,
-                    cpu_val,
-                    gpu_val,
-                    abs_diff
+                    "Batch {batch} mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
                 );
             }
         }
@@ -3515,11 +3425,7 @@ mod conv2d_gpu_tests {
             let abs_diff = (cpu_val - gpu_val).abs();
             assert!(
                 abs_diff < 1e-4,
-                "Asymmetric dimensions mismatch at index {}: CPU={}, GPU={}, diff={}",
-                i,
-                cpu_val,
-                gpu_val,
-                abs_diff
+                "Asymmetric dimensions mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
             );
         }
     }
@@ -3565,13 +3471,7 @@ mod conv2d_gpu_tests {
                 let abs_diff = (cpu_val - gpu_val).abs();
                 assert!(
                     abs_diff < 1e-4,
-                    "Channel configuration ({},{}) mismatch at index {}: CPU={}, GPU={}, diff={}",
-                    in_ch,
-                    out_ch,
-                    i,
-                    cpu_val,
-                    gpu_val,
-                    abs_diff
+                    "Channel configuration ({in_ch},{out_ch}) mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
                 );
             }
         }
@@ -3661,12 +3561,7 @@ mod conv2d_gpu_tests {
                 let abs_diff = (cpu_val - gpu_val).abs();
                 assert!(
                     abs_diff < 1e-4,
-                    "Kernel {} mismatch at index {}: CPU={}, GPU={}, diff={}",
-                    kernel_size,
-                    i,
-                    cpu_val,
-                    gpu_val,
-                    abs_diff
+                    "Kernel {kernel_size} mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
                 );
             }
         }
@@ -3730,15 +3625,7 @@ mod conv2d_gpu_tests {
                 let abs_diff = (cpu_val - gpu_val).abs();
                 assert!(
                     abs_diff < 1e-4,
-                    "Params k={} s={} p={} b={} mismatch at {}: CPU={}, GPU={}, diff={}",
-                    kernel,
-                    stride,
-                    padding,
-                    batch,
-                    i,
-                    cpu_val,
-                    gpu_val,
-                    abs_diff
+                    "Params k={kernel} s={stride} p={padding} b={batch} mismatch at {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
                 );
             }
         }
@@ -3813,11 +3700,7 @@ mod conv2d_gpu_tests {
             let abs_diff = (cpu_val - gpu_val).abs();
             assert!(
                 abs_diff < 1e-4,
-                "Non-square mismatch at index {}: CPU={}, GPU={}, diff={}",
-                i,
-                cpu_val,
-                gpu_val,
-                abs_diff
+                "Non-square mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
             );
         }
     }
@@ -3864,8 +3747,8 @@ mod conv2d_gpu_tests {
         let grad_cpu = x_cpu.grad().expect("CPU input should have gradient");
         let grad_gpu = x_gpu.grad().expect("GPU input should have gradient");
 
-        let grad_cpu_data = grad_cpu.to_vec();
-        let grad_gpu_data = grad_gpu.to_vec();
+        let grad_cpu_data = grad_cpu.clone();
+        let grad_gpu_data = grad_gpu.clone();
 
         assert_eq!(grad_cpu_data.len(), grad_gpu_data.len());
 
@@ -3873,11 +3756,7 @@ mod conv2d_gpu_tests {
             let abs_diff = (cpu_val - gpu_val).abs();
             assert!(
                 abs_diff < 1e-4,
-                "GPU col2im mismatch at index {}: CPU={}, GPU={}, diff={}",
-                i,
-                cpu_val,
-                gpu_val,
-                abs_diff
+                "GPU col2im mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
             );
         }
     }
@@ -3917,7 +3796,7 @@ mod conv2d_gpu_tests {
         assert_eq!(grad_input.len(), 16);
 
         // Verify values are non-zero (col2im should have accumulated gradients)
-        let grad_data = grad_input.to_vec();
+        let grad_data = grad_input.clone();
         let has_non_zero = grad_data.iter().any(|&v| v.abs() > 1e-6);
         assert!(has_non_zero, "col2im gradient should have non-zero values");
     }
@@ -3962,8 +3841,8 @@ mod conv2d_gpu_tests {
         let grad_cpu = x_cpu.grad().expect("CPU input should have gradient");
         let grad_gpu = x_gpu.grad().expect("GPU input should have gradient");
 
-        let grad_cpu_data = grad_cpu.to_vec();
-        let grad_gpu_data = grad_gpu.to_vec();
+        let grad_cpu_data = grad_cpu.clone();
+        let grad_gpu_data = grad_gpu.clone();
 
         assert_eq!(grad_cpu_data.len(), grad_gpu_data.len());
 
@@ -3971,11 +3850,7 @@ mod conv2d_gpu_tests {
             let abs_diff = (cpu_val - gpu_val).abs();
             assert!(
                 abs_diff < 1e-4,
-                "GPU col2im stride2 mismatch at index {}: CPU={}, GPU={}, diff={}",
-                i,
-                cpu_val,
-                gpu_val,
-                abs_diff
+                "GPU col2im stride2 mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
             );
         }
     }

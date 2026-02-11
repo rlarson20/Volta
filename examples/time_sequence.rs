@@ -21,10 +21,7 @@ fn main() {
         }
     }
 
-    println!(
-        "Generated {} sequences of length {}",
-        num_sequences, sequence_length
-    );
+    println!("Generated {num_sequences} sequences of length {sequence_length}");
     println!("Task: Predict next value in sine wave\n");
 
     // Build model: LSTM with 1 input, 32 hidden units, 1 output
@@ -89,7 +86,7 @@ fn main() {
 
         if epoch % 10 == 9 {
             let avg_loss = total_loss / (num_sequences * sequence_length) as f32;
-            println!(" Loss = {:.6}", avg_loss);
+            println!(" Loss = {avg_loss:.6}");
         }
     }
 

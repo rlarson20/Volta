@@ -13,7 +13,7 @@ struct Generator {
 
 impl Generator {
     fn new(latent_dim: usize) -> Self {
-        Generator {
+        Self {
             fc: Linear::new(latent_dim, 256 * 7 * 7, true),
             deconv1: ConvTranspose2d::new(256, 128, 4, 2, 1, true),
             deconv2: ConvTranspose2d::new(128, 1, 4, 2, 1, true),
@@ -59,7 +59,7 @@ struct Discriminator {
 
 impl Discriminator {
     fn new() -> Self {
-        Discriminator {
+        Self {
             conv1: Conv2d::new(1, 64, 4, 2, 1, true),
             conv2: Conv2d::new(64, 128, 4, 2, 1, true),
             flatten: Flatten,
@@ -99,20 +99,18 @@ fn main() {
     let learning_rate = 0.0002;
 
     // Load MNIST data
-    let (train_images, num_train) = match load_mnist_images("data/mnist/train-images-idx3-ubyte") {
-        Ok(images) => {
+    let (train_images, num_train) =
+        if let Ok(images) = load_mnist_images("data/mnist/train-images-idx3-ubyte") {
             let n = images.len() / 784;
-            println!("Loaded {} MNIST training images", n);
+            println!("Loaded {n} MNIST training images");
             (images, n)
-        }
-        Err(_) => {
+        } else {
             println!("Could not load MNIST data from data/mnist/ directory");
             println!("Generating synthetic data for demonstration...\n");
             let n = 1000;
             let images = vec![0.5; n * 784];
             (images, n)
-        }
-    };
+        };
 
     // Normalize to [-1, 1] to match tanh output
     let mut train_data = train_images;
@@ -200,7 +198,7 @@ fn main() {
 
         let avg_d_loss = total_d_loss / num_batches as f32;
         let avg_g_loss = total_g_loss / num_batches as f32;
-        println!(" D_loss={:.4}, G_loss={:.4}", avg_d_loss, avg_g_loss);
+        println!(" D_loss={avg_d_loss:.4}, G_loss={avg_g_loss:.4}");
     }
 
     println!("\n=== Training Complete ===");

@@ -44,17 +44,17 @@ mod gpu_stress_tests {
 
             if iteration % 10 == 0 {
                 let pending = gpu_pending_count();
-                println!("Iteration {}, pending ops: {}", iteration, pending);
+                println!("Iteration {iteration}, pending ops: {pending}");
             }
         }
 
         let pending_before_sync = gpu_pending_count();
-        println!("Before final sync, pending: {}", pending_before_sync);
+        println!("Before final sync, pending: {pending_before_sync}");
 
         let _ = gpu_sync();
 
         let pending_after_sync = gpu_pending_count();
-        println!("After final sync, pending: {}", pending_after_sync);
+        println!("After final sync, pending: {pending_after_sync}");
         assert_eq!(
             pending_after_sync, 0,
             "Pending count should be 0 after sync"
@@ -82,14 +82,11 @@ mod gpu_stress_tests {
         for i in 1..=10 {
             let _ = t.relu();
             let pending = gpu_pending_count();
-            println!("After op {}: pending = {}", i, pending);
+            println!("After op {i}: pending = {pending}");
         }
 
         let pending = gpu_pending_count();
-        println!(
-            "Expected 10 ops (or fewer if auto-synced), got: {}",
-            pending
-        );
+        println!("Expected 10 ops (or fewer if auto-synced), got: {pending}");
 
         let _ = gpu_sync();
     }
@@ -105,7 +102,7 @@ mod gpu_stress_tests {
         }
 
         for round in 0..5 {
-            println!("Round {}", round);
+            println!("Round {round}");
 
             // Create 100 tensors (will churn buffer pool)
             let tensors: Vec<_> = (0..100).map(|_| gpu_tensor(1024)).collect();
@@ -127,7 +124,7 @@ mod gpu_stress_tests {
 
     /// Test 4: Verify auto-sync threshold triggers correctly
     ///
-    /// This test checks that maybe_sync() actually kicks in when we
+    /// This test checks that `maybe_sync()` actually kicks in when we
     /// exceed the threshold.
     #[test]
     fn test_auto_sync_threshold() {
@@ -137,7 +134,7 @@ mod gpu_stress_tests {
         }
 
         let threshold = gpu_sync_threshold();
-        println!("Sync threshold: {}", threshold);
+        println!("Sync threshold: {threshold}");
 
         let t = gpu_tensor(256);
 
@@ -152,20 +149,18 @@ mod gpu_stress_tests {
             let pending = gpu_pending_count();
 
             if pending == 0 && i < target_ops {
-                println!("Auto-sync triggered after {} ops", i);
+                println!("Auto-sync triggered after {i} ops");
                 break;
             }
         }
 
         let final_pending = gpu_pending_count();
-        println!("Final pending: {}", final_pending);
+        println!("Final pending: {final_pending}");
 
         // Should have auto-synced, so pending should be less than threshold
         assert!(
             final_pending < threshold,
-            "Auto-sync should have triggered. Expected < {}, got {}",
-            threshold,
-            final_pending
+            "Auto-sync should have triggered. Expected < {threshold}, got {final_pending}"
         );
 
         let _ = gpu_sync();
@@ -190,7 +185,7 @@ mod gpu_stress_tests {
 
             if i % 100 == 0 {
                 let pending = gpu_pending_count();
-                println!("Op {}: pending = {}", i, pending);
+                println!("Op {i}: pending = {pending}");
             }
         }
 
@@ -230,7 +225,7 @@ mod gpu_stress_tests {
 
     /// Test 7: Copy operations tracking
     ///
-    /// Specifically test whether copy_region and to_vec track their submissions
+    /// Specifically test whether `copy_region` and `to_vec` track their submissions
     #[test]
     fn test_copy_operations_tracking() {
         if !gpu::is_gpu_available() {
@@ -244,13 +239,13 @@ mod gpu_stress_tests {
 
         let _ = gpu_sync();
         let before = gpu_pending_count();
-        println!("Before reading back: pending = {}", before);
+        println!("Before reading back: pending = {before}");
 
         // Reading data back from GPU does a submit (via to_vec in GpuBuffer)
         let result = t.borrow().data.to_vec();
 
         let after = gpu_pending_count();
-        println!("After reading back: pending = {}", after);
+        println!("After reading back: pending = {after}");
 
         // Verify data is correct
         assert_eq!(result.len(), data.len());
@@ -275,11 +270,11 @@ mod gpu_stress_tests {
 
         // Read back multiple times - staging buffers should be pooled
         for iteration in 0..5 {
-            println!("Readback iteration {}", iteration);
+            println!("Readback iteration {iteration}");
 
             for (i, t) in tensors.iter().enumerate() {
                 let data = t.borrow().data.to_vec();
-                assert_eq!(data.len(), 1024, "Tensor {} data length mismatch", i);
+                assert_eq!(data.len(), 1024, "Tensor {i} data length mismatch");
 
                 // Verify data integrity (values should be i * 0.01 for indices)
                 let first_val = data.first().copied().unwrap_or(f32::NAN);
@@ -297,17 +292,17 @@ mod gpu_stress_tests {
         println!("Staging buffer pool test complete");
     }
 
-    /// Test 9: sync_checked() timeout handling
+    /// Test 9: `sync_checked()` timeout handling
     ///
-    /// Verify sync_checked() properly tracks consecutive timeouts
+    /// Verify `sync_checked()` properly tracks consecutive timeouts
     #[test]
     fn test_sync_checked_timeout_handling() {
+        use volta::get_gpu_context;
+
         if !gpu::is_gpu_available() {
             println!("Skipping GPU stress test - no GPU available");
             return;
         }
-
-        use volta::get_gpu_context;
 
         let ctx = get_gpu_context().expect("GPU available");
 
@@ -338,7 +333,7 @@ mod gpu_stress_tests {
                         );
                     }
                     Err(e) => {
-                        panic!("Sync failed at checkpoint {}: {}", i, e);
+                        panic!("Sync failed at checkpoint {i}: {e}");
                     }
                 }
             }
@@ -357,22 +352,22 @@ mod gpu_stress_tests {
     /// Verify resource monitoring works and doesn't panic
     #[test]
     fn test_resource_monitoring() {
+        use volta::gpu::monitor::{ResourceStatus, check_system_resources, get_process_memory_mb};
+
         if !gpu::is_gpu_available() {
             println!("Skipping GPU stress test - no GPU available");
             return;
         }
 
-        use volta::gpu::monitor::{ResourceStatus, check_system_resources, get_process_memory_mb};
-
         // Check resources before starting
         match check_system_resources() {
             ResourceStatus::Critical(msg) => {
-                println!("WARNING: Resources already critical before test: {}", msg);
+                println!("WARNING: Resources already critical before test: {msg}");
                 println!("Skipping heavy operations to avoid system freeze");
                 return; // Skip test if already in critical state
             }
             ResourceStatus::Warning(msg) => {
-                println!("Resources elevated at test start: {}", msg);
+                println!("Resources elevated at test start: {msg}");
             }
             ResourceStatus::Healthy => {
                 println!("Resources healthy at test start");
@@ -396,19 +391,16 @@ mod gpu_stress_tests {
 
                 match check_system_resources() {
                     ResourceStatus::Critical(msg) => {
-                        println!("CRITICAL at iter {}: {}", iteration, msg);
-                        println!("Memory: {}MB, Pending: {}", memory_mb, pending);
-                        panic!("Test aborted - resources critical: {}", msg);
+                        println!("CRITICAL at iter {iteration}: {msg}");
+                        println!("Memory: {memory_mb}MB, Pending: {pending}");
+                        panic!("Test aborted - resources critical: {msg}");
                     }
                     ResourceStatus::Warning(msg) => {
-                        println!("Warning at iter {}: {}", iteration, msg);
-                        println!("Memory: {}MB, Pending: {}", memory_mb, pending);
+                        println!("Warning at iter {iteration}: {msg}");
+                        println!("Memory: {memory_mb}MB, Pending: {pending}");
                     }
                     ResourceStatus::Healthy => {
-                        println!(
-                            "Iter {}: Healthy ({}MB, {} pending)",
-                            iteration, memory_mb, pending
-                        );
+                        println!("Iter {iteration}: Healthy ({memory_mb}MB, {pending} pending)");
                     }
                 }
             }
@@ -423,22 +415,22 @@ mod gpu_stress_tests {
     /// Enhanced version of test 1 with resource monitoring to abort early
     #[test]
     fn test_many_small_ops_with_monitoring() {
+        use volta::gpu::monitor::{ResourceStatus, check_system_resources};
+
         if !gpu::is_gpu_available() {
             println!("Skipping GPU stress test - no GPU available");
             return;
         }
 
-        use volta::gpu::monitor::{ResourceStatus, check_system_resources};
-
         // Pre-flight check
         match check_system_resources() {
             ResourceStatus::Critical(msg) => {
-                panic!("Cannot start test - resources already critical: {}", msg);
+                panic!("Cannot start test - resources already critical: {msg}");
             }
             ResourceStatus::Warning(msg) => {
-                println!("Starting with elevated resources: {}", msg);
+                println!("Starting with elevated resources: {msg}");
             }
-            _ => {}
+            ResourceStatus::Healthy => {}
         }
 
         let tensors: Vec<_> = (0..20).map(|_| gpu_tensor(256)).collect();
@@ -452,12 +444,12 @@ mod gpu_stress_tests {
                 match check_system_resources() {
                     ResourceStatus::Critical(msg) => {
                         let _ = gpu_sync(); // Try to clean up before aborting
-                        panic!("Test aborted at iteration {} - {}", iteration, msg);
+                        panic!("Test aborted at iteration {iteration} - {msg}");
                     }
                     ResourceStatus::Warning(msg) => {
-                        println!("Warning at iter {}: {}", iteration, msg);
+                        println!("Warning at iter {iteration}: {msg}");
                     }
-                    _ => {}
+                    ResourceStatus::Healthy => {}
                 }
             }
         }
@@ -467,15 +459,15 @@ mod gpu_stress_tests {
 
     /// Test 12: System monitor profiling
     ///
-    /// Demonstrate real-time performance profiling with SystemMonitor
+    /// Demonstrate real-time performance profiling with `SystemMonitor`
     #[test]
     fn test_system_monitor_profiling() {
+        use volta::gpu::system_monitor::SystemMonitor;
+
         if !gpu::is_gpu_available() {
             println!("Skipping GPU stress test - no GPU available");
             return;
         }
-
-        use volta::gpu::system_monitor::SystemMonitor;
 
         let monitor = SystemMonitor::new();
 
@@ -493,7 +485,7 @@ mod gpu_stress_tests {
             }
 
             if i % 10 == 0 {
-                monitor.checkpoint(&format!("iteration_{}", i));
+                monitor.checkpoint(&format!("iteration_{i}"));
             }
         }
 
@@ -503,7 +495,7 @@ mod gpu_stress_tests {
 
         // Get final stats
         let stats = monitor.stats();
-        println!("\nFinal Stats: {}", stats);
+        println!("\nFinal Stats: {stats}");
 
         assert!(stats.operation_count > 0, "Should have recorded operations");
         assert!(stats.sync_count > 0, "Should have recorded syncs");
@@ -515,20 +507,20 @@ mod gpu_stress_tests {
     /// Verify early warning system detects increasing memory trends
     #[test]
     fn test_early_warning_trend_detection() {
+        use volta::gpu::early_warning::{EarlyWarningSystem, HealthStatus};
+
         if !gpu::is_gpu_available() {
             println!("Skipping GPU stress test - no GPU available");
             return;
         }
-
-        use volta::gpu::early_warning::{EarlyWarningSystem, HealthStatus};
 
         let mut ews = EarlyWarningSystem::new();
 
         // Initial checks should be healthy (insufficient data)
         match ews.check_health() {
             HealthStatus::Healthy => println!("Initial: Healthy (insufficient data)"),
-            HealthStatus::Warning(msg) => println!("Initial: Warning - {}", msg),
-            HealthStatus::Critical(msg) => println!("Initial: Critical - {}", msg),
+            HealthStatus::Warning(msg) => println!("Initial: Warning - {msg}"),
+            HealthStatus::Critical(msg) => println!("Initial: Critical - {msg}"),
         }
 
         // Run some operations and periodically check
@@ -542,13 +534,13 @@ mod gpu_stress_tests {
             if iteration % 5 == 0 {
                 match ews.check_health() {
                     HealthStatus::Healthy => {
-                        println!("Iteration {}: Healthy", iteration);
+                        println!("Iteration {iteration}: Healthy");
                     }
                     HealthStatus::Warning(msg) => {
-                        println!("Iteration {}: Warning - {}", iteration, msg);
+                        println!("Iteration {iteration}: Warning - {msg}");
                     }
                     HealthStatus::Critical(msg) => {
-                        println!("Iteration {}: Critical - {}", iteration, msg);
+                        println!("Iteration {iteration}: Critical - {msg}");
                         // In real usage, would abort here
                     }
                 }
@@ -576,14 +568,14 @@ mod gpu_stress_tests {
     /// Demonstrate using all monitoring tools together
     #[test]
     fn test_combined_monitoring_integration() {
+        use volta::gpu::early_warning::{EarlyWarningSystem, HealthStatus as EWSHealthStatus};
+        use volta::gpu::monitor::{ResourceStatus, check_system_resources};
+        use volta::gpu::system_monitor::SystemMonitor;
+
         if !gpu::is_gpu_available() {
             println!("Skipping GPU stress test - no GPU available");
             return;
         }
-
-        use volta::gpu::early_warning::{EarlyWarningSystem, HealthStatus as EWSHealthStatus};
-        use volta::gpu::monitor::{ResourceStatus, check_system_resources};
-        use volta::gpu::system_monitor::SystemMonitor;
 
         // Initialize all monitors
         let monitor = SystemMonitor::new();
@@ -594,10 +586,10 @@ mod gpu_stress_tests {
         // Pre-flight resource check
         match check_system_resources() {
             ResourceStatus::Critical(msg) => {
-                panic!("Cannot start - resources critical: {}", msg);
+                panic!("Cannot start - resources critical: {msg}");
             }
             ResourceStatus::Warning(msg) => {
-                println!("Starting with warning: {}", msg);
+                println!("Starting with warning: {msg}");
             }
             ResourceStatus::Healthy => {
                 println!("Starting healthy");
@@ -618,22 +610,22 @@ mod gpu_stress_tests {
             if iteration % 5 == 0 {
                 // Check immediate resources
                 if let ResourceStatus::Critical(msg) = check_system_resources() {
-                    panic!("Iteration {}: Critical resources - {}", iteration, msg);
+                    panic!("Iteration {iteration}: Critical resources - {msg}");
                 }
 
                 // Check trends
                 match ews.check_health() {
                     EWSHealthStatus::Critical(msg) => {
-                        println!("Iteration {}: Critical trend - {}", iteration, msg);
+                        println!("Iteration {iteration}: Critical trend - {msg}");
                     }
                     EWSHealthStatus::Warning(msg) => {
-                        println!("Iteration {}: Warning trend - {}", iteration, msg);
+                        println!("Iteration {iteration}: Warning trend - {msg}");
                     }
-                    _ => {}
+                    EWSHealthStatus::Healthy => {}
                 }
 
                 // Profiling checkpoint
-                monitor.checkpoint(&format!("iter_{}", iteration));
+                monitor.checkpoint(&format!("iter_{iteration}"));
             }
         }
 
@@ -644,7 +636,7 @@ mod gpu_stress_tests {
         // Final reporting
         let stats = monitor.stats();
         println!("\n=== Final Performance Stats ===");
-        println!("{}", stats);
+        println!("{stats}");
 
         let trends = ews.trends();
         println!(
@@ -654,10 +646,10 @@ mod gpu_stress_tests {
 
         match check_system_resources() {
             ResourceStatus::Critical(msg) => {
-                println!("\n=== CRITICAL: {} ===", msg);
+                println!("\n=== CRITICAL: {msg} ===");
             }
             ResourceStatus::Warning(msg) => {
-                println!("\n=== Warning: {} ===", msg);
+                println!("\n=== Warning: {msg} ===");
             }
             ResourceStatus::Healthy => {
                 println!("\n=== Completed Healthy ===");

@@ -30,7 +30,7 @@ impl CharVocab {
             char_to_idx.insert(ch, idx);
         }
 
-        CharVocab {
+        Self {
             char_to_idx,
             idx_to_char: chars,
         }
@@ -65,7 +65,7 @@ struct CharRNN {
 
 impl CharRNN {
     fn new(vocab_size: usize, emb_dim: usize, hidden_size: usize, dropout_p: f32) -> Self {
-        CharRNN {
+        Self {
             embedding: Embedding::new(vocab_size, emb_dim),
             lstm: LSTMCell::new(emb_dim, hidden_size, true),
             dropout: Dropout::new(dropout_p),
@@ -230,12 +230,12 @@ fn main() {
     let dropout_p = 0.1;
 
     println!("Hyperparameters:");
-    println!("  Embedding dimension: {}", emb_dim);
-    println!("  Hidden size: {}", hidden_size);
-    println!("  Sequence length: {}", seq_len);
-    println!("  Epochs: {}", epochs);
-    println!("  Learning rate: {}", learning_rate);
-    println!("  Dropout: {}\n", dropout_p);
+    println!("  Embedding dimension: {emb_dim}");
+    println!("  Hidden size: {hidden_size}");
+    println!("  Sequence length: {seq_len}");
+    println!("  Epochs: {epochs}");
+    println!("  Learning rate: {learning_rate}");
+    println!("  Dropout: {dropout_p}\n");
 
     // Create model
     let mut model = CharRNN::new(vocab.size(), emb_dim, hidden_size, dropout_p);
@@ -243,7 +243,7 @@ fn main() {
 
     let params = model.parameters();
     let total_params: usize = params.iter().map(|p| p.borrow().data.len()).sum();
-    println!("Total parameters: {}\n", total_params);
+    println!("Total parameters: {total_params}\n");
 
     // Create optimizer
     let mut optimizer = Adam::new(params, learning_rate, (0.9, 0.999), 1e-8, 0.0);
@@ -284,7 +284,7 @@ fn main() {
         let avg_loss = epoch_loss / num_batches as f32;
 
         if epoch % 10 == 0 || epoch == 1 {
-            println!("Epoch {:3}/{}: Loss = {:.4}", epoch, epochs, avg_loss);
+            println!("Epoch {epoch:3}/{epochs}: Loss = {avg_loss:.4}");
         }
     }
 
@@ -296,8 +296,8 @@ fn main() {
     let seeds = vec!["the ", "a ", "to "];
     for seed in seeds {
         let generated = generate(&mut model, &vocab, seed, 40, 1.0);
-        println!("Seed: {:?}", seed);
-        println!("Generated: {}\n", generated);
+        println!("Seed: {seed:?}");
+        println!("Generated: {generated}\n");
     }
 
     println!("✓ Successfully trained character language model!");

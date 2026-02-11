@@ -255,8 +255,7 @@ mod tests {
             let grad_at_idx2 = grad_data.get(2 * 4 + d).copied().unwrap_or(f32::NAN);
             assert!(
                 (grad_at_idx2 - 2.0).abs() < 1e-5,
-                "Expected grad ~2.0 for repeated index, got {}",
-                grad_at_idx2
+                "Expected grad ~2.0 for repeated index, got {grad_at_idx2}"
             );
         }
 
@@ -265,8 +264,7 @@ mod tests {
             let grad_at_idx7 = grad_data.get(7 * 4 + d).copied().unwrap_or(f32::NAN);
             assert!(
                 (grad_at_idx7 - 1.0).abs() < 1e-5,
-                "Expected grad ~1.0 for single index, got {}",
-                grad_at_idx7
+                "Expected grad ~1.0 for single index, got {grad_at_idx7}"
             );
         }
     }

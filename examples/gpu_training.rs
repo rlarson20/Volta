@@ -2,8 +2,8 @@
 //!
 //! This example demonstrates end-to-end GPU training in Volta, showing:
 //! - Creating models with device-aware constructors
-//! - Using Module::to_device() to move models to GPU
-//! - DataLoader with automatic GPU prefetch
+//! - Using `Module::to_device()` to move models to GPU
+//! - `DataLoader` with automatic GPU prefetch
 //! - Full training loop staying on GPU
 //! - Performance comparison with CPU training
 
@@ -17,15 +17,12 @@ fn main() {
 
     // Check GPU availability
     #[cfg(feature = "gpu")]
-    let device = match Device::gpu() {
-        Some(dev) => {
-            println!("✓ GPU available: {}", dev.name());
-            dev
-        }
-        None => {
-            println!("✗ No GPU available, using CPU");
-            Device::CPU
-        }
+    let device = if let Some(dev) = Device::gpu() {
+        println!("✓ GPU available: {}", dev.name());
+        dev
+    } else {
+        println!("✗ No GPU available, using CPU");
+        Device::CPU
     };
 
     #[cfg(not(feature = "gpu"))]
@@ -82,7 +79,7 @@ fn train_with_device_constructors(x_data: Vec<f32>, y_data: Vec<f32>, device: De
     train_model(&model, &mut opt, &x, &y, 100);
 }
 
-/// Train using to_device() on existing model
+/// Train using `to_device()` on existing model
 fn train_with_to_device(x_data: Vec<f32>, y_data: Vec<f32>, device: Device) {
     println!(
         "Building model on CPU, then moving to device: {}",
@@ -140,7 +137,7 @@ fn compare_cpu_vs_gpu(x_data: Vec<f32>, y_data: Vec<f32>) {
     train_model(&model_cpu, &mut opt_cpu, &x_cpu, &y_cpu, 200);
     let cpu_time = start.elapsed();
 
-    println!("CPU training time: {:?}", cpu_time);
+    println!("CPU training time: {cpu_time:?}");
 
     // GPU training (if available)
     #[cfg(feature = "gpu")]
@@ -164,7 +161,7 @@ fn compare_cpu_vs_gpu(x_data: Vec<f32>, y_data: Vec<f32>) {
         train_model(&model_gpu, &mut opt_gpu, &x_gpu, &y_gpu, 200);
         let gpu_time = start.elapsed();
 
-        println!("GPU training time: {:?}", gpu_time);
+        println!("GPU training time: {gpu_time:?}");
         println!(
             "\nSpeedup: {:.2}x",
             cpu_time.as_secs_f64() / gpu_time.as_secs_f64()
@@ -204,10 +201,7 @@ fn train_model(model: &Sequential, opt: &mut Adam, x: &Tensor, y: &Tensor, epoch
         }
     }
 
-    println!(
-        "  Final loss: {:.6} (started at {:.6})",
-        final_loss, initial_loss
-    );
+    println!("  Final loss: {final_loss:.6} (started at {initial_loss:.6})");
 
     // Test predictions
     println!("  Predictions:");

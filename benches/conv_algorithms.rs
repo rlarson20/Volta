@@ -6,8 +6,8 @@
 //! Memory calculation for im2col:
 //! - Input: (B, C, H, W)
 //! - Kernel: (K, K)
-//! - im2col output: (B * H_out * W_out, C * K * K)
-//! - Memory = B * H_out * W_out * C * K * K * 4 bytes (f32)
+//! - im2col output: (B * `H_out` * `W_out`, C * K * K)
+//! - Memory = B * `H_out` * `W_out` * C * K * K * 4 bytes (f32)
 
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use volta::{Conv2d, ConvAlgo, RawTensor, Tensor};
@@ -68,9 +68,7 @@ fn bench_conv_algorithm_comparison(c: &mut Criterion) {
         // Safety check: ensure we're under 16GB limit
         assert!(
             im2col_mb < 16_000.0,
-            "Benchmark exceeds memory limit: {} uses {:.1} MB",
-            name,
-            im2col_mb
+            "Benchmark exceeds memory limit: {name} uses {im2col_mb:.1} MB"
         );
 
         // Benchmark Direct convolution
@@ -82,7 +80,7 @@ fn bench_conv_algorithm_comparison(c: &mut Criterion) {
                 layer.set_algo(ConvAlgo::Direct);
                 let input = random_tensor_4d(batch_sz, ic, h, w);
 
-                b.iter(|| black_box(&layer).forward(black_box(&input)))
+                b.iter(|| black_box(&layer).forward(black_box(&input)));
             },
         );
 
@@ -95,14 +93,13 @@ fn bench_conv_algorithm_comparison(c: &mut Criterion) {
                 layer.set_algo(ConvAlgo::Im2col);
                 let input = random_tensor_4d(batch_sz, ic, h, w);
 
-                b.iter(|| black_box(&layer).forward(black_box(&input)))
+                b.iter(|| black_box(&layer).forward(black_box(&input)));
             },
         );
 
         // Print memory info for this scenario
         println!(
-            "{}: B={}, C={}→{}, H=W={}, K={}x{}, im2col memory: {:.1} MB",
-            name, batch, in_ch, out_ch, h, kernel, kernel, im2col_mb
+            "{name}: B={batch}, C={in_ch}→{out_ch}, H=W={h}, K={kernel}x{kernel}, im2col memory: {im2col_mb:.1} MB"
         );
     }
 
@@ -129,7 +126,7 @@ fn bench_conv_kernel_size_comparison(c: &mut Criterion) {
                 layer.set_algo(ConvAlgo::Direct);
                 let input = random_tensor_4d(8, 64, 56, 56);
 
-                bench.iter(|| black_box(&layer).forward(black_box(&input)))
+                bench.iter(|| black_box(&layer).forward(black_box(&input)));
             },
         );
 
@@ -141,14 +138,11 @@ fn bench_conv_kernel_size_comparison(c: &mut Criterion) {
                 layer.set_algo(ConvAlgo::Im2col);
                 let input = random_tensor_4d(8, 64, 56, 56);
 
-                bench.iter(|| black_box(&layer).forward(black_box(&input)))
+                bench.iter(|| black_box(&layer).forward(black_box(&input)));
             },
         );
 
-        println!(
-            "Kernel {}: im2col memory = {:.1} MB",
-            kernel_size, im2col_mb
-        );
+        println!("Kernel {kernel_size}: im2col memory = {im2col_mb:.1} MB");
     }
 
     group.finish();
@@ -171,7 +165,7 @@ fn bench_conv_batch_size_comparison(c: &mut Criterion) {
                 layer.set_algo(ConvAlgo::Direct);
                 let input = random_tensor_4d(batch_sz, 64, 56, 56);
 
-                bench.iter(|| black_box(&layer).forward(black_box(&input)))
+                bench.iter(|| black_box(&layer).forward(black_box(&input)));
             },
         );
 
@@ -183,11 +177,11 @@ fn bench_conv_batch_size_comparison(c: &mut Criterion) {
                 layer.set_algo(ConvAlgo::Im2col);
                 let input = random_tensor_4d(batch_sz, 64, 56, 56);
 
-                bench.iter(|| black_box(&layer).forward(black_box(&input)))
+                bench.iter(|| black_box(&layer).forward(black_box(&input)));
             },
         );
 
-        println!("Batch {}: im2col memory = {:.1} MB", batch, im2col_mb);
+        println!("Batch {batch}: im2col memory = {im2col_mb:.1} MB");
     }
 
     group.finish();
@@ -224,7 +218,7 @@ fn bench_conv_spatial_size_comparison(c: &mut Criterion) {
                 layer.set_algo(ConvAlgo::Direct);
                 let input = random_tensor_4d(batch_sz, 64, h, w);
 
-                bench.iter(|| black_box(&layer).forward(black_box(&input)))
+                bench.iter(|| black_box(&layer).forward(black_box(&input)));
             },
         );
 
@@ -236,14 +230,11 @@ fn bench_conv_spatial_size_comparison(c: &mut Criterion) {
                 layer.set_algo(ConvAlgo::Im2col);
                 let input = random_tensor_4d(batch_sz, 64, h, w);
 
-                bench.iter(|| black_box(&layer).forward(black_box(&input)))
+                bench.iter(|| black_box(&layer).forward(black_box(&input)));
             },
         );
 
-        println!(
-            "Spatial {} (batch={}): im2col memory = {:.1} MB",
-            label, batch, im2col_mb
-        );
+        println!("Spatial {label} (batch={batch}): im2col memory = {im2col_mb:.1} MB");
     }
 
     group.finish();
@@ -273,14 +264,11 @@ fn bench_conv_auto_mode(c: &mut Criterion) {
                 layer.set_algo(ConvAlgo::Auto);
                 let input = random_tensor_4d(batch_sz, ic, h, w);
 
-                bench.iter(|| black_box(&layer).forward(black_box(&input)))
+                bench.iter(|| black_box(&layer).forward(black_box(&input)));
             },
         );
 
-        println!(
-            "Auto scenario {}: im2col memory = {:.1} MB",
-            label, im2col_mb
-        );
+        println!("Auto scenario {label}: im2col memory = {im2col_mb:.1} MB");
     }
 
     group.finish();
@@ -315,7 +303,7 @@ fn bench_conv_memory_scaling(c: &mut Criterion) {
                 layer.set_algo(ConvAlgo::Direct);
                 let input = random_tensor_4d(batch_sz, ic, h, w);
 
-                bench.iter(|| black_box(&layer).forward(black_box(&input)))
+                bench.iter(|| black_box(&layer).forward(black_box(&input)));
             },
         );
 
@@ -327,7 +315,7 @@ fn bench_conv_memory_scaling(c: &mut Criterion) {
                 layer.set_algo(ConvAlgo::Im2col);
                 let input = random_tensor_4d(batch_sz, ic, h, w);
 
-                bench.iter(|| black_box(&layer).forward(black_box(&input)))
+                bench.iter(|| black_box(&layer).forward(black_box(&input)));
             },
         );
 

@@ -3,7 +3,7 @@
 //! Benchmarks for high-level neural network components including:
 //! - Linear layer (forward and backward pass)
 //! - Conv2d layer (various kernel sizes)
-//! - MaxPool2d layer
+//! - `MaxPool2d` layer
 //! - Sequential models (end-to-end forward pass)
 
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
@@ -38,25 +38,25 @@ fn bench_linear_forward(c: &mut Criterion) {
     group.bench_function("mnist_style_784x128", |b| {
         let layer = Linear::new(784, 128, true);
         let input = random_tensor_2d(32, 784);
-        b.iter(|| black_box(&layer).forward(black_box(&input)))
+        b.iter(|| black_box(&layer).forward(black_box(&input)));
     });
 
     group.bench_function("output_layer_128x10", |b| {
         let layer = Linear::new(128, 10, true);
         let input = random_tensor_2d(32, 128);
-        b.iter(|| black_box(&layer).forward(black_box(&input)))
+        b.iter(|| black_box(&layer).forward(black_box(&input)));
     });
 
     group.bench_function("square_large_512x512", |b| {
         let layer = Linear::new(512, 512, true);
         let input = random_tensor_2d(16, 512);
-        b.iter(|| black_box(&layer).forward(black_box(&input)))
+        b.iter(|| black_box(&layer).forward(black_box(&input)));
     });
 
     group.bench_function("rectangular_1024x256", |b| {
         let layer = Linear::new(1024, 256, true);
         let input = random_tensor_2d(16, 1024);
-        b.iter(|| black_box(&layer).forward(black_box(&input)))
+        b.iter(|| black_box(&layer).forward(black_box(&input)));
     });
 
     group.finish();
@@ -72,7 +72,7 @@ fn bench_linear_backward(c: &mut Criterion) {
         b.iter(|| {
             let output = layer.forward(&input);
             output.backward();
-        })
+        });
     });
 
     group.bench_function("backward_256x128", |b| {
@@ -81,7 +81,7 @@ fn bench_linear_backward(c: &mut Criterion) {
         b.iter(|| {
             let output = layer.forward(&input);
             output.backward();
-        })
+        });
     });
 
     group.finish();
@@ -96,44 +96,44 @@ fn bench_conv2d_forward(c: &mut Criterion) {
     group.bench_function("kernel_1x1", |b| {
         let layer = Conv2d::new(3, 16, 1, 1, 0, true);
         let input = random_tensor_4d(8, 3, 32, 32);
-        b.iter(|| black_box(&layer).forward(black_box(&input)))
+        b.iter(|| black_box(&layer).forward(black_box(&input)));
     });
 
     group.bench_function("kernel_3x3", |b| {
         let layer = Conv2d::new(3, 16, 3, 1, 0, true);
         let input = random_tensor_4d(8, 3, 32, 32);
-        b.iter(|| black_box(&layer).forward(black_box(&input)))
+        b.iter(|| black_box(&layer).forward(black_box(&input)));
     });
 
     group.bench_function("kernel_5x5", |b| {
         let layer = Conv2d::new(3, 16, 5, 1, 0, true);
         let input = random_tensor_4d(8, 3, 32, 32);
-        b.iter(|| black_box(&layer).forward(black_box(&input)))
+        b.iter(|| black_box(&layer).forward(black_box(&input)));
     });
 
     group.bench_function("kernel_7x7", |b| {
         let layer = Conv2d::new(3, 16, 7, 1, 0, true);
         let input = random_tensor_4d(8, 3, 32, 32);
-        b.iter(|| black_box(&layer).forward(black_box(&input)))
+        b.iter(|| black_box(&layer).forward(black_box(&input)));
     });
 
     // Different channel configurations
     group.bench_function("channels_grayscale_small", |b| {
         let layer = Conv2d::new(1, 8, 3, 1, 0, true);
         let input = random_tensor_4d(4, 1, 28, 28);
-        b.iter(|| black_box(&layer).forward(black_box(&input)))
+        b.iter(|| black_box(&layer).forward(black_box(&input)));
     });
 
     group.bench_function("channels_rgb_small", |b| {
         let layer = Conv2d::new(3, 16, 3, 1, 0, true);
         let input = random_tensor_4d(4, 3, 28, 28);
-        b.iter(|| black_box(&layer).forward(black_box(&input)))
+        b.iter(|| black_box(&layer).forward(black_box(&input)));
     });
 
     group.bench_function("channels_rgb_medium", |b| {
         let layer = Conv2d::new(3, 32, 3, 1, 0, true);
         let input = random_tensor_4d(4, 3, 28, 28);
-        b.iter(|| black_box(&layer).forward(black_box(&input)))
+        b.iter(|| black_box(&layer).forward(black_box(&input)));
     });
 
     group.finish();
@@ -147,19 +147,19 @@ fn bench_maxpool2d(c: &mut Criterion) {
     group.bench_function("standard_2x2", |b| {
         let layer = MaxPool2d::new(2, 2, 0);
         let input = random_tensor_4d(8, 16, 28, 28);
-        b.iter(|| black_box(&layer).forward(black_box(&input)))
+        b.iter(|| black_box(&layer).forward(black_box(&input)));
     });
 
     group.bench_function("overlap_3x2", |b| {
         let layer = MaxPool2d::new(3, 2, 0);
         let input = random_tensor_4d(8, 16, 28, 28);
-        b.iter(|| black_box(&layer).forward(black_box(&input)))
+        b.iter(|| black_box(&layer).forward(black_box(&input)));
     });
 
     group.bench_function("large_4x4", |b| {
         let layer = MaxPool2d::new(4, 4, 0);
         let input = random_tensor_4d(8, 16, 28, 28);
-        b.iter(|| black_box(&layer).forward(black_box(&input)))
+        b.iter(|| black_box(&layer).forward(black_box(&input)));
     });
 
     group.finish();
@@ -178,7 +178,7 @@ fn bench_sequential_forward(c: &mut Criterion) {
             Box::new(Linear::new(64, 10, true)),
         ]);
         let input = random_tensor_2d(32, 128);
-        b.iter(|| black_box(&model).forward(black_box(&input)))
+        b.iter(|| black_box(&model).forward(black_box(&input)));
     });
 
     // Medium MLP
@@ -191,7 +191,7 @@ fn bench_sequential_forward(c: &mut Criterion) {
             Box::new(Linear::new(64, 10, true)),
         ]);
         let input = random_tensor_2d(32, 256);
-        b.iter(|| black_box(&model).forward(black_box(&input)))
+        b.iter(|| black_box(&model).forward(black_box(&input)));
     });
 
     // CNN-like model (conv + pool + linear)
@@ -202,7 +202,7 @@ fn bench_sequential_forward(c: &mut Criterion) {
             Box::new(MaxPool2d::new(2, 2, 0)),
         ]);
         let input = random_tensor_4d(8, 3, 28, 28);
-        b.iter(|| black_box(&model).forward(black_box(&input)))
+        b.iter(|| black_box(&model).forward(black_box(&input)));
     });
 
     group.finish();
@@ -215,22 +215,22 @@ fn bench_activations(c: &mut Criterion) {
 
     group.bench_function("relu_1024", |b| {
         let tensor = random_tensor(1024);
-        b.iter(|| black_box(&tensor).relu())
+        b.iter(|| black_box(&tensor).relu());
     });
 
     group.bench_function("relu_4096", |b| {
         let tensor = random_tensor(4096);
-        b.iter(|| black_box(&tensor).relu())
+        b.iter(|| black_box(&tensor).relu());
     });
 
     group.bench_function("sigmoid_1024", |b| {
         let tensor = random_tensor(1024);
-        b.iter(|| black_box(&tensor).sigmoid())
+        b.iter(|| black_box(&tensor).sigmoid());
     });
 
     group.bench_function("tanh_1024", |b| {
         let tensor = random_tensor(1024);
-        b.iter(|| black_box(&tensor).tanh())
+        b.iter(|| black_box(&tensor).tanh());
     });
 
     group.finish();

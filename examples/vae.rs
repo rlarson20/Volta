@@ -15,36 +15,28 @@ fn main() {
     let learning_rate = 0.001;
 
     // Load MNIST data
-    let (train_images, num_train) = match load_mnist_images("data/train-images-idx3-ubyte") {
-        Ok(images) => {
+    let (train_images, num_train) =
+        if let Ok(images) = load_mnist_images("data/train-images-idx3-ubyte") {
             let n = images.len() / input_dim;
-            println!("Loaded {} MNIST training images", n);
+            println!("Loaded {n} MNIST training images");
             (images, n)
-        }
-        Err(_) => {
+        } else {
             println!("Could not load MNIST data from data/ directory");
             println!("Generating synthetic data for demonstration...\n");
             let n = 1000;
             let images = vec![0.5; n * input_dim];
             (images, n)
-        }
-    };
+        };
 
     // Normalize to [0, 1]
     let mut train_data = train_images;
     normalize(&mut train_data, 0.0, 255.0);
 
     println!("Architecture:");
-    println!(
-        "  Encoder: {} -> {} -> {} (mu + logvar)",
-        input_dim, hidden_dim, latent_dim
-    );
-    println!(
-        "  Decoder: {} -> {} -> {}",
-        latent_dim, hidden_dim, input_dim
-    );
-    println!("  Latent dimension: {}", latent_dim);
-    println!("  Batch size: {}", batch_size);
+    println!("  Encoder: {input_dim} -> {hidden_dim} -> {latent_dim} (mu + logvar)");
+    println!("  Decoder: {latent_dim} -> {hidden_dim} -> {input_dim}");
+    println!("  Latent dimension: {latent_dim}");
+    println!("  Batch size: {batch_size}");
     println!("\nStarting training...\n");
 
     // Build encoder: input -> hidden -> (mu, logvar)
@@ -121,10 +113,7 @@ fn main() {
             let avg_loss = total_loss / num_batches as f32;
             let avg_recon = total_recon / num_batches as f32;
             let avg_kl = total_kl / num_batches as f32;
-            println!(
-                " Loss={:.4} (Recon={:.4}, KL={:.4})",
-                avg_loss, avg_recon, avg_kl
-            );
+            println!(" Loss={avg_loss:.4} (Recon={avg_recon:.4}, KL={avg_kl:.4})");
         }
     }
 
@@ -167,5 +156,5 @@ fn main() {
         .map(|(a, b)| (a - b).powi(2))
         .sum::<f32>()
         / input_dim as f32;
-    println!("Reconstruction MSE: {:.6}", mse);
+    println!("Reconstruction MSE: {mse:.6}");
 }

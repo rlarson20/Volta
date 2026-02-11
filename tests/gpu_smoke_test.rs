@@ -415,10 +415,10 @@ fn test_binary_add_backward_simple() {
     loss.backward();
 
     let x_grad = x.grad().unwrap();
-    println!("x_grad: {:?}", x_grad);
+    println!("x_grad: {x_grad:?}");
     assert_eq!(x_grad, vec![1.0, 1.0]);
 
     let y_grad = y.grad().unwrap();
-    println!("y_grad: {:?}", y_grad);
+    println!("y_grad: {y_grad:?}");
     assert_eq!(y_grad, vec![1.0, 1.0]);
 }

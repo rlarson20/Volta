@@ -54,15 +54,12 @@ fn bench_matmul_cpu_vs_gpu(c: &mut Criterion) {
     // Pre-flight resource check
     match check_system_resources() {
         ResourceStatus::Critical(msg) => {
-            eprintln!("CRITICAL: Cannot run matmul benchmarks - {}", msg);
+            eprintln!("CRITICAL: Cannot run matmul benchmarks - {msg}");
             eprintln!("Skipping matmul_cpu_vs_gpu to avoid system freeze");
             return;
         }
         ResourceStatus::Warning(msg) => {
-            eprintln!(
-                "WARNING: Starting matmul benchmarks with elevated resources: {}",
-                msg
-            );
+            eprintln!("WARNING: Starting matmul benchmarks with elevated resources: {msg}");
         }
         ResourceStatus::Healthy => {
             println!(
@@ -84,7 +81,7 @@ fn bench_matmul_cpu_vs_gpu(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("cpu", n), n_ref, |b, s| {
             let a = random_tensor_2d(*s, *s);
             let tensor_b = random_tensor_2d(*s, *s);
-            b.iter(|| black_box(&a).matmul(black_box(&tensor_b)))
+            b.iter(|| black_box(&a).matmul(black_box(&tensor_b)));
         });
 
         // GPU version
@@ -98,7 +95,7 @@ fn bench_matmul_cpu_vs_gpu(c: &mut Criterion) {
                 let result = black_box(&a).matmul(black_box(&tensor_b));
                 let _ = gpu_sync();
                 result
-            })
+            });
         });
     }
 
@@ -119,22 +116,13 @@ fn bench_matmul_cpu_vs_gpu(c: &mut Criterion) {
     let final_memory = get_process_memory_mb();
     match check_system_resources() {
         ResourceStatus::Critical(msg) => {
-            eprintln!(
-                "CRITICAL after matmul_cpu_vs_gpu: {} (Memory: {}MB)",
-                msg, final_memory
-            );
+            eprintln!("CRITICAL after matmul_cpu_vs_gpu: {msg} (Memory: {final_memory}MB)");
         }
         ResourceStatus::Warning(msg) => {
-            eprintln!(
-                "Warning after matmul_cpu_vs_gpu: {} (Memory: {}MB)",
-                msg, final_memory
-            );
+            eprintln!("Warning after matmul_cpu_vs_gpu: {msg} (Memory: {final_memory}MB)");
         }
         ResourceStatus::Healthy => {
-            println!(
-                "matmul_cpu_vs_gpu complete. Final memory: {}MB",
-                final_memory
-            );
+            println!("matmul_cpu_vs_gpu complete. Final memory: {final_memory}MB");
         }
     }
 
@@ -146,10 +134,7 @@ fn bench_matmul_cpu_vs_gpu(c: &mut Criterion) {
 
     // Clear buffer pools to release GPU memory
     if let Some((buffers, staging)) = gpu_pool_stats() {
-        println!(
-            "[Cleanup] Clearing pools (buffers: {}, staging: {})",
-            buffers, staging
-        );
+        println!("[Cleanup] Clearing pools (buffers: {buffers}, staging: {staging})");
     }
     let _ = gpu_compact();
 
@@ -166,7 +151,7 @@ fn bench_matmul_cpu_vs_gpu(c: &mut Criterion) {
 
     // Verify cleanup succeeded
     if let ResourceStatus::Critical(msg) = check_system_resources() {
-        panic!("CRITICAL after cleanup: {}", msg);
+        panic!("CRITICAL after cleanup: {msg}");
     }
 }
 
@@ -185,15 +170,12 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
     // Pre-flight resource check
     match check_system_resources() {
         ResourceStatus::Critical(msg) => {
-            eprintln!("CRITICAL: Cannot run binary ops benchmarks - {}", msg);
+            eprintln!("CRITICAL: Cannot run binary ops benchmarks - {msg}");
             eprintln!("Skipping binary_ops_cpu_vs_gpu to avoid system freeze");
             return;
         }
         ResourceStatus::Warning(msg) => {
-            eprintln!(
-                "WARNING: Starting binary ops benchmarks with elevated resources: {}",
-                msg
-            );
+            eprintln!("WARNING: Starting binary ops benchmarks with elevated resources: {msg}");
         }
         ResourceStatus::Healthy => {
             println!(
@@ -214,7 +196,7 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("cpu_add", size), size_ref, |b, s| {
             let a = random_tensor(*s);
             let tensor_b = random_tensor(*s);
-            b.iter(|| black_box(&a).add(black_box(&tensor_b)))
+            b.iter(|| black_box(&a).add(black_box(&tensor_b)));
         });
 
         // GPU addition
@@ -228,14 +210,14 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
                 let result = black_box(&a).add(black_box(&tensor_b));
                 let _ = gpu_sync();
                 result
-            })
+            });
         });
 
         // CPU multiplication
         group.bench_with_input(BenchmarkId::new("cpu_mul", size), size_ref, |b, s| {
             let a = random_tensor(*s);
             let tensor_b = random_tensor(*s);
-            b.iter(|| black_box(&a).elem_mul(black_box(&tensor_b)))
+            b.iter(|| black_box(&a).elem_mul(black_box(&tensor_b)));
         });
 
         // GPU multiplication
@@ -249,7 +231,7 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
                 let result = black_box(&a).elem_mul(black_box(&tensor_b));
                 let _ = gpu_sync();
                 result
-            })
+            });
         });
     }
 
@@ -270,22 +252,13 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
     let final_memory = get_process_memory_mb();
     match check_system_resources() {
         ResourceStatus::Critical(msg) => {
-            eprintln!(
-                "CRITICAL after binary_ops_cpu_vs_gpu: {} (Memory: {}MB)",
-                msg, final_memory
-            );
+            eprintln!("CRITICAL after binary_ops_cpu_vs_gpu: {msg} (Memory: {final_memory}MB)");
         }
         ResourceStatus::Warning(msg) => {
-            eprintln!(
-                "Warning after binary_ops_cpu_vs_gpu: {} (Memory: {}MB)",
-                msg, final_memory
-            );
+            eprintln!("Warning after binary_ops_cpu_vs_gpu: {msg} (Memory: {final_memory}MB)");
         }
         ResourceStatus::Healthy => {
-            println!(
-                "binary_ops_cpu_vs_gpu complete. Final memory: {}MB",
-                final_memory
-            );
+            println!("binary_ops_cpu_vs_gpu complete. Final memory: {final_memory}MB");
         }
     }
 
@@ -297,10 +270,7 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
 
     // Clear buffer pools to release GPU memory
     if let Some((buffers, staging)) = gpu_pool_stats() {
-        println!(
-            "[Cleanup] Clearing pools (buffers: {}, staging: {})",
-            buffers, staging
-        );
+        println!("[Cleanup] Clearing pools (buffers: {buffers}, staging: {staging})");
     }
     let _ = gpu_compact();
 
@@ -315,7 +285,7 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
 
     // Verify cleanup succeeded
     if let ResourceStatus::Critical(msg) = check_system_resources() {
-        panic!("CRITICAL after cleanup: {}", msg);
+        panic!("CRITICAL after cleanup: {msg}");
     }
 }
 
@@ -334,15 +304,12 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
     // Pre-flight resource check
     match check_system_resources() {
         ResourceStatus::Critical(msg) => {
-            eprintln!("CRITICAL: Cannot run unary ops benchmarks - {}", msg);
+            eprintln!("CRITICAL: Cannot run unary ops benchmarks - {msg}");
             eprintln!("Skipping unary_ops_cpu_vs_gpu to avoid system freeze");
             return;
         }
         ResourceStatus::Warning(msg) => {
-            eprintln!(
-                "WARNING: Starting unary ops benchmarks with elevated resources: {}",
-                msg
-            );
+            eprintln!("WARNING: Starting unary ops benchmarks with elevated resources: {msg}");
         }
         ResourceStatus::Healthy => {
             println!(
@@ -362,7 +329,7 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
         // CPU exp
         group.bench_with_input(BenchmarkId::new("cpu_exp", size), size_ref, |b, s| {
             let a = random_tensor(*s);
-            b.iter(|| black_box(&a).exp())
+            b.iter(|| black_box(&a).exp());
         });
 
         // GPU exp
@@ -374,13 +341,13 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
                 let result = black_box(&a).exp();
                 let _ = gpu_sync();
                 result
-            })
+            });
         });
 
         // CPU relu
         group.bench_with_input(BenchmarkId::new("cpu_relu", size), size_ref, |b, s| {
             let a = random_tensor(*s);
-            b.iter(|| black_box(&a).relu())
+            b.iter(|| black_box(&a).relu());
         });
 
         // GPU relu
@@ -392,7 +359,7 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
                 let result = black_box(&a).relu();
                 let _ = gpu_sync();
                 result
-            })
+            });
         });
     }
 
@@ -413,22 +380,13 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
     let final_memory = get_process_memory_mb();
     match check_system_resources() {
         ResourceStatus::Critical(msg) => {
-            eprintln!(
-                "CRITICAL after unary_ops_cpu_vs_gpu: {} (Memory: {}MB)",
-                msg, final_memory
-            );
+            eprintln!("CRITICAL after unary_ops_cpu_vs_gpu: {msg} (Memory: {final_memory}MB)");
         }
         ResourceStatus::Warning(msg) => {
-            eprintln!(
-                "Warning after unary_ops_cpu_vs_gpu: {} (Memory: {}MB)",
-                msg, final_memory
-            );
+            eprintln!("Warning after unary_ops_cpu_vs_gpu: {msg} (Memory: {final_memory}MB)");
         }
         ResourceStatus::Healthy => {
-            println!(
-                "unary_ops_cpu_vs_gpu complete. Final memory: {}MB",
-                final_memory
-            );
+            println!("unary_ops_cpu_vs_gpu complete. Final memory: {final_memory}MB");
         }
     }
 
@@ -440,10 +398,7 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
 
     // Clear buffer pools to release GPU memory
     if let Some((buffers, staging)) = gpu_pool_stats() {
-        println!(
-            "[Cleanup] Clearing pools (buffers: {}, staging: {})",
-            buffers, staging
-        );
+        println!("[Cleanup] Clearing pools (buffers: {buffers}, staging: {staging})");
     }
     let _ = gpu_compact();
 
@@ -458,7 +413,7 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
 
     // Verify cleanup succeeded
     if let ResourceStatus::Critical(msg) = check_system_resources() {
-        panic!("CRITICAL after cleanup: {}", msg);
+        panic!("CRITICAL after cleanup: {msg}");
     }
 }
 
@@ -477,15 +432,12 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
     // Pre-flight resource check
     match check_system_resources() {
         ResourceStatus::Critical(msg) => {
-            eprintln!("CRITICAL: Cannot run reduce ops benchmarks - {}", msg);
+            eprintln!("CRITICAL: Cannot run reduce ops benchmarks - {msg}");
             eprintln!("Skipping reduce_ops_cpu_vs_gpu to avoid system freeze");
             return;
         }
         ResourceStatus::Warning(msg) => {
-            eprintln!(
-                "WARNING: Starting reduce ops benchmarks with elevated resources: {}",
-                msg
-            );
+            eprintln!("WARNING: Starting reduce ops benchmarks with elevated resources: {msg}");
         }
         ResourceStatus::Healthy => {
             println!(
@@ -505,7 +457,7 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
         // CPU sum
         group.bench_with_input(BenchmarkId::new("cpu_sum", size), size_ref, |b, s| {
             let a = random_tensor(*s);
-            b.iter(|| black_box(&a).sum())
+            b.iter(|| black_box(&a).sum());
         });
 
         // GPU sum
@@ -517,13 +469,13 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
                 let result = black_box(&a).sum();
                 let _ = gpu_sync();
                 result
-            })
+            });
         });
 
         // CPU mean
         group.bench_with_input(BenchmarkId::new("cpu_mean", size), size_ref, |b, s| {
             let a = random_tensor(*s);
-            b.iter(|| black_box(&a).mean())
+            b.iter(|| black_box(&a).mean());
         });
 
         // GPU mean
@@ -535,7 +487,7 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
                 let result = black_box(&a).mean();
                 let _ = gpu_sync();
                 result
-            })
+            });
         });
     }
 
@@ -556,22 +508,13 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
     let final_memory = get_process_memory_mb();
     match check_system_resources() {
         ResourceStatus::Critical(msg) => {
-            eprintln!(
-                "CRITICAL after reduce_ops_cpu_vs_gpu: {} (Memory: {}MB)",
-                msg, final_memory
-            );
+            eprintln!("CRITICAL after reduce_ops_cpu_vs_gpu: {msg} (Memory: {final_memory}MB)");
         }
         ResourceStatus::Warning(msg) => {
-            eprintln!(
-                "Warning after reduce_ops_cpu_vs_gpu: {} (Memory: {}MB)",
-                msg, final_memory
-            );
+            eprintln!("Warning after reduce_ops_cpu_vs_gpu: {msg} (Memory: {final_memory}MB)");
         }
         ResourceStatus::Healthy => {
-            println!(
-                "reduce_ops_cpu_vs_gpu complete. Final memory: {}MB",
-                final_memory
-            );
+            println!("reduce_ops_cpu_vs_gpu complete. Final memory: {final_memory}MB");
         }
     }
 
@@ -583,10 +526,7 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
 
     // Clear buffer pools to release GPU memory
     if let Some((buffers, staging)) = gpu_pool_stats() {
-        println!(
-            "[Cleanup] Clearing pools (buffers: {}, staging: {})",
-            buffers, staging
-        );
+        println!("[Cleanup] Clearing pools (buffers: {buffers}, staging: {staging})");
     }
     let _ = gpu_compact();
 
@@ -601,7 +541,7 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
 
     // Verify cleanup succeeded
     if let ResourceStatus::Critical(msg) = check_system_resources() {
-        panic!("CRITICAL after cleanup: {}", msg);
+        panic!("CRITICAL after cleanup: {msg}");
     }
 }
 
@@ -620,14 +560,13 @@ fn bench_memory_transfer(c: &mut Criterion) {
     // Pre-flight resource check
     match check_system_resources() {
         ResourceStatus::Critical(msg) => {
-            eprintln!("CRITICAL: Cannot run memory transfer benchmarks - {}", msg);
+            eprintln!("CRITICAL: Cannot run memory transfer benchmarks - {msg}");
             eprintln!("Skipping memory_transfer to avoid system freeze");
             return;
         }
         ResourceStatus::Warning(msg) => {
             eprintln!(
-                "WARNING: Starting memory transfer benchmarks with elevated resources: {}",
-                msg
+                "WARNING: Starting memory transfer benchmarks with elevated resources: {msg}"
             );
         }
         ResourceStatus::Healthy => {
@@ -640,7 +579,7 @@ fn bench_memory_transfer(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("memory_transfer");
 
-    for size in [1024, 4096, 16384, 65536, 262144] {
+    for size in [1024, 4096, 16384, 65536, 262_144] {
         let size_ref = &size;
         group.throughput(Throughput::Bytes(size as u64 * 4));
 
@@ -650,7 +589,7 @@ fn bench_memory_transfer(c: &mut Criterion) {
                 let result = black_box(&a).to_device(Device::gpu().unwrap());
                 let _ = gpu_sync(); // Ensure transfer completes for accurate timing
                 result
-            })
+            });
         });
     }
 
@@ -660,19 +599,13 @@ fn bench_memory_transfer(c: &mut Criterion) {
     let final_memory = get_process_memory_mb();
     match check_system_resources() {
         ResourceStatus::Critical(msg) => {
-            eprintln!(
-                "CRITICAL after memory_transfer: {} (Memory: {}MB)",
-                msg, final_memory
-            );
+            eprintln!("CRITICAL after memory_transfer: {msg} (Memory: {final_memory}MB)");
         }
         ResourceStatus::Warning(msg) => {
-            eprintln!(
-                "Warning after memory_transfer: {} (Memory: {}MB)",
-                msg, final_memory
-            );
+            eprintln!("Warning after memory_transfer: {msg} (Memory: {final_memory}MB)");
         }
         ResourceStatus::Healthy => {
-            println!("memory_transfer complete. Final memory: {}MB", final_memory);
+            println!("memory_transfer complete. Final memory: {final_memory}MB");
         }
     }
 
@@ -684,10 +617,7 @@ fn bench_memory_transfer(c: &mut Criterion) {
 
     // Clear buffer pools to release GPU memory
     if let Some((buffers, staging)) = gpu_pool_stats() {
-        println!(
-            "[Cleanup] Clearing pools (buffers: {}, staging: {})",
-            buffers, staging
-        );
+        println!("[Cleanup] Clearing pools (buffers: {buffers}, staging: {staging})");
     }
     let _ = gpu_compact();
 
@@ -702,7 +632,7 @@ fn bench_memory_transfer(c: &mut Criterion) {
 
     // Verify cleanup succeeded
     if let ResourceStatus::Critical(msg) = check_system_resources() {
-        panic!("CRITICAL after cleanup: {}", msg);
+        panic!("CRITICAL after cleanup: {msg}");
     }
 }
 
@@ -722,15 +652,12 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
     // Pre-flight resource check
     match check_system_resources() {
         ResourceStatus::Critical(msg) => {
-            eprintln!("CRITICAL: Cannot run GPU benchmarks - {}", msg);
+            eprintln!("CRITICAL: Cannot run GPU benchmarks - {msg}");
             eprintln!("Skipping gpu_batch_processing to avoid system freeze");
             return;
         }
         ResourceStatus::Warning(msg) => {
-            eprintln!(
-                "WARNING: Starting benchmarks with elevated resources: {}",
-                msg
-            );
+            eprintln!("WARNING: Starting benchmarks with elevated resources: {msg}");
         }
         ResourceStatus::Healthy => {
             println!(
@@ -753,7 +680,7 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
     group.bench_function("many_small_ops", |b| {
         // Check resources before setup
         if let ResourceStatus::Critical(msg) = check_system_resources() {
-            panic!("Benchmark aborted before setup - {}", msg);
+            panic!("Benchmark aborted before setup - {msg}");
         }
 
         let tensors: Vec<_> =
@@ -774,12 +701,12 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
         // Check resources after setup
         match check_system_resources() {
             ResourceStatus::Critical(msg) => {
-                panic!("Benchmark aborted after setup - {}", msg);
+                panic!("Benchmark aborted after setup - {msg}");
             }
             ResourceStatus::Warning(msg) => {
-                eprintln!("Warning after setup: {}", msg);
+                eprintln!("Warning after setup: {msg}");
             }
-            _ => {}
+            ResourceStatus::Healthy => {}
         }
 
         b.iter(|| {
@@ -794,15 +721,15 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
 
             // Check resources after each iteration
             if let ResourceStatus::Critical(msg) = check_system_resources() {
-                panic!("Benchmark aborted during iteration - {}", msg);
+                panic!("Benchmark aborted during iteration - {msg}");
             }
-        })
+        });
     });
 
     group.bench_function("single_large_op", |b| {
         // Check resources before setup
         if let ResourceStatus::Critical(msg) = check_system_resources() {
-            panic!("Benchmark aborted before setup - {}", msg);
+            panic!("Benchmark aborted before setup - {msg}");
         }
 
         let large_tensor = random_tensor(5120).to_device(Device::gpu().unwrap()); // 20 × 256
@@ -818,12 +745,12 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
         // Check resources after setup
         match check_system_resources() {
             ResourceStatus::Critical(msg) => {
-                panic!("Benchmark aborted after setup - {}", msg);
+                panic!("Benchmark aborted after setup - {msg}");
             }
             ResourceStatus::Warning(msg) => {
-                eprintln!("Warning after setup: {}", msg);
+                eprintln!("Warning after setup: {msg}");
             }
-            _ => {}
+            ResourceStatus::Healthy => {}
         }
 
         b.iter(|| {
@@ -836,9 +763,9 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
 
             // Check resources after each iteration
             if let ResourceStatus::Critical(msg) = check_system_resources() {
-                panic!("Benchmark aborted during iteration - {}", msg);
+                panic!("Benchmark aborted during iteration - {msg}");
             }
-        })
+        });
     });
 
     group.finish();
@@ -858,19 +785,13 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
     let final_memory = get_process_memory_mb();
     match check_system_resources() {
         ResourceStatus::Critical(msg) => {
-            eprintln!(
-                "CRITICAL after benchmarks: {} (Memory: {}MB)",
-                msg, final_memory
-            );
+            eprintln!("CRITICAL after benchmarks: {msg} (Memory: {final_memory}MB)");
         }
         ResourceStatus::Warning(msg) => {
-            eprintln!(
-                "Warning after benchmarks: {} (Memory: {}MB)",
-                msg, final_memory
-            );
+            eprintln!("Warning after benchmarks: {msg} (Memory: {final_memory}MB)");
         }
         ResourceStatus::Healthy => {
-            println!("Benchmarks complete. Final memory: {}MB", final_memory);
+            println!("Benchmarks complete. Final memory: {final_memory}MB");
         }
     }
 
@@ -882,10 +803,7 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
 
     // Clear buffer pools to release GPU memory
     if let Some((buffers, staging)) = gpu_pool_stats() {
-        println!(
-            "[Cleanup] Clearing pools (buffers: {}, staging: {})",
-            buffers, staging
-        );
+        println!("[Cleanup] Clearing pools (buffers: {buffers}, staging: {staging})");
     }
     let _ = gpu_compact();
 
@@ -900,7 +818,7 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
 
     // Verify cleanup succeeded
     if let ResourceStatus::Critical(msg) = check_system_resources() {
-        panic!("CRITICAL after cleanup: {}", msg);
+        panic!("CRITICAL after cleanup: {msg}");
     }
 }
 

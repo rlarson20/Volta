@@ -28,7 +28,6 @@ pollster = { version = "0.4.0", optional = true }
 safetensors = "0.7.0"
 thiserror = "2.0.18"
 
-#TODO: add the other examples
 [[example]]
 name = "gpu"
 path = "examples/gpu.rs"
@@ -49,6 +48,42 @@ path = "examples/readme-2.rs"
 [[example]]
 name = "load_external_mnist"
 path = "examples/load_external_mnist.rs"
+
+[[example]]
+name = "mnist_cnn"
+path = "examples/mnist_cnn.rs"
+
+[[example]]
+name = "mnist_rnn"
+path = "examples/mnist_rnn.rs"
+
+[[example]]
+name = "regression"
+path = "examples/regression.rs"
+
+[[example]]
+name = "char_language_model"
+path = "examples/char_language_model.rs"
+
+[[example]]
+name = "dcgan"
+path = "examples/dcgan.rs"
+
+[[example]]
+name = "gpu_training"
+path = "examples/gpu_training.rs"
+
+[[example]]
+name = "super_resolution"
+path = "examples/super_resolution.rs"
+
+[[example]]
+name = "time_sequence"
+path = "examples/time_sequence.rs"
+
+[[example]]
+name = "vae"
+path = "examples/vae.rs"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 blas-src = { version = "0.14", features = ["accelerate"], optional = true }
@@ -73,14 +108,108 @@ harness = false
 name = "gpu_comparison"
 harness = false
 
-# Defensive lints: Source: https://corrode.dev/blog/defensive-programming/
-# TODO: go over and properly organize lints
+[[bench]]
+name = "conv_algorithms"
+harness = false
+
+# =============================================================================
+# Clippy Lints Configuration
+# =============================================================================
+# This configuration follows defensive programming principles from:
+# https://corrode.dev/blog/defensive-programming/
+#
+# Organization:
+# 1. Defensive/Safety Lints (deny) - Critical for correctness
+# 2. Code Quality Lints (deny) - Important for maintainability
+# 3. Pedantic Lints (selective) - Quality improvements where practical
+# 4. Allowed Lints - Explicitly documented exceptions
+# =============================================================================
+
 [lints.clippy]
-indexing_slicing = "deny"          # Prevents direct indexing into slices and vectors
-fallible_impl_from = "deny"        # Warns about `From` implementations that can panic and should be `TryFrom` instead.
-wildcard_enum_match_arm = "deny"   # Disallows wildcard `_` patterns.
-unneeded_field_pattern = "deny"    # Identifies when you’re ignoring too many struct fields with `..` unnecessarily.
-fn_params_excessive_bools = "deny" # Warns when a function has too many boolean parameters (4 or more by default).
-must_use_candidate = "deny"        # Suggests adding `#[must_use]` to types that are good candidates for it.
-# Pedantic lints
-similar_names = "allow"
+
+# -----------------------------------------------------------------------------
+# 1. DEFENSIVE/SAFETY LINTS (deny)
+# -----------------------------------------------------------------------------
+# These lints prevent common sources of runtime errors and undefined behavior
+
+# Memory safety and bounds checking
+indexing_slicing = "deny"          # Use .get() instead of [] to prevent panics
+
+# Type safety and conversions
+fallible_impl_from = "deny"        # Fallible conversions should use TryFrom, not From
+
+# Pattern matching safety
+wildcard_enum_match_arm = "deny"   # Force explicit handling of all enum variants
+unneeded_field_pattern = "deny"    # Don't ignore struct fields unnecessarily
+
+# API design
+fn_params_excessive_bools = "deny" # 4+ bool params usually indicate need for an enum
+must_use_candidate = "deny"        # Mark types that should not be ignored
+
+# -----------------------------------------------------------------------------
+# 2. CODE QUALITY LINTS (deny)
+# -----------------------------------------------------------------------------
+# These enforce consistent, readable, and maintainable code
+
+# Code clarity
+uninlined_format_args = "deny"     # Use {var} instead of {}, var in format strings
+redundant_else = "deny"            # Remove unnecessary else after return
+collapsible_if = "deny"            # Simplify nested if statements
+collapsible_else_if = "deny"       # Simplify nested else-if chains
+explicit_iter_loop = "deny"        # Use iter() explicitly in for loops
+semicolon_if_nothing_returned = "deny" # Consistent semicolon usage
+
+# Type and trait improvements
+default_trait_access = "deny"      # Use Default::default() instead of Type::default()
+implicit_clone = "deny"            # Make clones explicit for clarity
+assigning_clones = "deny"          # Use clone_from when assigning clones
+cast_lossless = "deny"             # Use From/Into for lossless casts
+
+# Pattern matching
+single_match_else = "deny"         # Use if-let for single match arms
+match_same_arms = "deny"           # Combine identical match arms
+match_wildcard_for_single_variants = "deny" # Match specific variant instead of _
+
+# Iterator and collection usage
+map_unwrap_or = "deny"             # Use map_or instead of map().unwrap_or()
+map_clone = "deny"                 # Use copied()/cloned() instead of map(|x| x.clone())
+map_flatten = "deny"               # Use flat_map instead of map().flatten()
+len_zero = "deny"                  # Use is_empty() instead of len() == 0
+unnecessary_map_or = "deny"        # Simplify unnecessary map_or usage
+
+# Code organization
+items_after_statements = "deny"    # Keep items (fn, struct, etc.) before statements
+enum_glob_use = "deny"             # Avoid glob imports of enums
+
+# Struct and field naming
+struct_field_names = "deny"        # Avoid redundant prefixes in struct field names
+pub_underscore_fields = "deny"     # Public fields shouldn't start with underscore
+
+# Conditionals and control flow
+bool_to_int_with_if = "deny"      # Use as conversion instead of if bool { 1 } else { 0 }
+if_not_else = "deny"              # Put the positive case in if, not else
+manual_let_else = "deny"          # Use let-else syntax when appropriate
+manual_assert = "deny"            # Use assert! macro instead of manual if panic!
+
+# Functions and returns
+unnecessary_wraps = "deny"         # Don't wrap return types unnecessarily
+return_self_not_must_use = "deny" # Builder pattern methods should be #[must_use]
+double_must_use = "deny"          # Avoid duplicate #[must_use] attributes
+
+# Documentation
+doc_markdown = "deny"              # Properly format doc comments
+missing_panics_doc = "deny"       # Document when functions can panic
+missing_errors_doc = "deny"       # Document error conditions
+missing_fields_in_debug = "deny"  # Include all fields in Debug implementations
+
+# Misc improvements
+unreadable_literal = "deny"       # Use underscores in large numeric literals (1_000_000)
+use_self = "deny"                 # Use Self instead of repeating type name
+
+# -----------------------------------------------------------------------------
+# 3. ALLOWED LINTS (with rationale)
+# -----------------------------------------------------------------------------
+# These are explicitly allowed because they don't fit this project's needs
+
+# Pedantic lints that are too noisy or don't apply
+similar_names = "allow"           # Common in math/ML code (x, y, z, w, h, etc.)

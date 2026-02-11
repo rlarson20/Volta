@@ -27,12 +27,12 @@ fn main() {
     let num_epochs = 100;
 
     println!("Configuration:");
-    println!("  Upscale factor: {}x", upscale_factor);
-    println!("  Low-res size: {}x{}", low_res_size, low_res_size);
-    println!("  High-res size: {}x{}", high_res_size, high_res_size);
-    println!("  Batch size: {}", batch_size);
-    println!("  Learning rate: {}", learning_rate);
-    println!("  Epochs: {}\n", num_epochs);
+    println!("  Upscale factor: {upscale_factor}x");
+    println!("  Low-res size: {low_res_size}x{low_res_size}");
+    println!("  High-res size: {high_res_size}x{high_res_size}");
+    println!("  Batch size: {batch_size}");
+    println!("  Learning rate: {learning_rate}");
+    println!("  Epochs: {num_epochs}\n");
 
     // Build model: ESPCN architecture
     // Conv layers with increasing then decreasing channels, final layer outputs r² channels
@@ -62,12 +62,12 @@ fn main() {
         "  Conv2d(32 → {}, kernel=3x3, padding=1)",
         upscale_factor * upscale_factor
     );
-    println!("  PixelShuffle(upscale_factor={})", upscale_factor);
+    println!("  PixelShuffle(upscale_factor={upscale_factor})");
     println!();
 
     let params = model.parameters();
     let total_params: usize = params.iter().map(|p| p.borrow().data.len()).sum();
-    println!("Total parameters: {}\n", total_params);
+    println!("Total parameters: {total_params}\n");
 
     // Create optimizer (lr, betas, eps, weight_decay)
     let mut optimizer = Adam::new(params, learning_rate, (0.9, 0.999), 1e-8, 0.0);
@@ -99,7 +99,7 @@ fn main() {
 
         // Print progress
         if epoch % 10 == 0 || epoch == 1 {
-            println!("Epoch {:3}/{}: Loss = {:.6}", epoch, num_epochs, loss_value);
+            println!("Epoch {epoch:3}/{num_epochs}: Loss = {loss_value:.6}");
         }
     }
 

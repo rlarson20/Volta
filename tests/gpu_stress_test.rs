@@ -15,17 +15,13 @@ mod gpu_extended_tests {
         let b = gpu::GpuBuffer::from_slice(&[2.0, 4.0, 5.0, 8.0]).unwrap();
 
         let c = gpu::GpuKernels::binary_op(&a, &b, op)
-            .unwrap_or_else(|| panic!("Failed to run binary op {}", op));
+            .unwrap_or_else(|| panic!("Failed to run binary op {op}"));
 
         let result = c.to_vec();
         for (i, (r, e)) in result.iter().zip(expected.iter()).enumerate() {
             assert!(
                 (r - e).abs() < 1e-5,
-                "Op {} failed at index {}: got {}, expected {}",
-                op,
-                i,
-                r,
-                e
+                "Op {op} failed at index {i}: got {r}, expected {e}"
             );
         }
     }
@@ -74,10 +70,7 @@ mod gpu_extended_tests {
             let expected = 1.0 / expected_vals.get(i).copied().unwrap_or(f32::NAN);
             assert!(
                 (val - expected).abs() < 1e-5,
-                "Recip failed at index {}: got {}, expected {}",
-                i,
-                val,
-                expected
+                "Recip failed at index {i}: got {val}, expected {expected}"
             );
         }
 
@@ -88,10 +81,7 @@ mod gpu_extended_tests {
             let expected = 2_f32.powf(exp_vals.get(i).copied().unwrap_or(f32::NAN));
             assert!(
                 (val - expected).abs() < 1e-4,
-                "Exp2 failed at index {}: got {}, expected {}",
-                i,
-                val,
-                expected
+                "Exp2 failed at index {i}: got {val}, expected {expected}"
             );
         }
 
@@ -105,10 +95,7 @@ mod gpu_extended_tests {
             let expected = expected_vals.get(i).copied().unwrap_or(f32::NAN);
             assert!(
                 (val - expected).abs() < 1e-5,
-                "Log2 failed at index {}: got {}, expected {}",
-                i,
-                val,
-                expected
+                "Log2 failed at index {i}: got {val}, expected {expected}"
             );
         }
 
@@ -119,16 +106,13 @@ mod gpu_extended_tests {
             let expected = expected_vals.get(i).copied().unwrap_or(f32::NAN);
             assert!(
                 (val - expected).abs() < 1e-5,
-                "Sin failed at index {}: got {}, expected {}",
-                i,
-                val,
-                expected
+                "Sin failed at index {i}: got {val}, expected {expected}"
             );
         }
 
         // Test Cos
         let res_cos = gpu::GpuKernels::unary_op(&buf, "cos").unwrap().to_vec();
-        let expected_vals = [0.5403023, 1.0, 0.5403023, -0.6536436]; // cos([-1, 0, 1, 4])
+        let expected_vals = [0.540_302_3, 1.0, 0.540_302_3, -0.653_643_6]; // cos([-1, 0, 1, 4])
         for (i, &val) in res_cos.iter().enumerate() {
             assert!(
                 (val - expected_vals.get(i).copied().unwrap_or(f32::NAN)).abs() < 1e-5,

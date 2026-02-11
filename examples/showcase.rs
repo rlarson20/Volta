@@ -9,10 +9,9 @@
 //! - **Inference**: Using the trained model to make predictions.
 //! - **Persistence**: Saving and loading the weights of a trained layer.
 
-use std::error::Error;
 use volta::{Adam, Linear, Module, RawTensor, ReLU, Sequential, Tensor, TensorOps, mse_loss};
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() {
     println!("--- Volta Showcase: Solving XOR with an MLP ---");
 
     // 1. Define the XOR dataset
@@ -57,7 +56,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         if epoch % 20 == 0 {
             let loss_val = loss.borrow().data.first().copied().unwrap_or(f32::NAN);
-            println!("Epoch {:>3}: Loss = {:.6}", epoch, loss_val);
+            println!("Epoch {epoch:>3}: Loss = {loss_val:.6}");
         }
     }
     println!("--- Training Complete ---");
@@ -158,5 +157,4 @@ fn main() -> Result<(), Box<dyn Error>> {
     // }
 
     println!("\nShowcase finished successfully!");
-    Ok(())
 }

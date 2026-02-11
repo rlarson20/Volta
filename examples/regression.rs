@@ -53,7 +53,7 @@ fn main() {
 
         if epoch % 100 == 99 {
             let loss_val = loss.borrow().data.first().copied().unwrap_or(f32::NAN);
-            println!(" Loss = {:.6}", loss_val);
+            println!(" Loss = {loss_val:.6}");
         }
     }
 

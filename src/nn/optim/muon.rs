@@ -186,7 +186,7 @@ mod tests {
         assert_ne!(data_before, data_after);
 
         // Verify Newton-Schulz didn't explode values (regularization property)
-        for v in data_after.iter() {
+        for v in &data_after {
             assert!(v.abs() < 2.0);
         }
     }

@@ -554,12 +554,12 @@ mod io_tests {
 
         // Verify keys match
         assert_eq!(state.len(), loaded_state.len());
-        for (key, td) in state.iter() {
+        for (key, td) in &state {
             let loaded_td = loaded_state.get(key).expect("Key should exist");
             assert_eq!(td.shape, loaded_td.shape);
             // Check data (with small tolerance for f32 roundtrip)
             for (a, b) in td.data.iter().zip(loaded_td.data.iter()) {
-                assert!((a - b).abs() < 1e-6, "Data mismatch for key {}", key);
+                assert!((a - b).abs() < 1e-6, "Data mismatch for key {key}");
             }
         }
     }

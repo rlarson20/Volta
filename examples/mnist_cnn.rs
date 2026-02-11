@@ -9,13 +9,13 @@ fn main() {
 
     // Try to load MNIST data
     let mnist_dir = "data/mnist";
-    let train_images_path = format!("{}/train-images-idx3-ubyte", mnist_dir);
-    let train_labels_path = format!("{}/train-labels-idx1-ubyte", mnist_dir);
+    let train_images_path = format!("{mnist_dir}/train-images-idx3-ubyte");
+    let train_labels_path = format!("{mnist_dir}/train-labels-idx1-ubyte");
 
     let (image_data, label_data, num_samples) = if Path::new(&train_images_path).exists()
         && Path::new(&train_labels_path).exists()
     {
-        println!("Loading MNIST data from {}...", mnist_dir);
+        println!("Loading MNIST data from {mnist_dir}...");
 
         let images = load_mnist_images(&train_images_path).expect("Failed to load MNIST images");
         let labels = load_mnist_labels(&train_labels_path).expect("Failed to load MNIST labels");
@@ -23,7 +23,7 @@ fn main() {
         let num_samples = labels.len();
         let label_data = to_one_hot(&labels, 10);
 
-        println!("Loaded {} training samples", num_samples);
+        println!("Loaded {num_samples} training samples");
         (images, label_data, num_samples)
     } else {
         println!("MNIST data not found. Using synthetic data for demonstration.");
@@ -43,7 +43,7 @@ fn main() {
         let labels: Vec<u8> = (0..num_samples).map(|i| (i % 10) as u8).collect();
         let label_data = to_one_hot(&labels, 10);
 
-        println!("Generated {} synthetic samples", num_samples);
+        println!("Generated {num_samples} synthetic samples");
         (image_data, label_data, num_samples)
     };
 
@@ -117,7 +117,7 @@ fn main() {
         }
 
         let avg_loss = epoch_loss / num_batches as f32;
-        println!(" Loss = {:.6}", avg_loss);
+        println!(" Loss = {avg_loss:.6}");
     }
 
     // Test accuracy
@@ -158,8 +158,5 @@ fn main() {
     println!();
 
     let accuracy = total_correct as f32 / total_samples as f32 * 100.0;
-    println!(
-        "Training Set Accuracy: {}/{} ({:.2}%)",
-        total_correct, total_samples, accuracy
-    );
+    println!("Training Set Accuracy: {total_correct}/{total_samples} ({accuracy:.2}%)");
 }

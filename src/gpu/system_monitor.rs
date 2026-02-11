@@ -237,7 +237,7 @@ mod tests {
         let monitor = SystemMonitor::new();
         monitor.record_operation();
         let stats = monitor.stats();
-        let display = format!("{}", stats);
+        let display = format!("{stats}");
         assert!(display.contains("ops: 1"));
     }
 }

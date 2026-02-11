@@ -8,7 +8,7 @@ mod gpu_tests {
     fn test_gpu_available() {
         // This test just checks that GPU initialization doesn't panic
         let available = gpu::is_gpu_available();
-        println!("GPU available: {}", available);
+        println!("GPU available: {available}");
     }
 
     #[test]

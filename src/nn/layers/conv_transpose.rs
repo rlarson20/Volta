@@ -685,12 +685,7 @@ mod tests {
             assert_eq!(
                 y.borrow().shape,
                 vec![1, 4, expected_h, expected_w],
-                "Failed for in_h={}, in_w={}, kernel={}, stride={}, padding={}",
-                in_h,
-                in_w,
-                kernel,
-                stride,
-                padding
+                "Failed for in_h={in_h}, in_w={in_w}, kernel={kernel}, stride={stride}, padding={padding}"
             );
         }
     }
@@ -742,8 +737,7 @@ mod tests {
 
         assert!(
             passed,
-            "ConvTranspose2d gradient check failed: max_error={:.6e}, mean_error={:.6e}",
-            max_err, mean_err
+            "ConvTranspose2d gradient check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
         );
     }
 
@@ -759,8 +753,7 @@ mod tests {
 
         assert!(
             passed,
-            "ConvTranspose2d stride=2 gradient check failed: max_error={:.6e}, mean_error={:.6e}",
-            max_err, mean_err
+            "ConvTranspose2d stride=2 gradient check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
         );
     }
 
@@ -776,8 +769,7 @@ mod tests {
 
         assert!(
             passed,
-            "ConvTranspose2d no_bias gradient check failed: max_error={:.6e}, mean_error={:.6e}",
-            max_err, mean_err
+            "ConvTranspose2d no_bias gradient check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
         );
     }
 
@@ -793,8 +785,7 @@ mod tests {
 
         assert!(
             passed,
-            "ConvTranspose2d 1x1 gradient check failed: max_error={:.6e}, mean_error={:.6e}",
-            max_err, mean_err
+            "ConvTranspose2d 1x1 gradient check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
         );
     }
 
@@ -810,8 +801,7 @@ mod tests {
 
         assert!(
             passed,
-            "ConvTranspose2d 5x5 gradient check failed: max_error={:.6e}, mean_error={:.6e}",
-            max_err, mean_err
+            "ConvTranspose2d 5x5 gradient check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
         );
     }
 
@@ -827,8 +817,7 @@ mod tests {
 
         assert!(
             passed,
-            "ConvTranspose2d multiple channels gradient check failed: max_error={:.6e}, mean_error={:.6e}",
-            max_err, mean_err
+            "ConvTranspose2d multiple channels gradient check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
         );
     }
 

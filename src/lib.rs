@@ -951,10 +951,7 @@ mod misc_tests {
         );
 
         assert!(passed, "Custom tolerance gradient check failed");
-        println!(
-            "ReLU gradcheck: max_err={:.6e}, mean_err={:.6e}",
-            max_err, mean_err
-        );
+        println!("ReLU gradcheck: max_err={max_err:.6e}, mean_err={mean_err:.6e}");
     }
 
     #[test]
@@ -1158,65 +1155,63 @@ mod misc_tests {
         let final_loss = *losses.last().unwrap();
         assert!(
             final_loss < 0.01,
-            "Adam failed simple regression convergence: {:.6}",
-            final_loss
+            "Adam failed simple regression convergence: {final_loss:.6}"
         );
     }
+    // Same setup, train two models
+    // Used for test below it
+    fn train_model(use_adam: bool) -> f32 {
+        let x_data = vec![0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0];
+        let x = RawTensor::new(x_data, &[4, 2], false);
+        let y_data = vec![0.0, 1.0, 1.0, 0.0];
+        let y = RawTensor::new(y_data, &[4], false);
+
+        let model = Sequential::new(vec![
+            Box::new(Linear::new(2, 8, true)),
+            Box::new(ReLU),
+            Box::new(Linear::new(8, 1, true)),
+        ]);
+
+        let params = model.parameters();
+
+        if use_adam {
+            let mut opt = Adam::new(params, 0.05, (0.9, 0.999), 1e-8, 0.0);
+            for _ in 0..50 {
+                opt.zero_grad();
+                let pred = model.forward(&x).reshape(&[4]);
+                let loss = RawTensor::mse_loss(&pred, &y);
+                loss.backward();
+                opt.step();
+            }
+        } else {
+            let mut opt = SGD::new(params, 0.01, 0.0, 0.0);
+            for _ in 0..50 {
+                opt.zero_grad();
+                let pred = model.forward(&x).reshape(&[4]);
+                let loss = RawTensor::mse_loss(&pred, &y);
+                loss.backward();
+                opt.step();
+            }
+        }
+
+        // Return final loss
+        let pred = model.forward(&x).reshape(&[4]);
+        RawTensor::mse_loss(&pred, &y)
+            .borrow()
+            .data
+            .first()
+            .copied()
+            .expect("tensor data should exist")
+    }
+
     #[test]
     fn test_adam_vs_sgd() {
         crate::manual_seed(42); //set for repro
-        // Same setup, train two models
-        fn train_model(use_adam: bool) -> f32 {
-            let x_data = vec![0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0];
-            let x = RawTensor::new(x_data, &[4, 2], false);
-            let y_data = vec![0.0, 1.0, 1.0, 0.0];
-            let y = RawTensor::new(y_data, &[4], false);
-
-            let model = Sequential::new(vec![
-                Box::new(Linear::new(2, 8, true)),
-                Box::new(ReLU),
-                Box::new(Linear::new(8, 1, true)),
-            ]);
-
-            let params = model.parameters();
-
-            if use_adam {
-                let mut opt = Adam::new(params, 0.05, (0.9, 0.999), 1e-8, 0.0);
-                for _ in 0..50 {
-                    opt.zero_grad();
-                    let pred = model.forward(&x).reshape(&[4]);
-                    let loss = RawTensor::mse_loss(&pred, &y);
-                    loss.backward();
-                    opt.step();
-                }
-            } else {
-                let mut opt = SGD::new(params, 0.01, 0.0, 0.0);
-                for _ in 0..50 {
-                    opt.zero_grad();
-                    let pred = model.forward(&x).reshape(&[4]);
-                    let loss = RawTensor::mse_loss(&pred, &y);
-                    loss.backward();
-                    opt.step();
-                }
-            }
-
-            // Return final loss
-            let pred = model.forward(&x).reshape(&[4]);
-            RawTensor::mse_loss(&pred, &y)
-                .borrow()
-                .data
-                .first()
-                .copied()
-                .expect("tensor data should exist")
-        }
 
         let adam_loss = train_model(true);
         let sgd_loss = train_model(false);
 
-        println!(
-            "Adam final loss: {:.6}, SGD final loss: {:.6}",
-            adam_loss, sgd_loss
-        );
+        println!("Adam final loss: {adam_loss:.6}, SGD final loss: {sgd_loss:.6}");
 
         // Adam should be significantly better
         assert!(adam_loss < sgd_loss * 0.75, "Adam not outperforming SGD");
@@ -1280,7 +1275,7 @@ mod misc_tests {
                 opt.step();
             }
 
-            println!("Epoch {} complete", epoch);
+            println!("Epoch {epoch} complete");
         }
     }
     #[test]
@@ -1294,7 +1289,7 @@ mod misc_tests {
         let _ = RawTensor::matmul_raw(&a, &b, 256, 256, 256);
         let duration = start.elapsed();
 
-        println!("256x256 matmul: {:?}", duration);
+        println!("256x256 matmul: {duration:?}");
         let max_duration_ms: u128 = if cfg!(all(feature = "accelerate", target_os = "macos")) {
             if cfg!(debug_assertions) { 50 } else { 10 }
         } else if cfg!(debug_assertions) {
@@ -1305,9 +1300,7 @@ mod misc_tests {
 
         assert!(
             duration.as_millis() < max_duration_ms,
-            "Matmul took {:?} (> {}ms threshold for this build configuration)",
-            duration,
-            max_duration_ms
+            "Matmul took {duration:?} (> {max_duration_ms}ms threshold for this build configuration)"
         );
     }
     #[test]
@@ -1485,9 +1478,7 @@ mod misc_tests {
         let expected_sum = 2.0 * 16.0; // 2 occurrences * 16 dimensions
         assert!(
             (grad_at_idx3_sum - expected_sum).abs() < 1e-4,
-            "Expected accumulated grad sum {}, got {}",
-            expected_sum,
-            grad_at_idx3_sum
+            "Expected accumulated grad sum {expected_sum}, got {grad_at_idx3_sum}"
         );
     }
 
@@ -1509,8 +1500,7 @@ mod misc_tests {
                 .expect("tensor data should exist");
             assert!(
                 (grad_val - 3.0).abs() < 1e-5,
-                "Expected grad 3.0 for index 2, got {}",
-                grad_val
+                "Expected grad 3.0 for index 2, got {grad_val}"
             );
         }
 
@@ -1522,8 +1512,7 @@ mod misc_tests {
                 .expect("tensor data should exist");
             assert!(
                 (grad_val - 1.0).abs() < 1e-5,
-                "Expected grad 1.0 for index 5, got {}",
-                grad_val
+                "Expected grad 1.0 for index 5, got {grad_val}"
             );
         }
     }
@@ -1680,7 +1669,7 @@ mod edge_case_tests {
             | VoltaError::DeviceError(_)
             | VoltaError::Io(_)
             | VoltaError::OpError(_) => {
-                panic!("Expected InvalidParameter error, got {:?}", result)
+                panic!("Expected InvalidParameter error, got {result:?}")
             }
         }
     }
@@ -1714,7 +1703,7 @@ mod edge_case_tests {
             | VoltaError::DeviceError(_)
             | VoltaError::Io(_)
             | VoltaError::OpError(_) => {
-                panic!("Expected InvalidParameter error, got {:?}", result)
+                panic!("Expected InvalidParameter error, got {result:?}")
             }
         }
     }
@@ -1738,7 +1727,7 @@ mod edge_case_tests {
             | VoltaError::Io(_)
             | VoltaError::InvalidParameter(_)
             | VoltaError::OpError(_) => {
-                panic!("Expected DimensionOutOfBounds error, got {:?}", result)
+                panic!("Expected DimensionOutOfBounds error, got {result:?}")
             }
         }
     }
@@ -1762,7 +1751,7 @@ mod edge_case_tests {
             | VoltaError::Io(_)
             | VoltaError::InvalidParameter(_)
             | VoltaError::OpError(_) => {
-                panic!("Expected DimensionOutOfBounds error, got {:?}", result)
+                panic!("Expected DimensionOutOfBounds error, got {result:?}")
             }
         }
     }
@@ -1792,7 +1781,7 @@ mod edge_case_tests {
             | VoltaError::DeviceError(_)
             | VoltaError::Io(_)
             | VoltaError::OpError(_) => {
-                panic!("Expected InvalidParameter error, got {:?}", result)
+                panic!("Expected InvalidParameter error, got {result:?}")
             }
         }
     }
@@ -1822,7 +1811,7 @@ mod edge_case_tests {
             | VoltaError::DeviceError(_)
             | VoltaError::Io(_)
             | VoltaError::OpError(_) => {
-                panic!("Expected InvalidParameter error, got {:?}", result)
+                panic!("Expected InvalidParameter error, got {result:?}")
             }
         }
     }
@@ -1848,7 +1837,7 @@ mod edge_case_tests {
             | VoltaError::DeviceError(_)
             | VoltaError::Io(_)
             | VoltaError::OpError(_) => {
-                panic!("Expected InvalidParameter error, got {:?}", result)
+                panic!("Expected InvalidParameter error, got {result:?}")
             }
         }
     }
@@ -1906,11 +1895,10 @@ mod edge_case_tests {
 
         // All results should be +inf
         for &val in &z.borrow().data {
-            assert!(val.is_infinite(), "Expected infinity, got {}", val);
+            assert!(val.is_infinite(), "Expected infinity, got {val}");
             assert!(
                 val.is_sign_positive(),
-                "Expected positive infinity, got {}",
-                val
+                "Expected positive infinity, got {val}"
             );
         }
     }
@@ -1924,11 +1912,10 @@ mod edge_case_tests {
 
         // All results should be -inf
         for &val in &z.borrow().data {
-            assert!(val.is_infinite(), "Expected infinity, got {}", val);
+            assert!(val.is_infinite(), "Expected infinity, got {val}");
             assert!(
                 val.is_sign_negative(),
-                "Expected negative infinity, got {}",
-                val
+                "Expected negative infinity, got {val}"
             );
         }
     }
@@ -1942,7 +1929,7 @@ mod edge_case_tests {
 
         // All results should be NaN
         for &val in &z.borrow().data {
-            assert!(val.is_nan(), "Expected NaN, got {}", val);
+            assert!(val.is_nan(), "Expected NaN, got {val}");
         }
     }
 
@@ -1955,11 +1942,10 @@ mod edge_case_tests {
 
         // All results should be -inf
         for &val in &z.borrow().data {
-            assert!(val.is_infinite(), "Expected infinity, got {}", val);
+            assert!(val.is_infinite(), "Expected infinity, got {val}");
             assert!(
                 val.is_sign_negative(),
-                "Expected negative infinity, got {}",
-                val
+                "Expected negative infinity, got {val}"
             );
         }
     }
@@ -2002,7 +1988,7 @@ mod edge_case_tests {
 
         // All results should be NaN
         for &val in &y.borrow().data {
-            assert!(val.is_nan(), "sqrt of negative should be NaN, got {}", val);
+            assert!(val.is_nan(), "sqrt of negative should be NaN, got {val}");
         }
     }
 
@@ -2013,7 +1999,7 @@ mod edge_case_tests {
         let y = x.sqrt();
 
         for &val in &y.borrow().data {
-            assert_eq!(val, 0.0, "sqrt(0) should be 0, got {}", val);
+            assert_eq!(val, 0.0, "sqrt(0) should be 0, got {val}");
         }
     }
 
@@ -2076,8 +2062,8 @@ mod edge_case_tests {
 
         // All results should be -inf
         for &val in &y.borrow().data {
-            assert!(val.is_infinite(), "log(0) should be infinite, got {}", val);
-            assert!(val.is_sign_negative(), "log(0) should be -inf, got {}", val);
+            assert!(val.is_infinite(), "log(0) should be infinite, got {val}");
+            assert!(val.is_sign_negative(), "log(0) should be -inf, got {val}");
         }
     }
 
@@ -2089,7 +2075,7 @@ mod edge_case_tests {
 
         // All results should be NaN
         for &val in &y.borrow().data {
-            assert!(val.is_nan(), "log of negative should be NaN, got {}", val);
+            assert!(val.is_nan(), "log of negative should be NaN, got {val}");
         }
     }
 
@@ -2101,12 +2087,8 @@ mod edge_case_tests {
 
         // All results should be -inf
         for &val in &y.borrow().data {
-            assert!(val.is_infinite(), "log2(0) should be infinite, got {}", val);
-            assert!(
-                val.is_sign_negative(),
-                "log2(0) should be -inf, got {}",
-                val
-            );
+            assert!(val.is_infinite(), "log2(0) should be infinite, got {val}");
+            assert!(val.is_sign_negative(), "log2(0) should be -inf, got {val}");
         }
     }
 
@@ -2118,7 +2100,7 @@ mod edge_case_tests {
 
         // All results should be NaN
         for &val in &y.borrow().data {
-            assert!(val.is_nan(), "log2 of negative should be NaN, got {}", val);
+            assert!(val.is_nan(), "log2 of negative should be NaN, got {val}");
         }
     }
 
@@ -2882,8 +2864,7 @@ mod axis_reduce_tests {
         // Statistical check (allow some variance)
         assert!(
             num_zeros > 400 && num_zeros < 600,
-            "Dropout ratio off: {}",
-            num_zeros
+            "Dropout ratio off: {num_zeros}"
         );
 
         // Check scaling: non-zeros should be 2.0
@@ -2956,7 +2937,7 @@ mod axis_reduce_tests {
         }
     }
 
-    /// Integration test: Simulated PyTorch model → Volta loading workflow
+    /// Integration test: Simulated `PyTorch` model → Volta loading workflow
     ///
     /// This test demonstrates the full end-to-end workflow of:
     /// 1. Creating a "PyTorch-style" state dict (weights stored as [out, in])
@@ -3286,12 +3267,10 @@ mod gpu_tests {
     #[cfg(feature = "gpu")]
     #[test]
     fn test_linear_layer_backward_gpu() {
+        use crate::nn::{Linear, Module};
         if !is_gpu_available() {
             return; // Skip test if GPU not available
         }
-
-        use crate::nn::{Linear, Module};
-
         let gpu_device = Device::gpu().expect("GPU should be available");
 
         let layer = Linear::new(4, 3, true);
@@ -3719,7 +3698,7 @@ mod gpu_tests {
 
         // Verify parameter changed
         let result = param.borrow().data.to_vec();
-        for val in result.iter() {
+        for val in &result {
             assert_ne!(*val, 0.0, "Parameter should have been updated");
         }
     }
@@ -3752,7 +3731,7 @@ mod gpu_tests {
 
         // Verify parameter changed
         let result = param.borrow().data.to_vec();
-        for val in result.iter() {
+        for val in &result {
             assert_ne!(*val, 0.0, "Parameter should have been updated");
         }
     }
@@ -3847,10 +3826,10 @@ mod gpu_tests {
         let b_grad = b.grad().unwrap();
 
         // All gradients should be finite
-        for g in a_grad.iter() {
+        for g in &a_grad {
             assert!(g.is_finite(), "a_grad contains non-finite value");
         }
-        for g in b_grad.iter() {
+        for g in &b_grad {
             assert!(g.is_finite(), "b_grad contains non-finite value");
         }
     }

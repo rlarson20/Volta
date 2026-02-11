@@ -15,7 +15,7 @@ fn main() {
     let test_data_path = "models/pytorch_mnist_test.json";
 
     if !Path::new(model_path).exists() {
-        println!("❌ Model file not found: {}", model_path);
+        println!("❌ Model file not found: {model_path}");
         println!("\nTo generate the PyTorch model, run:");
         println!("  python scripts/export_pytorch_mnist.py");
         println!("\nThis will:");
@@ -25,7 +25,7 @@ fn main() {
         return;
     }
 
-    println!("✓ Found model file: {}\n", model_path);
+    println!("✓ Found model file: {model_path}\n");
 
     // Build matching Volta architecture using named layers
     println!("Building Volta model with named layers...");
@@ -56,7 +56,7 @@ fn main() {
             state
         }
         Err(e) => {
-            println!("❌ Failed to load SafeTensors file: {}", e);
+            println!("❌ Failed to load SafeTensors file: {e}");
             return;
         }
     };
@@ -88,10 +88,10 @@ fn main() {
 
     // Try to load test data for validation
     if Path::new(test_data_path).exists() {
-        println!("✓ Found test data file: {}", test_data_path);
+        println!("✓ Found test data file: {test_data_path}");
         run_validation(&model, test_data_path);
     } else {
-        println!("ℹ Test data not found (optional): {}", test_data_path);
+        println!("ℹ Test data not found (optional): {test_data_path}");
         println!("Running demo inference instead...\n");
         run_demo_inference(&model);
     }
@@ -110,7 +110,7 @@ fn run_validation(model: &Sequential, test_data_path: &str) {
     let _test_data_str = match std::fs::read_to_string(test_data_path) {
         Ok(content) => content,
         Err(e) => {
-            println!("❌ Failed to read test data: {}", e);
+            println!("❌ Failed to read test data: {e}");
             return;
         }
     };
@@ -146,7 +146,7 @@ fn run_demo_inference(model: &Sequential) {
     let output_data = &output.borrow().data;
     println!("\n  Output logits (first 10 values):");
     for (i, &val) in output_data.iter().take(10).enumerate() {
-        println!("    Class {}: {:.6}", i, val);
+        println!("    Class {i}: {val:.6}");
     }
 
     // Find predicted class
@@ -157,7 +157,7 @@ fn run_demo_inference(model: &Sequential) {
         .map(|(idx, _)| idx)
         .unwrap();
 
-    println!("\n  Predicted class: {}", pred_class);
+    println!("\n  Predicted class: {pred_class}");
     println!("  (Note: This is random weights, so prediction is meaningless)");
 
     println!("\n✓ Inference successful!");
