@@ -234,7 +234,6 @@ on_change_strategy = "kill_then_restart"
 # as the code compiles.
 # Call it as
 #    bacon ex -- my-example
-# TODO: add examples here
 [jobs.ex]
 command = ["cargo", "run", "--example"]
 need_stdout = true

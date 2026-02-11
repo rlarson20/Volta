@@ -5,6 +5,7 @@ This checklist focuses on improving the development experience of the Volta proj
 ## 📝 Configuration Files
 
 ### Cargo.toml Cleanup
+
 - [x] **Address TODOs in Cargo.toml**
   - [x] Line 77: "TODO: go over and properly organize lints" - ✅ **COMPLETED**
     - Reorganized into 3 clear categories: Defensive/Safety, Code Quality, Allowed
@@ -26,6 +27,7 @@ This checklist focuses on improving the development experience of the Volta proj
   - [ ] Consider if both should really be default (gpu might fail on systems without GPU)
 
 ### bacon.toml Cleanup
+
 - [ ] **Address TODOs in bacon.toml**
   - [ ] Line 33: "TODO: organize these" - Organize clippy pedantic lints
   - [ ] Line 92: "TODO: check if `map_to`s should be `map_to_else`" - Review and decide
@@ -37,11 +39,13 @@ This checklist focuses on improving the development experience of the Volta proj
   - [ ] Create issues to track fixing these
 
 ### rustfmt.toml Enhancement
+
 - [ ] **Expand rustfmt.toml with project preferences**
   - Currently only has `edition = "2024"`
   - Add common formatting preferences for consistency
 
 ### CI/CD Configuration
+
 - [ ] **Review CI matrix**
   - Currently tests on `[1.89, stable]` - is 1.89 still needed?
   - Document MSRV (Minimum Supported Rust Version) policy
@@ -53,12 +57,14 @@ This checklist focuses on improving the development experience of the Volta proj
 ## 🧪 Testing & Development Tools
 
 ### Test Organization
+
 - [ ] **Review test file structure in tests/**
   - Several `gpu_*` test files - consolidate if possible
   - `improvements_test.rs` - vague name, rename to be more specific
   - `coverage_fill.rs` - document purpose
 
 ### Benchmarking
+
 - [ ] **Document unsafe benchmarks**
   - `gpu_comparison` benchmark is documented as unsafe in CLAUDE.md
   - Add warnings in the benchmark file itself
@@ -69,6 +75,7 @@ This checklist focuses on improving the development experience of the Volta proj
   - Consider moving logic to justfile for consistency
 
 ### Development Scripts
+
 - [ ] **Review justfile organization**
   - LLM commands (lines 57-162) - mark clearly as maintainer-only
   - Consider separating into `justfile.local` that's gitignored
@@ -77,9 +84,9 @@ This checklist focuses on improving the development experience of the Volta proj
 ## 🔧 Source Code Hygiene
 
 ### TODOs in Source Code
+
 - [ ] **Address or document TODOs**
   - `src/nn/mod.rs:77` - "TODO: implement direct GPU-to-GPU transfer"
-  - `src/gpu/context.rs:214` - "TODO: inspect this deeper"
   - `src/gpu/monitor.rs:131` - "TODO: Could use sysinfo crate"
   - `src/gpu/kernels.rs:1909` - "TEMP!!!" comment
   - `src/lib.rs:2708` - Review test organization comment
@@ -89,6 +96,7 @@ This checklist focuses on improving the development experience of the Volta proj
   - Reference issue numbers in code comments
 
 ### Documentation
+
 - [ ] **Add missing module-level documentation**
   - Ensure all public modules have doc comments
   - Run `cargo doc` and review for missing docs
@@ -100,6 +108,7 @@ This checklist focuses on improving the development experience of the Volta proj
 ## 📦 Dependencies
 
 ### Dependency Audit
+
 - [ ] **Review unused dependencies**
   - `scrapboard.md` mentions "cargo machete says cblas and serde-json are no longer used"
   - Run `cargo machete` or `cargo-udeps` to find unused deps
@@ -111,6 +120,7 @@ This checklist focuses on improving the development experience of the Volta proj
 ## 🎯 Developer Experience
 
 ### Documentation
+
 - [ ] **Create CONTRIBUTING.md**
   - Guide for new contributors
   - Testing guidelines
@@ -129,6 +139,7 @@ This checklist focuses on improving the development experience of the Volta proj
   - Add badges for build status, coverage, etc.
 
 ### Code Organization
+
 - [ ] **Review examples/ directory**
   - Ensure all examples in Cargo.toml exist
   - Ensure all examples work
@@ -139,6 +150,7 @@ This checklist focuses on improving the development experience of the Volta proj
   - Create clear hierarchy of current vs archived docs
 
 ### Pre-commit Hooks
+
 - [ ] **Document pre-commit setup**
   - Add installation instructions to README or DEVELOPMENT.md
   - Test that hooks work on fresh clone
@@ -146,6 +158,7 @@ This checklist focuses on improving the development experience of the Volta proj
 ## 🔍 Code Quality Tools
 
 ### Linting Setup
+
 - [ ] **Review clippy configuration**
   - Many lints configured in both Cargo.toml and bacon.toml
   - Ensure consistency between files
@@ -162,6 +175,7 @@ This checklist focuses on improving the development experience of the Volta proj
 ## 📊 Metrics & Monitoring
 
 ### Project Health
+
 - [ ] **Set up code coverage tracking**
   - `coverage.txt` exists but no clear workflow
   - Document how to generate and interpret
@@ -174,18 +188,21 @@ This checklist focuses on improving the development experience of the Volta proj
 ## Priority Levels
 
 ### High Priority (Do First)
+
 1. Clean up root directory temporary files
 2. Fix .gitignore to be more specific
 3. Address TODOs in configuration files
 4. Create CONTRIBUTING.md and DEVELOPMENT.md
 
 ### Medium Priority (Do Soon)
+
 5. Consolidate documentation files
 6. Review and organize test files
 7. Audit and remove unused dependencies
 8. Add module-level documentation
 
 ### Low Priority (Nice to Have)
+
 9. Enhance CI/CD with more checks
 10. Set up additional code quality tools
 11. Improve benchmark organization
