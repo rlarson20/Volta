@@ -30,16 +30,16 @@ jobs:
       - name: Clippy (no features)
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: Test (no features)
-        run: cargo test --all-targets
+      - name: Test (no features) #TODO: improve CI setup/reorganize, figure out way to run benches seperately
+        run: cargo test
 
       # macOS-specific: test accelerate feature
       - name: Test (accelerate)
         if: runner.os == 'macOS'
         run: cargo test --features accelerate
 
-      - name: Check (gpu feature)
-        run: cargo check --features gpu
+      # - name: Check (gpu feature) # Runners lack GPUs
+      #   run: cargo check --features gpu
 
       - name: Doc tests
         run: cargo test --doc
