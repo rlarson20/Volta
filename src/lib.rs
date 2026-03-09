@@ -46,8 +46,9 @@ pub use device::Device;
 pub use nn::layers::Dropout;
 pub use nn::layers::flatten::Flatten;
 pub use nn::{
-    Adam, BatchNorm1d, BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, Embedding, LSTMCell, Linear,
-    MaxPool2d, Module, PixelShuffle, ReLU, SGD, Sequential, SequentialBuilder, Sigmoid, Tanh,
+    Adam, BatchNorm1d, BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, Embedding, LSTMCell,
+    LayerNorm, Linear, MaxPool2d, Module, PixelShuffle, ReLU, SGD, Sequential, SequentialBuilder,
+    Sigmoid, Tanh,
 };
 pub use tensor::{RawTensor, Tensor, TensorOps};
 
@@ -1367,6 +1368,162 @@ mod misc_tests {
         assert_eq!(params.first().unwrap().borrow().shape, vec![16]);
         // beta shape [16]
         assert_eq!(params.get(1).unwrap().borrow().shape, vec![16]);
+    }
+
+    // ===== LAYERNORM TESTS =====
+
+    #[test]
+    fn test_layernorm_1d_forward_shape() {
+        // Test basic 2D input (B, C)
+        let ln = LayerNorm::new(vec![32]); // normalize over last dimension (C)
+        let x = RawTensor::randn(&[8, 32]); // batch=8, features=32
+        let y = ln.forward(&x);
+        assert_eq!(y.borrow().shape, vec![8, 32]);
+    }
+
+    #[test]
+    fn test_layernorm_2d_forward_shape() {
+        // Test 3D input (B, T, C) for transformer-style inputs
+        let ln = LayerNorm::new(vec![64]); // normalize over last dimension (C)
+        let x = RawTensor::randn(&[4, 10, 64]); // batch=4, seq_len=10, features=64
+        let y = ln.forward(&x);
+        assert_eq!(y.borrow().shape, vec![4, 10, 64]);
+    }
+
+    #[test]
+    fn test_layernorm_normalization_stats() {
+        // Verify that normalization produces mean≈0 and std≈1
+        let ln = LayerNorm::new_with_eps(vec![16], 1e-5);
+
+        // Create input with non-zero mean and non-unit variance
+        let data: Vec<f32> = (0..128).map(|i| (i as f32) * 0.1 + 5.0).collect();
+        let x = RawTensor::new(data.clone(), &[8, 16], false);
+
+        let y = ln.forward(&x);
+
+        // Check each sample has mean≈0 and std≈1
+        let y_data = &y.borrow().data;
+        for i in 0..8 {
+            let start = i * 16;
+            let end = start + 16;
+            let sample = y_data
+                .get(start..end)
+                .expect("Sample slice should be valid");
+
+            let mean: f32 = sample.iter().sum::<f32>() / 16.0;
+            let variance: f32 = sample.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / 16.0;
+            let std = variance.sqrt();
+
+            // Mean should be very close to 0
+            assert!(mean.abs() < 1e-4, "Sample {i} mean = {mean}, expected ≈0");
+            // Std should be very close to 1.0 (allow some tolerance for numerical errors)
+            assert!(
+                (std - 1.0).abs() < 1e-3,
+                "Sample {i} std = {std}, expected ≈1"
+            );
+        }
+    }
+
+    #[test]
+    fn test_layernorm_parameters() {
+        // Check gamma and beta shapes and requires_grad
+        let ln = LayerNorm::new(vec![32]);
+        let params = ln.parameters();
+
+        // Should have gamma and beta
+        assert_eq!(params.len(), 2);
+        // gamma shape [32]
+        assert_eq!(params.first().unwrap().borrow().shape, vec![32]);
+        // beta shape [32]
+        assert_eq!(params.get(1).unwrap().borrow().shape, vec![32]);
+
+        // Both should require grad
+        assert!(params.first().unwrap().borrow().requires_grad);
+        assert!(params.get(1).unwrap().borrow().requires_grad);
+    }
+
+    #[test]
+    fn test_layernorm_gradient() {
+        // Numerical gradient check with deterministic data
+        let ln = LayerNorm::new_with_eps(vec![4], 1e-5);
+
+        // Use deterministic data (not random) for stable gradients
+        let data: Vec<f32> = (0..32).map(|i| (i as f32) * 0.1).collect();
+        let x = RawTensor::new(data, &[8, 4], true);
+
+        // Simple forward pass: sum of output
+        let y = ln.forward(&x);
+        let loss = y.sum();
+        loss.backward();
+
+        // Check that gradients exist and are finite
+        let x_grad = x.grad();
+        assert!(x_grad.is_some(), "Input should have gradient");
+
+        let grad_data = x_grad.unwrap();
+        assert_eq!(
+            grad_data.len(),
+            32,
+            "Gradient should have same size as input"
+        );
+
+        // Check gradients are finite (not NaN or Inf)
+        for &g in &grad_data {
+            assert!(g.is_finite(), "Gradient should be finite, found {g}");
+        }
+
+        // Check gamma and beta have gradients
+        let params = ln.parameters();
+        let gamma_grad = params.first().unwrap().grad();
+        let beta_grad = params.get(1).unwrap().grad();
+
+        assert!(gamma_grad.is_some(), "Gamma should have gradient");
+        assert!(beta_grad.is_some(), "Beta should have gradient");
+
+        // Gradients should be finite
+        for g in &gamma_grad.unwrap() {
+            assert!(g.is_finite(), "Gamma gradient should be finite");
+        }
+        for g in &beta_grad.unwrap() {
+            assert!(g.is_finite(), "Beta gradient should be finite");
+        }
+    }
+
+    #[test]
+    fn test_layernorm_state_dict() {
+        // Test state dict save/load roundtrip
+        let ln1 = LayerNorm::new_with_eps(vec![8], 1e-5);
+
+        // Forward pass to ensure parameters are initialized
+        let x = RawTensor::randn(&[4, 8]);
+        let _ = ln1.forward(&x);
+
+        // Save state dict
+        let state = ln1.state_dict();
+
+        // Create new layer and load state
+        let mut ln2 = LayerNorm::new(vec![8]);
+        ln2.load_state_dict(&state);
+
+        // Check that parameters match
+        let params1 = ln1.parameters();
+        let params2 = ln2.parameters();
+
+        // Gamma should match
+        let gamma1_data = &params1.first().unwrap().borrow().data;
+        let gamma2_data = &params2.first().unwrap().borrow().data;
+        assert_eq!(
+            gamma1_data, gamma2_data,
+            "Gamma should match after state dict roundtrip"
+        );
+
+        // Beta should match
+        let beta1_data = &params1.get(1).unwrap().borrow().data;
+        let beta2_data = &params2.get(1).unwrap().borrow().data;
+        assert_eq!(
+            beta1_data, beta2_data,
+            "Beta should match after state dict roundtrip"
+        );
     }
 
     #[test]
