@@ -17,7 +17,7 @@ This project is an educational endeavor to demystify the inner workings of moder
 - **Reverse-Mode Autodiff:** Efficient reverse-mode automatic differentiation with topological sorting.
 - **Rich Tensor Operations:** A comprehensive set of unary, binary, reduction, and matrix operations via an ergonomic `TensorOps` trait.
 - **Broadcasting:** Full NumPy-style broadcasting support for arithmetic operations.
-- **Neural Network Layers:** `Linear`, `Conv2d`, `ConvTranspose2d`, `MaxPool2d`, `Embedding`, `LSTMCell`, `PixelShuffle`, `Flatten`, `ReLU`, `Sigmoid`, `Tanh`, `Dropout`, `BatchNorm1d`, `BatchNorm2d`.
+- **Neural Network Layers:** `Linear`, `Conv2d`, `ConvTranspose2d`, `MaxPool2d`, `Embedding`, `LSTMCell`, `PixelShuffle`, `LayerNorm`, `Flatten`, `ReLU`, `GELU`, `Sigmoid`, `Tanh`, `Dropout`, `BatchNorm1d`, `BatchNorm2d`.
 - **Optimizers:** `SGD` (momentum + weight decay), `Adam` (bias-corrected + weight decay), and experimental `Muon`.
 - **External Model Loading:** Load weights from PyTorch, HuggingFace, and other frameworks via `StateDictMapper` with automatic weight transposition and key remapping. Supports SafeTensors format.
 - **Named Layers:** Human-readable state dict keys with `Sequential::builder()` pattern for robust serialization.
@@ -33,7 +33,7 @@ This library is functional for training MLPs, CNNs, RNNs, GANs, VAEs, and other 
 
 - ✅ **What's Working:**
   - **Core Autograd:** All operations verified with numerical gradient checking
-  - **Layers:** Linear, Conv2d, ConvTranspose2d, MaxPool2d, Embedding, LSTMCell, PixelShuffle, BatchNorm1d/2d, Dropout
+  - **Layers:** Linear, Conv2d, ConvTranspose2d, MaxPool2d, Embedding, LSTMCell, PixelShuffle, LayerNorm, BatchNorm1d/2d, Dropout
   - **Optimizers:** SGD (with momentum), Adam, Muon
   - **External Loading:** PyTorch/HuggingFace model weights via SafeTensors with automatic transposition
   - **Named Layers:** Robust serialization with human-readable state dict keys
@@ -57,7 +57,7 @@ This library is functional for training MLPs, CNNs, RNNs, GANs, VAEs, and other 
     - ⚠️ Broadcasting preprocessing happens on CPU before GPU dispatch
 
 - ❌ **What's Missing:**
-  - Production-ready GPU integration, distributed training, learning-rate schedulers, attention/transformer layers
+  - Production-ready GPU integration, distributed training, learning-rate schedulers, full attention mechanisms (LayerNorm and components are implemented)
 
 ## Installation
 
@@ -93,6 +93,45 @@ Or combine both for maximum performance:
 volta = { version = "0.3.0", features = ["accelerate", "gpu"] }
 ```
 
+## Architecture
+
+Volta is built around a dynamic computation graph that tracks operations for reverse-mode automatic differentiation.
+
+### Computation Graph & DAG Linearization
+
+When operations are performed on tensors requiring gradients, Volta constructs a Directed Acyclic Graph (DAG) of the computation. During the backward pass, this graph is linearized via topological sorting to compute gradients efficiently without deep recursion.
+
+```text
+    [Input x] (requires_grad=true)             [Weights w] (requires_grad=true)
+          \                                         /
+           \                                       /
+            v                                     v
+         [Linear] <--- (GradFn: LinearBackward) --
+               \
+                v
+            [ReLU] <--- (GradFn: ReLUBackward)
+               |
+               v
+            [Loss] <--- (GradFn: MSEBackward)
+```
+
+### GradFn Trait Dispatch
+
+The core of the autograd engine is the `Backward` trait. Each differentiable operation implements this trait. During the backward pass, the topological sort yields a linearized sequence of `Backward` closures. The engine invokes them iteratively, dispatching the gradient of the output to compute the gradients with respect to the inputs. This iterative approach avoids call stack exhaustion on deep, complex graphs.
+
+### Serialization: Why SafeTensors?
+
+Volta defaults to HuggingFace's SafeTensors format for model weight serialization instead of Pickle or robust generic serializers like `bincode` for several reasons:
+- **Zero-copy loading**: SafeTensors allows memory-mapping (mmap) weights directly from disk, bypassing memory allocations during loading.
+- **Safety**: Unlike Pickle, SafeTensors cannot execute arbitrary code.
+- **Interoperability**: It enables Volta to natively read weights from models trained in PyTorch or JAX.
+
+### Compute Backends
+
+Volta provides multiple backends for computation:
+- **CPU Backend**: Features matrix multiplication accelerated by Apple's Accelerate framework (via the `accelerate` feature) and multi-threaded CPU matrix operations using `matrixmultiply`.
+- **GPU Backend (Experimental)**: Uses `wgpu` to dispatch operations to the GPU. Tensors can seamlessly move between devices using `Tensor::to_device()`.
+
 ## Examples:
 
 ### Training an MLP
@@ -100,7 +139,11 @@ volta = { version = "0.3.0", features = ["accelerate", "gpu"] }
 Here's how to define a simple Multi-Layer Perceptron (MLP) with named layers, train it on synthetic data, and save the model.
 
 ```rust
-use volta::{nn::*, tensor::*, Adam, Sequential, TensorOps, io};
+use volta::{
+    Adam, Sequential, TensorOps, io,
+    nn::{Linear, Module, ReLU},
+    tensor::{RawTensor, mse_loss},
+};
 
 fn main() {
     // 1. Define a simple model with named layers: 2 -> 8 -> 1
@@ -130,7 +173,7 @@ fn main() {
         let loss = mse_loss(&pred, &y);
 
         if epoch % 20 == 0 {
-            println!("Epoch {}: loss = {:.6}", epoch, loss.borrow().data[0]);
+            println!("Epoch {}: loss = {:.6}", epoch, loss.borrow().data.first().copied().unwrap_or(f32::NAN));
         }
 
         loss.backward();
@@ -186,7 +229,7 @@ fn main() {
     loss.backward();
     optim.step();
 
-    println!("Loss: {:?}", loss.borrow().data[0]);
+    println!("Loss: {:?}", loss.borrow().data.first().copied().unwrap_or(f32::NAN));
 }
 ```
 
@@ -348,12 +391,11 @@ The next major steps for Volta are focused on expanding its capabilities to hand
 
 1. **Complete GPU Integration:** Port remaining neural network layers (Linear, Conv2d) to GPU, optimize GEMM kernels with shared memory tiling.
 2. **Performance Optimization:** Implement SIMD for element-wise operations, optimize broadcasting on GPU, kernel fusion for composite operations.
-3. **Transformer Support:** Add attention mechanisms, positional encodings, layer normalization.
-4. **Learning Rate Schedulers:** Cosine annealing, step decay, warmup schedules.
+3. **Learning Rate Schedulers:** Cosine annealing, step decay, warmup schedules.
 
 ### Outstanding Issues
 
-- **Conv2d Memory Inefficiency**: `im2col` implementation in `src/nn/layers/conv.rs` materializes the entire matrix in memory. Large batch sizes or high-resolution images will easily OOM even on high-end machines.
+- **Conv2d Memory Inefficiency**: `im2col` implementation in `src/nn/layers/conv.rs` materializes the entire matrix in memory. Large batch sizes or high-resolution images will easily OOM even on high-end machines. Somewhat mitigated through algorithm selection in convolutional layer.
 - **GPU Kernel Efficiency**: Current GPU matmul uses naive implementation without shared memory tiling. Significant performance gains possible with optimized GEMM kernels.
 - **Multi-dtype Completeness**: While storage supports multiple dtypes (f16, bf16, f64, etc.), most operations still assume f32. Full dtype support requires operation kernels for each type.
 - **Single-threaded**: Uses `Rc<RefCell>` instead of `Arc<Mutex>`, limiting to single-threaded execution on CPU.

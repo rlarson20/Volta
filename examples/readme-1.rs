@@ -5,12 +5,12 @@ use volta::{
 };
 
 fn main() {
-    // 1. Define a simple model: 2 -> 8 -> 1
-    let model = Sequential::new(vec![
-        Box::new(Linear::new(2, 8, true)),
-        Box::new(ReLU),
-        Box::new(Linear::new(8, 1, true)),
-    ]);
+    // 1. Define a simple model with named layers: 2 -> 8 -> 1
+    let model = Sequential::builder()
+        .add_named("fc1", Box::new(Linear::new(2, 8, true)))
+        .add_unnamed(Box::new(ReLU))
+        .add_named("fc2", Box::new(Linear::new(8, 1, true)))
+        .build();
 
     // 2. Create synthetic data
     let x_data = vec![0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0];
@@ -42,16 +42,17 @@ fn main() {
         loss.backward();
         optimizer.step();
     }
-    // 5. Save and Load State Dict
+
+    // 5. Save and Load State Dict (human-readable keys: "fc1.weight", "fc1.bias", etc.)
     let state = model.state_dict();
     io::save_state_dict(&state, "model.bin").expect("Failed to save");
 
     // Verify loading
-    let mut new_model = Sequential::new(vec![
-        Box::new(Linear::new(2, 8, true)),
-        Box::new(ReLU),
-        Box::new(Linear::new(8, 1, true)),
-    ]);
+    let mut new_model = Sequential::builder()
+        .add_named("fc1", Box::new(Linear::new(2, 8, true)))
+        .add_unnamed(Box::new(ReLU))
+        .add_named("fc2", Box::new(Linear::new(8, 1, true)))
+        .build();
     let loaded_state = io::load_state_dict("model.bin").expect("Failed to load");
     new_model.load_state_dict(&loaded_state);
 }
