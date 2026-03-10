@@ -3,6 +3,103 @@ check:
 	cargo build
 	cargo test
 
+# ===== CODE HEALTH & ANALYSIS =====
+
+# Run coverage with llvm-cov and open HTML report
+coverage:
+	cargo llvm-cov --html
+	open target/llvm-cov/html/index.html
+
+# Terminal-only coverage summary
+coverage-summary:
+	cargo llvm-cov
+
+# Fast targeted mutation testing (e.g. just mutants src/tensor.rs)
+mutants target="":
+	cargo mutants -- {{target}}
+
+# Full mutation testing (WARNING: slow)
+mutants-all:
+	cargo mutants
+
+# Find unused dependencies
+dead-deps:
+	cargo machete
+
+# Analyze binary bloat for an example (e.g. just bloat showcase)
+bloat name:
+	cargo bloat --example {{name}}
+
+# Show macro-expanded code for a module (e.g. just expand nn::layers::conv)
+expand mod:
+	cargo expand {{mod}}
+
+# ===== GPU & SHADER VALIDATION =====
+
+# Validate all WGSL shaders in src/gpu/shaders/
+validate-shaders:
+	@echo "Validating shaders..."
+	@for f in src/gpu/shaders/*.wgsl; do \
+		echo "Checking $f..."; \
+		naga $f || (echo "Failed: $f" && exit 1); \
+	done
+	@echo "All shaders valid."
+
+# Run only GPU integration tests
+test-gpu:
+	cargo test --features gpu --test 'gpu_*' -- --nocapture
+
+# Run all tests without GPU/Accelerate features
+test-cpu:
+	cargo test --no-default-features -- --nocapture
+
+# ===== EXAMPLE & INTEGRATION QUALITY =====
+
+# Compile-check every example (catches API drift)
+examples-check:
+	cargo build --examples
+
+# Run a single example by name
+example name:
+	cargo run --example {{name}}
+
+# ===== PROJECT METRICS & HYGIENE =====
+
+# Lines of code by language
+loc:
+	tokei src/
+
+# Dependency tree (root level)
+deps-tree:
+	cargo tree --depth 1
+
+# Check for outdated dependencies
+outdated:
+	cargo outdated --root-deps-only
+
+# Nuke all build artifacts and temporary files
+clean:
+	cargo clean
+	-rm mutants.out/
+	-rm *.txt responses/context.md
+	@echo "Cleaned target, mutants output, and temporary text files."
+
+# ===== AGGREGATE WORKFLOWS =====
+
+# Fast CI-like pipeline (fmt -> lint -> test -> docs -> examples)
+ci:
+	cargo fmt --check
+	cargo clippy --all-targets -- -D warnings
+	cargo test
+	cargo doc --no-deps
+	cargo build --examples
+	@echo "CI check passed!"
+
+# Comprehensive pre-release checklist
+pre-release: ci validate-shaders dead-deps coverage-summary examples-check
+	@echo "Pre-release checks complete."
+
+
 # ===== BENCHMARKING =====
 # Run all benchmarks
 bench: # NOT FOR USE, RUNS THE GPU_COMPARISON
