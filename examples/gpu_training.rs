@@ -6,7 +6,7 @@
 //! - `DataLoader` with automatic GPU prefetch
 //! - Full training loop staying on GPU
 //! - Performance comparison with CPU training
-
+#![allow(clippy::cast_possible_truncation)]
 use std::time::Instant;
 use volta::{
     Adam, Device, Linear, Module, RawTensor, ReLU, Sequential, Tensor, TensorOps, mse_loss,
@@ -37,10 +37,10 @@ fn main() {
     let y_data = vec![0.0, 1.0, 1.0, 0.0];
 
     println!("\n--- Approach 1: Using new_on_device() Constructors ---");
-    train_with_device_constructors(x_data.clone(), y_data.clone(), device.clone());
+    train_with_device_constructors(x_data.clone(), y_data.clone(), &device.clone());
 
     println!("\n--- Approach 2: Using to_device() on Existing Model ---");
-    train_with_to_device(x_data.clone(), y_data.clone(), device.clone());
+    train_with_to_device(x_data.clone(), y_data.clone(), &device.clone());
 
     println!("\n--- Performance Comparison ---");
     compare_cpu_vs_gpu(x_data, y_data);
@@ -49,7 +49,7 @@ fn main() {
 }
 
 /// Train using device-aware constructors
-fn train_with_device_constructors(x_data: Vec<f32>, y_data: Vec<f32>, device: Device) {
+fn train_with_device_constructors(x_data: Vec<f32>, y_data: Vec<f32>, device: &Device) {
     println!("Building model directly on device: {}", device.name());
 
     // Create model with all layers on specified device
@@ -80,7 +80,7 @@ fn train_with_device_constructors(x_data: Vec<f32>, y_data: Vec<f32>, device: De
 }
 
 /// Train using `to_device()` on existing model
-fn train_with_to_device(x_data: Vec<f32>, y_data: Vec<f32>, device: Device) {
+fn train_with_to_device(x_data: Vec<f32>, y_data: Vec<f32>, device: &Device) {
     println!(
         "Building model on CPU, then moving to device: {}",
         device.name()
@@ -117,6 +117,7 @@ fn train_with_to_device(x_data: Vec<f32>, y_data: Vec<f32>, device: Device) {
 }
 
 /// Compare CPU vs GPU training performance
+#[allow(clippy::similar_names)]
 fn compare_cpu_vs_gpu(x_data: Vec<f32>, y_data: Vec<f32>) {
     // CPU training
     println!("Training on CPU...");

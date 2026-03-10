@@ -48,6 +48,7 @@ impl BatchNorm2d {
 }
 
 impl Module for BatchNorm2d {
+    #[allow(clippy::many_single_char_names)]
     fn forward(&self, x: &Tensor) -> Tensor {
         let x_borrow = x.borrow();
         assert_eq!(

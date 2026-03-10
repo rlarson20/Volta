@@ -4,6 +4,11 @@
 //! that can be backed by either CPU memory or GPU buffers, with support
 //! for multiple data types (f16, bf16, f32, f64, etc.).
 
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::needless_pass_by_value
+)]
 use crate::VoltaError;
 use crate::device::Device;
 use crate::dtype::DType;

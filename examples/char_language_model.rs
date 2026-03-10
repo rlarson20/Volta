@@ -7,7 +7,7 @@
 //
 // The model predicts the next character in a sequence, learning patterns
 // from a small text corpus.
-
+#![allow(clippy::cast_precision_loss)]
 use std::collections::HashMap;
 use volta::{
     Adam, Dropout, Embedding, LSTMCell, Linear, Module, RawTensor, TensorOps, manual_seed,

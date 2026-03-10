@@ -1,3 +1,9 @@
+#![allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation
+)]
 use crate::Storage;
 use crate::autograd::GradFn;
 use crate::io::{StateDict, TensorData};
@@ -151,6 +157,7 @@ struct ConvTranspose2dGradFn {
 }
 
 impl GradFn for ConvTranspose2dGradFn {
+    #[allow(clippy::too_many_lines)]
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         // parents: [input, weight, bias] if has_bias, else [input, weight]
         let input = parents

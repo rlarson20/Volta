@@ -1,5 +1,6 @@
 #[test]
 #[cfg(feature = "gpu")]
+#[allow(clippy::too_many_lines)]
 fn test_new_unary_ops_gpu_autograd() {
     use volta::gpu::is_gpu_available;
     use volta::{Device, RawTensor, TensorOps};

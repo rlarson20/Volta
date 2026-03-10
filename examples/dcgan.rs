@@ -1,3 +1,4 @@
+#![allow(clippy::cast_precision_loss)]
 use volta::{
     Conv2d, ConvTranspose2d, Flatten, Linear, Module, ProgressBar, RawTensor, SGD, Tanh, TensorOps,
     bce_with_logits_loss, load_mnist_images, normalize, randn,
@@ -90,6 +91,7 @@ impl Discriminator {
     }
 }
 
+#[allow(clippy::similar_names)]
 fn main() {
     println!("=== DCGAN on MNIST ===\n");
 

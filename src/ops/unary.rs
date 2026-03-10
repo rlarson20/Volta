@@ -45,6 +45,7 @@ pub struct UnaryGradFn {
 }
 
 impl GradFn for UnaryGradFn {
+    #[allow(clippy::too_many_lines)]
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let x = parents
             .first()
@@ -215,6 +216,7 @@ impl RawTensor {
     ///
     /// This is the unified implementation for all unary ops.
     /// Creates a new tensor and sets up gradient tracking if needed.
+    #[allow(clippy::cast_possible_truncation)]
     pub fn unary_op(t: &Tensor, op: UnaryOp) -> Tensor {
         let (data, shape, req, device) = {
             let s = t.borrow();

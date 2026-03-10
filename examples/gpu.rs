@@ -1,5 +1,6 @@
 use volta::{Device, RawTensor, TensorOps};
 
+#[allow(clippy::similar_names)]
 fn main() {
     // Check if GPU is available
     #[cfg(feature = "gpu")]

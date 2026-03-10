@@ -1,5 +1,6 @@
 use volta::{LSTMCell, Module, ProgressBar, RawTensor, SGD, TensorOps};
 
+#[allow(clippy::cast_precision_loss)]
 fn main() {
     println!("=== Time Sequence Prediction with LSTM ===\n");
 

@@ -1182,7 +1182,10 @@ impl TensorOps for Tensor {
         RawTensor::backward(self);
     }
     fn grad(&self) -> Option<Vec<f32>> {
-        self.borrow().grad.as_ref().map(|g| g.to_vec())
+        self.borrow()
+            .grad
+            .as_ref()
+            .map(super::storage::Storage::to_vec)
     }
     fn zero_grad(&self) {
         RawTensor::zero_grad(self);

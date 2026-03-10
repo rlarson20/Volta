@@ -5,7 +5,7 @@
 //! - Conv2d layer (various kernel sizes)
 //! - `MaxPool2d` layer
 //! - Sequential models (end-to-end forward pass)
-
+#![allow(clippy::cast_precision_loss)]
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use volta::{Conv2d, Linear, MaxPool2d, Module, RawTensor, ReLU, Sequential, Tensor, TensorOps};
 

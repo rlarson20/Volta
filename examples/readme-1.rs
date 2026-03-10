@@ -1,4 +1,8 @@
-use volta::{Adam, Sequential, TensorOps, io, nn::*, tensor::*};
+use volta::{
+    Adam, Sequential, TensorOps, io,
+    nn::{Linear, Module, ReLU},
+    tensor::{RawTensor, mse_loss},
+};
 
 fn main() {
     // 1. Define a simple model: 2 -> 8 -> 1

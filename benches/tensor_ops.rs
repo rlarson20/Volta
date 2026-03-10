@@ -6,7 +6,7 @@
 //! - Matrix multiplication
 //! - Reduction operations (sum, mean, max)
 //! - Movement operations (reshape, transpose, etc.)
-
+#![allow(clippy::cast_precision_loss)]
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use volta::{RawTensor, Tensor, TensorOps};
 

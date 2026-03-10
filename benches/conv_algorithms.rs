@@ -8,7 +8,7 @@
 //! - Kernel: (K, K)
 //! - im2col output: (B * `H_out` * `W_out`, C * K * K)
 //! - Memory = B * `H_out` * `W_out` * C * K * K * 4 bytes (f32)
-
+#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use volta::{Conv2d, ConvAlgo, RawTensor, Tensor};
 

@@ -3,6 +3,7 @@ use volta::{
     load_mnist_images, mse_loss, normalize, randn_like,
 };
 
+#[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
 fn main() {
     println!("=== Variational Autoencoder (VAE) on MNIST ===\n");
 

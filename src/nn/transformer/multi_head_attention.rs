@@ -118,7 +118,7 @@ impl MultiHeadAttention {
         };
 
         // Reshape to 2D for Linear layers: [batch, seq_len, embed_dim] -> [batch * seq_len, embed_dim]
-        let x_2d = x.reshape(&[batch_size * seq_len, _embed_dim]);
+        let x_2d = x.reshape(&[batch_size * seq_len, self.embed_dim]);
 
         // Project Q, K, V through Linear layers (2D)
         let q = self.q_proj.forward(&x_2d); // [batch * seq_len, embed_dim]

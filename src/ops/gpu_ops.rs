@@ -146,7 +146,7 @@ impl RawTensor {
     }
 
     /// GPU-accelerated matrix multiplication
-    #[allow(dead_code)]
+    #[allow(clippy::many_single_char_names)]
     #[cfg(feature = "gpu")]
     pub(crate) fn gpu_matmul(
         a: &Storage,

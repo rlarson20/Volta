@@ -66,6 +66,7 @@ fn test_sgd_momentum_logic() {
     assert!((val2 - 0.971).abs() < 1e-6);
 }
 
+#[allow(clippy::float_cmp)]
 #[test]
 fn test_storage_mut_access() {
     // Coverage gap: Storage::as_mut_slice failure/success paths

@@ -150,6 +150,7 @@ impl RawTensor {
     /// All reduction ops produce a shape \[1\] output.
     /// # Panics
     /// unwrap map
+    #[allow(clippy::too_many_lines)]
     pub fn reduce_op(self_t: &Tensor, op: ReduceOp) -> Tensor {
         let (data, shape, req_grad, device) = {
             let s = self_t.borrow();

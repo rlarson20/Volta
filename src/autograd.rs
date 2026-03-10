@@ -143,7 +143,7 @@ impl RawTensor {
                                 parent.grad = Some(new_grad_storage);
                             }
                             Some(ref mut existing) => {
-                                Self::accumulate_grad(existing, new_grad_storage);
+                                Self::accumulate_grad(existing, &new_grad_storage);
                             }
                         }
                     }
@@ -155,11 +155,11 @@ impl RawTensor {
 
 impl RawTensor {
     /// Add a gradient contribution to an existing gradient storage, preferring GPU accumulation.
-    fn accumulate_grad(existing: &mut Storage, new_grad: Storage) {
+    fn accumulate_grad(existing: &mut Storage, new_grad: &Storage) {
         #[cfg(feature = "gpu")]
         {
             if existing.is_gpu() && new_grad.is_gpu() {
-                if let Some(sum) = Self::gpu_add(existing, &new_grad) {
+                if let Some(sum) = Self::gpu_add(existing, new_grad) {
                     *existing = sum;
                     return;
                 }

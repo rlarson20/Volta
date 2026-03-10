@@ -117,8 +117,8 @@ fn main() {
     let out_data = &test_output.borrow().data;
     println!(
         "  Output range: [{:.3}, {:.3}]",
-        out_data.iter().cloned().fold(f32::INFINITY, f32::min),
-        out_data.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
+        out_data.iter().copied().fold(f32::INFINITY, f32::min),
+        out_data.iter().copied().fold(f32::NEG_INFINITY, f32::max)
     );
 
     println!("\n✓ Successfully demonstrated super-resolution with PixelShuffle!");
@@ -128,6 +128,7 @@ fn main() {
 ///
 /// Creates smooth low-resolution images and corresponding high-resolution targets
 /// with added detail/frequency content to simulate the super-resolution task
+#[allow(clippy::cast_precision_loss)]
 fn generate_synthetic_data(
     batch_size: usize,
     low_res_size: usize,

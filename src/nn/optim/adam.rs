@@ -1,3 +1,4 @@
+#![allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
 use crate::storage::Storage;
 use crate::tensor::Tensor;
 

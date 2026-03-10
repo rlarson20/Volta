@@ -397,6 +397,7 @@ pub struct MovementGradFn {
 }
 
 impl GradFn for MovementGradFn {
+    #[allow(clippy::too_many_lines)]
     fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let grad_tensor = match &self.op {
             MovementOp::Reshape { .. } => {

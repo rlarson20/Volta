@@ -2,7 +2,7 @@
 //!
 //! These benchmarks are only available when the `gpu` feature is enabled.
 //! They compare CPU and GPU performance for key operations.
-
+#![allow(clippy::cast_precision_loss)]
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use volta::{Device, RawTensor, Tensor, TensorOps};
 
@@ -639,6 +639,7 @@ fn bench_memory_transfer(c: &mut Criterion) {
 // ===== GPU BATCH PROCESSING =====
 
 #[cfg(feature = "gpu")]
+#[allow(clippy::too_many_lines)]
 fn bench_gpu_batch_processing(c: &mut Criterion) {
     if !is_gpu_enabled() {
         return;

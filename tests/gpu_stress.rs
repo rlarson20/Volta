@@ -2,7 +2,7 @@
 //!
 //! These tests are designed to reproduce and diagnose GPU timeout issues
 //! by stressing the command queue with various workload patterns.
-
+#![allow(clippy::cast_precision_loss)]
 #[cfg(feature = "gpu")]
 mod gpu_stress_tests {
     use volta::{

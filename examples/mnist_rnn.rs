@@ -4,7 +4,7 @@
 //! where each timestep consists of 28 features (one row of pixels).
 //! An LSTM processes the sequence row-by-row, and the final hidden
 //! state is used for classification.
-
+#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 use std::path::Path;
 use volta::{
     Adam, BatchNorm1d, DataLoader, LSTMCell, Linear, Module, ProgressBar, RawTensor, TensorOps,
@@ -39,6 +39,7 @@ fn extract_timestep(batch: &volta::Tensor, t: usize) -> volta::Tensor {
     RawTensor::new(data, &[batch_size, features], false)
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() {
     println!("=== MNIST RNN (LSTM) Training ===\n");
 

@@ -149,6 +149,7 @@ fn get_process_memory_ratio() -> f64 {
 ///
 /// println!("Current memory usage: {}MB", get_process_memory_mb());
 /// ```
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 #[must_use]
 pub fn get_process_memory_mb() -> usize {
     const SYSTEM_MEMORY_MB: usize = 24 * 1024;

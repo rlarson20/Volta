@@ -3,7 +3,12 @@
 //! This module contains the logic for dispatching compute shaders.
 //! Each operation creates a command buffer, binds the appropriate
 //! pipeline and buffers, and submits work to the GPU.
-
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::too_many_lines,
+    clippy::many_single_char_names
+)]
 use super::{GpuBuffer, get_gpu_context};
 
 /// Parameters for matrix dimensions (used in matmul shader)

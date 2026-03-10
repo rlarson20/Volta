@@ -1,4 +1,4 @@
-// src/layers/conv.rs
+#![allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
 use crate::Storage;
 use crate::autograd::GradFn;
 use crate::device::Device;
@@ -221,6 +221,7 @@ struct DirectConvGradFn {
 }
 
 impl GradFn for DirectConvGradFn {
+    #[allow(clippy::too_many_lines)]
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         // parents: [input, weight]
         let x = parents.first().cloned();
@@ -622,6 +623,7 @@ struct IGEMMGradFn {
 }
 
 impl GradFn for IGEMMGradFn {
+    #[allow(clippy::too_many_lines)]
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         // parents: [input, weight]
         let x = parents.first().cloned();
@@ -1529,6 +1531,7 @@ impl Conv2d {
     /// - Reduces memory bandwidth (no im2col materialization)
     /// - Improves cache locality (tiled computation)
     /// - Enables future optimizations (Winograd, FFT)
+    #[allow(clippy::too_many_lines)]
     fn igemm_forward(
         x: &Tensor,
         weight: &Tensor,
@@ -1780,6 +1783,7 @@ impl Conv2d {
 
     /// # Panics
     /// Input needs to be 4D
+    #[allow(clippy::too_many_lines)]
     pub fn forward(&self, x: &Tensor) -> Tensor {
         let (batch, in_channels, height, width) = {
             let x_borrow = x.borrow();

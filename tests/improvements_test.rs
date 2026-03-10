@@ -192,6 +192,7 @@ fn test_broadcast_safety_improvements() {
     // Should handle gracefully
 }
 #[test]
+#[allow(clippy::similar_names)]
 fn test_tensor_to_device_updates_device_and_preserves_data() {
     let t = RawTensor::new(vec![1.0, 2.0], &[2], false);
 

@@ -82,7 +82,7 @@ pub fn is_gpu_available() -> bool {
 /// ```
 #[must_use]
 pub fn gpu_sync() -> bool {
-    get_gpu_context().is_none_or(|ctx| ctx.sync()) // No GPU = success
+    get_gpu_context().is_none_or(context::GpuContext::sync) // No GPU = success
 }
 
 /// Get the current number of pending GPU submissions (diagnostic)
@@ -103,7 +103,7 @@ pub fn gpu_sync() -> bool {
 /// ```
 #[must_use]
 pub fn gpu_pending_count() -> u32 {
-    get_gpu_context().map_or(0, |ctx| ctx.pending_count())
+    get_gpu_context().map_or(0, context::GpuContext::pending_count)
 }
 
 /// Get the GPU sync threshold (diagnostic)
@@ -112,7 +112,7 @@ pub fn gpu_pending_count() -> u32 {
 /// synchronization. Returns 0 if GPU is not available.
 #[must_use]
 pub fn gpu_sync_threshold() -> u32 {
-    get_gpu_context().map_or(0, |ctx| ctx.sync_threshold())
+    get_gpu_context().map_or(0, context::GpuContext::sync_threshold)
 }
 
 /// Clear GPU buffer pools to release memory

@@ -1,3 +1,4 @@
+#![allow(clippy::similar_names)]
 #[test]
 #[cfg(feature = "gpu")]
 fn test_tensor_gpu_unary_add_binary_smoke() {

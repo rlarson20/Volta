@@ -84,6 +84,7 @@ pub struct BinaryGradFn {
 }
 
 impl GradFn for BinaryGradFn {
+    #[allow(clippy::too_many_lines)]
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         // SAFETY: Binary operations always create exactly 2 parents during forward pass
         debug_assert!(parents.len() >= 2, "Binary grad requires 2 parents");

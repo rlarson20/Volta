@@ -12,7 +12,7 @@
 //! The library uses reference-counted interior mutability (`Rc<RefCell<RawTensor>>`) to build
 //! dynamic computation graphs. Each tensor operation creates new tensors and stores gradient
 //! functions that know how to backpropagate through that operation.
-
+#![allow(clippy::float_cmp, clippy::similar_names, clippy::cast_precision_loss)]
 #[cfg(feature = "gpu")]
 pub mod gpu;
 
@@ -619,6 +619,7 @@ mod misc_tests {
     }
 
     #[test]
+    #[allow(clippy::many_single_char_names)]
     fn test_broadcast_bias_add() {
         // Common pattern: batch matmul + bias
         // (batch=2, in=3) @ (3, 4) + (4,) -> (2, 4)
@@ -946,12 +947,12 @@ mod misc_tests {
     fn test_gradcheck_reduce_ops() {
         // Test mean gradient
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], true);
-        let passed = RawTensor::check_gradients_simple(&x, |t| t.mean());
+        let passed = RawTensor::check_gradients_simple(&x, super::tensor::TensorOps::mean);
         assert!(passed, "Mean gradient check failed");
 
         // Test max gradient (more challenging due to discontinuity)
         let x = RawTensor::new(vec![1.0, 5.0, 3.0, 2.0], &[4], true);
-        let passed = RawTensor::check_gradients_simple(&x, |t| t.max_reduce());
+        let passed = RawTensor::check_gradients_simple(&x, super::tensor::TensorOps::max_reduce);
         assert!(passed, "Max gradient check failed");
     }
 
@@ -984,6 +985,7 @@ mod misc_tests {
     }
 
     #[test]
+    #[allow(clippy::many_single_char_names)]
     fn test_gradcheck_neural_network_layer() {
         // Test full linear layer: y = xW + b
         let x = RawTensor::new(vec![1.0, 2.0, 3.0], &[1, 3], true);
@@ -1873,11 +1875,11 @@ mod edge_case_tests {
                     "Error message should mention length"
                 );
                 assert!(
-                    msg.contains("2"),
+                    msg.contains('2'),
                     "Error message should mention expected rank 2"
                 );
                 assert!(
-                    msg.contains("1"),
+                    msg.contains('1'),
                     "Error message should mention actual length 1"
                 );
             }
@@ -1907,11 +1909,11 @@ mod edge_case_tests {
                     "Error message should mention length"
                 );
                 assert!(
-                    msg.contains("2"),
+                    msg.contains('2'),
                     "Error message should mention expected rank 2"
                 );
                 assert!(
-                    msg.contains("3"),
+                    msg.contains('3'),
                     "Error message should mention actual length 3"
                 );
             }
@@ -1990,8 +1992,8 @@ mod edge_case_tests {
                 );
                 assert!(msg.contains("start"), "Error should mention start");
                 assert!(msg.contains("end"), "Error should mention end");
-                assert!(msg.contains("3"), "Error should include values");
-                assert!(msg.contains("2"), "Error should include values");
+                assert!(msg.contains('3'), "Error should include values");
+                assert!(msg.contains('2'), "Error should include values");
             }
             VoltaError::ShapeDataMismatch { .. }
             | VoltaError::DimensionOutOfBounds { .. }
@@ -3165,6 +3167,7 @@ mod axis_reduce_tests {
     /// 4. Loading into a Volta model with named layers
     /// 5. Verifying the model works correctly
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn test_external_model_loading_integration() {
         use crate::io::{TensorData, load_state_dict, mapping::StateDictMapper, save_state_dict};
         use crate::nn::{Linear, Module, ReLU, Sequential};

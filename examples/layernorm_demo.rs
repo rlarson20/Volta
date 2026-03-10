@@ -1,6 +1,7 @@
 use volta::RawTensor;
 use volta::{LayerNorm, Module, TensorOps};
 
+#[allow(clippy::cast_precision_loss)]
 fn main() {
     println!("=== LayerNorm Demonstration ===\n");
 
@@ -72,11 +73,11 @@ fn main() {
     let params3 = ln3.parameters();
     println!(
         "Gamma gradient exists: {}",
-        params3.first().and_then(|p| p.grad()).is_some()
+        params3.first().and_then(volta::TensorOps::grad).is_some()
     );
     println!(
         "Beta gradient exists: {}",
-        params3.get(1).and_then(|p| p.grad()).is_some()
+        params3.get(1).and_then(volta::TensorOps::grad).is_some()
     );
 
     println!("\n=== All LayerNorm demonstrations completed successfully! ===");

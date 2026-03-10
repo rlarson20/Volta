@@ -1,4 +1,5 @@
 //! Tests for GPU-accelerated movement operation backward passes
+#![allow(clippy::cast_precision_loss)]
 #![cfg(feature = "gpu")]
 
 use volta::device::Device;

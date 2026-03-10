@@ -127,7 +127,7 @@ fn run_validation(model: &Sequential, test_data_path: &str) {
 
     run_demo_inference(model);
 }
-
+#[allow(clippy::cast_precision_loss)]
 fn run_demo_inference(model: &Sequential) {
     println!("Running demo inference...");
 

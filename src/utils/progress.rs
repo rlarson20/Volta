@@ -38,6 +38,7 @@ impl ProgressBar {
         let _ = io::stderr().flush();
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn render(&self) {
         let percent = if self.total > 0 {
             (self.current as f32 / self.total as f32 * 100.0) as usize

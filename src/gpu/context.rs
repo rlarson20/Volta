@@ -526,6 +526,7 @@ impl GpuContext {
     }
 
     /// Create all compute pipelines by compiling shaders
+    #[allow(clippy::too_many_lines)]
     fn create_pipelines(device: &wgpu::Device) -> ComputePipelines {
         // Load and compile shader modules
         let elementwise_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {

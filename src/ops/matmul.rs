@@ -52,6 +52,7 @@ impl RawTensor {
     /// Raw matrix multiplication: (m,k) @ (k,n) -> (m,n)
     /// Uses `cblas_sgemm` on macOS, `matrixmultiply::sgemm` elsewhere
     #[must_use]
+    #[allow(clippy::many_single_char_names)]
     pub fn matmul_raw(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
         #[cfg(all(feature = "accelerate", target_os = "macos"))]
         {
@@ -75,6 +76,7 @@ impl RawTensor {
             }
 
             let mut result = vec![0.0; m * n];
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
             unsafe {
                 cblas_sgemm(
                     101, // CblasRowMajor
@@ -130,6 +132,7 @@ impl RawTensor {
     /// - (n,) @ (n,) -> scalar   [dot product]
     /// # Panics
     /// Dimension mismatch
+    #[allow(clippy::too_many_lines)]
     pub fn matmul(self_t: &Tensor, other: &Tensor) -> Tensor {
         let (data_a, shape_a, req_a, _dev_a) = {
             let s = self_t.borrow();
@@ -371,6 +374,7 @@ impl RawTensor {
 pub struct MatMulGradFn;
 
 impl GradFn for MatMulGradFn {
+    #[allow(clippy::too_many_lines, clippy::many_single_char_names)]
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let x = parents
             .first()
