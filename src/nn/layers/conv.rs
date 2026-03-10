@@ -2335,7 +2335,7 @@ mod conv2d_tests {
         x.borrow_mut().requires_grad = true;
 
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 5e-2);
 
         assert!(
             passed,

@@ -1029,6 +1029,7 @@ pub trait TensorOps {
     fn tanh(&self) -> Tensor;
     fn sigmoid(&self) -> Tensor;
     fn relu(&self) -> Tensor;
+    fn erf(&self) -> Tensor;
 
     //Reduce ops
     fn sum(&self) -> Tensor;
@@ -1125,6 +1126,9 @@ impl TensorOps for Tensor {
     }
     fn relu(&self) -> Tensor {
         RawTensor::unary_op(self, UnaryOp::ReLU)
+    }
+    fn erf(&self) -> Tensor {
+        RawTensor::unary_op(self, UnaryOp::Erf)
     }
 
     fn sum(&self) -> Tensor {

@@ -27,6 +27,7 @@ use rand::Rng;
 /// let embedded = embedding.forward(&indices);
 /// assert_eq!(embedded.borrow().shape, vec![3, 32]);
 /// ```
+#[derive(Clone, Debug)]
 pub struct Embedding {
     pub weight: Tensor,
     vocab_size: usize,

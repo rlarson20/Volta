@@ -4,13 +4,18 @@ use crate::tensor::Tensor;
 
 pub mod layers;
 pub mod optim;
+pub mod transformer;
 
 pub use layers::{
-    BatchNorm1d, BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, Dropout, Embedding, Flatten,
+    BatchNorm1d, BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, Dropout, Embedding, Flatten, GELU,
     LSTMCell, LayerNorm, Linear, MaxPool2d, PixelShuffle, ReLU, Sequential, SequentialBuilder,
     Sigmoid, Tanh,
 };
 pub use optim::{Adam, Muon, SGD};
+pub use transformer::{
+    FeedForward, MultiHeadAttention, PositionalEncoding, PositionalEncodingType,
+    ScaledDotProductAttention, TransformerBlock, causal_mask,
+};
 
 pub trait Module {
     fn forward(&self, x: &Tensor) -> Tensor;

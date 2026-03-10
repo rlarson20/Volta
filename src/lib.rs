@@ -46,7 +46,7 @@ pub use device::Device;
 pub use nn::layers::Dropout;
 pub use nn::layers::flatten::Flatten;
 pub use nn::{
-    Adam, BatchNorm1d, BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, Embedding, LSTMCell,
+    Adam, BatchNorm1d, BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, Embedding, GELU, LSTMCell,
     LayerNorm, Linear, MaxPool2d, Module, PixelShuffle, ReLU, SGD, Sequential, SequentialBuilder,
     Sigmoid, Tanh,
 };
@@ -223,6 +223,68 @@ mod unary_tests {
                 .copied()
                 .expect("tensor data should exist"),
             1.0,
+            epsilon = 1e-6
+        );
+    }
+
+    #[test]
+    fn test_erf_forward() {
+        // Test erf(0) = 0
+        let x = RawTensor::new(vec![0.0], &[1], false);
+        let y = x.erf();
+        assert_relative_eq!(
+            y.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist"),
+            0.0,
+            epsilon = 1e-6
+        );
+
+        // Test erf(1) ≈ 0.8427
+        let x = RawTensor::new(vec![1.0], &[1], false);
+        let y = x.erf();
+        assert_relative_eq!(
+            y.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist"),
+            0.8427,
+            epsilon = 1e-4
+        );
+
+        // Test erf(-1) ≈ -0.8427
+        let x = RawTensor::new(vec![-1.0], &[1], false);
+        let y = x.erf();
+        assert_relative_eq!(
+            y.borrow()
+                .data
+                .first()
+                .copied()
+                .expect("tensor data should exist"),
+            -0.8427,
+            epsilon = 1e-4
+        );
+    }
+
+    #[test]
+    fn test_erf_gradient() {
+        // Test gradient: d(erf(x))/dx = 2/sqrt(pi) * exp(-x^2)
+        let x = RawTensor::new(vec![1.0], &[1], true);
+        let y = x.erf();
+        y.backward();
+
+        // Expected gradient: 2/sqrt(pi) * exp(-1) ≈ 0.4151
+        let expected_grad = 2.0 / std::f32::consts::PI.sqrt() * (-1.0_f32).exp();
+        assert_relative_eq!(
+            x.grad()
+                .unwrap()
+                .first()
+                .copied()
+                .expect("tensor data should exist"),
+            expected_grad,
             epsilon = 1e-6
         );
     }

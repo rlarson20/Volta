@@ -1,5 +1,6 @@
 use crate::autograd::GradFn;
 use crate::{RawTensor, Tensor};
+use statrs::function::erf::erf as statrs_erf;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -18,6 +19,7 @@ use std::rc::Rc;
 /// - Tanh: d(tanh(x))/dx = 1 - tanh²(x)
 /// - Sigmoid: d(σ(x))/dx = σ(x)·(1-σ(x))
 /// - `ReLU`: d(max(0,x))/dx = x > 0 ? 1 : 0
+/// - Erf: d(erf(x))/dx = 2/√π · exp(-x²)
 #[derive(Clone, Copy)]
 pub enum UnaryOp {
     Neg,
@@ -32,6 +34,7 @@ pub enum UnaryOp {
     Tanh,
     Sigmoid,
     ReLU,
+    Erf,
 }
 
 /// Gradient function for unary operations
@@ -149,6 +152,15 @@ impl GradFn for UnaryGradFn {
                 .zip(&x.data)
                 .map(|(&g, &x)| if x > 0.0 { g } else { 0.0 })
                 .collect(),
+            UnaryOp::Erf => {
+                let two_over_sqrt_pi = 2.0 / std::f32::consts::PI.sqrt();
+                out_grad
+                    .data
+                    .iter()
+                    .zip(&x.data)
+                    .map(|(&g, &x)| g * two_over_sqrt_pi * (-x * x).exp())
+                    .collect()
+            }
         };
         vec![Some(RawTensor::new(grad_data, &x.shape, false))]
     }
@@ -173,6 +185,7 @@ const fn unary_kernel_name(op: UnaryOp) -> &'static str {
         UnaryOp::Log2 => "log2",
         UnaryOp::Sin => "sin",
         UnaryOp::Cos => "cos",
+        UnaryOp::Erf => "erf",
     }
 }
 
@@ -192,6 +205,7 @@ const fn unary_backward_kernel_name(op: UnaryOp) -> &'static str {
         UnaryOp::Log2 => "log2_backward",
         UnaryOp::Sin => "sin_backward",
         UnaryOp::Cos => "cos_backward",
+        UnaryOp::Erf => "erf_backward",
     }
 }
 
@@ -254,6 +268,7 @@ impl RawTensor {
                 UnaryOp::Tanh => x.tanh(),
                 UnaryOp::Sigmoid => 1.0 / (1.0 + (-x).exp()),
                 UnaryOp::ReLU => x.max(0.0),
+                UnaryOp::Erf => statrs_erf(f64::from(x)) as f32,
             })
             .collect();
 
