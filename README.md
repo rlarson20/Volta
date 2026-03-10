@@ -50,6 +50,7 @@ This library is functional for training MLPs, CNNs, RNNs, GANs, VAEs, and other 
 
 - ⚠️ **What's in Progress:**
   - **Performance:** Comprehensive benchmarking suite for performance tracking with `just bench` commands
+  - **Benchmarks:** known issue: crashes under full benchmark suite, suspected resource exhaustion/synchronization barrier, isolated benchmarks pass
   - **GPU Support:** Experimental WGPU-based acceleration via `gpu` feature:
     - ✅ Core ops on GPU: elementwise (unary/binary), matmul, reductions (sum/max/mean), movement ops (permute/expand/pad/shrink/stride)
     - ✅ GPU backward pass for autograd with lazy CPU↔GPU transfers
