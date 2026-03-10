@@ -7,7 +7,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/rlarson20/Volta)
 
-Volta is a minimal deep learning and automatic differentiation library built from scratch in pure Rust, heavily inspired by PyTorch. It provides a dynamic computation graph, NumPy-style broadcasting, and common neural network primitives.
+Volta is a minimal deep learning and automatic differentiation library for Rust, heavily inspired by PyTorch.
+Built from scratch to expose the internals - DAG linearization, GradFn trait dispatch, and SafeTensors interop - that production frameworks abstract away.
+It provides a dynamic computation graph, NumPy-style broadcasting, and common neural network primitives.
 
 This project is an educational endeavor to demystify the inner workings of modern autograd engines. It prioritizes correctness, clarity, and a clean API over raw performance, while still providing hooks for hardware acceleration.
 
@@ -122,6 +124,7 @@ The core of the autograd engine is the `Backward` trait. Each differentiable ope
 ### Serialization: Why SafeTensors?
 
 Volta defaults to HuggingFace's SafeTensors format for model weight serialization instead of Pickle or robust generic serializers like `bincode` for several reasons:
+
 - **Zero-copy loading**: SafeTensors allows memory-mapping (mmap) weights directly from disk, bypassing memory allocations during loading.
 - **Safety**: Unlike Pickle, SafeTensors cannot execute arbitrary code.
 - **Interoperability**: It enables Volta to natively read weights from models trained in PyTorch or JAX.
@@ -129,8 +132,13 @@ Volta defaults to HuggingFace's SafeTensors format for model weight serializatio
 ### Compute Backends
 
 Volta provides multiple backends for computation:
+
 - **CPU Backend**: Features matrix multiplication accelerated by Apple's Accelerate framework (via the `accelerate` feature) and multi-threaded CPU matrix operations using `matrixmultiply`.
 - **GPU Backend (Experimental)**: Uses `wgpu` to dispatch operations to the GPU. Tensors can seamlessly move between devices using `Tensor::to_device()`.
+
+## Benchmarks
+
+In progress; contributions welcome. CPU matmul baseline vs naive tracked via Criterion.
 
 ## Examples:
 
