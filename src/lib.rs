@@ -4086,3 +4086,966 @@ mod gpu_tests {
         );
     }
 }
+
+// ===== EXPANDED COVERAGE (P1) =====
+//
+// The following modules add direct unit tests for foundational ops and core
+// neural-network layers that previously had only indirect coverage. They
+// follow the existing convention of inline `#[cfg(test)] mod` blocks and rely
+// on `RawTensor::check_gradients_simple` for backward-pass validation.
+
+#[cfg(test)]
+mod binary_ops_tests {
+    use super::*;
+
+    fn make(shape: &[usize], data: Vec<f32>) -> Tensor {
+        RawTensor::new(data, shape, true)
+    }
+
+    #[test]
+    fn add_forward_value_and_shape() {
+        let a = make(&[2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+        let b = make(&[2, 2], vec![10.0, 20.0, 30.0, 40.0]);
+        let c = a.add(&b);
+        assert_eq!(c.borrow().shape, vec![2, 2]);
+        assert_eq!(c.borrow().data.to_vec(), vec![11.0, 22.0, 33.0, 44.0]);
+    }
+
+    #[test]
+    fn add_gradcheck() {
+        let x = make(&[3], vec![0.5, -1.0, 2.0]);
+        let y = RawTensor::new(vec![0.25, 0.75, -0.5], &[3], false);
+        let passed = RawTensor::check_gradients_simple(&x, |t| t.add(&y).sum());
+        assert!(passed, "add gradient check failed");
+    }
+
+    #[test]
+    fn sub_forward_value() {
+        let a = make(&[3], vec![10.0, 5.0, 0.0]);
+        let b = make(&[3], vec![3.0, 4.0, -1.0]);
+        let c = a.sub(&b);
+        assert_eq!(c.borrow().data.to_vec(), vec![7.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn sub_gradcheck() {
+        let x = make(&[2, 2], vec![1.0, 2.0, 3.0, 4.0]);
+        let y = RawTensor::new(vec![0.5, 0.5, 0.5, 0.5], &[2, 2], false);
+        let passed = RawTensor::check_gradients_simple(&x, |t| t.sub(&y).sum());
+        assert!(passed, "sub gradient check failed");
+    }
+
+    #[test]
+    fn elem_mul_forward_value() {
+        let a = make(&[3], vec![2.0, 3.0, 4.0]);
+        let b = make(&[3], vec![5.0, 6.0, 7.0]);
+        let c = a.elem_mul(&b);
+        assert_eq!(c.borrow().data.to_vec(), vec![10.0, 18.0, 28.0]);
+    }
+
+    #[test]
+    fn elem_mul_gradcheck() {
+        let x = make(&[3], vec![1.5, -2.0, 0.5]);
+        let y = RawTensor::new(vec![0.5, 1.0, -1.5], &[3], false);
+        let passed = RawTensor::check_gradients_simple(&x, |t| t.elem_mul(&y).sum());
+        assert!(passed, "elem_mul gradient check failed");
+    }
+
+    #[test]
+    fn div_forward_value() {
+        let a = make(&[3], vec![10.0, 9.0, 1.0]);
+        let b = make(&[3], vec![2.0, 3.0, 4.0]);
+        let c = a.div(&b);
+        let out = c.borrow().data.to_vec();
+        assert!((out.first().copied().unwrap_or(0.0) - 5.0).abs() < 1e-6);
+        assert!((out.get(1).copied().unwrap_or(0.0) - 3.0).abs() < 1e-6);
+        assert!((out.get(2).copied().unwrap_or(0.0) - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn div_gradcheck() {
+        let x = make(&[3], vec![2.0, -3.0, 5.0]);
+        let y = RawTensor::new(vec![1.5, 2.0, 0.5], &[3], false);
+        let passed = RawTensor::check_gradients_simple(&x, |t| t.div(&y).sum());
+        assert!(passed, "div gradient check failed");
+    }
+
+    #[test]
+    fn max_elem_forward_value() {
+        let a = make(&[4], vec![1.0, 5.0, 2.0, 8.0]);
+        let b = make(&[4], vec![3.0, 4.0, 7.0, 6.0]);
+        let c = a.max_elem(&b);
+        assert_eq!(c.borrow().data.to_vec(), vec![3.0, 5.0, 7.0, 8.0]);
+    }
+
+    #[test]
+    fn max_elem_gradient_routes_to_winner() {
+        // Use distinct, unambiguous values to avoid tie-handling ambiguity.
+        let a = make(&[3], vec![5.0, 1.0, 9.0]);
+        let b = make(&[3], vec![2.0, 7.0, 4.0]);
+        let z = a.max_elem(&b);
+        z.sum().backward();
+        // a wins at indices 0 and 2.
+        assert_eq!(a.grad(), Some(vec![1.0, 0.0, 1.0]));
+        assert_eq!(b.grad(), Some(vec![0.0, 1.0, 0.0]));
+    }
+
+    #[test]
+    fn modulo_forward_value() {
+        let a = RawTensor::new(vec![7.0, 8.0, 9.0], &[3], false);
+        let b = RawTensor::new(vec![3.0, 3.0, 3.0], &[3], false);
+        let c = a.modulo(&b);
+        let out = c.borrow().data.to_vec();
+        assert!((out.first().copied().unwrap_or(0.0) - 1.0).abs() < 1e-6);
+        assert!((out.get(1).copied().unwrap_or(0.0) - 2.0).abs() < 1e-6);
+        assert!((out.get(2).copied().unwrap_or(0.0) - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cmplt_forward_value() {
+        let a = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], false);
+        let b = RawTensor::new(vec![3.0, 1.0, 3.0, 5.0], &[4], false);
+        let c = a.cmplt(&b);
+        // 1<3=true, 2<1=false, 3<3=false, 4<5=true
+        assert_eq!(c.borrow().data.to_vec(), vec![1.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn add_then_mul_chain_gradcheck() {
+        // (x + y) * z, gradient w.r.t. x should be z.
+        let x = make(&[3], vec![1.0, 2.0, 3.0]);
+        let y = RawTensor::new(vec![4.0, 5.0, 6.0], &[3], false);
+        let z = RawTensor::new(vec![0.5, -0.5, 1.0], &[3], false);
+        let passed = RawTensor::check_gradients_simple(&x, |t| t.add(&y).elem_mul(&z).sum());
+        assert!(passed, "add+mul chain gradient check failed");
+    }
+}
+
+#[cfg(test)]
+mod unary_ops_tests {
+    use super::*;
+    use approx::assert_relative_eq;
+
+    fn shaped(data: Vec<f32>) -> Tensor {
+        let n = data.len();
+        RawTensor::new(data, &[n], true)
+    }
+
+    // Forward correctness ------------------------------------------------
+
+    #[test]
+    fn neg_forward() {
+        let x = shaped(vec![1.0, -2.0, 0.0]);
+        assert_eq!(x.neg().borrow().data.to_vec(), vec![-1.0, 2.0, 0.0]);
+    }
+
+    #[test]
+    fn recip_forward() {
+        let x = shaped(vec![1.0, 2.0, 4.0]);
+        let out = x.recip().borrow().data.to_vec();
+        assert_relative_eq!(out.first().copied().unwrap_or(0.0), 1.0, epsilon = 1e-6);
+        assert_relative_eq!(out.get(1).copied().unwrap_or(0.0), 0.5, epsilon = 1e-6);
+        assert_relative_eq!(out.get(2).copied().unwrap_or(0.0), 0.25, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn sqrt_forward() {
+        let x = shaped(vec![1.0, 4.0, 9.0]);
+        let out = x.sqrt().borrow().data.to_vec();
+        assert_relative_eq!(out.first().copied().unwrap_or(0.0), 1.0, epsilon = 1e-6);
+        assert_relative_eq!(out.get(1).copied().unwrap_or(0.0), 2.0, epsilon = 1e-6);
+        assert_relative_eq!(out.get(2).copied().unwrap_or(0.0), 3.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn exp_forward() {
+        let x = shaped(vec![0.0, 1.0]);
+        let out = x.exp().borrow().data.to_vec();
+        assert_relative_eq!(out.first().copied().unwrap_or(0.0), 1.0, epsilon = 1e-6);
+        assert_relative_eq!(
+            out.get(1).copied().unwrap_or(0.0),
+            std::f32::consts::E,
+            epsilon = 1e-5
+        );
+    }
+
+    #[test]
+    fn log_forward() {
+        let x = shaped(vec![1.0, std::f32::consts::E]);
+        let out = x.log().borrow().data.to_vec();
+        assert_relative_eq!(out.first().copied().unwrap_or(0.0), 0.0, epsilon = 1e-6);
+        assert_relative_eq!(out.get(1).copied().unwrap_or(0.0), 1.0, epsilon = 1e-5);
+    }
+
+    #[test]
+    fn exp2_forward() {
+        let x = shaped(vec![0.0, 1.0, 3.0]);
+        let out = x.exp2().borrow().data.to_vec();
+        assert_relative_eq!(out.first().copied().unwrap_or(0.0), 1.0, epsilon = 1e-6);
+        assert_relative_eq!(out.get(1).copied().unwrap_or(0.0), 2.0, epsilon = 1e-6);
+        assert_relative_eq!(out.get(2).copied().unwrap_or(0.0), 8.0, epsilon = 1e-5);
+    }
+
+    #[test]
+    fn log2_forward() {
+        let x = shaped(vec![1.0, 2.0, 8.0]);
+        let out = x.log2().borrow().data.to_vec();
+        assert_relative_eq!(out.first().copied().unwrap_or(0.0), 0.0, epsilon = 1e-6);
+        assert_relative_eq!(out.get(1).copied().unwrap_or(0.0), 1.0, epsilon = 1e-6);
+        assert_relative_eq!(out.get(2).copied().unwrap_or(0.0), 3.0, epsilon = 1e-5);
+    }
+
+    #[test]
+    fn sin_forward() {
+        let x = shaped(vec![0.0, std::f32::consts::FRAC_PI_2]);
+        let out = x.sin().borrow().data.to_vec();
+        assert_relative_eq!(out.first().copied().unwrap_or(0.0), 0.0, epsilon = 1e-6);
+        assert_relative_eq!(out.get(1).copied().unwrap_or(0.0), 1.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn cos_forward() {
+        let x = shaped(vec![0.0, std::f32::consts::PI]);
+        let out = x.cos().borrow().data.to_vec();
+        assert_relative_eq!(out.first().copied().unwrap_or(0.0), 1.0, epsilon = 1e-6);
+        assert_relative_eq!(out.get(1).copied().unwrap_or(0.0), -1.0, epsilon = 1e-5);
+    }
+
+    #[test]
+    fn tanh_forward() {
+        let x = shaped(vec![0.0, 100.0, -100.0]);
+        let out = x.tanh().borrow().data.to_vec();
+        assert_relative_eq!(out.first().copied().unwrap_or(0.0), 0.0, epsilon = 1e-6);
+        assert_relative_eq!(out.get(1).copied().unwrap_or(0.0), 1.0, epsilon = 1e-6);
+        assert_relative_eq!(out.get(2).copied().unwrap_or(0.0), -1.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn sigmoid_forward() {
+        let x = shaped(vec![0.0, 100.0, -100.0]);
+        let out = x.sigmoid().borrow().data.to_vec();
+        assert_relative_eq!(out.first().copied().unwrap_or(0.0), 0.5, epsilon = 1e-6);
+        assert_relative_eq!(out.get(1).copied().unwrap_or(0.0), 1.0, epsilon = 1e-6);
+        assert_relative_eq!(out.get(2).copied().unwrap_or(0.0), 0.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn relu_forward() {
+        let x = shaped(vec![1.0, -2.0, 0.0, 3.5]);
+        assert_eq!(x.relu().borrow().data.to_vec(), vec![1.0, 0.0, 0.0, 3.5]);
+    }
+
+    // Backward correctness via gradient check ----------------------------
+
+    #[test]
+    fn neg_gradcheck() {
+        let x = shaped(vec![1.0, -1.0, 0.5]);
+        assert!(RawTensor::check_gradients_simple(&x, |t| t.neg().sum()));
+    }
+
+    #[test]
+    fn recip_gradcheck() {
+        let x = shaped(vec![0.5, 1.0, 2.0, 4.0]);
+        assert!(RawTensor::check_gradients_simple(&x, |t| t.recip().sum()));
+    }
+
+    #[test]
+    fn sqrt_gradcheck() {
+        let x = shaped(vec![0.5, 1.0, 4.0]);
+        assert!(RawTensor::check_gradients_simple(&x, |t| t.sqrt().sum()));
+    }
+
+    #[test]
+    fn exp_gradcheck() {
+        let x = shaped(vec![-1.0, 0.0, 1.0]);
+        assert!(RawTensor::check_gradients_simple(&x, |t| t.exp().sum()));
+    }
+
+    #[test]
+    fn log_gradcheck() {
+        let x = shaped(vec![0.5, 1.0, 2.0]);
+        assert!(RawTensor::check_gradients_simple(&x, |t| t.log().sum()));
+    }
+
+    #[test]
+    fn exp2_gradcheck() {
+        let x = shaped(vec![-1.0, 0.0, 1.0]);
+        assert!(RawTensor::check_gradients_simple(&x, |t| t.exp2().sum()));
+    }
+
+    #[test]
+    fn log2_gradcheck() {
+        let x = shaped(vec![0.5, 1.0, 2.0]);
+        assert!(RawTensor::check_gradients_simple(&x, |t| t.log2().sum()));
+    }
+
+    #[test]
+    fn sin_gradcheck() {
+        let x = shaped(vec![-1.0, 0.0, 1.0]);
+        assert!(RawTensor::check_gradients_simple(&x, |t| t.sin().sum()));
+    }
+
+    #[test]
+    fn cos_gradcheck() {
+        let x = shaped(vec![-1.0, 0.0, 1.0]);
+        assert!(RawTensor::check_gradients_simple(&x, |t| t.cos().sum()));
+    }
+
+    #[test]
+    fn tanh_gradcheck() {
+        let x = shaped(vec![-1.0, 0.0, 1.0]);
+        assert!(RawTensor::check_gradients_simple(&x, |t| t.tanh().sum()));
+    }
+
+    #[test]
+    fn sigmoid_gradcheck() {
+        let x = shaped(vec![-1.0, 0.0, 1.0]);
+        assert!(RawTensor::check_gradients_simple(&x, |t| t.sigmoid().sum()));
+    }
+
+    #[test]
+    fn relu_gradcheck() {
+        // Avoid 0 to keep the gradient well-defined under finite differences.
+        let x = shaped(vec![-1.5, -0.5, 0.5, 1.5]);
+        assert!(RawTensor::check_gradients_simple(&x, |t| t.relu().sum()));
+    }
+
+    #[test]
+    fn erf_gradcheck() {
+        let x = shaped(vec![-0.5, 0.0, 0.5]);
+        assert!(RawTensor::check_gradients_simple(&x, |t| t.erf().sum()));
+    }
+}
+
+#[cfg(test)]
+mod reduce_ops_tests {
+    use super::*;
+    use approx::assert_relative_eq;
+
+    #[test]
+    fn sum_forward() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], false);
+        assert_relative_eq!(
+            x.sum().borrow().data.first().copied().unwrap_or(0.0),
+            10.0,
+            epsilon = 1e-6
+        );
+    }
+
+    #[test]
+    fn sum_backward_is_ones() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], true);
+        x.sum().backward();
+        assert_eq!(x.grad(), Some(vec![1.0, 1.0, 1.0]));
+    }
+
+    #[test]
+    fn mean_forward() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], false);
+        assert_relative_eq!(
+            x.mean().borrow().data.first().copied().unwrap_or(0.0),
+            2.5,
+            epsilon = 1e-6
+        );
+    }
+
+    #[test]
+    fn mean_backward_is_uniform() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], true);
+        x.mean().backward();
+        // dL/dx_i = 1/N
+        let g = x.grad().unwrap();
+        for v in g {
+            assert_relative_eq!(v, 0.25, epsilon = 1e-6);
+        }
+    }
+
+    #[test]
+    fn max_reduce_routes_grad_to_argmax() {
+        let x = RawTensor::new(vec![1.0, 7.0, 3.0, 2.0], &[4], true);
+        x.max_reduce().backward();
+        assert_eq!(x.grad(), Some(vec![0.0, 1.0, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn sum_dim_keepdim_shape() {
+        // (2, 3) -> sum over dim 1 with keepdim -> (2, 1)
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
+        let s = x.sum_dim(1, true);
+        assert_eq!(s.borrow().shape, vec![2, 1]);
+        assert_eq!(s.borrow().data.to_vec(), vec![6.0, 15.0]);
+    }
+
+    #[test]
+    fn sum_dim_no_keepdim_shape() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
+        let s = x.sum_dim(0, false);
+        // (2, 3) reduced over dim 0 -> (3,)
+        assert_eq!(s.borrow().shape, vec![3]);
+        assert_eq!(s.borrow().data.to_vec(), vec![5.0, 7.0, 9.0]);
+    }
+
+    #[test]
+    fn sum_dim_gradcheck() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], true);
+        assert!(RawTensor::check_gradients_simple(&x, |t| t
+            .sum_dim(1, true)
+            .sum()));
+    }
+
+    #[test]
+    fn mean_dim_keepdim_value() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
+        let m = x.mean_dim(1, true);
+        assert_eq!(m.borrow().shape, vec![2, 1]);
+        let out = m.borrow().data.to_vec();
+        assert_relative_eq!(out.first().copied().unwrap_or(0.0), 2.0, epsilon = 1e-6);
+        assert_relative_eq!(out.get(1).copied().unwrap_or(0.0), 5.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn mean_dim_gradcheck() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], true);
+        assert!(RawTensor::check_gradients_simple(&x, |t| t
+            .mean_dim(0, true)
+            .sum()));
+    }
+
+    #[test]
+    fn max_dim_value_and_shape() {
+        // distinct values per row to avoid tie ambiguity
+        let x = RawTensor::new(vec![1.0, 5.0, 3.0, 9.0, 2.0, 7.0], &[2, 3], false);
+        let m = x.max_dim(1, true);
+        assert_eq!(m.borrow().shape, vec![2, 1]);
+        assert_eq!(m.borrow().data.to_vec(), vec![5.0, 9.0]);
+    }
+
+    #[test]
+    fn max_dim_routes_grad_to_argmax_per_row() {
+        let x = RawTensor::new(vec![1.0, 5.0, 3.0, 9.0, 2.0, 7.0], &[2, 3], true);
+        x.max_dim(1, true).sum().backward();
+        // argmax row 0 -> col 1; row 1 -> col 0
+        assert_eq!(x.grad(), Some(vec![0.0, 1.0, 0.0, 1.0, 0.0, 0.0]));
+    }
+}
+
+#[cfg(test)]
+mod matmul_tests {
+    use super::*;
+    use approx::assert_relative_eq;
+
+    #[test]
+    fn matmul_2d_2d_value() {
+        // (2,3) @ (3,2) -> (2,2). Use simple integer-valued data.
+        let a = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
+        let b = RawTensor::new(vec![1.0, 0.0, 0.0, 1.0, 1.0, 1.0], &[3, 2], false);
+        let c = a.matmul(&b);
+        assert_eq!(c.borrow().shape, vec![2, 2]);
+        // row 0: [1+0+3, 0+2+3] = [4, 5]
+        // row 1: [4+0+6, 0+5+6] = [10, 11]
+        assert_eq!(c.borrow().data.to_vec(), vec![4.0, 5.0, 10.0, 11.0]);
+    }
+
+    #[test]
+    fn matmul_2d_2d_gradcheck() {
+        let a = RawTensor::new(vec![0.5, -1.0, 0.25, 1.0], &[2, 2], true);
+        let b = RawTensor::new(vec![1.0, 0.5, -0.5, 1.0], &[2, 2], false);
+        assert!(RawTensor::check_gradients_simple(&a, |t| t
+            .matmul(&b)
+            .sum()));
+    }
+
+    #[test]
+    fn matmul_2d_1d_value() {
+        // (3,2) @ (2,) -> (3,)
+        let a = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[3, 2], false);
+        let v = RawTensor::new(vec![1.0, -1.0], &[2], false);
+        let z = a.matmul(&v);
+        assert_eq!(z.borrow().shape, vec![3]);
+        // [1-2, 3-4, 5-6] = [-1, -1, -1]
+        assert_eq!(z.borrow().data.to_vec(), vec![-1.0, -1.0, -1.0]);
+    }
+
+    #[test]
+    fn matmul_2d_1d_gradcheck() {
+        let a = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], true);
+        let v = RawTensor::new(vec![0.5, -0.5], &[2], false);
+        assert!(RawTensor::check_gradients_simple(&a, |t| t
+            .matmul(&v)
+            .sum()));
+    }
+
+    #[test]
+    fn matmul_1d_2d_value() {
+        // (3,) @ (3,2) -> (2,)
+        let v = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], false);
+        let m = RawTensor::new(vec![1.0, 0.0, 0.0, 1.0, 1.0, 1.0], &[3, 2], false);
+        let z = v.matmul(&m);
+        assert_eq!(z.borrow().shape, vec![2]);
+        // row dot col: col0 = 1*1+2*0+3*1 = 4, col1 = 1*0+2*1+3*1 = 5
+        assert_eq!(z.borrow().data.to_vec(), vec![4.0, 5.0]);
+    }
+
+    #[test]
+    fn matmul_1d_2d_gradcheck() {
+        let v = RawTensor::new(vec![0.5, -0.5, 1.0], &[3], true);
+        let m = RawTensor::new(vec![1.0, 0.0, 0.0, 1.0, 1.0, 1.0], &[3, 2], false);
+        assert!(RawTensor::check_gradients_simple(&v, |t| t
+            .matmul(&m)
+            .sum()));
+    }
+
+    #[test]
+    fn matmul_1d_1d_dot_value() {
+        let a = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], false);
+        let b = RawTensor::new(vec![4.0, -1.0, 2.0], &[3], false);
+        let z = a.matmul(&b);
+        // 4 - 2 + 6 = 8; result is scalar shape
+        assert_relative_eq!(
+            z.borrow().data.first().copied().unwrap_or(0.0),
+            8.0,
+            epsilon = 1e-6
+        );
+    }
+
+    #[test]
+    fn matmul_1d_1d_dot_gradcheck() {
+        let a = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], true);
+        let b = RawTensor::new(vec![0.5, -0.5, 1.0], &[3], false);
+        assert!(RawTensor::check_gradients_simple(&a, |t| t
+            .matmul(&b)
+            .sum()));
+    }
+
+    #[test]
+    fn matmul_batched_value_and_shape() {
+        // (2, 2, 3) @ (2, 3, 2) -> (2, 2, 2). All-ones inputs => entries = 3.
+        let a = RawTensor::ones(&[2, 2, 3]);
+        let b = RawTensor::ones(&[2, 3, 2]);
+        let c = a.matmul(&b);
+        assert_eq!(c.borrow().shape, vec![2, 2, 2]);
+        for v in c.borrow().data.to_vec() {
+            assert_relative_eq!(v, 3.0, epsilon = 1e-6);
+        }
+    }
+
+    #[test]
+    fn matmul_batched_gradcheck() {
+        // Small batched matmul gradient check on `a`.
+        let a = RawTensor::new(
+            vec![
+                0.5, -0.5, 1.0, 1.5, -1.0, 0.5, 0.25, 0.75, -0.25, 1.0, 0.5, -0.5,
+            ],
+            &[2, 2, 3],
+            true,
+        );
+        let b = RawTensor::new(
+            vec![
+                0.5, 0.25, 1.0, -0.5, 0.0, 1.0, -1.0, 0.5, 0.25, 1.0, 0.5, -0.5,
+            ],
+            &[2, 3, 2],
+            false,
+        );
+        assert!(RawTensor::check_gradients_simple(&a, |t| t
+            .matmul(&b)
+            .sum()));
+    }
+
+    #[test]
+    fn transpose_2d_shape_and_value() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
+        let t = x.transpose();
+        assert_eq!(t.borrow().shape, vec![3, 2]);
+        // permuted: original (i,j) -> (j,i). Row-major: [1,4, 2,5, 3,6]
+        assert_eq!(t.borrow().data.to_vec(), vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    }
+}
+
+#[cfg(test)]
+mod linear_tests {
+    use super::*;
+
+    #[test]
+    fn weight_shape_and_bias_present() {
+        let layer = Linear::new(4, 3, true);
+        assert_eq!(layer.weight.borrow().shape, vec![4, 3]);
+        assert!(layer.bias.is_some());
+        let b = layer.bias.as_ref().unwrap();
+        assert_eq!(b.borrow().shape, vec![3]);
+    }
+
+    #[test]
+    fn no_bias_when_use_bias_false() {
+        let layer = Linear::new(4, 3, false);
+        assert!(layer.bias.is_none());
+        assert_eq!(layer.parameters().len(), 1);
+    }
+
+    #[test]
+    fn forward_shape_with_bias() {
+        let layer = Linear::new(5, 2, true);
+        let x = RawTensor::new(vec![1.0; 3 * 5], &[3, 5], true);
+        let y = layer.forward(&x);
+        assert_eq!(y.borrow().shape, vec![3, 2]);
+    }
+
+    #[test]
+    fn forward_value_with_known_weights() {
+        // Build a deterministic Linear: y = xW + b with shape (1,2) input,
+        // (2,3) weight, (3,) bias.
+        let mut layer = Linear::new(2, 3, true);
+        // Override randomly initialized weights with known values.
+        {
+            let mut w = layer.weight.borrow_mut();
+            w.data = Storage::cpu(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        }
+        {
+            let bias = layer.bias.as_mut().unwrap();
+            let mut b = bias.borrow_mut();
+            b.data = Storage::cpu(vec![10.0, 20.0, 30.0]);
+        }
+        let x = RawTensor::new(vec![1.0, 1.0], &[1, 2], false);
+        let y = layer.forward(&x);
+        // x @ W = [1*1+1*4, 1*2+1*5, 1*3+1*6] = [5, 7, 9]; + bias = [15, 27, 39]
+        assert_eq!(y.borrow().data.to_vec(), vec![15.0, 27.0, 39.0]);
+    }
+
+    #[test]
+    fn backward_gradcheck_input() {
+        // Use a fixed weight tensor so the gradient check is deterministic.
+        let layer = Linear::new(3, 2, true);
+        // Snapshot the (random) weight so the closure captures stable values.
+        let w_snapshot = layer.weight.borrow().data.to_vec();
+        let b_snapshot = layer
+            .bias
+            .as_ref()
+            .map(|b| b.borrow().data.to_vec())
+            .unwrap_or_default();
+        let w_shape = layer.weight.borrow().shape.clone();
+        let b_shape = layer
+            .bias
+            .as_ref()
+            .map(|b| b.borrow().shape.clone())
+            .unwrap_or_default();
+        let x = RawTensor::new(vec![0.5, -1.0, 1.5, 0.25, 0.0, 2.0], &[2, 3], true);
+
+        let passed = RawTensor::check_gradients_simple(&x, |t| {
+            let w = RawTensor::new(w_snapshot.clone(), &w_shape, false);
+            let b = RawTensor::new(b_snapshot.clone(), &b_shape, false);
+            t.matmul(&w).add(&b).sum()
+        });
+        assert!(passed, "Linear input gradient check failed");
+    }
+}
+
+#[cfg(test)]
+mod activation_tests {
+    use super::*;
+
+    #[test]
+    fn relu_layer_forward_matches_op() {
+        let layer = ReLU;
+        let x = RawTensor::new(vec![-1.0, 0.0, 2.0, -3.0], &[4], true);
+        let y = <ReLU as Module>::forward(&layer, &x);
+        assert_eq!(y.borrow().data.to_vec(), vec![0.0, 0.0, 2.0, 0.0]);
+        assert!(layer.parameters().is_empty());
+    }
+
+    #[test]
+    fn relu_layer_gradcheck() {
+        let layer = ReLU;
+        let x = RawTensor::new(vec![-1.5, -0.5, 0.5, 1.5], &[4], true);
+        assert!(RawTensor::check_gradients_simple(&x, |t| {
+            <ReLU as Module>::forward(&layer, t).sum()
+        }));
+    }
+
+    #[test]
+    fn sigmoid_layer_forward_matches_op() {
+        let layer = Sigmoid;
+        let x = RawTensor::new(vec![0.0, 100.0, -100.0], &[3], true);
+        let y = <Sigmoid as Module>::forward(&layer, &x);
+        let out = y.borrow().data.to_vec();
+        assert!((out.first().copied().unwrap_or(0.0) - 0.5).abs() < 1e-6);
+        assert!((out.get(1).copied().unwrap_or(0.0) - 1.0).abs() < 1e-6);
+        assert!(out.get(2).copied().unwrap_or(0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sigmoid_layer_gradcheck() {
+        let layer = Sigmoid;
+        let x = RawTensor::new(vec![-1.0, 0.0, 1.0], &[3], true);
+        assert!(RawTensor::check_gradients_simple(&x, |t| {
+            <Sigmoid as Module>::forward(&layer, t).sum()
+        }));
+    }
+
+    #[test]
+    fn tanh_layer_forward_matches_op() {
+        let layer = Tanh;
+        let x = RawTensor::new(vec![0.0, 100.0, -100.0], &[3], true);
+        let y = <Tanh as Module>::forward(&layer, &x);
+        let out = y.borrow().data.to_vec();
+        assert!(out.first().copied().unwrap_or(0.0).abs() < 1e-6);
+        assert!((out.get(1).copied().unwrap_or(0.0) - 1.0).abs() < 1e-6);
+        assert!((out.get(2).copied().unwrap_or(0.0) + 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn tanh_layer_gradcheck() {
+        let layer = Tanh;
+        let x = RawTensor::new(vec![-1.0, 0.0, 1.0], &[3], true);
+        assert!(RawTensor::check_gradients_simple(&x, |t| {
+            <Tanh as Module>::forward(&layer, t).sum()
+        }));
+    }
+}
+
+#[cfg(test)]
+mod dropout_tests {
+    use super::*;
+
+    #[test]
+    fn p_zero_is_identity() {
+        let layer = Dropout::new(0.0);
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], true);
+        let y = <Dropout as Module>::forward(&layer, &x);
+        assert_eq!(y.borrow().data.to_vec(), vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(y.borrow().shape, vec![4]);
+    }
+
+    #[test]
+    fn p_one_zeroes_all_elements() {
+        // With keep_prob=0, the mask is all zeros => output is all zeros.
+        let layer = Dropout::new(1.0);
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], true);
+        let y = <Dropout as Module>::forward(&layer, &x);
+        for v in y.borrow().data.to_vec() {
+            assert_eq!(v, 0.0, "dropout p=1 should zero all elements");
+        }
+    }
+
+    #[test]
+    fn eval_mode_passthrough() {
+        // In eval mode, even high-p dropout returns x unchanged.
+        let mut layer = Dropout::new(0.9);
+        layer.train(false);
+        let x = RawTensor::new(vec![5.0; 16], &[16], true);
+        let y = <Dropout as Module>::forward(&layer, &x);
+        for v in y.borrow().data.to_vec() {
+            assert_eq!(v, 5.0);
+        }
+    }
+
+    #[test]
+    fn shape_preserved_under_training() {
+        let layer = Dropout::new(0.5);
+        let x = RawTensor::new(vec![1.0; 2 * 3 * 4], &[2, 3, 4], true);
+        let y = <Dropout as Module>::forward(&layer, &x);
+        assert_eq!(y.borrow().shape, vec![2, 3, 4]);
+    }
+
+    #[test]
+    fn statistical_mean_preservation() {
+        // For inverted dropout, E[output] == input. With a large enough sample
+        // the empirical mean stays within ~5% of the input value.
+        crate::tensor::manual_seed(0x00C0_FFEE);
+        let layer = Dropout::new(0.5);
+        let n = 20_000;
+        let x = RawTensor::new(vec![1.0; n], &[n], false);
+        let y = <Dropout as Module>::forward(&layer, &x);
+        let sum: f32 = y.borrow().data.to_vec().iter().sum();
+        let mean = sum / n as f32;
+        // E[mean] = 1.0, std ≈ sqrt(p / ((1-p)*n)) ≈ 0.007 for p=0.5, n=20k.
+        // 0.05 is a comfortable bound that keeps this from flaking.
+        assert!(
+            (mean - 1.0).abs() < 0.05,
+            "dropout mean drifted: got {mean}, expected ~1.0"
+        );
+    }
+}
+
+#[cfg(test)]
+mod batchnorm_tests {
+    use super::*;
+    use approx::assert_relative_eq;
+
+    fn running_stats(state: &io::StateDict) -> (Vec<f32>, Vec<f32>) {
+        let rm = state
+            .get("running_mean")
+            .expect("state dict missing running_mean")
+            .data
+            .clone();
+        let rv = state
+            .get("running_var")
+            .expect("state dict missing running_var")
+            .data
+            .clone();
+        (rm, rv)
+    }
+
+    // ---- BatchNorm1d ----
+
+    #[test]
+    fn bn1d_forward_shape_preserved() {
+        let layer = BatchNorm1d::new(4);
+        let x = RawTensor::new(vec![1.0; 8 * 4], &[8, 4], true);
+        let y = <BatchNorm1d as Module>::forward(&layer, &x);
+        assert_eq!(y.borrow().shape, vec![8, 4]);
+    }
+
+    #[test]
+    fn bn1d_train_normalizes_to_zero_mean_unit_var() {
+        let layer = BatchNorm1d::new(2);
+        // Per-feature, batch-of-4: column 0 = {1, 2, 3, 4}, column 1 = {-1, 0, 1, 2}
+        let x = RawTensor::new(
+            vec![1.0, -1.0, 2.0, 0.0, 3.0, 1.0, 4.0, 2.0],
+            &[4, 2],
+            false,
+        );
+        let y = <BatchNorm1d as Module>::forward(&layer, &x);
+        let out = y.borrow().data.to_vec();
+        // Output mean per column should be ~0 and stddev ~1 (gamma=1, beta=0).
+        let col0: Vec<f32> = (0..4)
+            .map(|i| out.get(i * 2).copied().unwrap_or(0.0))
+            .collect();
+        let mean0: f32 = col0.iter().sum::<f32>() / 4.0;
+        let var0: f32 = col0.iter().map(|v| (v - mean0).powi(2)).sum::<f32>() / 4.0;
+        assert_relative_eq!(mean0, 0.0, epsilon = 1e-5);
+        assert_relative_eq!(var0, 1.0, max_relative = 1e-3);
+    }
+
+    #[test]
+    fn bn1d_training_updates_running_stats() {
+        let layer = BatchNorm1d::new(3);
+        // Capture initial state (running_mean=0, running_var=1).
+        let (rm0, rv0) = running_stats(&<BatchNorm1d as Module>::state_dict(&layer));
+        assert_eq!(rm0, vec![0.0, 0.0, 0.0]);
+        assert_eq!(rv0, vec![1.0, 1.0, 1.0]);
+
+        // Forward with a batch whose stats clearly differ from defaults.
+        let x = RawTensor::new(
+            vec![
+                1.0, 10.0, -5.0, 2.0, 12.0, -3.0, 3.0, 14.0, -1.0, 4.0, 16.0, 1.0,
+            ],
+            &[4, 3],
+            false,
+        );
+        let _ = <BatchNorm1d as Module>::forward(&layer, &x);
+
+        let (rm1, rv1) = running_stats(&<BatchNorm1d as Module>::state_dict(&layer));
+        // Running mean should have moved toward batch mean for each feature.
+        // Batch means: col0 = 2.5, col1 = 13, col2 = -2.0
+        // With momentum=0.1: rm = 0.9*0 + 0.1*batch_mean
+        assert_relative_eq!(rm1.first().copied().unwrap_or(0.0), 0.25, epsilon = 1e-4);
+        assert_relative_eq!(rm1.get(1).copied().unwrap_or(0.0), 1.3, epsilon = 1e-4);
+        assert_relative_eq!(rm1.get(2).copied().unwrap_or(0.0), -0.2, epsilon = 1e-4);
+        // Variance updates should differ from the initial 1.0 for at least one feature.
+        let any_var_changed = rv1.iter().any(|v| (v - 1.0).abs() > 1e-3);
+        assert!(
+            any_var_changed,
+            "running_var should have moved after training step"
+        );
+    }
+
+    #[test]
+    fn bn1d_eval_uses_running_stats() {
+        let mut layer = BatchNorm1d::new(2);
+        // Pre-load known running stats via load_state_dict.
+        let mut state = <BatchNorm1d as Module>::state_dict(&layer);
+        state.insert(
+            "running_mean".to_string(),
+            io::TensorData {
+                data: vec![5.0, -5.0],
+                shape: vec![2],
+            },
+        );
+        state.insert(
+            "running_var".to_string(),
+            io::TensorData {
+                data: vec![4.0, 4.0],
+                shape: vec![2],
+            },
+        );
+        <BatchNorm1d as Module>::load_state_dict(&mut layer, &state);
+        layer.train(false);
+
+        // Input == running_mean => normalized output should be ~0 (then * gamma=1 + beta=0).
+        let x = RawTensor::new(vec![5.0, -5.0, 5.0, -5.0], &[2, 2], false);
+        let y = <BatchNorm1d as Module>::forward(&layer, &x);
+        for v in y.borrow().data.to_vec() {
+            assert!(
+                v.abs() < 1e-4,
+                "eval-mode normalized output should be ~0, got {v}"
+            );
+        }
+    }
+
+    #[test]
+    fn bn1d_gradcheck_input() {
+        let layer = BatchNorm1d::new(2);
+        let x = RawTensor::new(vec![1.0, -1.0, 2.0, 0.0, 3.0, 1.0, 4.0, 2.0], &[4, 2], true);
+        // Use stricter epsilon on BN since it's mean-centered (small grads).
+        let (_max_e, _mean_e, passed) = RawTensor::check_gradients(
+            &x,
+            |t| <BatchNorm1d as Module>::forward(&layer, t).sum(),
+            1e-2,
+            1e-2,
+        );
+        assert!(passed, "BatchNorm1d input gradient check failed");
+    }
+
+    // ---- BatchNorm2d ----
+
+    #[test]
+    fn bn2d_forward_shape_preserved() {
+        let layer = BatchNorm2d::new(3);
+        // (B=2, C=3, H=2, W=2)
+        let x = RawTensor::new(vec![1.0; 2 * 3 * 2 * 2], &[2, 3, 2, 2], true);
+        let y = <BatchNorm2d as Module>::forward(&layer, &x);
+        assert_eq!(y.borrow().shape, vec![2, 3, 2, 2]);
+    }
+
+    #[test]
+    fn bn2d_training_updates_running_stats() {
+        let layer = BatchNorm2d::new(2);
+        let (rm0, rv0) = running_stats(&<BatchNorm2d as Module>::state_dict(&layer));
+        assert_eq!(rm0, vec![0.0, 0.0]);
+        assert_eq!(rv0, vec![1.0, 1.0]);
+
+        // Channel 0 = all 1.0, Channel 1 = all 5.0  =>  batch_mean = [1, 5]
+        let mut data = Vec::with_capacity(2 * 2 * 2 * 2);
+        for _b in 0..2 {
+            for c in 0..2 {
+                for _ in 0..(2 * 2) {
+                    data.push(if c == 0 { 1.0 } else { 5.0 });
+                }
+            }
+        }
+        let x = RawTensor::new(data, &[2, 2, 2, 2], false);
+        let _ = <BatchNorm2d as Module>::forward(&layer, &x);
+
+        let (rm1, _rv1) = running_stats(&<BatchNorm2d as Module>::state_dict(&layer));
+        // momentum=0.1: rm = 0.9*0 + 0.1*[1, 5] = [0.1, 0.5]
+        assert_relative_eq!(rm1.first().copied().unwrap_or(0.0), 0.1, epsilon = 1e-5);
+        assert_relative_eq!(rm1.get(1).copied().unwrap_or(0.0), 0.5, epsilon = 1e-5);
+    }
+
+    #[test]
+    fn bn2d_gradcheck_input() {
+        let layer = BatchNorm2d::new(2);
+        // Distinct values so BN actually computes a non-trivial normalization.
+        let mut data = Vec::with_capacity(2 * 2 * 2 * 2);
+        for i in 0..(2 * 2 * 2 * 2) {
+            data.push((i as f32) * 0.1 + 1.0);
+        }
+        let x = RawTensor::new(data, &[2, 2, 2, 2], true);
+        let (_max_e, _mean_e, passed) = RawTensor::check_gradients(
+            &x,
+            |t| <BatchNorm2d as Module>::forward(&layer, t).sum(),
+            1e-2,
+            1e-2,
+        );
+        assert!(passed, "BatchNorm2d input gradient check failed");
+    }
+}
