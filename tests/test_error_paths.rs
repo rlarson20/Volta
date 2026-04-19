@@ -24,7 +24,10 @@ fn test_dimension_out_of_bounds() {
     let result = RawTensor::try_sum_dim(&x, 5, false);
     assert!(result.is_err());
     let err = result.err().unwrap();
-    assert!(matches!(err, VoltaError::DimensionOutOfBounds { dim: 5, .. }));
+    assert!(matches!(
+        err,
+        VoltaError::DimensionOutOfBounds { dim: 5, .. }
+    ));
 }
 
 // ── BroadcastError ─────────────────────────────────────────────────────

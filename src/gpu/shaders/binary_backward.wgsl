@@ -470,6 +470,7 @@ fn sub_backward_b(@builtin(global_invocation_id) global_id: vec3<u32>) {
 fn mul_backward_a(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
     if (idx < arrayLength(&out_grad)) {
+        force_use_bindings(a[idx], b[idx]);
         result_grad[idx] = out_grad[idx] * b[idx];
     }
 }
@@ -479,6 +480,7 @@ fn mul_backward_a(@builtin(global_invocation_id) global_id: vec3<u32>) {
 fn mul_backward_b(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
     if (idx < arrayLength(&out_grad)) {
+        force_use_bindings(a[idx], b[idx]);
         result_grad[idx] = out_grad[idx] * a[idx];
     }
 }
@@ -488,6 +490,7 @@ fn mul_backward_b(@builtin(global_invocation_id) global_id: vec3<u32>) {
 fn div_backward_a(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
     if (idx < arrayLength(&out_grad)) {
+        force_use_bindings(a[idx], b[idx]);
         result_grad[idx] = out_grad[idx] / b[idx];
     }
 }

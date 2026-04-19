@@ -10,8 +10,16 @@ fn test_lstm_output_shapes() {
 
     let (h, c) = lstm.forward_step(&x, None);
 
-    assert_eq!(h.borrow().shape, vec![2, 3], "h shape should be [batch=2, hidden=3]");
-    assert_eq!(c.borrow().shape, vec![2, 3], "c shape should be [batch=2, hidden=3]");
+    assert_eq!(
+        h.borrow().shape,
+        vec![2, 3],
+        "h shape should be [batch=2, hidden=3]"
+    );
+    assert_eq!(
+        c.borrow().shape,
+        vec![2, 3],
+        "c shape should be [batch=2, hidden=3]"
+    );
 }
 
 // forward_step(x, None) should produce the same result as
@@ -166,10 +174,7 @@ fn test_lstm_state_propagation() {
     // No blowup: all values should be finite and within tanh range [-1, 1]
     for val in &h3_data {
         assert!(val.is_finite(), "h3 contains non-finite value: {val}");
-        assert!(
-            val.abs() <= 1.0 + 1e-6,
-            "h3 value {val} outside tanh range"
-        );
+        assert!(val.abs() <= 1.0 + 1e-6, "h3 value {val} outside tanh range");
     }
     for val in &c3.borrow().data.to_vec() {
         assert!(val.is_finite(), "c3 contains non-finite value: {val}");
@@ -304,10 +309,28 @@ fn test_lstm_no_bias() {
     );
 
     // Verify shapes of the two weight tensors
-    let w_ih_shape = params.first().expect("should have weight_ih").borrow().shape.clone();
-    let w_hh_shape = params.get(1).expect("should have weight_hh").borrow().shape.clone();
-    assert_eq!(w_ih_shape, vec![8, 2], "weight_ih shape should be [4*hidden, input]");
-    assert_eq!(w_hh_shape, vec![8, 2], "weight_hh shape should be [4*hidden, hidden]");
+    let w_ih_shape = params
+        .first()
+        .expect("should have weight_ih")
+        .borrow()
+        .shape
+        .clone();
+    let w_hh_shape = params
+        .get(1)
+        .expect("should have weight_hh")
+        .borrow()
+        .shape
+        .clone();
+    assert_eq!(
+        w_ih_shape,
+        vec![8, 2],
+        "weight_ih shape should be [4*hidden, input]"
+    );
+    assert_eq!(
+        w_hh_shape,
+        vec![8, 2],
+        "weight_hh shape should be [4*hidden, hidden]"
+    );
 
     // Forward should produce valid output
     let x = RawTensor::new(vec![1.0, -1.0, 0.5, 0.5], &[2, 2], false);

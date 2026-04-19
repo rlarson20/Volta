@@ -85,6 +85,7 @@ fn neg_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
     if (idx < arrayLength(&out_grad)) {
         // d(-x)/dx = -1
+        _ = x[idx]; // Force binding 1 into layout
         result[idx] = -out_grad[idx];
     }
 }

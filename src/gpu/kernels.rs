@@ -417,7 +417,7 @@ impl GpuKernels {
             "log2" => &ctx.pipelines().log2,
             "sin" => &ctx.pipelines().sin,
             "cos" => &ctx.pipelines().cos,
-            _ => panic!("Unknown unary op: {op}"),
+            _ => return None, // Unsupported op falls back to CPU
         };
 
         let bind_group_layout = pipeline.get_bind_group_layout(0);

@@ -10,11 +10,11 @@
 mod common;
 
 use common::{
-    assert_close, assert_unary_parity, assert_unary_parity_backward, gpu_device, make_input,
-    skip_if_no_gpu, TOL_BWD_GPU, TOL_FWD_GPU,
+    TOL_BWD_GPU, TOL_FWD_GPU, assert_close, assert_unary_parity, assert_unary_parity_backward,
+    gpu_device, make_input, skip_if_no_gpu,
 };
-use volta::tensor::TensorOps;
 use volta::Device;
+use volta::tensor::TensorOps;
 
 // ---------------------------------------------------------------------------
 // transpose
