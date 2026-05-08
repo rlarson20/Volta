@@ -46,11 +46,9 @@ impl ProgressBar {
             0
         };
 
-        let filled = if self.total > 0 {
-            (self.current * self.width / self.total).min(self.width)
-        } else {
-            0
-        };
+        let filled = (self.current * self.width)
+            .checked_div(self.total)
+            .map_or(0, |v| v.min(self.width));
 
         let bar: String = "█".repeat(filled) + &"░".repeat(self.width - filled);
 
