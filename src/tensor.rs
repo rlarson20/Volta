@@ -353,7 +353,7 @@ impl RawTensor {
     /// ```
     pub fn invalidate_gpu_cache(&mut self) {
         self.data.invalidate_cpu_cache();
-        if let Some(ref grad) = self.grad {
+        if let Some(ref mut grad) = self.grad {
             grad.invalidate_cpu_cache();
         }
     }

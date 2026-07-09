@@ -624,7 +624,7 @@ impl Storage {
     /// storage.invalidate_cpu_cache(); // Releases CPU copy
     /// ```
     #[cfg(feature = "gpu")]
-    pub fn invalidate_cpu_cache(&self) {
+    pub fn invalidate_cpu_cache(&mut self) {
         if let Self::Gpu { cpu_cache, .. } = self {
             cpu_cache.borrow_mut().take();
         }
