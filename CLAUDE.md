@@ -22,7 +22,9 @@ Whenever you're corrected on something, or you learn something about the codebas
 - Auto-selection chooses algorithm based on input size, kernel size, batch size, and device
 - All three algorithms support both forward and backward passes on GPU with zero CPU fallback
 
-**See `notes/REFACTOR_SUGGESTIONS.md` for ongoing and planned refactoring work.**
+**See `notes/REFACTOR_SUGGESTIONS.md` for ongoing and planned refactoring work, and `dev-docs/IMPROVEMENT_PLAN.md` (2026-07) for the current prioritized bug/improvement roadmap.**
+
+**Feature flags gotcha:** `Cargo.toml` sets `default = ["gpu", "accelerate"]`, so plain `cargo build`/`cargo test`/`cargo clippy` compile WITH the GPU backend (contrary to the README's opt-in framing, and CI's "no features" step labels). Use `--no-default-features` for a CPU-only build.
 
 ## Project Overview
 
@@ -182,7 +184,7 @@ Load weights from PyTorch, HuggingFace, and other frameworks using weight mappin
 - **Single-threaded only**: Uses Rc<RefCell> instead of Arc<Mutex>
 - **No distributed training**
 - **No learning rate schedulers**
-- **No RNN/Transformer layers** (LSTMCell exists but no full RNN/Transformer)
+- **No full RNN layer** (LSTMCell exists; transformer components — `MultiHeadAttention`, `TransformerBlock`, `PositionalEncoding` — ARE implemented in `src/nn/transformer/`)
 - **Incomplete GPU support**: Some operations still CPU-only (check `src/gpu/mod.rs` for current status)
 
 **Known Anti-Patterns (from notes/REFACTOR_SUGGESTIONS.md):**
