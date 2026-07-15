@@ -35,7 +35,7 @@ Ordered by severity. All verified by reading the code; none are speculative.
 
 ### P0-1: Use-after-free (UB) in `Storage` GPU cache — `src/storage.rs:246-257` vs `627-631`
 
-#### Fixed in commit 0522d2f
+#### Fixed in commit 991a8b7
 
 `try_as_f32_slice()` returns a `&[f32]` derived from a raw pointer into the `RefCell` cache, justified by a safety comment: *"We never clear the cache once populated."* But `invalidate_cpu_cache()` (line 627) does exactly that — and it takes `&self`, so the borrow checker cannot stop this:
 
