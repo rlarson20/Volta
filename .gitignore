@@ -9,6 +9,10 @@ responses/context.md
 # Data files
 data/*
 node_modules/
+#model artifacts
+models/
+#hiding this for now
+minigrad-react/
 
 #mutants output
 mutants.out/

@@ -13,6 +13,10 @@ It provides a dynamic computation graph, NumPy-style broadcasting, and common ne
 
 This project is an educational endeavor to demystify the inner workings of modern autograd engines. It prioritizes correctness, clarity, and a clean API over raw performance, while still providing hooks for hardware acceleration.
 
+> [!CAUTION]
+> This repo is pre-v1.0, and currently... not in a spot that I'm proud of.
+> Expect MAJOR refactors in order to get it into a more polished spot.
+
 ## Key Features
 
 - **Dynamic Computation Graph:** Build and backpropagate through graphs on the fly, just like PyTorch.
