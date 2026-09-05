@@ -29,6 +29,7 @@ safetensors = "0.7.0"
 thiserror = "2.0.18"
 statrs = "0.18.0"
 
+# Examples
 [[example]]
 name = "gpu"
 path = "examples/gpu.rs"
@@ -101,6 +102,7 @@ default = ["gpu", "accelerate"]
 accelerate = ["blas-src"]
 gpu = ["wgpu", "pollster"]
 
+# Benchmarks
 [[bench]]
 name = "tensor_ops"
 harness = false
@@ -116,6 +118,9 @@ harness = false
 [[bench]]
 name = "conv_algorithms"
 harness = false
+
+[lints.rust]
+missing_docs = "deny"
 
 # =============================================================================
 # Clippy Lints Configuration
@@ -202,10 +207,11 @@ return_self_not_must_use = "deny" # Builder pattern methods should be #[must_use
 double_must_use = "deny"          # Avoid duplicate #[must_use] attributes
 
 # Documentation
-doc_markdown = "deny"            # Properly format doc comments
-missing_panics_doc = "deny"      # Document when functions can panic
-missing_errors_doc = "deny"      # Document error conditions
-missing_fields_in_debug = "deny" # Include all fields in Debug implementations
+doc_markdown = "deny"                  # Properly format doc comments
+missing_panics_doc = "deny"            # Document when functions can panic
+missing_errors_doc = "deny"            # Document error conditions
+missing_docs_in_private_items = "deny"
+missing_fields_in_debug = "deny"       # Include all fields in Debug implementations
 
 # Misc improvements
 unreadable_literal = "deny" # Use underscores in large numeric literals (1_000_000)
