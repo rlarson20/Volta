@@ -38,10 +38,8 @@ precisely the claims that needed correcting — the calibration is good.
 
 Every sub-claim holds.
 
-`src/nn/layers/conv_transpose.rs:417` is `if x.borrow().requires_grad {` — the sole gate on
-attaching `parents` + `ConvTranspose2dGradFn`. `conv_transpose.rs:410` seeds the output with
-`RawTensor::new(output_data, &output_shape, x.borrow().requires_grad)`, so the weight's own
-`requires_grad` never enters the decision.
+`src/nn/layers/conv_transpose.rs:417` is `if x.borrow().requires_grad {` — the sole gate on attaching `parents` + `ConvTranspose2dGradFn`.
+`conv_transpose.rs:410` seeds the output with `RawTensor::new(output_data, &output_shape, x.borrow().requires_grad)`, so the weight's own `requires_grad` never enters the decision.
 
 Empirical, exactly as predicted:
 
@@ -50,39 +48,23 @@ B1 input.requires_grad=false: weight.grad=NONE,             bias.grad=Some(len=3
 B1 input.requires_grad=true:  weight.grad=Some(len=54, nz=54), bias.grad=Some(len=3, nonzero=3)
 ```
 
-The bias-trains-anyway detail is right and the mechanism is worth writing down: bias is applied
-via `output = output.add(&bias_reshaped)` (line 413), a real graph op, _before_ the gate. When
-`x` has no grad the `AddGradFn` survives and feeds the bias. When `x` does have grad, line 424
-`output.borrow_mut().grad_fn = Some(Box::new(ConvTranspose2dGradFn{..}))` **overwrites** the
-add's grad_fn — so the two paths reach the bias by completely different routes.
+The bias-trains-anyway detail is right and the mechanism is worth writing down: bias is applied via `output = output.add(&bias_reshaped)` (line 413), a real graph op, _before_ the gate.
+When `x` has no grad the `AddGradFn` survives and feeds the bias.
+When `x` does have grad, line 424 `output.borrow_mut().grad_fn = Some(Box::new(ConvTranspose2dGradFn{..}))` **overwrites** the add's grad_fn — so the two paths reach the bias by completely different routes.
 
-- "gradfn already checks per-parent req_grad" — ✅, `ConvTranspose2dGradFn::backward` gates each
-  parent independently, so the proposed minimum fix (gate on `{x,weight,bias}.requires_grad`) is
-  sound with no other change.
-- "dcgan, vae, super_resolution's generators' fc and both deconv layers have frozen weights" —
-  ✅ structurally: those examples feed plain data tensors into the generator. The `fc` claim is
-  indirect (a frozen `ConvTranspose2d` earlier in the chain doesn't freeze a `Linear` _before_
-  it — the `Linear` sits upstream of the deconv and still receives grad through the deconv's
-  input path _only if_ the deconv attached a grad_fn, which it does not when the input to the
-  generator is plain noise). Net effect is the same: those generators do not train.
+- "gradfn already checks per-parent req_grad" — ✅, `ConvTranspose2dGradFn::backward` gates each parent independently, so the proposed minimum fix (gate on `{x,weight,bias}.requires_grad`) is sound with no other change.
+- "dcgan, vae, super_resolution's generators' fc and both deconv layers have frozen weights" — ✅ structurally: those examples feed plain data tensors into the generator. The `fc` claim is indirect (a frozen `ConvTranspose2d` earlier in the chain doesn't freeze a `Linear` _before_ it — the `Linear` sits upstream of the deconv and still receives grad through the deconv's input path _only if_ the deconv attached a grad_fn, which it does not when the input to the generator is plain noise). Net effect is the same: those generators do not train.
 
 ### B2 — LSTMCell severs the graph at the gate slice ✅ CONFIRMED
 
-`src/nn/layers/lstm.rs:122–146` (`slice_gate`) copies floats out of `gates.borrow().data` and
-returns `RawTensor::new(gate_data, &[batch, hidden], gates.borrow().requires_grad)` — the flag is
-propagated but no `grad_fn` and no `parents`. Backward stops there.
+`src/nn/layers/lstm.rs:122–146` (`slice_gate`) copies floats out of `gates.borrow().data` and returns `RawTensor::new(gate_data, &[batch, hidden], gates.borrow().requires_grad)` — the flag is propagated but no `grad_fn` and no `parents`. Backward stops there.
 
 ```
 B2 lstm param[0..3] grad = NONE (all four: weight_ih, weight_hh, bias_ih, bias_hh)
 B2 lstm input grad     = NONE
 ```
 
-"Known and enshrined" ✅ — `tests/test_lstm.rs:257–296`, `test_lstm_gradient_flow`, matches on
-`grad` and takes the `None` arm with `println!("Known limitation confirmed: slice_gate breaks
-autograd graph.")`. The test cannot fail either way. The comment above it (line 259) explicitly
-says "If this test starts passing without the catch, the autograd issue has been fixed" — so it
-is documentation, not a regression fence. The characterization "worse than no test, launders
-defect" is fair: `cargo test` reports it green.
+"Known and enshrined" ✅ — `tests/test_lstm.rs:257–296`, `test_lstm_gradient_flow`, matches on `grad` and takes the `None` arm with `println!("Known limitation confirmed: slice_gate breaks autograd graph.")`. The test cannot fail either way. The comment above it (line 259) explicitly says "If this test starts passing without the catch, the autograd issue has been fixed" — so it is documentation, not a regression fence. The characterization "worse than no test, launders defect" is fair: `cargo test` reports it green.
 
 ### B3 — `PositionalEncoding::forward` severs the graph in both modes ✅ CONFIRMED
 
@@ -1133,8 +1115,6 @@ Collected for convenience:
 | --- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 2   | Muon's "frob-norm 'approx spectral' scaling" is a defect                   | ❌ Frobenius normalization is what the reference Muon does. The real deviations are the quadratic (vs quintic) polynomial and the missing `sqrt(max(1, rows/cols))` scaling.                                                 |
 | 3   | "GpuSyncError: display w/o impl std::error::Error (gpu/context 40-57)"     | ❌ `impl std::error::Error for GpuSyncError {}` is at `gpu/context.rs:57`, the last line of the cited range.                                                                                                                 |
-| 4   | "try_/panic twin pattern exists for 4 funcs … bc_shape … panic only"       | 🟠 Six twins exist, including `try_broadcast_shape` (binary.rs:438) — the one explicitly listed as absent.                                                                                                                   |
-| 5   | "unfinished minigrad thing" is part of the repo's public face              | 🟠 `minigrad-react/` is gitignored and untracked.                                                                                                                                                                            |
 | 6   | H5 blames `pad_to_u32_4` at kernels:2955                                   | 🟡 That function is real at that exact line but is used only by movement ops. Broadcast-backward pads inline at `kernels.rs:769–800`, and does it worse (left-aligned, breaking the right-alignment its own comment claims). |
 | 7   | "eprintln req but failed in mm, bin, tern, conv"                           | 🟡 mm/tern/conv all warn; **`binary.rs` warns nowhere** — the biggest gap, and unnamed.                                                                                                                                      |
 | 8   | "col2im tests use varied data" (as the exception)                          | 🟡 Varied input, but weights are still `vec![1.0; …]`.                                                                                                                                                                       |
@@ -1146,9 +1126,13 @@ Collected for convenience:
 | 14  | "cfg gated code paths had no compiler looking from any direction"          | 🟡 The `gpu` arm _is_ compiled by CI (because the "no features" steps run with default features). Only the `not(gpu)` arm is unchecked — which is where all 5 errors are.                                                    |
 
 Claims handled so far:
-1 (partial): now have missing_docs set
+1 (partial): now have missing_docs set, need to doc... pretty much everything, should build tool to check doc coverage
+4: number of try_ pairs. was 6, also something to be handled with other shit
+5: still need to handle minigrad-react, but it's not in the repo public face
 
 | 1 | "missing docs are denied and honored" | ❌ `missing_docs` is not configured anywhere. `missing_panics_doc`/`missing_errors_doc` are — and are satisfied with placeholder text (`storage.rs:298` documents a panic in a function that returns `Option`). |
+| 4 | "try_/panic twin pattern exists for 4 funcs … bc_shape … panic only" | 🟠 Six twins exist, including `try_broadcast_shape` (binary.rs:438) — the one explicitly listed as absent. |
+| 5 | "unfinished minigrad thing" is part of the repo's public face | 🟠 `minigrad-react/` is gitignored and untracked. |
 
 ## 17. Things the notes missed
 
@@ -1174,8 +1158,8 @@ Found while verifying, not claimed anywhere in the document:
    H8's panic is only reachable via the full module path.
 7. **`Sequential::load_state_dict` slices `&key[prefix.len()..]`** on a `String`
    (`sequential.rs:67`) — panics on a multi-byte layer name.
-8. **Four more top-level LLM artifacts are tracked** beyond `responses/` and `sys-prompts/`:
-   `ADDENDUM.md` (41 KB), `DECISIONS.md`, `glm-53-adversarial-audit.md` (35 KB), `coverage.txt`.
+8. **Three more top-level LLM artifacts are tracked** beyond `responses/` and `sys-prompts/`:
+   `ADDENDUM.md` (41 KB), `DECISIONS.md`, `glm-53-adversarial-audit.md` (35 KB).
 
 ---
 
