@@ -186,12 +186,14 @@ H2 bce_with_logits(x=89)  loss=inf  grad=Some(NaN)
 H2 bce_with_logits(x=100) loss=inf  grad=Some(NaN)
 ```
 
-**Two corrections.** (a) The threshold is x ≥ 89, not 88 — `exp(88.72)` is the f32 limit.
+**Two corrections.**
+(a) The threshold is x ≥ 89, not 88 — `exp(88.72)` is the f32 limit.
 (b) It is not `|x| ≥ 88`: negative logits are fine (`exp(-100) → 0`, `log(1+0) = 0`, correct
-answer). The failure is one-sided, on large positive logits — which is the DCGAN discriminator's
+answer).
+The failure is one-sided, on large positive logits — which is the DCGAN discriminator's
 saturating regime, so the practical exposure is real.
 
-- "bce_loss has same issue w log(p)/log(1-p)" ✅ — `tensor.rs:428–441` takes `pred.log()` and
+- "bce_loss has same issue w log(p)/log(1-p)" ✅ — `src/tensor.rs:428–441` takes `pred.log()` and
   `(1-pred).log()` directly. `bce_loss(p=[0,1], t=[0,1])` → `[NaN]`.
 - Proposed fix `max(x,0)+log1p(exp(-|x|))` ✅ correct — that is the standard stable softplus and
   matches PyTorch's `BCEWithLogitsLoss` formulation (`max(x,0) - x*z + log(1+exp(-|x|))`).
@@ -233,11 +235,11 @@ H4 stride_op(&[0]):                PANIC  src/ops/movement.rs:1102  attempt to d
 ```
 
 - Max/NaN: `reduce.rs:199/210/219` all use `.max_by(|(_,a),(_,b)| a.partial_cmp(b).unwrap())`.
-- xavier: `tensor.rs:254–262` takes `fan_in = shape[0]`, `fan_out = shape[1]`, generates
+- xavier: `src/tensor.rs:254–262` takes `fan_in = shape[0]`, `fan_out = shape[1]`, generates
   `fan_in * fan_out` samples, then constructs with the full `shape`. For `[2,3,4,5]` that's 6
   values for a 120-element tensor. The claim "gens fan_in*fan_out elems regardless of shape prod"
   is exactly right.
-- stride: `movement.rs:1102` is `.map(|(d, s)| d.div_ceil(*s))` — the cited line is exact.
+- stride: `src/ops/movement.rs:1102` is `.map(|(d, s)| d.div_ceil(*s))` — the cited line is exact.
 - "ships VoltaError enum and deny-heavy clippy, panics on ordinary inputs" ✅ — `src/error.rs`
   defines a 9-variant `VoltaError` via `thiserror`; `Cargo.toml` denies `indexing_slicing`,
   `missing_panics_doc`, `missing_errors_doc`. All three of these panics are reachable from public
@@ -279,7 +281,7 @@ anywhere on the path.
 - "char_transformer_model bypasses" ✅ — the example imports `FeedForward, MultiHeadAttention`
   and assembles its own block (`examples/char_transformer_model.rs:28, 64–77`).
 - "doc'ed as todo admitting MultiHeadAttention makes block non-standard" 🟡 — such a TODO exists,
-  but in the _example_, not the block: `char_transformer_model.rs:11–14`, "TODO: handle these
+  but in the _example_, not the block: `examples/char_transformer_model.rs:11–14`, "TODO: handle these
   concerns / MultiHeadAttention::forward internally does x.add(&output) — so calling
   norm1.forward(mha.forward(x)) is Pre-LN applied to the post-residual output, which is slightly
   non-standard (Post-LN)."
@@ -337,17 +339,17 @@ exports `Adam` and `SGD` only. It is reachable as `volta::nn::optim::muon::Muon`
 
 ### "every op deep copies" ✅ CONFIRMED
 
-- "storage::clone is a `Vec<u8>` copy" ✅ — `storage.rs:48–61`, the `Cpu` arm is `data.clone()`
+- "storage::clone is a `Vec<u8>` copy" ✅ — `src/storage.rs:48–61`, the `Cpu` arm is `data.clone()`
   on a `Vec<u8>`. (The `Gpu` arm is an `Arc` bump, so the problem is CPU-path-specific, as the
   notes say later.)
 - "every op in un/bin/mm/move/tern leads w `s.data.clone()`" ✅ — the borrow-clone-drop preamble
-  is verbatim in `binary.rs:608–615`, `matmul.rs:137–154`, `movement.rs:1085–1091`,
-  `unary.rs`, `ternary.rs`.
-- "broadcasts are materialized (broadcast_to, no stride-0 view)" ✅ — `binary.rs:480–526`
+  is verbatim in `src/ops/binary.rs:608–615`, `src/ops/matmul.rs:137–154`, `src/ops/movement.rs:1085–1091`,
+  `src/ops/unary.rs`, `src/ops/ternary.rs`.
+- "broadcasts are materialized (broadcast_to, no stride-0 view)" ✅ — `src/ops/binary.rs:480–526`
   allocates `vec![0.0; to_size]` and fills every element.
 - "elementwise op allocates ~3x output size" ✅ in the broadcasting case: two `broadcast_to`
   buffers plus the result.
-- "WhereGradFn keeps full broadcast-sized cond for graph lifetime" ✅ — `ternary.rs:78`,
+- "WhereGradFn keeps full broadcast-sized cond for graph lifetime" ✅ — `src/ops/ternary.rs:78`,
   `condition: Vec<f32>, // broadcasted condition (matches out_grad shape)`, populated at line 274
   from `cond_bc`.
 
@@ -359,7 +361,7 @@ input-tensor copy per output element written. "O(BHWCK²) full tensor copies" �
 
 ### "conv input grad is quadratic" ✅ CONFIRMED, both cited ranges
 
-- `conv.rs:427–518` (`DirectConvGradFn::compute_input_gradient_cpu`): for each
+- `src/nn/layers/conv.rs:427–518` (`DirectConvGradFn::compute_input_gradient_cpu`): for each
   `(b, ic, ih, iw)` it loops `for oc … for oh in 0..h_out … for ow in 0..w_out` and tests
   membership in the receptive field. ✅
 - `conv.rs:822–912` (`IGEMMGradFn::igemm_backward_input`): identical structure — "Accumulate from
@@ -510,7 +512,7 @@ Compiles cleanly, panics on first forward.
 
 ### "mixed device bin ops silent make cpu out" ✅ CONFIRMED
 
-`binary.rs:628`: `if Self::common_gpu_device(&[self_t, other]).is_some() && ...` — returns `None`
+`src/ops/binary.rs:628`: `if Self::common_gpu_device(&[self_t, other]).is_some() && ...` — returns `None`
 for mixed devices, so control falls straight through to the CPU path with no warning and no
 device annotation on the result. Same shape in `matmul.rs:137–154`, where `_dev_a` and `_dev_b`
 are destructured and then discarded — the underscore prefixes make the discard deliberate.
@@ -525,15 +527,15 @@ Positive claims:
 
 - "genuine context w ~70 pipelines" ✅ — `src/gpu/context.rs` declares **68**
   `wgpu::ComputePipeline` fields across 20 WGSL shader files.
-- "pooled buffers, staged readbacks" ✅ — `gpu/pool.rs` (power-of-2 bucketed `BufferPool`),
-  `gpu/staging_pool.rs`.
-- "properly tiled 16x16 shared-mem matmul" ✅ — `shaders/matmul.wgsl:22–29`:
+- "pooled buffers, staged readbacks" ✅ — `src/gpu/pool.rs` (power-of-2 bucketed `BufferPool`),
+  `src/gpu/staging_pool.rs`.
+- "properly tiled 16x16 shared-mem matmul" ✅ — `src/gpu/shaders/matmul.wgsl:22–29`:
   `const TILE_SIZE: u32 = 16u; var<workgroup> tile_a: array<f32, 256>; ... @compute @workgroup_size(16,16)`
   with `workgroupBarrier()` on both sides of the accumulation. This is textbook and correct.
-- "working conv fw/bw kernels w CPU parity tests" ✅ — `conv_backward_input.wgsl`,
+- "working conv fw/bw kernels w CPU parity tests" ✅ — `src/gpu/shaders/conv_backward_input.wgsl`,
   `conv_backward_weight.wgsl`, `igemm_backward_*.wgsl`, plus parity tests in `conv.rs`.
-- "GPU optimizer step whose adam matches (valid) CPU one" ✅ — `shaders/optimizer_step.wgsl`,
-  `adam.rs:98`, `tests/test_optimizers.rs`.
+- "GPU optimizer step whose adam matches (valid) CPU one" ✅ — `src/gpu/shaders/optimizer_step.wgsl`,
+  `src/nn/optim/adam.rs:98`, `tests/test_optimizers.rs`.
 
 Negative claims:
 
@@ -776,6 +778,7 @@ SumGradFn, UnaryGradFn, WhereGradFn`.
 
 ### "one good thing: missing docs are denied and honored" ❌ **WRONG**
 
+(did end up fixing at least existence of missing_docs lint)
 `missing_docs` appears **nowhere** — not in `[lints.clippy]`, not in `[lints.rust]` (there is no
 `[lints.rust]` table), and not as `#![deny(missing_docs)]` in `src/lib.rs`. What exists is
 `missing_panics_doc = "deny"`, `missing_errors_doc = "deny"`, and `doc_markdown = "deny"`.
@@ -852,7 +855,7 @@ silently invalidate the outstanding `&[f32]`.
   `"Don't know how to fix right now"` (sequential.rs),
   `"just don't know hot to fix right now"` (conv_transpose.rs),
   `"Attempts to fix by merging the construction with its single usage leads to other errors, will come back to fix this."` (pool.rs).
-  Only one is a real justification (`binary.rs:296`, `"∂(x/y)/∂y = -x/y²"`). The characterization
+  Only one is a real justification (`src/ops/binary.rs:296`, `"∂(x/y)/∂y = -x/y²"`). The characterization
   is exactly right.
 - "crate level allow float_cmp, similar_names, cast_precision_loss" ✅ — `lib.rs:15`, verbatim.
   There are 5 more file-level `#![allow(...)]` blocks (`storage.rs:7`, `adam.rs:1`,
@@ -897,10 +900,10 @@ silently invalidate the outstanding `&[f32]`.
   ✅ — `src/ops/unary.rs:3` `use statrs::function::erf::erf as statrs_erf;` and exactly one call
   site, `unary.rs:273`, `UnaryOp::Erf => statrs_erf(f64::from(x)) as f32`. That is the entire
   usage of `statrs` in the crate. (`libm::erff` would be the smaller swap; A&S 7.1.26 gives
-  ~1.5e-7 absolute error, adequate for f32.)
+  ~1.5e-7 absolute error, adequate for f32.) (DONE)
 - "approx in dependencies but only used in tests, so it's a dev dependency" ✅ — every
   `approx::` use is inside a `#[cfg(test)] mod` (`lib.rs:169, 3040, 3041, 3118, 3317, 4227, 4423,
-4535, 4871` and `nn/transformer/mask.rs:49`). It is in `[dependencies]`, not `[dev-dependencies]`.
+4535, 4871` and `nn/transformer/mask.rs:49`). It is in `[dependencies]`, not `[dev-dependencies]`. (DONE)
 - "blas-src dep only to link Accelerate / actual cblas decl handwritten / linkage and decl can
   drift independently" ✅ — see §unsafe audit.
 - "it is modern: 2024, 1.89 vers, let-chains, crate metadata, best maintained dim of project" ✅ —

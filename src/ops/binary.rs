@@ -293,6 +293,7 @@ impl GradFn for BinaryGradFn {
                 let gy = if y_val.requires_grad {
                     let x_bc = RawTensor::broadcast_to(&x_val.data, &x_val.shape, &out_grad.shape);
                     let y_bc = RawTensor::broadcast_to(&y_val.data, &y_val.shape, &out_grad.shape);
+                    //TODO: better way to express operation so doesn't look suspicious?
                     #[expect(clippy::suspicious_operation_groupings, reason = "∂(x/y)/∂y = -x/y²")]
                     let grad: Vec<f32> = out_grad
                         .data
