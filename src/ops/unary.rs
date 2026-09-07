@@ -1,6 +1,5 @@
 use crate::autograd::GradFn;
 use crate::{RawTensor, Tensor};
-use statrs::function::erf::erf as statrs_erf;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -270,7 +269,7 @@ impl RawTensor {
                 UnaryOp::Tanh => x.tanh(),
                 UnaryOp::Sigmoid => 1.0 / (1.0 + (-x).exp()),
                 UnaryOp::ReLU => x.max(0.0),
-                UnaryOp::Erf => statrs_erf(f64::from(x)) as f32,
+                UnaryOp::Erf => libm::erff(x),
             })
             .collect();
 
