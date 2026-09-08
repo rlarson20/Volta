@@ -11,6 +11,7 @@ use std::fmt;
 /// Volta internally uses a byte buffer + dtype tag approach, allowing
 /// runtime flexibility for mixed-precision operations and easy loading
 /// of external model formats.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum DType {

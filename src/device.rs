@@ -4,6 +4,7 @@ use std::fmt;
 /// Compute device for tensor operations
 ///
 /// In progress adding GPU support with wgpu.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum Device {
     #[default]

@@ -7,6 +7,7 @@ use crate::nn::Module;
 use crate::tensor::{RawTensor, Tensor, TensorOps};
 
 /// Algorithm to use for convolution
+#[non_exhaustive]
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConvAlgo {
     /// Direct convolution - compute each output pixel by iterating over kernel

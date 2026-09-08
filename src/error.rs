@@ -1,6 +1,7 @@
 use crate::dtype::DType;
 use thiserror::Error;
 
+#[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum VoltaError {
     #[error("Shape mismatch: tensor has {elements} elements but data length is {len}")]
