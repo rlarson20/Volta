@@ -28,9 +28,10 @@ the ledger labels the alternatives and states the invariant that all acceptable 
 ## B1–B3 — autograd graph construction through parameterized layers
 
 **General invariant.** [PyTorch's autograd mechanics](https://docs.pytorch.org/docs/main/notes/autograd.html)
-states the relevant forward rule explicitly: record an operation when **at
-least one input** requires a gradient; in backward, accumulate only into the
-leaf inputs whose `requires_grad` is true. Its [autograd tutorial](https://docs.pytorch.org/tutorials/beginner/blitz/autograd_tutorial)
+states the relevant forward rule explicitly:
+record an operation when **at least one input** requires a gradient;
+in backward, accumulate only into the leaf inputs whose `requires_grad` is true.
+Its [autograd tutorial](https://docs.pytorch.org/tutorials/beginner/blitz/autograd_tutorial)
 also describes the output as requiring gradients when any one input does.
 This is the correct rule for Volta's graph-edge constructor: use
 `x.requires_grad || weight.requires_grad || bias.requires_grad`, and have the

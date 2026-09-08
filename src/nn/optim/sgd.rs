@@ -186,7 +186,6 @@ impl SGD {
     }
 
     /// CPU update for a single parameter
-    #[cfg(feature = "gpu")]
     fn step_cpu_param(&mut self, i: usize) {
         let param = self.params.get(i).unwrap();
         let mut p = param.borrow_mut();

@@ -148,7 +148,8 @@ impl GradFn for Im2colGradFn {
         // out_grad has shape (B*H_out*W_out, C*K*K)
         // We need to convert it back to (B, C, H, W) using col2im
 
-        // Try GPU-accelerated col2im first
+        // Try GPU-accelerated col2im first (when the GPU backend is compiled in)
+        #[cfg(feature = "gpu")]
         let grad_storage = if out_grad.data.is_gpu() {
             let (batch, channels, height, width) = (
                 self.input_shape.first().copied().unwrap_or(1),
@@ -184,6 +185,14 @@ impl GradFn for Im2colGradFn {
             }
         } else {
             // CPU path - convert Vec<f32> to Storage
+            let cpu_data =
+                Conv2d::col2im(&out_grad.data, &self.input_shape, self.kernel, self.stride);
+            crate::storage::Storage::cpu(cpu_data)
+        };
+
+        #[cfg(not(feature = "gpu"))]
+        let grad_storage = {
+            // CPU-only build: col2im always runs on the host
             let cpu_data =
                 Conv2d::col2im(&out_grad.data, &self.input_shape, self.kernel, self.stride);
             crate::storage::Storage::cpu(cpu_data)
@@ -315,7 +324,7 @@ impl GradFn for DirectConvGradFn {
 
             #[cfg(not(feature = "gpu"))]
             {
-                self.compute_input_gradient_cpu(
+                Some(self.compute_input_gradient_cpu(
                     &out_grad.data.to_vec(),
                     &weight.as_ref().unwrap().borrow().data.to_vec(),
                     batch,
@@ -331,7 +340,7 @@ impl GradFn for DirectConvGradFn {
                     pad_w,
                     h_out,
                     w_out,
-                )
+                ))
             }
         } else {
             None
@@ -392,7 +401,7 @@ impl GradFn for DirectConvGradFn {
 
             #[cfg(not(feature = "gpu"))]
             {
-                self.compute_weight_gradient_cpu(
+                Some(self.compute_weight_gradient_cpu(
                     &out_grad.data.to_vec(),
                     &x.as_ref().unwrap().borrow().data.to_vec(),
                     batch,
@@ -408,7 +417,7 @@ impl GradFn for DirectConvGradFn {
                     pad_w,
                     h_out,
                     w_out,
-                )
+                ))
             }
         } else {
             None

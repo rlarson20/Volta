@@ -4,6 +4,7 @@
 //! These are called automatically when tensors are on GPU storage.
 
 use crate::RawTensor;
+#[cfg(feature = "gpu")]
 use crate::gpu::GpuKernels;
 use crate::storage::Storage;
 #[cfg(feature = "gpu")]
