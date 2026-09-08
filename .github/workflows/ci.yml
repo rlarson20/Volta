@@ -5,11 +5,15 @@ on:
   pull_request:
 
 jobs:
-  test:
-    runs-on: ${{ matrix.os }}
+  # Honest "no default features" lane. Everything here is CPU-only; the `gpu`
+  # feature is excluded from every step (wgpu is heavy and cannot run on
+  # GPU-less Linux runners). This lane is expected to stay red until bug B5
+  # (CPU-only build does not compile, see notes/TODO.md) is fixed.
+  cpu-only:
+    runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
         rust: [1.89, stable]
     steps:
       - uses: actions/checkout@v4
@@ -17,6 +21,9 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
           components: rustfmt, clippy
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hack
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -27,22 +34,60 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
-      - name: Clippy (no features)
-        run: cargo clippy --all-targets -- -D warnings
+      - name: Clippy (no default features)
+        run: cargo clippy --no-default-features --all-targets -- -D warnings
 
-      - name: Test (no features) #TODO: improve CI setup/reorganize, figure out way to run benches seperately
-        run: cargo test
+      - name: Test (no default features)
+        run: cargo test --no-default-features
 
-      # macOS-specific: test accelerate feature
-      - name: Test (accelerate)
-        if: runner.os == 'macOS'
-        run: cargo test --features accelerate
+      - name: Doc tests (no default features)
+        run: cargo test --doc --no-default-features
 
-      # - name: Check (gpu feature) # Runners lack GPUs
-      #   run: cargo check --features gpu
+      - name: Build docs (no default features)
+        run: cargo doc --no-deps --no-default-features
 
-      - name: Doc tests
-        run: cargo test --doc
+      # Feature-combination rot check. `--feature-powerset` includes the
+      # empty-feature-set compile that would have caught B5. `gpu` is
+      # deliberately excluded on Linux.
+      - name: cargo-hack feature powerset (no gpu)
+        run: cargo hack check --feature-powerset --no-dev-deps --exclude-features gpu
 
-      - name: Build docs
+  # Full build with gpu + accelerate. GitHub's macos-latest is Apple Silicon
+  # with a working Metal GPU; GPU tests self-skip at runtime when no adapter
+  # is available (src/gpu/mod.rs).
+  macos:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rust: [1.89, stable]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt, clippy
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hack
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Clippy (all features)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Test (all features)
+        run: cargo test --all-features
+
+      - name: Doc tests (all features)
+        run: cargo test --doc --all-features
+
+      - name: Build docs (all features)
         run: cargo doc --no-deps --all-features
+
+      - name: cargo-hack feature powerset
+        run: cargo hack check --feature-powerset --no-dev-deps

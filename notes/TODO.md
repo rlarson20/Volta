@@ -405,11 +405,16 @@ catches B1-3 before anyone else had to
 
 #### CI
 
-- [ ] no-features doesn't check no-features
+- [x] no-features doesn't check no-features
   - -D warnings caused allow with excuses culture instead of fixing shit
   - warnings were errors, every issue gets a waiver rather tahn change
   - GPU feature check commented out (runners tend to lack GPUs)
   - cfg gated code paths had no compiler looking from any direction
+  - DONE: ci.yml split into `cpu-only` (ubuntu, real `--no-default-features` on
+    clippy/test/doc + `cargo hack check --feature-powerset --exclude-features gpu`)
+    and `macos` (apple silicon, `--all-features` incl gpu + full cargo-hack powerset).
+    `cpu-only` job stays RED until B5 (CPU-only build does not compile) is fixed —
+    that's the 4 cfg one-liners in the blocking-defects list above, not done here.
 
 #### Minimum set for idiomatic
 
@@ -1237,7 +1242,7 @@ gets cheaper w each phase before
 
 ##### 0: Mechanical, do immediately
 
-Contents: non-exhaustive on pub enums, approx dev dep, drop statrs, CI --no-default-features and cargo hack, cfg at defn consolidation, log facade for prints
+Contents: non-exhaustive on pub enums [done], approx dev dep [done], drop statrs [done], CI --no-default-features and cargo hack [done], cfg at defn consolidation [pending — B5], log facade for prints [pending]
 Prevents: B5 recurrence, dep bloat, print pollution
 Size: day, near 0 risk
 
