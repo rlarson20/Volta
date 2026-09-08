@@ -163,9 +163,7 @@ impl RawTensor {
                     *existing = sum;
                     return;
                 }
-                eprintln!(
-                    "Warning: GPU gradient accumulation failed; falling back to CPU accumulation"
-                );
+                log::warn!("GPU gradient accumulation failed; falling back to CPU accumulation");
             }
         }
 

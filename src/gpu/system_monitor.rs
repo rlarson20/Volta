@@ -53,8 +53,9 @@ impl SystemMonitor {
 
     /// Record a checkpoint with a descriptive label
     ///
-    /// Prints performance metrics including memory usage, operation counts,
-    /// operations per second, sync count, and pending GPU operations.
+    /// Logs performance metrics (at `debug` level via the `log` facade) including
+    /// memory usage, operation counts, operations per second, sync count, and
+    /// pending GPU operations.
     ///
     /// # Arguments
     /// * `label` - Descriptive name for this checkpoint
@@ -85,7 +86,7 @@ impl SystemMonitor {
             0.0
         };
 
-        println!(
+        log::debug!(
             "[{label}] Mem: {current_memory_mb}MB, Ops: {ops} (+{ops_delta}, {ops_per_sec:.0}/s), Syncs: {syncs}, Pending: {pending}, Time: {elapsed:.2}s"
         );
     }

@@ -13,6 +13,12 @@
 //! dynamic computation graphs. Each tensor operation creates new tensors and stores gradient
 //! functions that know how to backpropagate through that operation.
 #![allow(clippy::float_cmp, clippy::similar_names, clippy::cast_precision_loss)]
+// A library must not write to stdout/stderr unprompted — diagnostics go through
+// the `log` facade. Scoped to non-test builds of the library crate: examples and
+// integration tests are separate crates (unaffected), and unit-test modules may
+// print freely. `utils::progress` is the one legitimate exception and opts out
+// with a module-level `#[allow]`.
+#![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
 #[cfg(feature = "gpu")]
 pub mod gpu;
 

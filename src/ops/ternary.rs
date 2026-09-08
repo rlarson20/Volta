@@ -213,13 +213,9 @@ impl RawTensor {
                                 }
                                 return out;
                             }
-                            eprintln!(
-                                "Warning: GPU add for MulAcc failed; falling back to CPU path"
-                            );
+                            log::warn!("GPU add for MulAcc failed; falling back to CPU path");
                         } else {
-                            eprintln!(
-                                "Warning: GPU mul for MulAcc failed; falling back to CPU path"
-                            );
+                            log::warn!("GPU mul for MulAcc failed; falling back to CPU path");
                         }
                     }
                 }

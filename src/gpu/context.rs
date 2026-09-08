@@ -317,17 +317,8 @@ impl GpuContext {
     /// Increment the pending submission counter.
     /// Call this after each `queue.submit()`.
     pub fn increment_pending(&self) {
-        #[cfg(debug_assertions)]
-        {
-            let new_count = self.pending_submissions.fetch_add(1, Ordering::Relaxed) + 1;
-            if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
-                eprintln!("[GPU] Pending count: {} -> {}", new_count - 1, new_count);
-            }
-        }
-        #[cfg(not(debug_assertions))]
-        {
-            self.pending_submissions.fetch_add(1, Ordering::Relaxed);
-        }
+        let new_count = self.pending_submissions.fetch_add(1, Ordering::Relaxed) + 1;
+        log::trace!("[GPU] pending count: {} -> {new_count}", new_count - 1);
     }
 
     /// Force GPU synchronization - wait for all pending commands to complete.
@@ -347,10 +338,7 @@ impl GpuContext {
             return true;
         }
 
-        #[cfg(debug_assertions)]
-        if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
-            eprintln!("[GPU] Syncing {pending} pending submissions...");
-        }
+        log::debug!("[GPU] syncing {pending} pending submissions...");
 
         // Poll the device until all work completes
         let result = self.device.poll(wgpu::PollType::Wait {
@@ -364,18 +352,13 @@ impl GpuContext {
 
         match result {
             Ok(_) => {
-                #[cfg(debug_assertions)]
-                if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
-                    eprintln!("[GPU] Sync complete. Pending reset to 0.");
-                }
+                log::debug!("[GPU] sync complete, pending reset to 0");
                 true
             }
             Err(e) => {
-                eprintln!("[GPU] Sync timeout warning: {e:?}");
-                eprintln!("[GPU] This may indicate GPU overload. Consider:");
-                eprintln!("[GPU]   - Reducing batch size");
-                eprintln!("[GPU]   - Adding more frequent sync points");
-                eprintln!("[GPU]   - Using smaller tensors");
+                log::warn!(
+                    "[GPU] sync timeout: {e:?}. This may indicate GPU overload; consider reducing batch size, adding more frequent sync points, or using smaller tensors."
+                );
                 false
             }
         }
@@ -390,15 +373,14 @@ impl GpuContext {
             if self.sync() {
                 return true;
             }
-            eprintln!(
-                "[GPU] Sync retry {}/{} - GPU may be overwhelmed",
-                attempt + 1,
-                max_retries
+            log::warn!(
+                "[GPU] sync retry {}/{max_retries} - GPU may be overwhelmed",
+                attempt + 1
             );
             // Small delay between retries
             std::thread::sleep(Duration::from_millis(100));
         }
-        eprintln!("[GPU] All sync retries failed - GPU may be lost");
+        log::warn!("[GPU] all sync retries failed - GPU may be lost");
         false
     }
 
@@ -410,13 +392,10 @@ impl GpuContext {
     pub fn maybe_sync(&self) {
         let pending = self.pending_submissions.load(Ordering::Relaxed);
         if pending >= self.sync_threshold {
-            #[cfg(debug_assertions)]
-            if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
-                eprintln!(
-                    "[GPU] Auto-sync triggered: {} >= {}",
-                    pending, self.sync_threshold
-                );
-            }
+            log::trace!(
+                "[GPU] auto-sync triggered: {pending} >= {}",
+                self.sync_threshold
+            );
             self.sync();
         }
     }
@@ -460,10 +439,7 @@ impl GpuContext {
             return Ok(());
         }
 
-        #[cfg(debug_assertions)]
-        if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
-            eprintln!("[GPU] sync_checked: {pending} pending submissions...");
-        }
+        log::debug!("[GPU] sync_checked: {pending} pending submissions...");
 
         // Use 2-second hard timeout
         let result = self.device.poll(wgpu::PollType::Wait {
@@ -478,10 +454,7 @@ impl GpuContext {
                 // Success - reset timeout counter
                 self.consecutive_timeouts.store(0, Ordering::Relaxed);
 
-                #[cfg(debug_assertions)]
-                if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
-                    eprintln!("[GPU] sync_checked: Success, timeout counter reset");
-                }
+                log::debug!("[GPU] sync_checked: success, timeout counter reset");
 
                 Ok(())
             }
@@ -489,7 +462,7 @@ impl GpuContext {
                 // Timeout - increment counter
                 let new_count = self.consecutive_timeouts.fetch_add(1, Ordering::Relaxed) + 1;
 
-                eprintln!("[GPU] Sync timeout #{new_count}: {e:?}");
+                log::warn!("[GPU] sync timeout #{new_count}: {e:?}");
 
                 if new_count >= MAX_CONSECUTIVE_TIMEOUTS {
                     Err(GpuSyncError::GpuLost(format!(
@@ -519,10 +492,7 @@ impl GpuContext {
     pub fn reset_timeout_counter(&self) {
         self.consecutive_timeouts.store(0, Ordering::Relaxed);
 
-        #[cfg(debug_assertions)]
-        if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
-            eprintln!("[GPU] Timeout counter manually reset");
-        }
+        log::debug!("[GPU] timeout counter manually reset");
     }
 
     /// Create all compute pipelines by compiling shaders

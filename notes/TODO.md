@@ -1242,7 +1242,13 @@ gets cheaper w each phase before
 
 ##### 0: Mechanical, do immediately
 
-Contents: non-exhaustive on pub enums [done], approx dev dep [done], drop statrs [done], CI --no-default-features and cargo hack [done], cfg at defn consolidation [pending — B5], log facade for prints [pending]
+Contents: non-exhaustive on pub enums [done], approx dev dep [done], drop statrs [done], CI --no-default-features and cargo hack [done], cfg at defn consolidation [done], log facade for prints [done]
+  - `log` crate (facade, non-optional dep); `env_logger` dev-dep for examples/tests
+  - all non-test `eprintln!`/`println!` in src/ -> `log::{warn,info,debug,trace}!`
+    - GPU->CPU fallbacks = warn; GPU init = info; sync lifecycle = debug; pending/pool churn = trace
+  - deleted the bespoke `#[cfg(debug_assertions)] + VOLTA_GPU_DEBUG` gate in gpu/context.rs + gpu/staging_pool.rs; use `RUST_LOG=volta::gpu=trace` now
+  - `#![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]` in lib.rs as the regression guard; utils/progress.rs (interactive bar) opts out with a module `#[allow]`
+  - library is silent by default; downstream installs a logger to see diagnostics
 Prevents: B5 recurrence, dep bloat, print pollution
 Size: day, near 0 risk
 

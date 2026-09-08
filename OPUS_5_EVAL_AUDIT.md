@@ -1094,11 +1094,6 @@ that introduced it.
 
 ### Sequencing 🔵 reasonable
 
-Phase 0 is correctly scoped as a day of near-zero-risk work, and it retires B5 plus the packaging
-findings. One reordering suggestion: **B5 is a shipped-broken build**, and the two-line CI change
-plus the `sgd.rs:189` cfg flip fixes it in under an hour. That belongs ahead of everything,
-including the rest of phase 0.
-
 Phase 1's `assert_trainable` across all layers is the single highest value-per-hour item in the
 whole plan — it is ~19 lines of test and it fences the entire B1–B3 class, and it does not depend
 on the opaque-tensor refactor landing first.

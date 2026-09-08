@@ -70,13 +70,10 @@ impl StagingBufferPool {
         {
             *count = count.saturating_sub(1);
 
-            #[cfg(debug_assertions)]
-            if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
-                eprintln!(
-                    "[StagingPool] Acquired {}B buffer from pool ({} remain)",
-                    size_bytes, *count
-                );
-            }
+            log::trace!(
+                "[StagingPool] acquired {size_bytes}B buffer from pool ({} remain)",
+                *count
+            );
             drop(count);
             return Some(buffer);
         }
@@ -98,13 +95,11 @@ impl StagingBufferPool {
         let mut count = self.current_count.lock().unwrap();
 
         if *count >= self.max_total {
-            #[cfg(debug_assertions)]
-            if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
-                eprintln!(
-                    "[StagingPool] Pool full ({}/{}), dropping {}B buffer",
-                    *count, self.max_total, size_bytes
-                );
-            }
+            log::trace!(
+                "[StagingPool] pool full ({}/{}), dropping {size_bytes}B buffer",
+                *count,
+                self.max_total
+            );
 
             return false; // Pool full, buffer will be dropped
         }
@@ -117,13 +112,10 @@ impl StagingBufferPool {
             .push(buffer);
         *count += 1;
 
-        #[cfg(debug_assertions)]
-        if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
-            eprintln!(
-                "[StagingPool] Returned {}B buffer to pool ({} total)",
-                size_bytes, *count
-            );
-        }
+        log::trace!(
+            "[StagingPool] returned {size_bytes}B buffer to pool ({} total)",
+            *count
+        );
         drop(count);
         true
     }
@@ -138,10 +130,7 @@ impl StagingBufferPool {
         self.pools.lock().unwrap().clear();
         *self.current_count.lock().unwrap() = 0;
 
-        #[cfg(debug_assertions)]
-        if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
-            eprintln!("[StagingPool] Cleared all buffers");
-        }
+        log::trace!("[StagingPool] cleared all buffers");
     }
 
     /// Get current number of pooled buffers

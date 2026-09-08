@@ -1517,7 +1517,7 @@ impl Conv2d {
 
             raw
         } else {
-            eprintln!("[WARNING] GPU Direct Convolution failed, falling back to CPU");
+            log::warn!("GPU direct convolution failed, falling back to CPU");
             Self::direct_conv(x, weight, pad_h, pad_w, stride_h, stride_w)
         }
     }

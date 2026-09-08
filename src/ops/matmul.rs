@@ -184,7 +184,7 @@ impl RawTensor {
                             }
                             return out;
                         }
-                        eprintln!("Warning: GPU matmul requested but failed; falling back to CPU");
+                        log::warn!("GPU matmul requested but failed; falling back to CPU");
                     }
                 }
 

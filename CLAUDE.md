@@ -26,6 +26,10 @@ Whenever you're corrected on something, or you learn something about the codebas
 
 **Feature flags gotcha:** `Cargo.toml` sets `default = ["gpu", "accelerate"]`, so plain `cargo build`/`cargo test`/`cargo clippy` compile WITH the GPU backend (contrary to the README's opt-in framing, and CI's "no features" step labels). Use `--no-default-features` for a CPU-only build.
 
+**Build is currently lint-blocked, not code-broken:** `[lints.rust] missing_docs = "deny"` (added recently) makes plain `cargo build` fail with ~230 missing-module-doc errors on both feature configs. The code itself compiles — `RUSTFLAGS="--cap-lints=warn" cargo build/test` is green (all feature configs, including `--no-default-features`; the old B5 CPU-only compile failure was fixed in c8a5006). Use the cap-lints trick to functionally verify changes until the doc backlog is cleared.
+
+**Logging (Phase 0 "log facade", COMPLETED):** the library never prints to stdout/stderr. All diagnostics go through the `log` facade (`log::{error,warn,info,debug,trace}!`). It's silent unless a downstream binary installs a logger (`env_logger`, `tracing-subscriber`, …) — e.g. `RUST_LOG=volta=debug` or `RUST_LOG=volta::gpu=trace`. `#![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]` in `lib.rs` enforces this; `src/utils/progress.rs` (interactive progress bar) is the one sanctioned exception via a module `#[allow]`. Don't add `println!`/`eprintln!` to `src/` — use `log`.
+
 ## Project Overview
 
 Volta is a PyTorch-like deep learning framework written in pure Rust. It's an educational project designed to demystify automatic differentiation engines and neural network computation graphs.

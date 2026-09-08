@@ -958,7 +958,7 @@ impl RawTensor {
             total_error += relative_error;
 
             if relative_error > tolerance {
-                eprintln!(
+                log::debug!(
                     "Gradient mismatch at index {i}: analytical={analytical:.6e}, numerical={numerical:.6e}, error={relative_error:.6e}",
                 );
             }
@@ -983,7 +983,7 @@ impl RawTensor {
         );
 
         if !passed {
-            eprintln!("Gradient check FAILED: max_error={max_err:.6e}, mean_error={mean_err:.6e}");
+            log::warn!("Gradient check FAILED: max_error={max_err:.6e}, mean_error={mean_err:.6e}");
         }
 
         passed

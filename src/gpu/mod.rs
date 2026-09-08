@@ -35,11 +35,11 @@ pub fn get_gpu_context() -> Option<&'static GpuContext> {
     GPU_CONTEXT
         .get_or_init(|| match GpuContext::new() {
             Ok(ctx) => {
-                println!("GPU initialized: {}", ctx.device_name());
+                log::info!("GPU initialized: {}", ctx.device_name());
                 Some(ctx)
             }
             Err(e) => {
-                eprintln!("GPU initialization failed: {e}. Falling back to CPU.");
+                log::warn!("GPU initialization failed: {e}. Falling back to CPU.");
                 None
             }
         })

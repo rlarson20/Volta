@@ -583,13 +583,13 @@ impl Storage {
                         // Convert to f32 for GPU (GPU ops are f32 only for now)
                         Self::gpu(self.to_f32_vec())
                     } else {
-                        eprintln!("Warning: GPU requested but not available, using CPU");
+                        log::warn!("GPU requested but not available, using CPU");
                         self.clone()
                     }
                 }
                 #[cfg(not(feature = "gpu"))]
                 {
-                    eprintln!("Warning: GPU feature not enabled, using CPU");
+                    log::warn!("GPU feature not enabled, using CPU");
                     self.clone()
                 }
             }
