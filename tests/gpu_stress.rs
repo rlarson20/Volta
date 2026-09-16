@@ -242,7 +242,7 @@ mod gpu_stress_tests {
         println!("Before reading back: pending = {before}");
 
         // Reading data back from GPU does a submit (via to_vec in GpuBuffer)
-        let result = t.borrow().data.to_vec();
+        let result = t.data();
 
         let after = gpu_pending_count();
         println!("After reading back: pending = {after}");
@@ -273,7 +273,7 @@ mod gpu_stress_tests {
             println!("Readback iteration {iteration}");
 
             for (i, t) in tensors.iter().enumerate() {
-                let data = t.borrow().data.to_vec();
+                let data = t.data();
                 assert_eq!(data.len(), 1024, "Tensor {i} data length mismatch");
 
                 // Verify data integrity (values should be i * 0.01 for indices)

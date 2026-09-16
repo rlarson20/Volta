@@ -53,7 +53,7 @@ fn test_device_safety_improvements() {
 fn test_tensor_size_validation() {
     // Test that reasonable tensors work
     let small_tensor = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], true);
-    assert_eq!(small_tensor.borrow().data.len(), 3);
+    assert_eq!(small_tensor.data().len(), 3);
 
     // Test that very large tensors are rejected
     let large_data = vec![0.0; 101_000_000]; // Over limit
@@ -179,8 +179,8 @@ fn test_broadcast_safety_improvements() {
     let b = RawTensor::new(vec![3.0], &[1], true);
     let c = a.add(&b);
 
-    assert_eq!(c.borrow().shape, vec![2]);
-    assert_eq!(c.borrow().data, vec![4.0, 5.0]);
+    assert_eq!(c.shape(), vec![2]);
+    assert_eq!(c.data(), vec![4.0, 5.0]);
 
     // Test that incompatible broadcasting still fails appropriately
     let _result = std::panic::catch_unwind(|| {
@@ -198,16 +198,16 @@ fn test_tensor_to_device_updates_device_and_preserves_data() {
 
     // CPU -> CPU should be a cheap no-op in terms of semantics
     let t_cpu = t.to_device(Device::CPU);
-    assert_eq!(t_cpu.borrow().device, Device::CPU);
-    assert_eq!(t_cpu.borrow().shape, vec![2]);
-    assert_eq!(t_cpu.borrow().data.to_vec(), vec![1.0, 2.0]);
+    assert_eq!(t_cpu.device(), Device::CPU);
+    assert_eq!(t_cpu.shape(), vec![2]);
+    assert_eq!(t_cpu.data(), vec![1.0, 2.0]);
 
     // Move to a GPU device name; storage may or may not actually become GPU
     // backed depending on feature flags and runtime availability, but:
     // - device field must reflect the requested Device
     // - data must be numerically preserved.
     let t_gpu = t.to_device(Device::GPU("CUDA".to_string()));
-    assert_eq!(t_gpu.borrow().shape, vec![2]);
-    assert_eq!(t_gpu.borrow().data.to_vec(), vec![1.0, 2.0]);
-    assert_eq!(t_gpu.borrow().device, Device::GPU("CUDA".to_string()));
+    assert_eq!(t_gpu.shape(), vec![2]);
+    assert_eq!(t_gpu.data(), vec![1.0, 2.0]);
+    assert_eq!(t_gpu.device(), Device::GPU("CUDA".to_string()));
 }

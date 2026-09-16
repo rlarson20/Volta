@@ -1,4 +1,5 @@
 #![allow(clippy::cast_precision_loss)]
+#[cfg(feature = "gpu")]
 use volta::gpu;
 #[cfg(all(test, feature = "gpu"))]
 mod gpu_tests {
@@ -73,8 +74,7 @@ mod gpu_tests {
 
         x_gpu.backward();
 
-        let xb = x_gpu.borrow();
-        let grad_storage = xb.grad.as_ref().expect("Gradient should be set");
+        let grad_storage = x_gpu.grad_storage().expect("Gradient should be set");
         assert!(
             grad_storage.is_gpu(),
             "Expected root gradient storage to live on GPU"
@@ -106,8 +106,7 @@ mod gpu_tests {
 
         loss.backward();
 
-        let ab = a.borrow();
-        let grad_storage = ab.grad.as_ref().expect("Gradient for 'a' missing");
+        let grad_storage = a.grad_storage().expect("Gradient for 'a' missing");
         assert!(
             grad_storage.is_gpu(),
             "Expected accumulated gradient for 'a' to live on GPU"
@@ -131,30 +130,27 @@ mod gpu_tests {
         // Test permute (transpose 2D) - uses CPU fallback for now
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false).to_device(device.clone());
         let x_t = x.permute(&[1, 0]);
-        assert_eq!(x_t.borrow().shape, vec![2, 2]);
-        assert_eq!(x_t.borrow().data.to_vec(), vec![1.0, 3.0, 2.0, 4.0]);
+        assert_eq!(x_t.shape(), vec![2, 2]);
+        assert_eq!(x_t.data(), vec![1.0, 3.0, 2.0, 4.0]);
 
         // Test expand (broadcast)
         let y = RawTensor::new(vec![1.0, 2.0], &[1, 2], false).to_device(device.clone());
         let y_expanded = y.expand(&[3, 2]);
-        assert_eq!(y_expanded.borrow().shape, vec![3, 2]);
-        assert_eq!(
-            y_expanded.borrow().data.to_vec(),
-            vec![1.0, 2.0, 1.0, 2.0, 1.0, 2.0]
-        );
+        assert_eq!(y_expanded.shape(), vec![3, 2]);
+        assert_eq!(y_expanded.data(), vec![1.0, 2.0, 1.0, 2.0, 1.0, 2.0]);
 
         // Test shrink (slice)
         let z = RawTensor::new((0..16).map(|i| i as f32).collect(), &[4, 4], false)
             .to_device(device.clone());
         let z_shrunk = z.shrink(&[(1, 3), (1, 3)]);
-        assert_eq!(z_shrunk.borrow().shape, vec![2, 2]);
-        assert_eq!(z_shrunk.borrow().data.to_vec(), vec![5.0, 6.0, 9.0, 10.0]);
+        assert_eq!(z_shrunk.shape(), vec![2, 2]);
+        assert_eq!(z_shrunk.data(), vec![5.0, 6.0, 9.0, 10.0]);
 
         // Test stride (subsample)
         let w = RawTensor::new((0..16).map(|i| i as f32).collect(), &[4, 4], false)
             .to_device(device.clone());
         let w_strided = w.stride_op(&[2, 2]);
-        assert_eq!(w_strided.borrow().shape, vec![2, 2]);
-        assert_eq!(w_strided.borrow().data.to_vec(), vec![0.0, 2.0, 8.0, 10.0]);
+        assert_eq!(w_strided.shape(), vec![2, 2]);
+        assert_eq!(w_strided.data(), vec![0.0, 2.0, 8.0, 10.0]);
     }
 }

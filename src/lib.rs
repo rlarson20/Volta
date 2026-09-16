@@ -3327,14 +3327,17 @@ mod gpu_tests {
     fn test_device_gpu_returns_none_when_disabled() {
         // When gpu feature is disabled, Device::gpu() should return None
         let gpu = Device::gpu();
-        if cfg!(feature = "gpu") {
+        #[cfg(feature = "gpu")]
+        {
             // If GPU is available, gpu() should return Some device
             // We can't guarantee GPU is available on all systems
             if is_gpu_available() {
                 assert!(gpu.is_some());
                 assert!(gpu.unwrap().is_gpu());
             }
-        } else {
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
             // Without gpu feature, should always be None
             assert!(gpu.is_none());
         }

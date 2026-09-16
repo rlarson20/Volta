@@ -29,6 +29,6 @@ fn main() {
 
     println!(
         "Loss: {:?}",
-        loss.borrow().data.first().copied().unwrap_or(f32::NAN)
+        loss.data().first().copied().unwrap_or(f32::NAN)
     );
 }

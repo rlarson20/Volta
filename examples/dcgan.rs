@@ -23,7 +23,7 @@ impl Generator {
     }
 
     fn forward(&self, z: &volta::Tensor) -> volta::Tensor {
-        let batch = *z.borrow().shape.first().unwrap_or(&1);
+        let batch = *z.shape().first().unwrap_or(&1);
 
         // z: [batch, latent_dim] -> [batch, 256*7*7]
         let x = self.fc.forward(z).relu();
@@ -174,7 +174,7 @@ fn main() {
 
             // Total discriminator loss
             let d_loss = d_loss_real.add(&d_loss_fake);
-            total_d_loss += d_loss.borrow().data.first().copied().unwrap_or(f32::NAN);
+            total_d_loss += d_loss.data().first().copied().unwrap_or(f32::NAN);
 
             d_loss.backward();
             d_optimizer.step();
@@ -190,7 +190,7 @@ fn main() {
             let d_fake = discriminator.forward(&fake_images);
             let g_loss = bce_with_logits_loss(&d_fake, &real_labels); // Use real labels
 
-            total_g_loss += g_loss.borrow().data.first().copied().unwrap_or(f32::NAN);
+            total_g_loss += g_loss.data().first().copied().unwrap_or(f32::NAN);
 
             g_loss.backward();
             g_optimizer.step();
@@ -209,7 +209,7 @@ fn main() {
     println!("\nGenerating sample images:");
     let noise = randn(&[1, latent_dim]);
     let generated = generator.forward(&noise);
-    let gen_data = &generated.borrow().data;
+    let gen_data = generated.data();
 
     // Show first 10 pixels
     println!(

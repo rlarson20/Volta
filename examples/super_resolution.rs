@@ -66,7 +66,7 @@ fn main() {
     println!();
 
     let params = model.parameters();
-    let total_params: usize = params.iter().map(|p| p.borrow().data.len()).sum();
+    let total_params: usize = params.iter().map(|p| p.data().len()).sum();
     println!("Total parameters: {total_params}\n");
 
     // Create optimizer (lr, betas, eps, weight_decay)
@@ -85,12 +85,7 @@ fn main() {
 
         // Compute MSE loss
         let loss_tensor = mse_loss(&output, &high_res);
-        let loss_value = loss_tensor
-            .borrow()
-            .data
-            .first()
-            .copied()
-            .unwrap_or(f32::NAN);
+        let loss_value = loss_tensor.data().first().copied().unwrap_or(f32::NAN);
 
         // Backward pass
         optimizer.zero_grad();
@@ -110,11 +105,11 @@ fn main() {
     let test_input = create_test_pattern(1, low_res_size);
     let test_output = model.forward(&test_input);
 
-    println!("  Input shape:  {:?}", test_input.borrow().shape);
-    println!("  Output shape: {:?}", test_output.borrow().shape);
+    println!("  Input shape:  {:?}", test_input.shape());
+    println!("  Output shape: {:?}", test_output.shape());
 
     // Show a slice of the output to verify reasonable values
-    let out_data = &test_output.borrow().data;
+    let out_data = test_output.data();
     println!(
         "  Output range: [{:.3}, {:.3}]",
         out_data.iter().copied().fold(f32::INFINITY, f32::min),
@@ -139,7 +134,7 @@ fn generate_synthetic_data(
 
     // High-res: start with upsampled version of low-res (via simple repetition),
     // then add high-frequency detail
-    let lr_data = low_res.borrow().data.to_vec();
+    let lr_data = low_res.data();
     let mut hr_data = Vec::with_capacity(batch_size * high_res_size * high_res_size);
 
     let scale = high_res_size / low_res_size;

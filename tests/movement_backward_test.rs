@@ -43,8 +43,8 @@ fn test_permute_backward_cpu_vs_gpu() {
     gpu_permuted.backward();
 
     // Compare gradients
-    let cpu_grad = cpu_t.borrow().grad.as_ref().unwrap().to_vec();
-    let gpu_grad = gpu_t.borrow().grad.as_ref().unwrap().to_vec();
+    let cpu_grad = cpu_t.grad_storage().unwrap().to_vec();
+    let gpu_grad = gpu_t.grad_storage().unwrap().to_vec();
 
     assert!(
         tensors_approx_eq(&cpu_grad, &gpu_grad, 1e-5),
@@ -76,8 +76,8 @@ fn test_expand_backward_cpu_vs_gpu() {
     gpu_expanded.backward();
 
     // Compare gradients (should sum over broadcast dimension)
-    let cpu_grad = cpu_t.borrow().grad.as_ref().unwrap().to_vec();
-    let gpu_grad = gpu_t.borrow().grad.as_ref().unwrap().to_vec();
+    let cpu_grad = cpu_t.grad_storage().unwrap().to_vec();
+    let gpu_grad = gpu_t.grad_storage().unwrap().to_vec();
 
     assert!(
         tensors_approx_eq(&cpu_grad, &gpu_grad, 1e-5),
@@ -116,8 +116,8 @@ fn test_pad_backward_cpu_vs_gpu() {
     gpu_padded.backward();
 
     // Compare gradients (should extract center region)
-    let cpu_grad = cpu_t.borrow().grad.as_ref().unwrap().to_vec();
-    let gpu_grad = gpu_t.borrow().grad.as_ref().unwrap().to_vec();
+    let cpu_grad = cpu_t.grad_storage().unwrap().to_vec();
+    let gpu_grad = gpu_t.grad_storage().unwrap().to_vec();
 
     assert!(
         tensors_approx_eq(&cpu_grad, &gpu_grad, 1e-5),
@@ -150,8 +150,8 @@ fn test_shrink_backward_cpu_vs_gpu() {
     gpu_shrunk.backward();
 
     // Compare gradients (should place gradient in window, zero elsewhere)
-    let cpu_grad = cpu_t.borrow().grad.as_ref().unwrap().to_vec();
-    let gpu_grad = gpu_t.borrow().grad.as_ref().unwrap().to_vec();
+    let cpu_grad = cpu_t.grad_storage().unwrap().to_vec();
+    let gpu_grad = gpu_t.grad_storage().unwrap().to_vec();
 
     assert!(
         tensors_approx_eq(&cpu_grad, &gpu_grad, 1e-5),
@@ -184,8 +184,8 @@ fn test_stride_backward_cpu_vs_gpu() {
     gpu_strided.backward();
 
     // Compare gradients (should upsample with zeros)
-    let cpu_grad = cpu_t.borrow().grad.as_ref().unwrap().to_vec();
-    let gpu_grad = gpu_t.borrow().grad.as_ref().unwrap().to_vec();
+    let cpu_grad = cpu_t.grad_storage().unwrap().to_vec();
+    let gpu_grad = gpu_t.grad_storage().unwrap().to_vec();
 
     assert!(
         tensors_approx_eq(&cpu_grad, &gpu_grad, 1e-5),
@@ -209,13 +209,13 @@ fn test_movement_backward_chain_cpu_vs_gpu() {
     let cpu_t = RawTensor::new(data.clone(), &[2, 1, 3], true);
     let cpu_out = cpu_t.permute(&[2, 1, 0]).expand(&[3, 2, 2]);
     cpu_out.backward();
-    let cpu_grad = cpu_t.borrow().grad.as_ref().unwrap().to_vec();
+    let cpu_grad = cpu_t.grad_storage().unwrap().to_vec();
 
     // GPU path
     let gpu_t = RawTensor::new(data, &[2, 1, 3], true).to_device(device.clone());
     let gpu_out = gpu_t.permute(&[2, 1, 0]).expand(&[3, 2, 2]);
     gpu_out.backward();
-    let gpu_grad = gpu_t.borrow().grad.as_ref().unwrap().to_vec();
+    let gpu_grad = gpu_t.grad_storage().unwrap().to_vec();
 
     assert!(
         tensors_approx_eq(&cpu_grad, &gpu_grad, 1e-5),
@@ -236,12 +236,12 @@ fn test_expand_backward_multiple_dims() {
     let cpu_t = RawTensor::new(data.clone(), &[1, 1, 3], true);
     let cpu_expanded = cpu_t.expand(&[2, 2, 3]);
     cpu_expanded.backward();
-    let cpu_grad = cpu_t.borrow().grad.as_ref().unwrap().to_vec();
+    let cpu_grad = cpu_t.grad_storage().unwrap().to_vec();
 
     let gpu_t = RawTensor::new(data, &[1, 1, 3], true).to_device(device.clone());
     let gpu_expanded = gpu_t.expand(&[2, 2, 3]);
     gpu_expanded.backward();
-    let gpu_grad = gpu_t.borrow().grad.as_ref().unwrap().to_vec();
+    let gpu_grad = gpu_t.grad_storage().unwrap().to_vec();
 
     assert!(
         tensors_approx_eq(&cpu_grad, &gpu_grad, 1e-5),

@@ -190,7 +190,7 @@ fn main() {
 
     let model = TinyTransformerLM::new(vocab.size(), embed_dim, num_heads);
     let params = model.parameters();
-    let total_params: usize = params.iter().map(|p| p.borrow().data.len()).sum();
+    let total_params: usize = params.iter().map(|p| p.data().len()).sum();
     println!("Parameters:  {total_params}");
     println!("Embed dim:   {embed_dim}, Heads: {num_heads}, SeqLen: {seq_len}\n");
 
@@ -227,7 +227,7 @@ fn main() {
             loss.backward();
             optimizer.step();
 
-            epoch_loss += loss.borrow().data.first().copied().unwrap_or(f32::NAN);
+            epoch_loss += loss.data().first().copied().unwrap_or(f32::NAN);
         }
 
         let avg_loss = epoch_loss / num_batches as f32;

@@ -26,5 +26,5 @@ fn main() {
     // Move result back to CPU if needed
     let c_cpu = c_gpu.to_device(Device::CPU);
 
-    println!("Result shape: {:?}", c_cpu.borrow().shape);
+    println!("Result shape: {:?}", c_cpu.shape());
 }

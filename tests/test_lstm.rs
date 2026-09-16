@@ -11,12 +11,12 @@ fn test_lstm_output_shapes() {
     let (h, c) = lstm.forward_step(&x, None);
 
     assert_eq!(
-        h.borrow().shape,
+        h.shape(),
         vec![2, 3],
         "h shape should be [batch=2, hidden=3]"
     );
     assert_eq!(
-        c.borrow().shape,
+        c.shape(),
         vec![2, 3],
         "c shape should be [batch=2, hidden=3]"
     );
@@ -34,10 +34,10 @@ fn test_lstm_zero_state_init() {
     let c0 = RawTensor::zeros(&[2, 2]);
     let (h_zero, c_zero) = lstm.forward_step(&x, Some((&h0, &c0)));
 
-    let h_none_data = h_none.borrow().data.to_vec();
-    let h_zero_data = h_zero.borrow().data.to_vec();
-    let c_none_data = c_none.borrow().data.to_vec();
-    let c_zero_data = c_zero.borrow().data.to_vec();
+    let h_none_data = h_none.data();
+    let h_zero_data = h_zero.data();
+    let c_none_data = c_none.data();
+    let c_zero_data = c_zero.data();
 
     for (idx, (a, b)) in h_none_data.iter().zip(h_zero_data.iter()).enumerate() {
         assert!(
@@ -115,8 +115,8 @@ fn test_lstm_gate_math_known_weights() {
     // h_next = o * tanh(c_next)
     let expected_h = sig2 * expected_c.tanh();
 
-    let h_val = h.borrow().data.to_vec();
-    let c_val = c.borrow().data.to_vec();
+    let h_val = h.data();
+    let c_val = c.data();
 
     let h0 = *h_val.first().expect("h should have at least one element");
     let c0 = *c_val.first().expect("c should have at least one element");
@@ -141,23 +141,23 @@ fn test_lstm_state_propagation() {
 
     // Step 1: no initial state
     let (h1, c1) = lstm.forward_step(&x1, None);
-    assert_eq!(h1.borrow().shape, vec![1, 4]);
-    assert_eq!(c1.borrow().shape, vec![1, 4]);
+    assert_eq!(h1.shape(), vec![1, 4]);
+    assert_eq!(c1.shape(), vec![1, 4]);
 
     // Step 2: feed forward state
     let (h2, c2) = lstm.forward_step(&x2, Some((&h1, &c1)));
-    assert_eq!(h2.borrow().shape, vec![1, 4]);
-    assert_eq!(c2.borrow().shape, vec![1, 4]);
+    assert_eq!(h2.shape(), vec![1, 4]);
+    assert_eq!(c2.shape(), vec![1, 4]);
 
     // Step 3: feed forward again
     let (h3, c3) = lstm.forward_step(&x3, Some((&h2, &c2)));
-    assert_eq!(h3.borrow().shape, vec![1, 4]);
-    assert_eq!(c3.borrow().shape, vec![1, 4]);
+    assert_eq!(h3.shape(), vec![1, 4]);
+    assert_eq!(c3.shape(), vec![1, 4]);
 
     // Values should change across steps
-    let h1_data = h1.borrow().data.to_vec();
-    let h2_data = h2.borrow().data.to_vec();
-    let h3_data = h3.borrow().data.to_vec();
+    let h1_data = h1.data();
+    let h2_data = h2.data();
+    let h3_data = h3.data();
 
     // At least one element should differ between steps
     let h1_h2_differ = h1_data
@@ -176,7 +176,7 @@ fn test_lstm_state_propagation() {
         assert!(val.is_finite(), "h3 contains non-finite value: {val}");
         assert!(val.abs() <= 1.0 + 1e-6, "h3 value {val} outside tanh range");
     }
-    for val in &c3.borrow().data.to_vec() {
+    for val in &c3.data() {
         assert!(val.is_finite(), "c3 contains non-finite value: {val}");
     }
 }
@@ -242,8 +242,8 @@ fn test_lstm_forget_gate_dominance() {
 
     let (_h_next, c_next) = lstm.forward_step(&x, Some((&h_init, &c_init)));
 
-    let c_init_data = c_init.borrow().data.to_vec();
-    let c_next_data = c_next.borrow().data.to_vec();
+    let c_init_data = c_init.data();
+    let c_next_data = c_next.data();
 
     // c_next should be very close to c_init because forget~1 and input~0
     for (idx, (orig, next)) in c_init_data.iter().zip(c_next_data.iter()).enumerate() {
@@ -263,7 +263,7 @@ fn test_lstm_forget_gate_dominance() {
 fn test_lstm_gradient_flow() {
     let lstm = LSTMCell::new(2, 2, true);
     let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
-    x.borrow_mut().requires_grad = true;
+    x.set_requires_grad(true);
 
     let (h, _c) = lstm.forward_step(&x, None);
     let loss = h.sum();
@@ -272,7 +272,7 @@ fn test_lstm_gradient_flow() {
     // backward() may produce None gradients for the input.
     loss.backward();
 
-    let grad = x.borrow().grad.clone();
+    let grad = x.grad_storage();
     match grad {
         Some(ref g) => {
             let g_data = g.to_vec();
@@ -309,18 +309,8 @@ fn test_lstm_no_bias() {
     );
 
     // Verify shapes of the two weight tensors
-    let w_ih_shape = params
-        .first()
-        .expect("should have weight_ih")
-        .borrow()
-        .shape
-        .clone();
-    let w_hh_shape = params
-        .get(1)
-        .expect("should have weight_hh")
-        .borrow()
-        .shape
-        .clone();
+    let w_ih_shape = params.first().expect("should have weight_ih").shape();
+    let w_hh_shape = params.get(1).expect("should have weight_hh").shape();
     assert_eq!(
         w_ih_shape,
         vec![8, 2],
@@ -336,14 +326,14 @@ fn test_lstm_no_bias() {
     let x = RawTensor::new(vec![1.0, -1.0, 0.5, 0.5], &[2, 2], false);
     let (h, c) = lstm.forward_step(&x, None);
 
-    assert_eq!(h.borrow().shape, vec![2, 2]);
-    assert_eq!(c.borrow().shape, vec![2, 2]);
+    assert_eq!(h.shape(), vec![2, 2]);
+    assert_eq!(c.shape(), vec![2, 2]);
 
     // Values should be finite
-    for val in &h.borrow().data.to_vec() {
+    for val in &h.data() {
         assert!(val.is_finite(), "h contains non-finite value: {val}");
     }
-    for val in &c.borrow().data.to_vec() {
+    for val in &c.data() {
         assert!(val.is_finite(), "c contains non-finite value: {val}");
     }
 }
@@ -357,13 +347,13 @@ fn test_lstm_module_forward() {
     let h = lstm.forward(&x);
 
     assert_eq!(
-        h.borrow().shape,
+        h.shape(),
         vec![2, 3],
         "Module::forward should return h with shape [batch, hidden]"
     );
 
     // Values should be finite and bounded by tanh
-    for val in &h.borrow().data.to_vec() {
+    for val in &h.data() {
         assert!(val.is_finite(), "h contains non-finite value: {val}");
         assert!(
             val.abs() <= 1.0 + 1e-6,

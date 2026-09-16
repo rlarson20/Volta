@@ -9,15 +9,15 @@ fn main() {
     println!("Example 1: Basic 2D input (B, C)");
     let ln = LayerNorm::new(vec![4]);
     let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 4], false);
-    println!("Input shape: {:?}", x.borrow().shape);
-    println!("Input data:\n{:?}", x.borrow().data.to_vec());
+    println!("Input shape: {:?}", x.shape());
+    println!("Input data:\n{:?}", x.data());
 
     let y = ln.forward(&x);
-    println!("Output shape: {:?}", y.borrow().shape);
-    println!("Output data:\n{:?}", y.borrow().data.to_vec());
+    println!("Output shape: {:?}", y.shape());
+    println!("Output data:\n{:?}", y.data());
 
     // Verify normalization
-    let y_data = &y.borrow().data;
+    let y_data = y.data();
     for i in 0..2 {
         let start = i * 4;
         let end = start + 4;
@@ -37,28 +37,28 @@ fn main() {
         &[2, 10, 8],
         false,
     );
-    println!("Input shape: {:?}", x2.borrow().shape);
+    println!("Input shape: {:?}", x2.shape());
 
     let y2 = ln2.forward(&x2);
-    println!("Output shape: {:?}", y2.borrow().shape);
+    println!("Output shape: {:?}", y2.shape());
 
     // Check parameters
     let params = ln.parameters();
     println!(
         "\nGamma shape: {:?}",
-        params.first().map(|p| p.borrow().shape.clone())
+        params.first().map(volta::Tensor::shape)
     );
     println!(
         "Beta shape: {:?}",
-        params.get(1).map(|p| p.borrow().shape.clone())
+        params.get(1).map(volta::Tensor::shape)
     );
     println!(
         "Gamma requires_grad: {}",
-        params.first().is_some_and(|p| p.borrow().requires_grad)
+        params.first().is_some_and(volta::Tensor::requires_grad)
     );
     println!(
         "Beta requires_grad: {}",
-        params.get(1).is_some_and(|p| p.borrow().requires_grad)
+        params.get(1).is_some_and(volta::Tensor::requires_grad)
     );
 
     // Test gradient flow

@@ -55,7 +55,7 @@ fn main() {
         opt.step();
 
         if epoch % 20 == 0 {
-            let loss_val = loss.borrow().data.first().copied().unwrap_or(f32::NAN);
+            let loss_val = loss.data().first().copied().unwrap_or(f32::NAN);
             println!("Epoch {epoch:>3}: Loss = {loss_val:.6}");
         }
     }
@@ -65,12 +65,9 @@ fn main() {
     // Let's see how well the model learned the XOR function.
     println!("\n--- Inference After Training ---");
     let final_predictions = model.forward(&x_data);
-    let x_data_borrowed = x_data.borrow();
-    let x_data_slice = &x_data_borrowed.data;
-    let y_data_borrowed = y_data.borrow();
-    let y_data_slice = &y_data_borrowed.data;
-    let final_borrowed = final_predictions.borrow();
-    let final_slice = &final_borrowed.data;
+    let x_data_slice = x_data.data();
+    let y_data_slice = y_data.data();
+    let final_slice = final_predictions.data();
 
     for i in 0..4 {
         let x_data_ref = x_data_slice.get(i * 2..(i * 2) + 2);

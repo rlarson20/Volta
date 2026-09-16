@@ -113,7 +113,7 @@ fn main() {
             loss.backward();
             optimizer.step();
 
-            epoch_loss += loss.borrow().data.first().copied().unwrap_or(0.0);
+            epoch_loss += loss.data().first().copied().unwrap_or(0.0);
             num_batches += 1;
             progress.update(num_batches);
         }
@@ -133,9 +133,9 @@ fn main() {
 
     for (test_x, test_y) in &mut dataloader {
         let output = model.forward(&test_x);
-        let pred_data = &output.borrow().data;
-        let target_data = &test_y.borrow().data;
-        let batch_size = test_y.borrow().shape.first().copied().unwrap_or(1);
+        let pred_data = output.data();
+        let target_data = test_y.data();
+        let batch_size = test_y.shape().first().copied().unwrap_or(1);
 
         for i in 0..batch_size {
             let pred_class = (0..10)

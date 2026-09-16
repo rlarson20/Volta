@@ -1,3 +1,4 @@
+#[cfg(feature = "gpu")]
 use volta::gpu;
 
 #[cfg(all(test, feature = "gpu"))]

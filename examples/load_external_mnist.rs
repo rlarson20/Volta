@@ -137,13 +137,13 @@ fn run_demo_inference(model: &Sequential) {
     let input = RawTensor::new(input_data, &[1, 784], false);
 
     // Run forward pass
-    println!("  Input shape: {:?}", input.borrow().shape);
+    println!("  Input shape: {:?}", input.shape());
     let output = model.forward(&input);
 
-    println!("  Output shape: {:?}", output.borrow().shape);
+    println!("  Output shape: {:?}", output.shape());
 
     // Print output values
-    let output_data = &output.borrow().data;
+    let output_data = output.data();
     println!("\n  Output logits (first 10 values):");
     for (i, &val) in output_data.iter().take(10).enumerate() {
         println!("    Class {i}: {val:.6}");

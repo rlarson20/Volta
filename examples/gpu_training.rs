@@ -66,7 +66,7 @@ fn train_with_device_constructors(x_data: Vec<f32>, y_data: Vec<f32>, device: &D
     // Verify parameters are on correct device
     {
         let params = model.parameters();
-        let param_device = params.first().unwrap().borrow().device.clone();
+        let param_device = params.first().unwrap().device();
         println!("Parameters device: {}", param_device.name());
     }
 
@@ -96,14 +96,14 @@ fn train_with_to_device(x_data: Vec<f32>, y_data: Vec<f32>, device: &Device) {
     ]);
 
     {
-        let initial_device = model.parameters().first().unwrap().borrow().device.clone();
+        let initial_device = model.parameters().first().unwrap().device();
         println!("Initial parameters device: {}", initial_device.name());
     }
 
     // Move entire model to device
     model.to_device(device.clone());
     {
-        let final_device = model.parameters().first().unwrap().borrow().device.clone();
+        let final_device = model.parameters().first().unwrap().device();
         println!("After to_device(): {}", final_device.name());
     }
 
@@ -184,10 +184,10 @@ fn train_model(model: &Sequential, opt: &mut Adam, x: &Tensor, y: &Tensor, epoch
         let loss = mse_loss(&predictions, y);
 
         if epoch == 0 {
-            initial_loss = loss.borrow().data.first().copied().unwrap_or(f32::NAN);
+            initial_loss = loss.data().first().copied().unwrap_or(f32::NAN);
         }
         if epoch == epochs - 1 {
-            final_loss = loss.borrow().data.first().copied().unwrap_or(f32::NAN);
+            final_loss = loss.data().first().copied().unwrap_or(f32::NAN);
         }
 
         loss.backward();
@@ -197,7 +197,7 @@ fn train_model(model: &Sequential, opt: &mut Adam, x: &Tensor, y: &Tensor, epoch
             println!(
                 "  Epoch {:>3}: Loss = {:.6}",
                 epoch,
-                loss.borrow().data.first().copied().unwrap_or(f32::NAN)
+                loss.data().first().copied().unwrap_or(f32::NAN)
             );
         }
     }
@@ -207,9 +207,9 @@ fn train_model(model: &Sequential, opt: &mut Adam, x: &Tensor, y: &Tensor, epoch
     // Test predictions
     println!("  Predictions:");
     let final_preds = model.forward(x);
-    let pred_data = &final_preds.borrow().data;
-    let y_data = &y.borrow().data;
-    let x_data = &x.borrow().data;
+    let pred_data = final_preds.data();
+    let y_data = y.data();
+    let x_data = x.data();
     for i in 0..4 {
         println!(
             "    Input: [{:.0}, {:.0}] -> Target: {:.0}, Predicted: {:.4}",

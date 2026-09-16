@@ -74,7 +74,7 @@ fn main() {
                 let target = RawTensor::new(vec![target_val], &[1, 1], false);
                 let loss = RawTensor::mse_loss(&pred, &target);
 
-                total_loss += loss.borrow().data.first().copied().unwrap_or(f32::NAN);
+                total_loss += loss.data().first().copied().unwrap_or(f32::NAN);
                 loss.backward();
 
                 // Update hidden state for next timestep
@@ -113,7 +113,7 @@ fn main() {
         };
 
         let pred = output_layer.forward(&h_new);
-        let pred_val = pred.borrow().data.first().copied().unwrap_or(f32::NAN);
+        let pred_val = pred.data().first().copied().unwrap_or(f32::NAN);
 
         if t % 5 == 0 {
             println!(

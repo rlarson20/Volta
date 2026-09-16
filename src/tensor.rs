@@ -72,16 +72,48 @@ impl Tensor {
         }
     }
 
+    /// This tensor's shape.
+    ///
+    /// Read-only — unlike `requires_grad`/`grad_fn`/`parents`, nothing about graph
+    /// correctness depends on who can *see* a shape, only on who can overwrite the
+    /// fields that encode graph structure. Safe to expose without qualification.
+    pub fn shape(&self) -> Vec<usize> {
+        self.inner.borrow().shape.clone()
+    }
+
+    /// This tensor's data, decoded to `f32` regardless of underlying dtype/device.
+    pub fn data(&self) -> Vec<f32> {
+        self.inner.borrow().data.to_vec()
+    }
+
+    /// The device this tensor's data lives on.
+    pub fn device(&self) -> Device {
+        self.inner.borrow().device.clone()
+    }
+
+    /// This tensor's gradient as raw `Storage` (e.g. to check `.is_gpu()`), if any.
+    ///
+    /// Prefer `TensorOps::grad()` (returns `Option<Vec<f32>>`) unless you
+    /// specifically need the `Storage` handle rather than decoded values.
+    pub fn grad_storage(&self) -> Option<Storage> {
+        self.inner.borrow().grad.clone()
+    }
+
     /// Set `requires_grad` on a leaf tensor.
     ///
-    /// # Panics (debug only)
+    /// # Panics
     /// Panics if called on a tensor that already has a `grad_fn` attached —
     /// flipping the flag on a non-leaf tensor would contradict the invariant
     /// `edge()` maintains (requires_grad is derived from inputs, not hand-set,
-    /// on anything that isn't a leaf).
-    pub(crate) fn set_requires_grad(&self, on: bool) {
+    /// on anything that isn't a leaf). This is the same rule PyTorch enforces on
+    /// `.requires_grad = ...` for non-leaf tensors, and it's an unconditional
+    /// `assert!` rather than `debug_assert!` deliberately: if this method is public,
+    /// the check needs to actually hold in release builds too, or it's the same
+    /// "invariant as convention, not enforcement" problem this whole wrapper exists
+    /// to close.
+    pub fn set_requires_grad(&self, on: bool) {
         let mut t = self.inner.borrow_mut();
-        debug_assert!(
+        assert!(
             !(on && t.grad_fn.is_some()),
             "set_requires_grad called on a non-leaf tensor"
         );

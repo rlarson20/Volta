@@ -176,7 +176,7 @@ fn generate(
         let logits = model.decoder.forward(&h_new);
 
         // Apply temperature and sample
-        let logits_data = &logits.borrow().data;
+        let logits_data = logits.data();
         let scaled: Vec<f32> = logits_data.iter().map(|&x| x / temperature).collect();
 
         // Simple argmax for deterministic generation
@@ -242,7 +242,7 @@ fn main() {
     model.train_mode(true);
 
     let params = model.parameters();
-    let total_params: usize = params.iter().map(|p| p.borrow().data.len()).sum();
+    let total_params: usize = params.iter().map(|p| p.data().len()).sum();
     println!("Total parameters: {total_params}\n");
 
     // Create optimizer
@@ -278,7 +278,7 @@ fn main() {
             loss.backward();
             optimizer.step();
 
-            epoch_loss += loss.borrow().data.first().copied().unwrap_or(f32::NAN);
+            epoch_loss += loss.data().first().copied().unwrap_or(f32::NAN);
         }
 
         let avg_loss = epoch_loss / num_batches as f32;

@@ -79,12 +79,7 @@ where
     let y_cpu = op(&x_cpu);
     let y_gpu = op(&x_gpu).to_device(Device::CPU);
 
-    assert_close(
-        op_name,
-        &y_cpu.borrow().data.to_vec(),
-        &y_gpu.borrow().data.to_vec(),
-        tol,
-    );
+    assert_close(op_name, &y_cpu.data(), &y_gpu.data(), tol);
 }
 
 /// Forward + backward parity for a unary op: also compares ∂L/∂x with L = sum(y).
@@ -111,16 +106,14 @@ pub fn assert_unary_parity_backward<F>(
 
     assert_close(
         &format!("{op_name} fwd"),
-        &y_cpu.borrow().data.to_vec(),
-        &y_gpu.to_device(Device::CPU).borrow().data.to_vec(),
+        &y_cpu.data(),
+        &y_gpu.to_device(Device::CPU).data(),
         tol_fwd,
     );
 
     let g_cpu = x_cpu.grad().expect("CPU gradient missing");
     let g_gpu = x_gpu
-        .borrow()
-        .grad
-        .as_ref()
+        .grad_storage()
         .expect("GPU gradient missing")
         .to_vec();
     assert_close(&format!("{op_name} bwd"), &g_cpu, &g_gpu, tol_bwd);
@@ -143,12 +136,7 @@ where
     let c_cpu = op(&a_cpu, &b_cpu);
     let c_gpu = op(&a_gpu, &b_gpu).to_device(Device::CPU);
 
-    assert_close(
-        op_name,
-        &c_cpu.borrow().data.to_vec(),
-        &c_gpu.borrow().data.to_vec(),
-        tol,
-    );
+    assert_close(op_name, &c_cpu.data(), &c_gpu.data(), tol);
 }
 
 /// Forward + backward parity for a binary op with matched shapes.
@@ -177,27 +165,17 @@ pub fn assert_binary_parity_backward<F>(
 
     assert_close(
         &format!("{op_name} fwd"),
-        &c_cpu.borrow().data.to_vec(),
-        &c_gpu.to_device(Device::CPU).borrow().data.to_vec(),
+        &c_cpu.data(),
+        &c_gpu.to_device(Device::CPU).data(),
         tol_fwd,
     );
 
     let ga_cpu = a_cpu.grad().expect("CPU a-grad missing");
-    let ga_gpu = a_gpu
-        .borrow()
-        .grad
-        .as_ref()
-        .expect("GPU a-grad missing")
-        .to_vec();
+    let ga_gpu = a_gpu.grad_storage().expect("GPU a-grad missing").to_vec();
     assert_close(&format!("{op_name} ∂/∂a"), &ga_cpu, &ga_gpu, tol_bwd);
 
     let gb_cpu = b_cpu.grad().expect("CPU b-grad missing");
-    let gb_gpu = b_gpu
-        .borrow()
-        .grad
-        .as_ref()
-        .expect("GPU b-grad missing")
-        .to_vec();
+    let gb_gpu = b_gpu.grad_storage().expect("GPU b-grad missing").to_vec();
     assert_close(&format!("{op_name} ∂/∂b"), &gb_cpu, &gb_gpu, tol_bwd);
 }
 
@@ -213,12 +191,7 @@ where
     let x_gpu = x_cpu.to_device(gpu_device());
     let y_cpu = op(&x_cpu);
     let y_gpu = op(&x_gpu).to_device(Device::CPU);
-    assert_close(
-        op_name,
-        &y_cpu.borrow().data.to_vec(),
-        &y_gpu.borrow().data.to_vec(),
-        tol,
-    );
+    assert_close(op_name, &y_cpu.data(), &y_gpu.data(), tol);
 }
 
 /// Forward + backward parity for matmul over a given (`a_shape`, `b_shape`) pair.
@@ -240,26 +213,16 @@ pub fn assert_matmul_parity(a_shape: &[usize], b_shape: &[usize], tol_fwd: f32, 
     let label = format!("matmul {a_shape:?} @ {b_shape:?}");
     assert_close(
         &format!("{label} fwd"),
-        &c_cpu.borrow().data.to_vec(),
-        &c_gpu.to_device(Device::CPU).borrow().data.to_vec(),
+        &c_cpu.data(),
+        &c_gpu.to_device(Device::CPU).data(),
         tol_fwd,
     );
 
     let ga_cpu = a_cpu.grad().expect("CPU a-grad missing");
-    let ga_gpu = a_gpu
-        .borrow()
-        .grad
-        .as_ref()
-        .expect("GPU a-grad missing")
-        .to_vec();
+    let ga_gpu = a_gpu.grad_storage().expect("GPU a-grad missing").to_vec();
     assert_close(&format!("{label} ∂/∂a"), &ga_cpu, &ga_gpu, tol_bwd);
 
     let gb_cpu = b_cpu.grad().expect("CPU b-grad missing");
-    let gb_gpu = b_gpu
-        .borrow()
-        .grad
-        .as_ref()
-        .expect("GPU b-grad missing")
-        .to_vec();
+    let gb_gpu = b_gpu.grad_storage().expect("GPU b-grad missing").to_vec();
     assert_close(&format!("{label} ∂/∂b"), &gb_cpu, &gb_gpu, tol_bwd);
 }

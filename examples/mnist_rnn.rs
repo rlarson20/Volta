@@ -16,10 +16,10 @@ use volta::{
 /// Input shape: [batch, `seq_len`, features]
 /// Output shape: [batch, features]
 fn extract_timestep(batch: &volta::Tensor, t: usize) -> volta::Tensor {
-    let borrowed = batch.borrow();
-    let batch_size = *borrowed.shape.first().unwrap_or(&1);
-    let seq_len = *borrowed.shape.get(1).unwrap_or(&1);
-    let features = *borrowed.shape.get(2).unwrap_or(&1);
+    let shape = batch.shape();
+    let batch_size = *shape.first().unwrap_or(&1);
+    let seq_len = *shape.get(1).unwrap_or(&1);
+    let features = *shape.get(2).unwrap_or(&1);
 
     assert!(
         t < seq_len,
@@ -27,11 +27,12 @@ fn extract_timestep(batch: &volta::Tensor, t: usize) -> volta::Tensor {
     );
 
     let mut data = Vec::with_capacity(batch_size * features);
+    let batch_data = batch.data();
 
     for b in 0..batch_size {
         let start = b * seq_len * features + t * features;
         let end = start + features;
-        if let Some(slice) = borrowed.data.get(start..end) {
+        if let Some(slice) = batch_data.get(start..end) {
             data.extend_from_slice(slice);
         }
     }
@@ -169,7 +170,7 @@ fn main() {
             loss.backward();
             optimizer.step();
 
-            epoch_loss += loss.borrow().data.first().copied().unwrap_or(f32::NAN);
+            epoch_loss += loss.data().first().copied().unwrap_or(f32::NAN);
             num_batches += 1;
             progress.update(num_batches);
         }
@@ -206,9 +207,9 @@ fn main() {
         let h_norm = bn.forward(&h_final);
         let logits = classifier.forward(&h_norm);
 
-        let pred_data = &logits.borrow().data;
-        let target_data = &test_y.borrow().data;
-        let batch_size = *test_y.borrow().shape.first().unwrap_or(&1);
+        let pred_data = logits.data();
+        let target_data = test_y.data();
+        let batch_size = *test_y.shape().first().unwrap_or(&1);
 
         for i in 0..batch_size {
             let pred_class = (0..10)

@@ -10,7 +10,7 @@ fn test_batchnorm_gradient_check() {
     // Use a small batch > 1 to ensure statistics calculation is non-trivial.
     let bn = BatchNorm2d::new(2);
     let x = RawTensor::randn(&[2, 2, 4, 4]); // B=2, C=2, H=4, W=4
-    x.borrow_mut().requires_grad = true;
+    x.set_requires_grad(true);
 
     // BatchNorm is highly sensitive to epsilon/tolerance in numerical checks
     // due to the division by small variances.
@@ -25,7 +25,7 @@ fn test_dropout_edge_cases() {
     let x = RawTensor::ones(&[2, 2]);
     let y = d_zero.forward(&x);
     // With p=0.0, output should exactly match input
-    assert_eq!(y.borrow().data, x.borrow().data);
+    assert_eq!(y.data(), x.data());
 }
 
 #[test]
@@ -33,7 +33,7 @@ fn test_flatten_gradient_check() {
     // Ensure Flatten correctly propagates gradients back to original shape
     let flatten = Flatten::new();
     let x = RawTensor::randn(&[2, 3, 4]); // 2x3x4
-    x.borrow_mut().requires_grad = true;
+    x.set_requires_grad(true);
 
     let passed = check_gradients_simple(&x, |t| {
         let flat = flatten.forward(t);
@@ -47,6 +47,8 @@ fn test_sgd_momentum_logic() {
     // Coverage gap: SGD momentum branches
     let t = RawTensor::new(vec![1.0], &[1], true);
     // Manually inject a gradient
+    // TODO(set_grad): needs a public grad-injection method, deliberately deferred
+    // (see tests/TODO.md) — left broken to measure how much this alone accounts for.
     t.borrow_mut().grad = Some(Storage::cpu(vec![0.1]));
 
     let mut opt = SGD::new(vec![t.clone()], 0.1, 0.9, 0.0);
@@ -55,14 +57,14 @@ fn test_sgd_momentum_logic() {
     // v = 0.9*0 - lr*grad = -0.1*0.1 = -0.01
     // w = 1.0 + (-0.01) = 0.99
     opt.step();
-    let val1 = t.borrow().data.first().copied().unwrap_or(f32::NAN);
+    let val1 = t.data().first().copied().unwrap_or(f32::NAN);
     assert!((val1 - 0.99).abs() < 1e-6);
 
     // Step 2:
     // v = 0.9*(-0.01) - 0.1*0.1 = -0.009 - 0.01 = -0.019
     // w = 0.99 + (-0.019) = 0.971
     opt.step();
-    let val2 = t.borrow().data.first().copied().unwrap_or(f32::NAN);
+    let val2 = t.data().first().copied().unwrap_or(f32::NAN);
     assert!((val2 - 0.971).abs() < 1e-6);
 }
 

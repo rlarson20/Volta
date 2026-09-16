@@ -53,7 +53,7 @@ fn main() {
         progress.update(epoch + 1);
 
         if epoch % 100 == 99 {
-            let loss_val = loss.borrow().data.first().copied().unwrap_or(f32::NAN);
+            let loss_val = loss.data().first().copied().unwrap_or(f32::NAN);
             println!(" Loss = {loss_val:.6}");
         }
     }
@@ -64,17 +64,12 @@ fn main() {
     println!("\n=== Training Complete ===");
     println!(
         "Final Loss: {:.6}",
-        final_loss
-            .borrow()
-            .data
-            .first()
-            .copied()
-            .unwrap_or(f32::NAN)
+        final_loss.data().first().copied().unwrap_or(f32::NAN)
     );
 
     // Show a few predictions
     println!("\nSample predictions:");
-    let pred_data = &final_pred.borrow().data;
+    let pred_data = final_pred.data();
     for i in (0..num_samples).step_by(20) {
         println!(
             "  x={:6.2}: pred={:6.3}, true={:6.3}, error={:6.3}",

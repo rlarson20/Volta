@@ -60,8 +60,8 @@ fn reshape_parity() {
 
     assert_close(
         "reshape fwd",
-        &y_cpu.borrow().data.to_vec(),
-        &y_gpu.borrow().data.to_vec(),
+        &y_cpu.data(),
+        &y_gpu.data(),
         TOL_FWD_GPU,
     );
 }
@@ -82,18 +82,13 @@ fn reshape_backward_parity() {
 
     assert_close(
         "reshape fwd",
-        &y_cpu.borrow().data.to_vec(),
-        &y_gpu.to_device(Device::CPU).borrow().data.to_vec(),
+        &y_cpu.data(),
+        &y_gpu.to_device(Device::CPU).data(),
         TOL_FWD_GPU,
     );
 
     let g_cpu = x_cpu.grad().expect("CPU gradient missing");
-    let g_gpu = x_gpu
-        .borrow()
-        .grad
-        .as_ref()
-        .expect("GPU gradient missing")
-        .to_vec();
+    let g_gpu = x_gpu.grad_storage().expect("GPU gradient missing").to_vec();
     assert_close("reshape bwd", &g_cpu, &g_gpu, TOL_BWD_GPU);
 }
 
@@ -115,8 +110,8 @@ fn permute_parity() {
 
     assert_close(
         "permute fwd",
-        &y_cpu.borrow().data.to_vec(),
-        &y_gpu.borrow().data.to_vec(),
+        &y_cpu.data(),
+        &y_gpu.data(),
         TOL_FWD_GPU,
     );
 }
@@ -137,18 +132,13 @@ fn permute_backward_parity() {
 
     assert_close(
         "permute fwd",
-        &y_cpu.borrow().data.to_vec(),
-        &y_gpu.to_device(Device::CPU).borrow().data.to_vec(),
+        &y_cpu.data(),
+        &y_gpu.to_device(Device::CPU).data(),
         TOL_FWD_GPU,
     );
 
     let g_cpu = x_cpu.grad().expect("CPU gradient missing");
-    let g_gpu = x_gpu
-        .borrow()
-        .grad
-        .as_ref()
-        .expect("GPU gradient missing")
-        .to_vec();
+    let g_gpu = x_gpu.grad_storage().expect("GPU gradient missing").to_vec();
     assert_close("permute bwd", &g_cpu, &g_gpu, TOL_BWD_GPU);
 }
 
@@ -170,8 +160,8 @@ fn flatten_parity() {
 
     assert_close(
         "flatten fwd",
-        &y_cpu.borrow().data.to_vec(),
-        &y_gpu.borrow().data.to_vec(),
+        &y_cpu.data(),
+        &y_gpu.data(),
         TOL_FWD_GPU,
     );
 }
@@ -192,18 +182,13 @@ fn flatten_backward_parity() {
 
     assert_close(
         "flatten fwd",
-        &y_cpu.borrow().data.to_vec(),
-        &y_gpu.to_device(Device::CPU).borrow().data.to_vec(),
+        &y_cpu.data(),
+        &y_gpu.to_device(Device::CPU).data(),
         TOL_FWD_GPU,
     );
 
     let g_cpu = x_cpu.grad().expect("CPU gradient missing");
-    let g_gpu = x_gpu
-        .borrow()
-        .grad
-        .as_ref()
-        .expect("GPU gradient missing")
-        .to_vec();
+    let g_gpu = x_gpu.grad_storage().expect("GPU gradient missing").to_vec();
     assert_close("flatten bwd", &g_cpu, &g_gpu, TOL_BWD_GPU);
 }
 

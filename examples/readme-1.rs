@@ -35,7 +35,7 @@ fn main() {
             println!(
                 "Epoch {}: loss = {:.6}",
                 epoch,
-                loss.borrow().data.first().copied().unwrap_or(f32::NAN)
+                loss.data().first().copied().unwrap_or(f32::NAN)
             );
         }
 
