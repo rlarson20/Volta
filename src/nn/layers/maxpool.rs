@@ -1,6 +1,8 @@
-use crate::autograd::GradFn;
+use crate::autograd::{GradFn, edge};
+use crate::device::Device;
 use crate::io::StateDict;
 use crate::nn::Module;
+use crate::storage::Storage;
 use crate::tensor::{RawTensor, Tensor, TensorOps};
 
 /// 2D max pooling layer
@@ -66,9 +68,9 @@ impl MaxPool2d {
             x.clone()
         };
 
-        let (data, shape, requires_grad) = {
+        let (data, shape) = {
             let xp = x_padded.borrow();
-            (xp.data.clone(), xp.shape.clone(), xp.requires_grad)
+            (xp.data.clone(), xp.shape.clone())
         };
 
         let (padded_h, padded_w) = (
@@ -129,14 +131,14 @@ impl MaxPool2d {
         }
 
         let out_shape = vec![batch, channels, h_out, w_out];
-        let out = RawTensor::new(out_data, &out_shape, requires_grad);
 
-        if requires_grad {
-            out.borrow_mut().parents = vec![x_padded];
-            out.borrow_mut().grad_fn = Some(Box::new(MaxPool2dGradFn { max_indices }));
-        }
-
-        out
+        edge(
+            [x_padded],
+            Storage::cpu(out_data),
+            out_shape,
+            Device::CPU,
+            Box::new(MaxPool2dGradFn { max_indices }),
+        )
     }
 }
 

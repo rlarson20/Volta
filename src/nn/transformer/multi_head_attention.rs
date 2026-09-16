@@ -366,4 +366,11 @@ mod tests {
 
         assert_eq!(output.borrow().shape, vec![2, 10, 128]);
     }
+
+    #[test]
+    fn test_mha_assert_trainable() {
+        let mha = MultiHeadAttention::new(16, 2, 0.0);
+        let x = RawTensor::new(vec![1.0; 2 * 3 * 16], &[2, 3, 16], true);
+        crate::assert_trainable!(mha, x);
+    }
 }

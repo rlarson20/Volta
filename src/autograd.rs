@@ -1,5 +1,7 @@
+use crate::device::Device;
 use crate::storage::Storage;
 use crate::tensor::{RawTensor, Tensor};
+use std::cell::Cell;
 use std::collections::HashSet;
 
 // ===== GRADIENT FUNCTION TRAIT =====
@@ -17,35 +19,83 @@ pub trait GradFn {
     fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>>;
     /// Clone this gradient function (needed for Rc/RefCell)
     fn clone_box(&self) -> Box<dyn GradFn>;
+    /// Whether this gradient function is a no-op (e.g. `Mod`/`Cmplt`'s comparison-like
+    /// ops, which have no useful derivative). `edge()` never attaches a trivial
+    /// `GradFn`, even if an input requires grad. Defaults to `false` since most ops
+    /// are differentiable; override on the handful that aren't.
+    fn is_trivial(&self) -> bool {
+        false
+    }
 }
 
-// Edge creation function: only thing allowed to write grad_fn/parents
+/// Edge creation function: the only code allowed to write `grad_fn`/`parents`.
+///
+/// Every op used to hand-write this "build output tensor, then conditionally attach
+/// parents + grad_fn" ritual (see ADDENDUM.md §1.4). Centralizing it here means a new
+/// op can't attach its grad fn under the wrong condition (the B1/B2/B3 bug class) —
+/// "any input requires grad, no_grad() isn't active, and the grad isn't trivial" is
+/// the only rule that exists, everywhere.
+///
+/// `shape`/`grad` are `Vec<usize>`/`Box<dyn GradFn>` rather than the `Shape`/`GradFn`
+/// (enum) types ADDENDUM.md sketches, since those are Phase 2 work (§1.2, §2.5) not
+/// yet landed — this uses what exists today. `device` isn't in the ADDENDUM sketch
+/// either, but is required in practice: `Storage` doesn't uniquely determine a
+/// `Device` value, and every real call site (GPU vs CPU op paths) already tracks
+/// device separately from the data it produced.
 pub(crate) fn edge(
     inputs: impl AsRef<[Tensor]>,
     data: Storage,
-    shape: Shape,
-    grad: GradFn,
+    shape: Vec<usize>,
+    device: Device,
+    grad: Box<dyn GradFn>,
 ) -> Tensor {
-    let requires_grad =
-        inputs.as_ref().iter().any(|t| t.requires_grad()) && !grad_is_trivial(&grad); //Mod and Cmplt return falce here, once
-    //attach parents and grad_fn iff requires_grad, here
-    //needs to consult NO_GRAD
+    let requires_grad = is_grad_enabled()
+        && inputs.as_ref().iter().any(Tensor::requires_grad)
+        && !grad.is_trivial();
+
+    let out = RawTensor::new_with_storage(data, &shape, device, requires_grad);
+    if requires_grad {
+        let mut o = out.borrow_mut();
+        o.parents = inputs.as_ref().to_vec();
+        o.grad_fn = Some(grad);
+    }
+    out
 }
 
-fn grad_is_trivial(g: &GradFn) -> bool {
-    todo!("need to determine how to handle 'trivial gradients'")
+// Reentrant depth counter, not a bool: a plain on/off flag (as ADDENDUM.md §1.5
+// sketches it) breaks the moment one `no_grad()` scope nests inside another — e.g.
+// a layer's own `no_grad()` running inside `check_gradients`'s wrapping `no_grad()`.
+// With a bool, the inner guard's `Drop` would reset the flag to `false` and
+// incorrectly re-enable grad tracking while the outer scope is still active. A depth
+// counter composes correctly: grad stays disabled until every nested guard has
+// dropped.
+//
+// `thread_local!` rather than a bare `static`, matching the `GLOBAL_RNG` pattern
+// already used in `src/tensor.rs`: a plain `static NO_GRAD_DEPTH: Cell<u32>` doesn't
+// compile (`Cell` isn't `Sync`), and this crate is single-threaded by design anyway
+// (`Rc<RefCell<_>>` throughout), so thread-local state is both correct and free.
+thread_local! {
+    static NO_GRAD_DEPTH: Cell<u32> = const { Cell::new(0) };
 }
 
-static NO_GRAD: Cell<bool> = Cell::new(false);
+/// Whether `edge()` is currently allowed to attach graph edges.
+pub(crate) fn is_grad_enabled() -> bool {
+    NO_GRAD_DEPTH.with(|d| d.get() == 0)
+}
 
+/// Suppress graph attachment for the lifetime of the returned guard.
+///
+/// Use this to scope side-effecting mutations that shouldn't build graph — e.g.
+/// BatchNorm's running-stat update, or the perturbed forward passes inside
+/// `check_gradients`'s finite-difference loop (ADDENDUM.md §1.5).
 pub fn no_grad() -> NoGradGuard {
-    NO_GRAD.set(true);
+    NO_GRAD_DEPTH.with(|d| d.set(d.get() + 1));
     NoGradGuard
 }
 pub struct NoGradGuard;
 impl Drop for NoGradGuard {
     fn drop(&mut self) {
-        NO_GRAD.set(false)
+        NO_GRAD_DEPTH.with(|d| d.set(d.get() - 1));
     }
 }
 
@@ -155,27 +205,13 @@ impl RawTensor {
                 // Compute gradients for parent tensors
                 let parent_grads = grad_fn.backward(&grad_out, &parents);
 
-                // Accumulate gradients in parents
+                // Accumulate gradients in parents. `Tensor::accumulate_grad` is the
+                // only code allowed to write `grad` (device-move + add-or-set), so
+                // backward() just extracts the raw contribution and hands it over.
                 for (parent_grad, parent_ref) in parent_grads.into_iter().zip(parents.iter()) {
                     if let Some(g) = parent_grad {
-                        let mut parent = parent_ref.borrow_mut();
-                        let parent_device = parent.device.clone();
-
-                        // Move this gradient contribution onto the parent's device.
-                        let new_grad_storage = {
-                            let g_borrow = g.borrow();
-                            g_borrow.data.to_device(&parent_device)
-                        };
-
-                        match parent.grad {
-                            None => {
-                                // First contribution: just store it (already on correct device).
-                                parent.grad = Some(new_grad_storage);
-                            }
-                            Some(ref mut existing) => {
-                                Self::accumulate_grad(existing, &new_grad_storage);
-                            }
-                        }
+                        let grad_storage = g.borrow().data.clone();
+                        parent_ref.accumulate_grad(grad_storage);
                     }
                 }
             }
@@ -185,7 +221,7 @@ impl RawTensor {
 
 impl RawTensor {
     /// Add a gradient contribution to an existing gradient storage, preferring GPU accumulation.
-    fn accumulate_grad(existing: &mut Storage, new_grad: &Storage) {
+    pub(crate) fn accumulate_grad(existing: &mut Storage, new_grad: &Storage) {
         #[cfg(feature = "gpu")]
         {
             if existing.is_gpu() && new_grad.is_gpu() {

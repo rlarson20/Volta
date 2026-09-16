@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
 use crate::Storage;
-use crate::autograd::GradFn;
+use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
@@ -1129,13 +1129,12 @@ impl Conv2d {
     fn im2col(x: &Tensor, kernel: (usize, usize), stride: (usize, usize)) -> Tensor {
         const MAX_ALLOC: usize = 100_000_000; // Maximum allowed allocation
 
-        let (data, shape, requires_grad, device) = {
+        let (data, shape, device) = {
             let x_borrow = x.borrow();
             assert_eq!(x_borrow.shape.len(), 4, "Input must be 4D: (B, C, H, W)");
             (
                 x_borrow.data.clone(),
                 x_borrow.shape.clone(),
-                x_borrow.requires_grad,
                 x_borrow.device.clone(),
             )
         };
@@ -1173,17 +1172,17 @@ impl Conv2d {
                     &data, batch, channels, height, width, kh, kw, sh, sw, h_out, w_out,
                 )
             {
-                let out =
-                    RawTensor::new_with_storage(col_data, &[rows, cols], device, requires_grad);
-                if requires_grad {
-                    out.borrow_mut().parents = vec![x.clone()];
-                    out.borrow_mut().grad_fn = Some(Box::new(Im2colGradFn {
+                return edge(
+                    [x.clone()],
+                    col_data,
+                    vec![rows, cols],
+                    device,
+                    Box::new(Im2colGradFn {
                         input_shape: shape,
                         kernel,
                         stride,
-                    }));
-                }
-                return out;
+                    }),
+                );
             }
         }
 
@@ -1233,19 +1232,17 @@ impl Conv2d {
             }
         }
 
-        let out = RawTensor::new(result, &[rows, cols], requires_grad);
-
-        // Attach gradient function if input requires gradients
-        if requires_grad {
-            out.borrow_mut().parents = vec![x.clone()];
-            out.borrow_mut().grad_fn = Some(Box::new(Im2colGradFn {
+        edge(
+            [x.clone()],
+            Storage::cpu(result),
+            vec![rows, cols],
+            Device::CPU,
+            Box::new(Im2colGradFn {
                 input_shape: shape,
                 kernel,
                 stride,
-            }));
-        }
-
-        out
+            }),
+        )
     }
 
     /// Col2im: Inverse of im2col, used for computing input gradients
@@ -1320,14 +1317,9 @@ impl Conv2d {
         stride_h: usize,
         stride_w: usize,
     ) -> Tensor {
-        let (x_data, x_shape, _x_device, x_requires_grad) = {
+        let (x_data, x_shape) = {
             let x_borrow = x.borrow();
-            (
-                x_borrow.data.clone(),
-                x_borrow.shape.clone(),
-                x_borrow.device.clone(),
-                x_borrow.requires_grad,
-            )
+            (x_borrow.data.clone(), x_borrow.shape.clone())
         };
 
         let (w_data, w_shape) = {
@@ -1428,21 +1420,21 @@ impl Conv2d {
             }
         }
 
-        // Create output tensor
-        let result = RawTensor::new(output, &[batch, out_ch, h_out, w_out], x_requires_grad);
-
-        // Attach gradient function if input requires gradients
-        if x_requires_grad {
-            result.borrow_mut().parents = vec![x.clone(), weight.clone()];
-            result.borrow_mut().grad_fn = Some(Box::new(DirectConvGradFn {
-                input_shape: x_shape.clone(),
-                weight_shape: w_shape.clone(),
+        // Create output tensor. `edge()` requires grad if *either* x or weight does —
+        // fixes a latent bug where this used to check only `x_requires_grad`, ignoring
+        // the weight tensor (the same B1-class bug §1.4 targets).
+        edge(
+            [x.clone(), weight.clone()],
+            Storage::cpu(output),
+            vec![batch, out_ch, h_out, w_out],
+            Device::CPU,
+            Box::new(DirectConvGradFn {
+                input_shape: x_shape,
+                weight_shape: w_shape,
                 padding: (pad_h, pad_w),
                 stride: (stride_h, stride_w),
-            }));
-        }
-
-        result
+            }),
+        )
     }
 
     /// GPU Direct convolution helper
@@ -1493,29 +1485,21 @@ impl Conv2d {
         let result = None;
         if let Some(storage) = result {
             let device = x.borrow().device.clone();
-            let requires_grad = x.borrow().requires_grad;
-            let raw = RawTensor::new_with_storage(
+            let x_shape = x.borrow().shape.clone();
+            let w_shape = weight.borrow().shape.clone();
+
+            edge(
+                [x.clone(), weight.clone()],
                 storage,
-                &[batch, out_channels, h_out, w_out],
+                vec![batch, out_channels, h_out, w_out],
                 device,
-                requires_grad,
-            );
-
-            // Attach gradient function if input requires gradients
-            if requires_grad {
-                let x_shape = x.borrow().shape.clone();
-                let w_shape = weight.borrow().shape.clone();
-
-                raw.borrow_mut().parents = vec![x.clone(), weight.clone()];
-                raw.borrow_mut().grad_fn = Some(Box::new(DirectConvGradFn {
+                Box::new(DirectConvGradFn {
                     input_shape: x_shape,
                     weight_shape: w_shape,
                     padding: (pad_h, pad_w),
                     stride: (stride_h, stride_w),
-                }));
-            }
-
-            raw
+                }),
+            )
         } else {
             log::warn!("GPU direct convolution failed, falling back to CPU");
             Self::direct_conv(x, weight, pad_h, pad_w, stride_h, stride_w)
@@ -1551,13 +1535,12 @@ impl Conv2d {
         stride_w: usize,
         variant: IGEMMVariant,
     ) -> Tensor {
-        let (x_data, x_shape, x_device, x_requires_grad) = {
+        let (x_data, x_shape, x_device) = {
             let x_borrow = x.borrow();
             (
                 x_borrow.data.clone(),
                 x_borrow.shape.clone(),
                 x_borrow.device.clone(),
-                x_borrow.requires_grad,
             )
         };
 
@@ -1605,28 +1588,23 @@ impl Conv2d {
         #[cfg(not(feature = "gpu"))]
         let gpu_result = None;
 
+        // `edge()` requires grad if *either* x or weight does — fixes a latent bug
+        // where this used to check only `x_requires_grad`, ignoring the weight
+        // tensor (the same B1-class bug §1.4 targets).
         if let Some(storage) = gpu_result {
-            // Create GPU tensor with grad function
-            let result = RawTensor::new_with_storage(
+            edge(
+                [x.clone(), weight.clone()],
                 storage,
-                &[batch, out_ch, h_out, w_out],
-                x_device.clone(),
-                x_requires_grad,
-            );
-
-            // Attach gradient function if input requires gradients
-            if x_requires_grad {
-                result.borrow_mut().parents = vec![x.clone(), weight.clone()];
-                result.borrow_mut().grad_fn = Some(Box::new(IGEMMGradFn {
+                vec![batch, out_ch, h_out, w_out],
+                x_device,
+                Box::new(IGEMMGradFn {
                     input_shape: x_shape,
                     weight_shape: w_shape,
                     padding: (pad_h, pad_w),
                     stride: (stride_h, stride_w),
                     _variant: variant,
-                }));
-            }
-
-            result
+                }),
+            )
         } else {
             // Fall back to CPU path
             let x_data_cpu = x_data.to_vec();
@@ -1663,21 +1641,19 @@ impl Conv2d {
             }
 
             // Create output tensor
-            let result = RawTensor::new(output, &[batch, out_ch, h_out, w_out], x_requires_grad);
-
-            // Attach gradient function if input requires gradients
-            if x_requires_grad {
-                result.borrow_mut().parents = vec![x.clone(), weight.clone()];
-                result.borrow_mut().grad_fn = Some(Box::new(IGEMMGradFn {
+            edge(
+                [x.clone(), weight.clone()],
+                Storage::cpu(output),
+                vec![batch, out_ch, h_out, w_out],
+                Device::CPU,
+                Box::new(IGEMMGradFn {
                     input_shape: x_shape,
                     weight_shape: w_shape,
                     padding: (pad_h, pad_w),
                     stride: (stride_h, stride_w),
                     _variant: variant,
-                }));
-            }
-
-            result
+                }),
+            )
         }
     }
 
@@ -2037,28 +2013,13 @@ mod conv2d_tests {
 
     #[test]
     fn test_conv2d_backward_flow() {
-        // Test that gradients flow through the entire network
+        // assert_trainable! checks every parameter gets a *nonzero* gradient, a
+        // strict superset of the presence-only checks this test used to hand-roll.
         let conv = Conv2d::new(2, 4, 3, 1, 0, true);
         let x = RawTensor::randn(&[1, 2, 5, 5]);
         x.borrow_mut().requires_grad = true;
 
-        let y = conv.forward(&x);
-        let loss = y.sum();
-        loss.backward();
-
-        // Check that input has gradients
-        assert!(x.grad().is_some(), "Input should have gradients");
-
-        // Check that weights have gradients
-        assert!(
-            conv.weight.grad().is_some(),
-            "Weights should have gradients"
-        );
-
-        // Check that bias has gradients
-        if let Some(ref b) = conv.bias {
-            assert!(b.grad().is_some(), "Bias should have gradients");
-        }
+        crate::assert_trainable!(conv, x);
     }
 
     #[test]

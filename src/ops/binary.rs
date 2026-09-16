@@ -1,9 +1,7 @@
-use crate::autograd::GradFn;
+use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::storage::Storage;
 use crate::{RawTensor, Result, Tensor, VoltaError};
-use std::cell::RefCell;
-use std::rc::Rc;
 
 /// Binary operations: two inputs, one output
 ///
@@ -358,6 +356,10 @@ impl GradFn for BinaryGradFn {
     fn clone_box(&self) -> Box<dyn GradFn> {
         Box::new(Self { op: self.op })
     }
+
+    fn is_trivial(&self) -> bool {
+        matches!(self.op, BinaryOp::Mod | BinaryOp::Cmplt)
+    }
 }
 
 // Map a `BinaryOp` to the corresponding GPU backward kernel names, if supported.
@@ -606,21 +608,13 @@ impl RawTensor {
     /// # Panics
     /// broadcast failure
     pub fn binary_op(self_t: &Tensor, other: &Tensor, op: BinaryOp) -> Tensor {
-        let (data_a, shape_a, req_a) = {
+        let (data_a, shape_a) = {
             let s = self_t.borrow();
-            (s.data.clone(), s.shape.clone(), s.requires_grad)
+            (s.data.clone(), s.shape.clone())
         };
-        let (data_b, shape_b, req_b) = {
+        let (data_b, shape_b) = {
             let o = other.borrow();
-            (o.data.clone(), o.shape.clone(), o.requires_grad)
-        };
-
-        // Mod and Cmplt are non-differentiable
-        let requires_grad = match op {
-            BinaryOp::Mod | BinaryOp::Cmplt => false,
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Max => {
-                req_a || req_b
-            }
+            (o.data.clone(), o.shape.clone())
         };
 
         // If both operands are already on the same GPU and we have a matching
@@ -632,19 +626,13 @@ impl RawTensor {
                 && let Some((shape, storage, device)) =
                     Self::try_gpu_binary_result(self_t, other, op)
             {
-                let out = Rc::new(RefCell::new(Self {
-                    data: storage,
+                return edge(
+                    [self_t.clone(), other.clone()],
+                    storage,
                     shape,
-                    grad: None,
-                    requires_grad,
-                    grad_fn: None,
-                    parents: vec![self_t.clone(), other.clone()],
                     device,
-                }));
-                if requires_grad {
-                    out.borrow_mut().grad_fn = Some(Box::new(BinaryGradFn { op }));
-                }
-                return out;
+                    Box::new(BinaryGradFn { op }),
+                );
             }
         }
 
@@ -679,13 +667,13 @@ impl RawTensor {
             })
             .collect();
 
-        let out = Self::new(result_data, &out_shape, requires_grad);
-
-        if out.borrow().requires_grad {
-            out.borrow_mut().parents = vec![self_t.clone(), other.clone()];
-            out.borrow_mut().grad_fn = Some(Box::new(BinaryGradFn { op }));
-        }
-        out
+        edge(
+            [self_t.clone(), other.clone()],
+            Storage::cpu(result_data),
+            out_shape,
+            Device::CPU,
+            Box::new(BinaryGradFn { op }),
+        )
     }
 
     // Convenience methods for binary operations

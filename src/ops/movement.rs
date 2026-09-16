@@ -1,5 +1,7 @@
-use crate::autograd::GradFn;
+use crate::autograd::{GradFn, edge};
+use crate::device::Device;
 use crate::error::Result;
+use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
 
 // ===== INDEX MAPPING TRAITS =====
@@ -435,8 +437,10 @@ impl GradFn for MovementGradFn {
 
                 // CPU fallback
                 let grad_t = RawTensor::new(out_grad.data.to_vec(), &out_grad.shape, false);
-                let result = RawTensor::permute_impl(&grad_t, &inverse_axes);
-                return vec![Some(result)];
+                let (storage, shape, device) = RawTensor::permute_impl(&grad_t, &inverse_axes);
+                return vec![Some(RawTensor::new_with_storage(
+                    storage, &shape, device, false,
+                ))];
             }
             MovementOp::Expand { new_shape } => {
                 // Try GPU path
@@ -616,41 +620,35 @@ impl RawTensor {
     /// # Panics
     /// Size mismatch
     pub fn reshape(self_t: &Tensor, new_shape: &[usize]) -> Tensor {
-        let (data, old_shape, req_grad, device) = {
+        let (data, old_shape, device) = {
             let s = self_t.borrow();
-            (
-                s.data.clone(),
-                s.shape.clone(),
-                s.requires_grad,
-                s.device.clone(),
-            )
+            (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
         let old_size: usize = old_shape.iter().product();
         let new_size: usize = new_shape.iter().product();
         assert_eq!(old_size, new_size, "Cannot reshape: size mismatch");
 
-        // Reshape is a view operation - data stays in place, only shape changes
-        // Use new_with_storage to preserve the device
-        let out = Self::new_with_storage(data, new_shape, device, req_grad);
-
-        if req_grad {
-            out.borrow_mut().parents = vec![self_t.clone()];
-            out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
+        // Reshape is a view operation - data stays in place, only shape changes.
+        edge(
+            [self_t.clone()],
+            data,
+            new_shape.to_vec(),
+            device,
+            Box::new(MovementGradFn {
                 op: MovementOp::Reshape {
                     new_shape: new_shape.to_vec(),
                 },
                 original_shape: old_shape,
-            }));
-        }
-        out
+            }),
+        )
     }
 
     /// Internal permute implementation (no gradient tracking)
     ///
     /// Reorders axes according to the permutation specified by `axes`.
     /// For example, axes=[1,0] transposes a 2D matrix.
-    fn permute_impl(self_t: &Tensor, axes: &[usize]) -> Tensor {
+    fn permute_impl(self_t: &Tensor, axes: &[usize]) -> (Storage, Vec<usize>, Device) {
         // Helper: convert linear index to coordinates
         fn index_to_coords(idx: usize, shape: &[usize]) -> Vec<usize> {
             let mut coords = vec![0; shape.len()];
@@ -684,7 +682,7 @@ impl RawTensor {
         if device.is_gpu()
             && let Some(storage) = Self::gpu_permute(&data, &shape, &new_shape, axes)
         {
-            return Self::new_with_storage(storage, &new_shape, device, false);
+            return (storage, new_shape, device);
         }
 
         // CPU fallback
@@ -709,7 +707,7 @@ impl RawTensor {
                 *val = data_val;
             }
         }
-        Self::new(new_data, &new_shape, false)
+        (Storage::cpu(new_data), new_shape, Device::CPU)
     }
 
     /// Permute (reorder) tensor axes
@@ -719,7 +717,6 @@ impl RawTensor {
     /// # Panics
     /// invalid permutation axes
     pub fn permute(self_t: &Tensor, axes: &[usize]) -> Tensor {
-        let req_grad = self_t.borrow().requires_grad;
         let old_shape = self_t.borrow().shape.clone();
 
         // Verify axes is a valid permutation
@@ -729,19 +726,20 @@ impl RawTensor {
             assert_eq!(i, ax, "Invalid permutation axes");
         }
 
-        let out = Self::permute_impl(self_t, axes);
-        out.borrow_mut().requires_grad = req_grad;
+        let (storage, new_shape, device) = Self::permute_impl(self_t, axes);
 
-        if req_grad {
-            out.borrow_mut().parents = vec![self_t.clone()];
-            out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
+        edge(
+            [self_t.clone()],
+            storage,
+            new_shape,
+            device,
+            Box::new(MovementGradFn {
                 op: MovementOp::Permute {
                     axes: axes.to_vec(),
                 },
                 original_shape: old_shape,
-            }));
-        }
-        out
+            }),
+        )
     }
 
     /// Expand (broadcast) tensor to larger shape
@@ -753,14 +751,9 @@ impl RawTensor {
     pub fn expand(self_t: &Tensor, new_shape: &[usize]) -> Tensor {
         const MAX_ALLOC: usize = 100_000_000;
 
-        let (data, old_shape, req_grad, device) = {
+        let (data, old_shape, device) = {
             let s = self_t.borrow();
-            (
-                s.data.clone(),
-                s.shape.clone(),
-                s.requires_grad,
-                s.device.clone(),
-            )
+            (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
         assert_eq!(old_shape.len(), new_shape.len(), "Expand: rank must match");
@@ -784,17 +777,18 @@ impl RawTensor {
         if device.is_gpu()
             && let Some(storage) = Self::gpu_expand(&data, &old_shape, new_shape)
         {
-            let out = Self::new_with_storage(storage, new_shape, device, req_grad);
-            if req_grad {
-                out.borrow_mut().parents = vec![self_t.clone()];
-                out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
+            return edge(
+                [self_t.clone()],
+                storage,
+                new_shape.to_vec(),
+                device,
+                Box::new(MovementGradFn {
                     op: MovementOp::Expand {
                         new_shape: new_shape.to_vec(),
                     },
                     original_shape: old_shape,
-                }));
-            }
-            return out;
+                }),
+            );
         }
 
         // CPU fallback
@@ -825,18 +819,18 @@ impl RawTensor {
             }
         }
 
-        let out = Self::new(result, new_shape, req_grad);
-
-        if req_grad {
-            out.borrow_mut().parents = vec![self_t.clone()];
-            out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
+        edge(
+            [self_t.clone()],
+            Storage::cpu(result),
+            new_shape.to_vec(),
+            Device::CPU,
+            Box::new(MovementGradFn {
                 op: MovementOp::Expand {
                     new_shape: new_shape.to_vec(),
                 },
                 original_shape: old_shape,
-            }));
-        }
-        out
+            }),
+        )
     }
 
     /// Pad tensor with zeros
@@ -848,14 +842,9 @@ impl RawTensor {
     pub fn pad(self_t: &Tensor, padding: &[(usize, usize)]) -> Tensor {
         const MAX_ALLOC: usize = 100_000_000;
 
-        let (data, old_shape, req_grad, device) = {
+        let (data, old_shape, device) = {
             let s = self_t.borrow();
-            (
-                s.data.clone(),
-                s.shape.clone(),
-                s.requires_grad,
-                s.device.clone(),
-            )
+            (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
         assert_eq!(
@@ -881,17 +870,18 @@ impl RawTensor {
         if device.is_gpu()
             && let Some(storage) = Self::gpu_pad(&data, &old_shape, &new_shape, padding)
         {
-            let out = Self::new_with_storage(storage, &new_shape, device, req_grad);
-            if req_grad {
-                out.borrow_mut().parents = vec![self_t.clone()];
-                out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
+            return edge(
+                [self_t.clone()],
+                storage,
+                new_shape,
+                device,
+                Box::new(MovementGradFn {
                     op: MovementOp::Pad {
                         padding: padding.to_vec(),
                     },
                     original_shape: old_shape,
-                }));
-            }
-            return out;
+                }),
+            );
         }
 
         // CPU fallback
@@ -908,18 +898,18 @@ impl RawTensor {
 
         apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
 
-        let out = Self::new(result, &new_shape, req_grad);
-
-        if req_grad {
-            out.borrow_mut().parents = vec![self_t.clone()];
-            out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
+        edge(
+            [self_t.clone()],
+            Storage::cpu(result),
+            new_shape,
+            Device::CPU,
+            Box::new(MovementGradFn {
                 op: MovementOp::Pad {
                     padding: padding.to_vec(),
                 },
                 original_shape: old_shape,
-            }));
-        }
-        out
+            }),
+        )
     }
 
     /// Extract a sub-region of the tensor
@@ -1013,14 +1003,9 @@ impl RawTensor {
     ///   - Any range has `start == end` (zero-sized dimension)
     /// * `VoltaError::DimensionOutOfBounds` - If any range has `end > dimension size`
     pub fn try_shrink(self_t: &Tensor, ranges: &[(usize, usize)]) -> Result<Tensor> {
-        let (data, old_shape, req_grad, device) = {
+        let (data, old_shape, device) = {
             let s = self_t.borrow();
-            (
-                s.data.clone(),
-                s.shape.clone(),
-                s.requires_grad,
-                s.device.clone(),
-            )
+            (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
         // Validate ranges before any computation
@@ -1033,17 +1018,18 @@ impl RawTensor {
         if device.is_gpu()
             && let Some(storage) = Self::gpu_shrink(&data, &old_shape, &new_shape, ranges)
         {
-            let out = Self::new_with_storage(storage, &new_shape, device, req_grad);
-            if req_grad {
-                out.borrow_mut().parents = vec![self_t.clone()];
-                out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
+            return Ok(edge(
+                [self_t.clone()],
+                storage,
+                new_shape,
+                device,
+                Box::new(MovementGradFn {
                     op: MovementOp::Shrink {
                         ranges: ranges.to_vec(),
                     },
                     original_shape: old_shape,
-                }));
-            }
-            return Ok(out);
+                }),
+            ));
         }
 
         // CPU fallback
@@ -1060,18 +1046,18 @@ impl RawTensor {
 
         apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
 
-        let out = Self::new(result, &new_shape, req_grad);
-
-        if req_grad {
-            out.borrow_mut().parents = vec![self_t.clone()];
-            out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
+        Ok(edge(
+            [self_t.clone()],
+            Storage::cpu(result),
+            new_shape,
+            Device::CPU,
+            Box::new(MovementGradFn {
                 op: MovementOp::Shrink {
                     ranges: ranges.to_vec(),
                 },
                 original_shape: old_shape,
-            }));
-        }
-        Ok(out)
+            }),
+        ))
     }
 
     /// Subsample tensor with specified strides
@@ -1080,14 +1066,9 @@ impl RawTensor {
     /// # Panics
     /// Strides length must match rank
     pub fn stride_op(self_t: &Tensor, strides: &[usize]) -> Tensor {
-        let (data, old_shape, req_grad, device) = {
+        let (data, old_shape, device) = {
             let s = self_t.borrow();
-            (
-                s.data.clone(),
-                s.shape.clone(),
-                s.requires_grad,
-                s.device.clone(),
-            )
+            (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
         assert_eq!(
@@ -1107,17 +1088,18 @@ impl RawTensor {
         if device.is_gpu()
             && let Some(storage) = Self::gpu_stride(&data, &old_shape, &new_shape, strides)
         {
-            let out = Self::new_with_storage(storage, &new_shape, device, req_grad);
-            if req_grad {
-                out.borrow_mut().parents = vec![self_t.clone()];
-                out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
+            return edge(
+                [self_t.clone()],
+                storage,
+                new_shape,
+                device,
+                Box::new(MovementGradFn {
                     op: MovementOp::Stride {
                         strides: strides.to_vec(),
                     },
                     original_shape: old_shape,
-                }));
-            }
-            return out;
+                }),
+            );
         }
 
         // CPU fallback
@@ -1134,18 +1116,18 @@ impl RawTensor {
 
         apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
 
-        let out = Self::new(result, &new_shape, req_grad);
-
-        if req_grad {
-            out.borrow_mut().parents = vec![self_t.clone()];
-            out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
+        edge(
+            [self_t.clone()],
+            Storage::cpu(result),
+            new_shape,
+            Device::CPU,
+            Box::new(MovementGradFn {
                 op: MovementOp::Stride {
                     strides: strides.to_vec(),
                 },
                 original_shape: old_shape,
-            }));
-        }
-        out
+            }),
+        )
     }
 
     /// Compute memory strides for row-major layout

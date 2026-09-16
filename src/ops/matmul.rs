@@ -1,7 +1,7 @@
-use crate::autograd::GradFn;
+use crate::autograd::{GradFn, edge};
+use crate::device::Device;
+use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
-use std::cell::RefCell;
-use std::rc::Rc;
 
 // ===== TRANSPOSE GRADIENT =====
 
@@ -134,23 +134,13 @@ impl RawTensor {
     /// Dimension mismatch
     #[allow(clippy::too_many_lines)]
     pub fn matmul(self_t: &Tensor, other: &Tensor) -> Tensor {
-        let (data_a, shape_a, req_a, _dev_a) = {
+        let (data_a, shape_a) = {
             let s = self_t.borrow();
-            (
-                s.data.clone(),
-                s.shape.clone(),
-                s.requires_grad,
-                s.device.clone(),
-            )
+            (s.data.clone(), s.shape.clone())
         };
-        let (data_b, shape_b, req_b, _dev_b) = {
+        let (data_b, shape_b) = {
             let o = other.borrow();
-            (
-                o.data.clone(),
-                o.shape.clone(),
-                o.requires_grad,
-                o.device.clone(),
-            )
+            (o.data.clone(), o.shape.clone())
         };
 
         // Handle different cases
@@ -169,20 +159,13 @@ impl RawTensor {
                 {
                     if let Some(device) = Self::common_gpu_device(&[self_t, other]) {
                         if let Some(storage) = Self::gpu_matmul(&data_a, &data_b, m, n, p) {
-                            let requires_grad = req_a || req_b;
-                            let out = Rc::new(RefCell::new(Self {
-                                data: storage,
-                                shape: vec![m, p],
-                                grad: None,
-                                requires_grad,
-                                grad_fn: None,
-                                parents: vec![self_t.clone(), other.clone()],
+                            return edge(
+                                [self_t.clone(), other.clone()],
+                                storage,
+                                vec![m, p],
                                 device,
-                            }));
-                            if requires_grad {
-                                out.borrow_mut().grad_fn = Some(Box::new(MatMulGradFn));
-                            }
-                            return out;
+                                Box::new(MatMulGradFn),
+                            );
                         }
                         log::warn!("GPU matmul requested but failed; falling back to CPU");
                     }
@@ -190,13 +173,13 @@ impl RawTensor {
 
                 // CPU fallback: BLAS/Accelerate or matrixmultiply on host data.
                 let result_data = Self::matmul_raw(&data_a, &data_b, m, n, p);
-                let out = Self::new(result_data, &[m, p], req_a || req_b);
-
-                if out.borrow().requires_grad {
-                    out.borrow_mut().parents = vec![self_t.clone(), other.clone()];
-                    out.borrow_mut().grad_fn = Some(Box::new(MatMulGradFn));
-                }
-                out
+                edge(
+                    [self_t.clone(), other.clone()],
+                    Storage::cpu(result_data),
+                    vec![m, p],
+                    Device::CPU,
+                    Box::new(MatMulGradFn),
+                )
             }
             (2, 1) => {
                 // Matrix-vector: (m,n) @ (n,) -> (m,)
@@ -220,13 +203,13 @@ impl RawTensor {
                     }
                 }
 
-                let out = Self::new(result_data, &[m], req_a || req_b);
-
-                if out.borrow().requires_grad {
-                    out.borrow_mut().parents = vec![self_t.clone(), other.clone()];
-                    out.borrow_mut().grad_fn = Some(Box::new(MatMulGradFn));
-                }
-                out
+                edge(
+                    [self_t.clone(), other.clone()],
+                    Storage::cpu(result_data),
+                    vec![m],
+                    Device::CPU,
+                    Box::new(MatMulGradFn),
+                )
             }
             (1, 2) => {
                 // Vector-matrix: (n,) @ (n,p) -> (p,)
@@ -251,13 +234,13 @@ impl RawTensor {
                     }
                 }
 
-                let out = Self::new(result_data, &[p], req_a || req_b);
-
-                if out.borrow().requires_grad {
-                    out.borrow_mut().parents = vec![self_t.clone(), other.clone()];
-                    out.borrow_mut().grad_fn = Some(Box::new(MatMulGradFn));
-                }
-                out
+                edge(
+                    [self_t.clone(), other.clone()],
+                    Storage::cpu(result_data),
+                    vec![p],
+                    Device::CPU,
+                    Box::new(MatMulGradFn),
+                )
             }
             (1, 1) => {
                 // Dot product: (n,) @ (n,) -> scalar
@@ -266,13 +249,13 @@ impl RawTensor {
                 assert_eq!(n, n2, "Dot product dimension mismatch: ({n}) @ ({n2})");
 
                 let sum: f32 = data_a.iter().zip(&data_b).map(|(a, b)| a * b).sum();
-                let out = Self::new(vec![sum], &[1], req_a || req_b);
-
-                if out.borrow().requires_grad {
-                    out.borrow_mut().parents = vec![self_t.clone(), other.clone()];
-                    out.borrow_mut().grad_fn = Some(Box::new(MatMulGradFn));
-                }
-                out
+                edge(
+                    [self_t.clone(), other.clone()],
+                    Storage::cpu(vec![sum]),
+                    vec![1],
+                    Device::CPU,
+                    Box::new(MatMulGradFn),
+                )
             }
             _ => {
                 // Batched MatMul: (B, M, K) @ (B, K, N) -> (B, M, N)
@@ -327,12 +310,13 @@ impl RawTensor {
                 out_shape.push(m);
                 out_shape.push(n);
 
-                let out = Self::new(result_data, &out_shape, req_a || req_b);
-                if out.borrow().requires_grad {
-                    out.borrow_mut().parents = vec![self_t.clone(), other.clone()];
-                    out.borrow_mut().grad_fn = Some(Box::new(MatMulGradFn));
-                }
-                out
+                edge(
+                    [self_t.clone(), other.clone()],
+                    Storage::cpu(result_data),
+                    out_shape,
+                    Device::CPU,
+                    Box::new(MatMulGradFn),
+                )
             }
         }
     }
@@ -341,9 +325,9 @@ impl RawTensor {
     /// # Panics
     /// Non-2d tensor
     pub fn transpose(self_t: &Tensor) -> Tensor {
-        let (data, shape, req_grad) = {
+        let (data, shape) = {
             let s = self_t.borrow();
-            (s.data.clone(), s.shape.clone(), s.requires_grad)
+            (s.data.clone(), s.shape.clone())
         };
 
         assert_eq!(shape.len(), 2, "Transpose expects 2D tensor");
@@ -353,14 +337,13 @@ impl RawTensor {
         let dim1 = shape.get(1).copied().unwrap_or(1);
         let new_shape = vec![dim1, dim0];
 
-        let out = Self::new(transposed_data, &new_shape, req_grad);
-
-        if req_grad {
-            out.borrow_mut().parents = vec![self_t.clone()];
-            // Use movement grad with inverse permutation [1,0]
-            out.borrow_mut().grad_fn = Some(Box::new(TransposeGradFn));
-        }
-        out
+        edge(
+            [self_t.clone()],
+            Storage::cpu(transposed_data),
+            new_shape,
+            Device::CPU,
+            Box::new(TransposeGradFn),
+        )
     }
 }
 

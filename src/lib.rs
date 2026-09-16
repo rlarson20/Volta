@@ -41,6 +41,7 @@ pub mod autograd;
 pub mod data;
 pub mod device;
 pub mod io;
+mod macros;
 pub mod nn;
 pub mod ops;
 pub mod tensor;
@@ -4742,6 +4743,13 @@ mod linear_tests {
         });
         assert!(passed, "Linear input gradient check failed");
     }
+
+    #[test]
+    fn assert_trainable_all_params_get_gradient() {
+        let layer = Linear::new(4, 3, true);
+        let x = RawTensor::new(vec![1.0; 2 * 4], &[2, 4], true);
+        crate::assert_trainable!(layer, x);
+    }
 }
 
 #[cfg(test)]
@@ -5001,6 +5009,19 @@ mod batchnorm_tests {
         assert!(passed, "BatchNorm1d input gradient check failed");
     }
 
+    #[test]
+    fn bn1d_assert_trainable_all_params_get_gradient() {
+        let layer = BatchNorm1d::new(3);
+        let x = RawTensor::new(
+            vec![
+                1.0, 10.0, -5.0, 2.0, 12.0, -3.0, 3.0, 14.0, -1.0, 4.0, 16.0, 1.0,
+            ],
+            &[4, 3],
+            true,
+        );
+        crate::assert_trainable!(layer, x);
+    }
+
     // ---- BatchNorm2d ----
 
     #[test]
@@ -5053,5 +5074,12 @@ mod batchnorm_tests {
             1e-2,
         );
         assert!(passed, "BatchNorm2d input gradient check failed");
+    }
+
+    #[test]
+    fn bn2d_assert_trainable_all_params_get_gradient() {
+        let layer = BatchNorm2d::new(2);
+        let x = RawTensor::new(vec![1.0; 2 * 2 * 2 * 2], &[2, 2, 2, 2], true);
+        crate::assert_trainable!(layer, x);
     }
 }

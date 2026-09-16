@@ -1,6 +1,8 @@
-use crate::autograd::GradFn;
+use crate::autograd::{GradFn, edge};
+use crate::device::Device;
 use crate::io::StateDict;
 use crate::nn::Module;
+use crate::storage::Storage;
 use crate::tensor::{RawTensor, Tensor, with_rng};
 use rand::Rng;
 
@@ -99,21 +101,19 @@ impl Embedding {
 
         drop(weight_borrowed);
 
-        let output_shape = [indices.len(), self.dim];
-        let output = RawTensor::new(output_data, &output_shape, false);
+        let output_shape = vec![indices.len(), self.dim];
 
-        // Attach gradient function if weight requires grad
-        if self.weight.borrow().requires_grad {
-            output.borrow_mut().requires_grad = true;
-            output.borrow_mut().parents = vec![self.weight.clone()];
-            output.borrow_mut().grad_fn = Some(Box::new(EmbeddingGradFn {
+        edge(
+            [self.weight.clone()],
+            Storage::cpu(output_data),
+            output_shape,
+            Device::CPU,
+            Box::new(EmbeddingGradFn {
                 indices: indices.to_vec(),
                 vocab_size: self.vocab_size,
                 embedding_dim: self.dim,
-            }));
-        }
-
-        output
+            }),
+        )
     }
 }
 
@@ -286,4 +286,11 @@ mod tests {
         assert_eq!(params.len(), 1);
         assert_eq!(params.first().unwrap().borrow().shape, vec![50, 16]);
     }
+
+    // No `assert_trainable!` test here: `Module::forward` for `Embedding` is a
+    // deliberate panic stub (`Embedding::forward` takes `&[usize]`, not `&Tensor`,
+    // so it can't implement the `Module` trait's signature). `assert_trainable!`
+    // calls forward through that trait via UFCS, so it would always panic here.
+    // `test_embedding_backward_flow` above already checks the exact per-index
+    // accumulated gradient values, a strictly stronger check than "nonzero".
 }

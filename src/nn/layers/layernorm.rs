@@ -178,4 +178,11 @@ mod tests {
         let ln = LayerNorm::new_with_eps(vec![32], 1e-6);
         assert_eq!(ln.eps, 1e-6);
     }
+
+    #[test]
+    fn test_layernorm_assert_trainable() {
+        let ln = LayerNorm::new(vec![4]);
+        let x = RawTensor::new(vec![1.0; 2 * 4], &[2, 4], true);
+        crate::assert_trainable!(ln, x);
+    }
 }

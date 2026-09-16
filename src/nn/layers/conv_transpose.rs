@@ -5,12 +5,11 @@
     clippy::cast_possible_truncation
 )]
 use crate::Storage;
-use crate::autograd::GradFn;
+use crate::autograd::{GradFn, edge};
+use crate::device::Device;
 use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
 use crate::tensor::{RawTensor, Tensor, TensorOps};
-use std::cell::RefCell;
-use std::rc::Rc;
 
 /// Transposed 2D convolution (also called deconvolution)
 ///
@@ -182,7 +181,7 @@ impl GradFn for ConvTranspose2dGradFn {
         let (stride_h, stride_w) = self.stride;
         let (pad_h, pad_w) = self.padding;
 
-        let out_grad_tensor = Rc::new(RefCell::new(out_grad.clone()));
+        let out_grad_tensor = Tensor::from_raw(out_grad.clone());
 
         // Calculate output dimensions
         let out_h = (in_h - 1) * stride_h + kh - 2 * pad_h;
@@ -404,34 +403,47 @@ impl Module for ConvTranspose2d {
             self.padding,
         );
 
-        let input_shape = x.borrow().shape.clone();
-        let mut output = RawTensor::new(output_data, &output_shape, x.borrow().requires_grad);
-
-        // 5. Add bias if present
+        // 5. Add bias if present. The real backward for this op is the custom
+        // ConvTranspose2dGradFn below (col2im isn't invertible through ordinary
+        // matmul/reshape autograd), so everything up to here — including this bias
+        // add — is throwaway data computation (`requires_grad: false`); only the
+        // final `.data`/`.shape` are kept, and `edge()` below builds the tensor that
+        // actually carries the graph.
+        let mut raw_output = RawTensor::new(output_data, &output_shape, false);
         if let Some(ref bias) = self.bias {
             let bias_reshaped = bias.reshape(&[1, out_channels, 1, 1]);
-            output = output.add(&bias_reshaped);
+            raw_output = raw_output.add(&bias_reshaped);
+        }
+        let (final_data, final_shape) = {
+            let b = raw_output.borrow();
+            (b.data.clone(), b.shape.clone())
+        };
+
+        let input_shape = x.borrow().shape.clone();
+        let has_bias = self.bias.is_some();
+
+        // `edge()` requires grad if *any* of x/weight/bias does — fixes a latent bug
+        // where this used to check only `x.borrow().requires_grad`, ignoring the
+        // weight and bias tensors (the same B1-class bug §1.4 targets).
+        let mut inputs = vec![x.clone(), self.weight.clone()];
+        if let Some(ref bias) = self.bias {
+            inputs.push(bias.clone());
         }
 
-        // Track gradient computation graph
-        if x.borrow().requires_grad {
-            let mut parents = vec![x.clone(), self.weight.clone()];
-            if let Some(ref bias) = self.bias {
-                parents.push(bias.clone());
-            }
-
-            output.borrow_mut().parents.clone_from(&parents);
-            output.borrow_mut().grad_fn = Some(Box::new(ConvTranspose2dGradFn {
+        edge(
+            inputs,
+            final_data,
+            final_shape,
+            Device::CPU,
+            Box::new(ConvTranspose2dGradFn {
                 input_shape,
                 weight: self.weight.clone(),
                 stride: self.stride,
                 padding: self.padding,
                 kernel_size: self.kernel_size,
-                has_bias: self.bias.is_some(),
-            }));
-        }
-
-        output
+                has_bias,
+            }),
+        )
     }
 
     fn parameters(&self) -> Vec<Tensor> {
@@ -918,5 +930,12 @@ mod tests {
             1,
             "ConvTranspose2d without bias should have 1 parameter"
         );
+    }
+
+    #[test]
+    fn test_conv_transpose2d_assert_trainable() {
+        let conv = ConvTranspose2d::new(2, 4, 3, 1, 0, true);
+        let x = RawTensor::new(vec![1.0; 2 * 5 * 5], &[1, 2, 5, 5], true);
+        crate::assert_trainable!(conv, x);
     }
 }

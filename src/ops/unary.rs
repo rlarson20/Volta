@@ -1,7 +1,7 @@
-use crate::autograd::GradFn;
+use crate::autograd::{GradFn, edge};
+use crate::device::Device;
+use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
-use std::cell::RefCell;
-use std::rc::Rc;
 
 /// Unary operations: single input, single output
 ///
@@ -217,14 +217,9 @@ impl RawTensor {
     /// Creates a new tensor and sets up gradient tracking if needed.
     #[allow(clippy::cast_possible_truncation)]
     pub fn unary_op(t: &Tensor, op: UnaryOp) -> Tensor {
-        let (data, shape, req, device) = {
+        let (data, shape, device) = {
             let s = t.borrow();
-            (
-                s.data.clone(),
-                s.shape.clone(),
-                s.requires_grad,
-                s.device.clone(),
-            )
+            (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
         // Fast path: if the tensor already lives on GPU and we have a matching
@@ -235,20 +230,13 @@ impl RawTensor {
                 && let kernel = unary_kernel_name(op)
                 && let Some(storage) = Self::gpu_unary(&data, kernel)
             {
-                let out = Rc::new(RefCell::new(Self {
-                    data: storage,
+                return edge(
+                    [t.clone()],
+                    storage,
                     shape,
-                    grad: None,
-                    requires_grad: req,
-                    grad_fn: None,
-                    parents: vec![t.clone()],
                     device,
-                }));
-
-                if req {
-                    out.borrow_mut().grad_fn = Some(Box::new(UnaryGradFn { op }));
-                }
-                return out;
+                    Box::new(UnaryGradFn { op }),
+                );
             }
         }
 
@@ -273,13 +261,12 @@ impl RawTensor {
             })
             .collect();
 
-        let out = Self::new(result, &shape, req);
-
-        // Set up backpropagation if this tensor requires gradients
-        if out.borrow().requires_grad {
-            out.borrow_mut().parents = vec![t.clone()];
-            out.borrow_mut().grad_fn = Some(Box::new(UnaryGradFn { op }));
-        }
-        out
+        edge(
+            [t.clone()],
+            Storage::cpu(result),
+            shape,
+            Device::CPU,
+            Box::new(UnaryGradFn { op }),
+        )
     }
 }

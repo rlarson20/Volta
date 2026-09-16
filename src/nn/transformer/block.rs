@@ -288,4 +288,13 @@ mod tests {
         // Should have norm1.gamma, norm1.beta, norm2.gamma, norm2.beta, ffn parameters
         assert!(state.len() >= 4);
     }
+
+    #[test]
+    fn test_block_assert_trainable() {
+        // SimpleAttention (the current placeholder attention) has no parameters of
+        // its own, so this exercises norm1/norm2/ffn — everything that does.
+        let block = TransformerBlock::new(16, 2, 2, 0.0);
+        let x = RawTensor::new(vec![1.0; 2 * 3 * 16], &[2, 3, 16], true);
+        crate::assert_trainable!(block, x);
+    }
 }

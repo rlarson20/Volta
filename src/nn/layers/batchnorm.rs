@@ -89,9 +89,10 @@ impl Module for BatchNorm2d {
             let sq_diff = diff.elem_mul(&diff);
             let batch_var = sq_diff.mean_dim(1, true); // (C, 1)
 
-            // Update running stats (no_grad logic)
+            // Update running stats.
             // running_mean = (1 - m) * running_mean + m * batch_mean
             {
+                let _no_grad = crate::autograd::no_grad();
                 let mut rm = self.running_mean.borrow_mut();
                 let mut rv = self.running_var.borrow_mut();
                 let bm_data = &batch_mean.borrow().data;
@@ -260,8 +261,9 @@ impl Module for BatchNorm1d {
             let sq_diff = diff.elem_mul(&diff);
             let batch_var = sq_diff.mean_dim(0, true); // [1, C]
 
-            // Update running stats (no gradient tracking)
+            // Update running stats.
             {
+                let _no_grad = crate::autograd::no_grad();
                 let mut rm = self.running_mean.borrow_mut();
                 let mut rv = self.running_var.borrow_mut();
                 let bm_data = &batch_mean.borrow().data;

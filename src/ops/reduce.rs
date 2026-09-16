@@ -1,4 +1,5 @@
-use crate::autograd::GradFn;
+use crate::autograd::{GradFn, edge};
+use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
 
 /// Reduction operations: reduce tensor to scalar
@@ -152,14 +153,9 @@ impl RawTensor {
     /// unwrap map
     #[allow(clippy::too_many_lines)]
     pub fn reduce_op(self_t: &Tensor, op: ReduceOp) -> Tensor {
-        let (data, shape, req_grad, device) = {
+        let (data, shape, device) = {
             let s = self_t.borrow();
-            (
-                s.data.clone(),
-                s.shape.clone(),
-                s.requires_grad,
-                s.device.clone(),
-            )
+            (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
         let (result_val, grad_fn): (f32, Box<dyn GradFn>) = match op {
@@ -257,17 +253,8 @@ impl RawTensor {
 
         // Start with a CPU scalar and then place it on the same logical device
         // as the input tensor. The reduction computation may have happened on GPU.
-        let out = Self::new(vec![result_val], &[1], req_grad);
-        {
-            let mut ob = out.borrow_mut();
-            ob.data = ob.data.to_device(&device);
-            ob.device = device;
-        }
+        let storage = Storage::cpu(vec![result_val]).to_device(&device);
 
-        if out.borrow().requires_grad {
-            out.borrow_mut().parents = vec![self_t.clone()];
-            out.borrow_mut().grad_fn = Some(grad_fn);
-        }
-        out
+        edge([self_t.clone()], storage, vec![1], device, grad_fn)
     }
 }

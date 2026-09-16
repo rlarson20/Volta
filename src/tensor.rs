@@ -1,5 +1,5 @@
 use crate::Storage;
-use crate::autograd::GradFn;
+use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::ops::binary::BinaryOp;
 use crate::ops::reduce::ReduceOp;
@@ -20,6 +20,7 @@ use std::rc::Rc;
 ///
 /// **Note for production**: This is single-threaded only. For multi-threading,
 /// replace with `Arc<Mutex<RawTensor>>`.
+#[derive(Clone, Debug)]
 pub struct Tensor {
     inner: Rc<RefCell<RawTensor>>, //keeps fields private
 }
@@ -28,14 +29,96 @@ impl Tensor {
     pub fn requires_grad(&self) -> bool {
         self.inner.borrow().requires_grad
     }
-    pub(crate) fn set_requires_grad(&self, on: bool) { /* add invariant assertions */
+
+    /// Crate-internal forwarding methods to the underlying `RefCell<RawTensor>`.
+    ///
+    /// Before this type existed, `Tensor` *was* `Rc<RefCell<RawTensor>>`, so every
+    /// `t.borrow()` / `t.borrow_mut()` / `t.as_ptr()` call in the codebase resolved
+    /// through `Rc`'s `Deref` impl straight to `RefCell`'s inherent methods of the
+    /// same name. Wrapping `Rc<RefCell<RawTensor>>` in a struct removes that `Deref`
+    /// chain, so we re-supply methods with the *same names* here rather than
+    /// renaming them — Rust resolves a method call by (name, receiver type), so this
+    /// keeps every existing internal call site compiling unchanged instead of
+    /// forcing a rename across every op/layer file.
+    ///
+    /// The opacity §1.1 actually cares about comes from `pub(crate)`, not from a
+    /// different method name: internal code (autograd, ops, nn) can still reach
+    /// `RawTensor`'s fields this way, but an external crate depending on `volta`
+    /// cannot — `inner` and these methods are invisible outside this crate, so
+    /// `x.borrow_mut().requires_grad = true` from downstream code is simply gone.
+    pub(crate) fn borrow(&self) -> std::cell::Ref<'_, RawTensor> {
+        self.inner.borrow()
     }
-    pub fn detach(&self) -> Tensor { /* new leaf sharing data */
+
+    pub(crate) fn borrow_mut(&self) -> std::cell::RefMut<'_, RawTensor> {
+        self.inner.borrow_mut()
     }
-    pub(crate) fn accumulate_grad(&self, g: Storage) { /* only grad writer */
+
+    /// Pointer identity for the graph-traversal visited-set in `autograd::backward()`.
+    pub(crate) fn as_ptr(&self) -> *const RawTensor {
+        self.inner.as_ptr()
     }
-    pub(crate) fn snapshot(&self) -> TensorSnapshot<'static> { /* owned clone of fields */
+
+    /// Wrap an already-built `RawTensor` value into a `Tensor` handle.
+    ///
+    /// For the rare case where code outside this module needs a `Tensor` around a
+    /// `RawTensor` it already has in hand (e.g. wrapping a `&RawTensor` gradient
+    /// argument so a `TensorOps` method can be called on it) — `inner` being private
+    /// means a `Tensor { inner: .. }` struct literal only compiles inside this
+    /// module, so this is the crate-wide way to do it instead.
+    pub(crate) fn from_raw(raw: RawTensor) -> Tensor {
+        Tensor {
+            inner: Rc::new(RefCell::new(raw)),
+        }
     }
+
+    /// Set `requires_grad` on a leaf tensor.
+    ///
+    /// # Panics (debug only)
+    /// Panics if called on a tensor that already has a `grad_fn` attached —
+    /// flipping the flag on a non-leaf tensor would contradict the invariant
+    /// `edge()` maintains (requires_grad is derived from inputs, not hand-set,
+    /// on anything that isn't a leaf).
+    pub(crate) fn set_requires_grad(&self, on: bool) {
+        let mut t = self.inner.borrow_mut();
+        debug_assert!(
+            !(on && t.grad_fn.is_some()),
+            "set_requires_grad called on a non-leaf tensor"
+        );
+        t.requires_grad = on;
+    }
+
+    /// Return a new leaf tensor sharing this tensor's data but detached from the graph.
+    pub fn detach(&self) -> Tensor {
+        let t = self.inner.borrow();
+        Tensor {
+            inner: Rc::new(RefCell::new(RawTensor {
+                data: t.data.clone(),
+                shape: t.shape.clone(),
+                grad: None,
+                requires_grad: false,
+                grad_fn: None,
+                parents: vec![],
+                device: t.device.clone(),
+            })),
+        }
+    }
+
+    /// Accumulate a gradient contribution into this tensor.
+    ///
+    /// The only code allowed to write `grad` outside of initialization.
+    pub(crate) fn accumulate_grad(&self, g: Storage) {
+        let mut t = self.inner.borrow_mut();
+        let g = g.to_device(&t.device);
+        match t.grad {
+            None => t.grad = Some(g),
+            Some(ref mut existing) => RawTensor::accumulate_grad(existing, &g),
+        }
+    }
+
+    // pub(crate) fn snapshot(&self) -> TensorSnapshot<'static> { /* owned clone of fields */ }
+    // Deferred: no consumer yet and `TensorSnapshot` doesn't exist. Revisit alongside
+    // the `load_state_dict` rewrite described in ADDENDUM.md §1.1.
 }
 
 // ===== RAW TENSOR STRUCTURE =====
@@ -153,7 +236,9 @@ impl RawTensor {
             parents: vec![],
             device: Device::CPU,
         };
-        Ok(Rc::new(RefCell::new(raw)))
+        Ok(Tensor {
+            inner: Rc::new(RefCell::new(raw)),
+        })
     }
 
     /// Create a new tensor from data and shape
@@ -196,7 +281,9 @@ impl RawTensor {
             parents: vec![],
             device,
         };
-        Ok(Rc::new(RefCell::new(raw)))
+        Ok(Tensor {
+            inner: Rc::new(RefCell::new(raw)),
+        })
     }
 
     /// Create a new tensor from Storage and shape (internal use for GPU ops)
@@ -626,7 +713,7 @@ impl RawTensor {
     ///
     /// Returns `VoltaError::DimensionOutOfBounds` if dim is >= tensor rank
     pub fn try_sum_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Result<Tensor> {
-        let (data, shape, req_grad, device) = {
+        let (data, shape, device) = {
             let s = self_t.borrow();
             if dim >= s.shape.len() {
                 return Err(VoltaError::DimensionOutOfBounds {
@@ -634,12 +721,7 @@ impl RawTensor {
                     shape: s.shape.clone(),
                 });
             }
-            (
-                s.data.clone(),
-                s.shape.clone(),
-                s.requires_grad,
-                s.device.clone(),
-            )
+            (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
         let dim_size = *shape.get(dim).unwrap_or(&1);
@@ -684,23 +766,20 @@ impl RawTensor {
                 .collect()
         };
 
-        let out = Self::new(result, &final_shape, req_grad);
         // Place the reduction result on the same logical device as the input.
-        {
-            let mut ob = out.borrow_mut();
-            ob.data = ob.data.to_device(&device);
-            ob.device = device;
-        }
+        let storage = Storage::cpu(result).to_device(&device);
 
-        if req_grad {
-            out.borrow_mut().parents = vec![self_t.clone()];
-            out.borrow_mut().grad_fn = Some(Box::new(SumDimGradFn {
+        Ok(edge(
+            [self_t.clone()],
+            storage,
+            final_shape,
+            device,
+            Box::new(SumDimGradFn {
                 input_shape: shape,
                 dim,
                 keepdim,
-            }));
-        }
-        Ok(out)
+            }),
+        ))
     }
 
     /// # Arguments
@@ -748,7 +827,9 @@ impl RawTensor {
             parents: t.parents.clone(),
             device,
         };
-        Rc::new(RefCell::new(new_tensor))
+        Tensor {
+            inner: Rc::new(RefCell::new(new_tensor)),
+        }
     }
 
     /// Max along a specific axis
@@ -757,7 +838,7 @@ impl RawTensor {
     /// # Panics
     /// dim out of bounds
     pub fn max_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
-        let (data, shape, req_grad, device) = {
+        let (data, shape, device) = {
             let s = self_t.borrow();
             assert!(
                 dim < s.shape.len(),
@@ -765,12 +846,7 @@ impl RawTensor {
                 dim,
                 s.shape
             );
-            (
-                s.data.clone(),
-                s.shape.clone(),
-                s.requires_grad,
-                s.device.clone(),
-            )
+            (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
         let dim_size = *shape.get(dim).unwrap_or(&1);
@@ -818,24 +894,21 @@ impl RawTensor {
                 .collect()
         };
 
-        let out = Self::new(result, &final_shape, req_grad);
         // Ensure the max result lives on the same logical device as the input.
-        {
-            let mut ob = out.borrow_mut();
-            ob.data = ob.data.to_device(&device);
-            ob.device = device;
-        }
+        let storage = Storage::cpu(result).to_device(&device);
 
-        if req_grad {
-            out.borrow_mut().parents = vec![self_t.clone()];
-            out.borrow_mut().grad_fn = Some(Box::new(MaxDimGradFn {
+        edge(
+            [self_t.clone()],
+            storage,
+            final_shape,
+            device,
+            Box::new(MaxDimGradFn {
                 input_shape: shape,
                 max_indices,
                 dim,
                 keepdim,
-            }));
-        }
-        out
+            }),
+        )
     }
 
     pub fn softmax(self_t: &Tensor, dim: usize) -> Tensor {
@@ -912,6 +985,7 @@ impl RawTensor {
         F: Fn(&Tensor) -> Tensor,
     {
         // Compute analytical gradient
+        Self::zero_grad(tensor);
         let loss = loss_fn(tensor);
         loss.backward();
 
@@ -922,37 +996,43 @@ impl RawTensor {
         let original_shape = tensor.borrow().shape.clone();
         let requires_grad = tensor.borrow().requires_grad;
 
-        // Compute numerical gradient for each element
-        for i in 0..original_data.len() {
-            //f(x + epsilon)
-            let mut data_plus = original_data.clone();
-            if let Some(val) = data_plus.get_mut(i) {
-                *val += epsilon;
-            }
-            let tensor_plus = Self::new(data_plus.to_vec(), &original_shape, requires_grad);
-            let loss_plus = loss_fn(&tensor_plus);
-            assert!(
-                !loss_plus.borrow().data.is_empty(),
-                "check_gradients: loss must be scalar, got shape {:?}",
-                loss_plus.borrow().shape
-            );
-            let val_plus = loss_plus.borrow().data.first().copied().unwrap_or(0.0);
+        // Compute numerical gradient for each element. These perturbed forward passes
+        // are for finite-difference comparison only — scoped in `no_grad()` so they
+        // can't attach graph nodes or otherwise contaminate the analytical pass above
+        // (ADDENDUM.md §1.5).
+        {
+            let _no_grad = crate::autograd::no_grad();
+            for i in 0..original_data.len() {
+                //f(x + epsilon)
+                let mut data_plus = original_data.clone();
+                if let Some(val) = data_plus.get_mut(i) {
+                    *val += epsilon;
+                }
+                let tensor_plus = Self::new(data_plus.to_vec(), &original_shape, requires_grad);
+                let loss_plus = loss_fn(&tensor_plus);
+                assert!(
+                    !loss_plus.borrow().data.is_empty(),
+                    "check_gradients: loss must be scalar, got shape {:?}",
+                    loss_plus.borrow().shape
+                );
+                let val_plus = loss_plus.borrow().data.first().copied().unwrap_or(0.0);
 
-            let mut data_minus = original_data.clone();
-            if let Some(val) = data_minus.get_mut(i) {
-                *val -= epsilon;
-            }
-            let tensor_minus = Self::new(data_minus.to_vec(), &original_shape, requires_grad);
-            let loss_minus = loss_fn(&tensor_minus);
-            assert!(
-                !loss_minus.borrow().data.is_empty(),
-                "check_gradients: loss must be scalar, got shape {:?}",
-                loss_minus.borrow().shape
-            );
-            let val_minus = loss_minus.borrow().data.first().copied().unwrap_or(0.0);
-            //central diff
-            if let Some(val) = numerical_grad.get_mut(i) {
-                *val = (val_plus - val_minus) / (2.0 * epsilon);
+                let mut data_minus = original_data.clone();
+                if let Some(val) = data_minus.get_mut(i) {
+                    *val -= epsilon;
+                }
+                let tensor_minus = Self::new(data_minus.to_vec(), &original_shape, requires_grad);
+                let loss_minus = loss_fn(&tensor_minus);
+                assert!(
+                    !loss_minus.borrow().data.is_empty(),
+                    "check_gradients: loss must be scalar, got shape {:?}",
+                    loss_minus.borrow().shape
+                );
+                let val_minus = loss_minus.borrow().data.first().copied().unwrap_or(0.0);
+                //central diff
+                if let Some(val) = numerical_grad.get_mut(i) {
+                    *val = (val_plus - val_minus) / (2.0 * epsilon);
+                }
             }
         }
 

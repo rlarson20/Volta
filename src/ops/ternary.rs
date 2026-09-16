@@ -1,7 +1,7 @@
-use crate::autograd::GradFn;
+use crate::autograd::{GradFn, edge};
+use crate::device::Device;
+use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
-use std::cell::RefCell;
-use std::rc::Rc;
 
 /// Ternary operations: three inputs, one output
 #[derive(Clone, Copy)]
@@ -153,32 +153,17 @@ impl RawTensor {
     pub fn ternary_op(x: &Tensor, y: &Tensor, z: &Tensor, op: TernaryOp) -> Tensor {
         match op {
             TernaryOp::MulAcc => {
-                let (data_x, shape_x, req_x, dev_x) = {
+                let (data_x, shape_x, dev_x) = {
                     let s = x.borrow();
-                    (
-                        s.data.clone(),
-                        s.shape.clone(),
-                        s.requires_grad,
-                        s.device.clone(),
-                    )
+                    (s.data.clone(), s.shape.clone(), s.device.clone())
                 };
-                let (data_y, shape_y, req_y, dev_y) = {
+                let (data_y, shape_y, dev_y) = {
                     let s = y.borrow();
-                    (
-                        s.data.clone(),
-                        s.shape.clone(),
-                        s.requires_grad,
-                        s.device.clone(),
-                    )
+                    (s.data.clone(), s.shape.clone(), s.device.clone())
                 };
-                let (data_z, shape_z, req_z, dev_z) = {
+                let (data_z, shape_z, dev_z) = {
                     let s = z.borrow();
-                    (
-                        s.data.clone(),
-                        s.shape.clone(),
-                        s.requires_grad,
-                        s.device.clone(),
-                    )
+                    (s.data.clone(), s.shape.clone(), s.device.clone())
                 };
 
                 assert_eq!(
@@ -190,8 +175,6 @@ impl RawTensor {
                     "MulAcc requires matching shapes for x and z"
                 );
 
-                let requires_grad = req_x || req_y || req_z;
-
                 // Fast path: when all three inputs live on the same GPU device and
                 // shapes match exactly, evaluate z = x * y + w entirely on GPU.
                 #[cfg(feature = "gpu")]
@@ -199,19 +182,13 @@ impl RawTensor {
                     if dev_x.is_gpu() && dev_x == dev_y && dev_x == dev_z {
                         if let Some(prod) = Self::gpu_mul(&data_x, &data_y) {
                             if let Some(sum) = Self::gpu_add(&prod, &data_z) {
-                                let out = Rc::new(RefCell::new(Self {
-                                    data: sum,
-                                    shape: shape_x,
-                                    grad: None,
-                                    requires_grad,
-                                    grad_fn: None,
-                                    parents: vec![x.clone(), y.clone(), z.clone()],
-                                    device: dev_x,
-                                }));
-                                if requires_grad {
-                                    out.borrow_mut().grad_fn = Some(Box::new(MulAccGradFn));
-                                }
-                                return out;
+                                return edge(
+                                    [x.clone(), y.clone(), z.clone()],
+                                    sum,
+                                    shape_x,
+                                    dev_x,
+                                    Box::new(MulAccGradFn),
+                                );
                             }
                             log::warn!("GPU add for MulAcc failed; falling back to CPU path");
                         } else {
@@ -227,12 +204,13 @@ impl RawTensor {
                     .zip(&data_z)
                     .map(|((a, b), c)| a * b + c)
                     .collect::<Vec<_>>();
-                let out = Self::new(result_data, &shape_x, requires_grad);
-                if out.borrow().requires_grad {
-                    out.borrow_mut().parents = vec![x.clone(), y.clone(), z.clone()];
-                    out.borrow_mut().grad_fn = Some(Box::new(MulAccGradFn));
-                }
-                out
+                edge(
+                    [x.clone(), y.clone(), z.clone()],
+                    Storage::cpu(result_data),
+                    shape_x,
+                    Device::CPU,
+                    Box::new(MulAccGradFn),
+                )
             }
             TernaryOp::Where => {
                 // x = condition, y = true branch, z = false branch
@@ -240,13 +218,13 @@ impl RawTensor {
                     let s = x.borrow();
                     (s.data.clone(), s.shape.clone())
                 };
-                let (true_data, true_shape, true_req) = {
+                let (true_data, true_shape) = {
                     let s = y.borrow();
-                    (s.data.clone(), s.shape.clone(), s.requires_grad)
+                    (s.data.clone(), s.shape.clone())
                 };
-                let (false_data, false_shape, false_req) = {
+                let (false_data, false_shape) = {
                     let s = z.borrow();
-                    (s.data.clone(), s.shape.clone(), s.requires_grad)
+                    (s.data.clone(), s.shape.clone())
                 };
 
                 let tmp_shape = Self::broadcast_shape(&cond_shape, &true_shape);
@@ -263,16 +241,19 @@ impl RawTensor {
                     .map(|((&c, &t), &f)| if c == 0.0 { f } else { t })
                     .collect::<Vec<_>>();
 
-                let out = Self::new(result_data, &out_shape, true_req || false_req);
-                if out.borrow().requires_grad {
-                    out.borrow_mut().parents = vec![y.clone(), z.clone()];
-                    out.borrow_mut().grad_fn = Some(Box::new(WhereGradFn {
+                // Note: the condition (x) is never a parent — gradients only flow
+                // through whichever branch was selected, never through the mask.
+                edge(
+                    [y.clone(), z.clone()],
+                    Storage::cpu(result_data),
+                    out_shape,
+                    Device::CPU,
+                    Box::new(WhereGradFn {
                         condition: cond_bc,
                         true_shape,
                         false_shape,
-                    }));
-                }
-                out
+                    }),
+                )
             }
         }
     }

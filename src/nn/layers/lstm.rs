@@ -211,3 +211,15 @@ impl Module for LSTMCell {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lstmcell_assert_trainable() {
+        let cell = LSTMCell::new(4, 8, true);
+        let x = RawTensor::new(vec![1.0; 2 * 4], &[2, 4], true);
+        crate::assert_trainable!(cell, x);
+    }
+}

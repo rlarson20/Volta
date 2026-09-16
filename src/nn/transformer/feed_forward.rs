@@ -213,4 +213,11 @@ mod tests {
         // Should have expand.weight, expand.bias, contract.weight, contract.bias
         assert_eq!(state.len(), 4);
     }
+
+    #[test]
+    fn test_ffn_assert_trainable() {
+        let ffn = FeedForward::new(16, 2, 0.0);
+        let x = RawTensor::new(vec![1.0; 2 * 3 * 16], &[2, 3, 16], true);
+        crate::assert_trainable!(ffn, x);
+    }
 }
