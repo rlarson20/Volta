@@ -13,14 +13,30 @@ use rand_distr::{Distribution, Normal};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-/// Type alias for a reference-counted, interior-mutable tensor.
+/// Wrapper struct for a reference-counted, interior-mutable tensor.
 ///
 /// We use `Rc<RefCell<RawTensor>>` to allow multiple references to the same tensor
 /// (needed for computation graphs) while still allowing mutation (for gradient accumulation).
 ///
 /// **Note for production**: This is single-threaded only. For multi-threading,
 /// replace with `Arc<Mutex<RawTensor>>`.
-pub type Tensor = Rc<RefCell<RawTensor>>;
+pub struct Tensor {
+    inner: Rc<RefCell<RawTensor>>, //keeps fields private
+}
+
+impl Tensor {
+    pub fn requires_grad(&self) -> bool {
+        self.inner.borrow().requires_grad
+    }
+    pub(crate) fn set_requires_grad(&self, on: bool) { /* add invariant assertions */
+    }
+    pub fn detach(&self) -> Tensor { /* new leaf sharing data */
+    }
+    pub(crate) fn accumulate_grad(&self, g: Storage) { /* only grad writer */
+    }
+    pub(crate) fn snapshot(&self) -> TensorSnapshot<'static> { /* owned clone of fields */
+    }
+}
 
 // ===== RAW TENSOR STRUCTURE =====
 

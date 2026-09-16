@@ -559,17 +559,20 @@ Supporting cast: `insta` snapshot for `state_dict()` round-trips (catches key-fo
 
 Ordered by prevention-per-risk; each phase compiles and ships independently.
 
-| Phase                          | Contents                                                                                                                                                                                       | Prevents                                               | Size                      |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------- |
-| 0 — mechanical, do immediately | `#[non_exhaustive]` on public enums; `approx`→dev-dep; drop `statrs` (20-line erf); CI `--no-default-features` fix + cargo-hack; cfg-at-definition consolidation (§9); `log` facade for prints | B5 recurrence, dependency bloat, print pollution       | 1 day, near-zero risk     |
-| 1 — the invariant wall         | Opaque `Tensor` + §1.4 `edge()` constructor + `NoGrad` (§1.1, 1.4, 1.5); `assert_trainable!` across all layers (§5.3)                                                                          | B1/B2/B3 class, graph surgery                          | ~1 week, mechanical churn |
-| 2 — types for dims and ops     | `Shape`/`Axis`/`Strides` (§1.2); specs replace positional args (§1.3); `GradFn` enum (§2.5); `define_ops!` (§5.1); `PadValue` (§2.4); `into_loss` (§2.2)                                       | B4 class, forward/backward/kernel drift, H1            | ~1–2 weeks                |
-| 3 — traits and storage         | Sealed + split traits w/ trybuild (§3); `DevicePolicy` (§2.1); storage `Arc`/`OnceCell`/no-Deref (§7); indexing policy + `fetch` (§8)                                                          | H3/H6/H8, silent fallback, clone economy, silent zeros | ~2 weeks                  |
-| 4 — endgame, optional          | Arena graph (§6); `Backend` trait (§3.5); proptest DAG checks (§10.2) if not already in phase 2                                                                                                | cycles, `Send`, memory determinism                     | multi-week, do last       |
+| Phase                      | Contents                                                                                                                                                 | Prevents                                               | Size                      |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------- |
+| 1 — the invariant wall     | Opaque `Tensor` + §1.4 `edge()` constructor + `NoGrad` (§1.1, 1.4, 1.5); `assert_trainable!` across all layers (§5.3)                                    | B1/B2/B3 class, graph surgery                          | ~1 week, mechanical churn |
+| 2 — types for dims and ops | `Shape`/`Axis`/`Strides` (§1.2); specs replace positional args (§1.3); `GradFn` enum (§2.5); `define_ops!` (§5.1); `PadValue` (§2.4); `into_loss` (§2.2) | B4 class, forward/backward/kernel drift, H1            | ~1–2 weeks                |
+| 3 — traits and storage     | Sealed + split traits w/ trybuild (§3); `DevicePolicy` (§2.1); storage `Arc`/`OnceCell`/no-Deref (§7); indexing policy + `fetch` (§8)                    | H3/H6/H8, silent fallback, clone economy, silent zeros | ~2 weeks                  |
+| 4 — endgame, optional      | Arena graph (§6); `Backend` trait (§3.5); proptest DAG checks (§10.2) if not already in phase 2                                                          | cycles, `Send`, memory determinism                     | multi-week, do last       |
 
 Phases 0–2 alone retire every prevention target that maps to a Part I blocker.
 The arena (§6) is the only genuinely architectural bet,
 and it gets cheaper every phase that lands before it.
+
+### done phases
+
+| 0 — mechanical, do immediately | `#[non_exhaustive]` on public enums; `approx`→dev-dep; drop `statrs` (20-line erf); CI `--no-default-features` fix + cargo-hack; cfg-at-definition consolidation (§9); `log` facade for prints | B5 recurrence, dependency bloat, print pollution | 1 day, near-zero risk |
 
 ---
 

@@ -19,6 +19,36 @@ pub trait GradFn {
     fn clone_box(&self) -> Box<dyn GradFn>;
 }
 
+// Edge creation function: only thing allowed to write grad_fn/parents
+pub(crate) fn edge(
+    inputs: impl AsRef<[Tensor]>,
+    data: Storage,
+    shape: Shape,
+    grad: GradFn,
+) -> Tensor {
+    let requires_grad =
+        inputs.as_ref().iter().any(|t| t.requires_grad()) && !grad_is_trivial(&grad); //Mod and Cmplt return falce here, once
+    //attach parents and grad_fn iff requires_grad, here
+    //needs to consult NO_GRAD
+}
+
+fn grad_is_trivial(g: &GradFn) -> bool {
+    todo!("need to determine how to handle 'trivial gradients'")
+}
+
+static NO_GRAD: Cell<bool> = Cell::new(false);
+
+pub fn no_grad() -> NoGradGuard {
+    NO_GRAD.set(true);
+    NoGradGuard
+}
+pub struct NoGradGuard;
+impl Drop for NoGradGuard {
+    fn drop(&mut self) {
+        NO_GRAD.set(false)
+    }
+}
+
 // ===== BACKPROPAGATION =====
 
 impl RawTensor {
