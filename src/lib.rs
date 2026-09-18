@@ -24,11 +24,13 @@ pub mod gpu;
 
 pub mod dtype;
 pub mod error;
+pub mod shape;
 pub mod storage;
 
 // Add to re-exports:
 pub use dtype::DType;
 pub use error::{Result, VoltaError};
+pub use shape::{Axis, Shape, Strides};
 pub use storage::Storage;
 
 #[cfg(feature = "gpu")]

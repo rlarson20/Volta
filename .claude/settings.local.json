@@ -12,7 +12,8 @@
       "Bash(tree:*)",
       "Bash(cargo clippy:*)",
       "Bash(rtk proxy *)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(rtk grep *)"
     ]
   }
 }
