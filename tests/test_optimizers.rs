@@ -22,9 +22,7 @@ fn test_adam_bias_correction() {
     let init_param: f32 = 1.0;
 
     let t = RawTensor::new(vec![init_param], &[1], true);
-    // TODO(set_grad): needs a public grad-injection method, deliberately deferred
-    // (see tests/TODO.md) — left broken to measure how much this alone accounts for.
-    t.borrow_mut().grad = Some(Storage::cpu(vec![grad_val]));
+    t.set_grad(Storage::cpu(vec![grad_val]));
 
     let mut opt = Adam::new(vec![t.clone()], lr, (beta1, beta2), eps, 0.0);
     opt.step();
@@ -60,9 +58,7 @@ fn test_adam_mv_accumulation_multi_step() {
     let init_param: f32 = 2.0;
 
     let t = RawTensor::new(vec![init_param], &[1], true);
-    // TODO(set_grad): needs a public grad-injection method, deliberately deferred
-    // (see tests/TODO.md) — left broken to measure how much this alone accounts for.
-    t.borrow_mut().grad = Some(Storage::cpu(vec![grad_val]));
+    t.set_grad(Storage::cpu(vec![grad_val]));
 
     let mut opt = Adam::new(vec![t.clone()], lr, (beta1, beta2), eps, 0.0);
 
@@ -74,9 +70,7 @@ fn test_adam_mv_accumulation_multi_step() {
     for step in 1..=3_i32 {
         // Re-inject gradient before each step (step does not zero grad,
         // but we want a known, fresh gradient each time).
-        // TODO(set_grad): needs a public grad-injection method, deliberately deferred
-        // (see tests/TODO.md) — left broken to measure how much this alone accounts for.
-        t.borrow_mut().grad = Some(Storage::cpu(vec![grad_val]));
+        t.set_grad(Storage::cpu(vec![grad_val]));
         opt.step();
 
         // EMA updates
@@ -107,18 +101,14 @@ fn test_adam_weight_decay() {
 
     // With weight decay
     let t_wd = RawTensor::new(vec![init_param], &[1], true);
-    // TODO(set_grad): needs a public grad-injection method, deliberately deferred
-    // (see tests/TODO.md) — left broken to measure how much this alone accounts for.
-    t_wd.borrow_mut().grad = Some(Storage::cpu(vec![0.0]));
+    t_wd.set_grad(Storage::cpu(vec![0.0]));
     let mut opt_wd = Adam::new(vec![t_wd.clone()], lr, (beta1, beta2), eps, 0.01);
     opt_wd.step();
     let val_wd = scalar(&t_wd);
 
     // Without weight decay
     let t_no = RawTensor::new(vec![init_param], &[1], true);
-    // TODO(set_grad): needs a public grad-injection method, deliberately deferred
-    // (see tests/TODO.md) — left broken to measure how much this alone accounts for.
-    t_no.borrow_mut().grad = Some(Storage::cpu(vec![0.0]));
+    t_no.set_grad(Storage::cpu(vec![0.0]));
     let mut opt_no = Adam::new(vec![t_no.clone()], lr, (beta1, beta2), eps, 0.0);
     opt_no.step();
     let val_no = scalar(&t_no);
@@ -183,9 +173,7 @@ fn test_sgd_no_momentum_simple() {
     let grad_val: f32 = 2.0;
 
     let t = RawTensor::new(vec![init_param], &[1], true);
-    // TODO(set_grad): needs a public grad-injection method, deliberately deferred
-    // (see tests/TODO.md) — left broken to measure how much this alone accounts for.
-    t.borrow_mut().grad = Some(Storage::cpu(vec![grad_val]));
+    t.set_grad(Storage::cpu(vec![grad_val]));
 
     let mut opt = SGD::new(vec![t.clone()], lr, 0.0, 0.0);
     opt.step();
@@ -218,9 +206,7 @@ fn test_sgd_weight_decay() {
     let grad_val: f32 = 1.0;
 
     let t = RawTensor::new(vec![init_param], &[1], true);
-    // TODO(set_grad): needs a public grad-injection method, deliberately deferred
-    // (see tests/TODO.md) — left broken to measure how much this alone accounts for.
-    t.borrow_mut().grad = Some(Storage::cpu(vec![grad_val]));
+    t.set_grad(Storage::cpu(vec![grad_val]));
 
     let mut opt = SGD::new(vec![t.clone()], lr, 0.0, wd);
     opt.step();

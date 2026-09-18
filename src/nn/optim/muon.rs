@@ -174,7 +174,7 @@ mod tests {
         // Simple test: Ensure parameters change after a step
         let x = RawTensor::new(vec![1.0, -1.0, 0.5, 0.5], &[2, 2], true);
         // Artificial gradient
-        x.borrow_mut().grad = Some(Storage::cpu(vec![0.1, 0.1, -0.1, -0.1]));
+        x.set_grad(Storage::cpu(vec![0.1, 0.1, -0.1, -0.1]));
 
         let mut opt = Muon::new(vec![x.clone()], 0.1, 0.9, true, 5);
 

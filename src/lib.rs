@@ -3113,7 +3113,7 @@ mod axis_reduce_tests {
         // Step should be: w = w - lr * (grad + decay * w) = 1.0 - 0.1 * (0 + 0.1 * 1.0) = 0.99
         let mut opt = SGD::new(vec![w.clone()], 0.1, 0.0, 0.1);
 
-        w.borrow_mut().grad = Some(Storage::cpu(vec![0.0])); // Artificial zero gradient
+        w.set_grad(Storage::cpu(vec![0.0])); // Artificial zero gradient
         opt.step();
 
         let new_val = w
@@ -3721,11 +3721,7 @@ mod gpu_tests {
         let mut opt = SGD::new(vec![param.clone()], 0.01, 0.0, 0.0);
 
         // Manually set a gradient on GPU
-        {
-            let mut p = param.borrow_mut();
-            let grad_data = vec![0.1; 10];
-            p.grad = Some(Storage::gpu(grad_data));
-        }
+        param.set_grad(Storage::gpu(vec![0.1; 10]));
 
         // Step should update the parameter
         let param_before = param.borrow().data.to_vec();
@@ -3756,11 +3752,7 @@ mod gpu_tests {
         let mut opt = Adam::new(vec![param.clone()], 0.01, (0.9, 0.999), 1e-8, 0.0);
 
         // Manually set a gradient on GPU
-        {
-            let mut p = param.borrow_mut();
-            let grad_data = vec![0.1; 10];
-            p.grad = Some(Storage::gpu(grad_data));
-        }
+        param.set_grad(Storage::gpu(vec![0.1; 10]));
 
         // Step should update the parameter
         let param_before = param.borrow().data.to_vec();
@@ -3791,11 +3783,7 @@ mod gpu_tests {
         let mut opt = SGD::new(vec![param.clone()], 0.01, 0.9, 0.0);
 
         // Manually set a gradient on GPU
-        {
-            let mut p = param.borrow_mut();
-            let grad_data = vec![0.1; 10];
-            p.grad = Some(Storage::gpu(grad_data));
-        }
+        param.set_grad(Storage::gpu(vec![0.1; 10]));
 
         // First step
         let param_before = param.borrow().data.to_vec();
@@ -3808,10 +3796,7 @@ mod gpu_tests {
         }
 
         // Set same gradient again
-        {
-            let mut p = param.borrow_mut();
-            p.grad = Some(Storage::gpu(vec![0.1; 10]));
-        }
+        param.set_grad(Storage::gpu(vec![0.1; 10]));
 
         // Second step should apply different update due to momentum
         let param_after_step2;
@@ -3856,19 +3841,13 @@ mod gpu_tests {
         // CPU parameter and optimizer
         let param_cpu = RawTensor::new(data.clone(), &[5], true);
         let mut opt_cpu = Adam::new(vec![param_cpu.clone()], 0.01, (0.9, 0.999), 1e-8, 0.0);
-        {
-            let mut p = param_cpu.borrow_mut();
-            p.grad = Some(Storage::cpu(grad_data.clone()));
-        }
+        param_cpu.set_grad(Storage::cpu(grad_data.clone()));
 
         // GPU parameter and optimizer
         let param_gpu = RawTensor::new(data, &[5], true).to_device(gpu_device.clone());
         let mut opt_gpu = Adam::new(vec![param_gpu.clone()], 0.01, (0.9, 0.999), 1e-8, 0.0);
-        {
-            let mut p = param_gpu.borrow_mut();
-            // Create GPU gradient
-            p.grad = Some(Storage::gpu(grad_data));
-        }
+        // Create GPU gradient
+        param_gpu.set_grad(Storage::gpu(grad_data));
 
         // Take one step on both
         opt_cpu.step();
@@ -3909,18 +3888,12 @@ mod gpu_tests {
         // but we can verify the optimizer works without CPU transfers
 
         // Set gradient on GPU
-        {
-            let mut p = param.borrow_mut();
-            p.grad = Some(Storage::gpu(vec![0.1, 0.2, 0.3, 0.4, 0.5]));
-        }
+        param.set_grad(Storage::gpu(vec![0.1, 0.2, 0.3, 0.4, 0.5]));
 
         // Take multiple steps
         for _ in 0..5 {
             // Update gradient each step
-            {
-                let mut p = param.borrow_mut();
-                p.grad = Some(Storage::gpu(vec![0.1, 0.2, 0.3, 0.4, 0.5]));
-            }
+            param.set_grad(Storage::gpu(vec![0.1, 0.2, 0.3, 0.4, 0.5]));
             opt.step();
         }
 
@@ -3954,10 +3927,7 @@ mod gpu_tests {
 
         // Set gradient on GPU and take multiple steps
         for _ in 0..5 {
-            {
-                let mut p = param.borrow_mut();
-                p.grad = Some(Storage::gpu(vec![0.1, 0.2, 0.3, 0.4, 0.5]));
-            }
+            param.set_grad(Storage::gpu(vec![0.1, 0.2, 0.3, 0.4, 0.5]));
             opt.step();
         }
 

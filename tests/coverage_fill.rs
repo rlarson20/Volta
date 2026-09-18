@@ -47,9 +47,7 @@ fn test_sgd_momentum_logic() {
     // Coverage gap: SGD momentum branches
     let t = RawTensor::new(vec![1.0], &[1], true);
     // Manually inject a gradient
-    // TODO(set_grad): needs a public grad-injection method, deliberately deferred
-    // (see tests/TODO.md) — left broken to measure how much this alone accounts for.
-    t.borrow_mut().grad = Some(Storage::cpu(vec![0.1]));
+    t.set_grad(Storage::cpu(vec![0.1]));
 
     let mut opt = SGD::new(vec![t.clone()], 0.1, 0.9, 0.0);
 

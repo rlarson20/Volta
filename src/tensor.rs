@@ -138,7 +138,9 @@ impl Tensor {
 
     /// Accumulate a gradient contribution into this tensor.
     ///
-    /// The only code allowed to write `grad` outside of initialization.
+    /// One of the two sanctioned writers of `grad` outside of initialization
+    /// — this one adds a contribution in during `backward()`; `set_grad`
+    /// overwrites directly for test seeding.
     pub(crate) fn accumulate_grad(&self, g: Storage) {
         let mut t = self.inner.borrow_mut();
         let g = g.to_device(&t.device);
@@ -146,6 +148,21 @@ impl Tensor {
             None => t.grad = Some(g),
             Some(ref mut existing) => RawTensor::accumulate_grad(existing, &g),
         }
+    }
+
+    /// Directly set this tensor's gradient, overwriting any existing value.
+    ///
+    /// This is the second sanctioned writer of `grad` outside initialization —
+    /// `accumulate_grad` (used by `backward()`) adds a contribution in; this one
+    /// replaces it outright. Intended for tests that need to seed a specific
+    /// gradient without running a full forward+backward pass (e.g. verifying
+    /// optimizer arithmetic in isolation). Normalizes `grad` onto this tensor's
+    /// device first, same as `accumulate_grad`, so a mismatched-device grad
+    /// doesn't silently desync.
+    pub fn set_grad(&self, grad: Storage) {
+        let mut t = self.inner.borrow_mut();
+        let device = t.device.clone();
+        t.grad = Some(grad.to_device(&device));
     }
 
     // pub(crate) fn snapshot(&self) -> TensorSnapshot<'static> { /* owned clone of fields */ }
