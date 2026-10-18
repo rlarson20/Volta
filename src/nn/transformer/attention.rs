@@ -59,6 +59,7 @@ impl ScaledDotProductAttention {
     /// Output tensor of shape [batch, `seq_len`, `d_v`]
     /// # Panics
     /// Wrong tensor shape
+    #[must_use]
     pub fn forward(
         &self,
         query: &Tensor,

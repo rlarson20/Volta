@@ -133,6 +133,7 @@ impl RawTensor {
     /// # Panics
     /// Dimension mismatch
     #[allow(clippy::too_many_lines)]
+    #[must_use]
     pub fn matmul(self_t: &Tensor, other: &Tensor) -> Tensor {
         let (data_a, shape_a) = {
             let s = self_t.borrow();
@@ -324,6 +325,7 @@ impl RawTensor {
     /// Transpose a 2D tensor
     /// # Panics
     /// Non-2d tensor
+    #[must_use]
     pub fn transpose(self_t: &Tensor) -> Tensor {
         let (data, shape) = {
             let s = self_t.borrow();

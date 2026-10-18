@@ -607,6 +607,7 @@ impl RawTensor {
     /// 4. Set up gradient tracking
     /// # Panics
     /// broadcast failure
+    #[must_use]
     pub fn binary_op(self_t: &Tensor, other: &Tensor, op: BinaryOp) -> Tensor {
         let (data_a, shape_a) = {
             let s = self_t.borrow();

@@ -116,6 +116,7 @@ impl PositionalEncoding {
     /// Output tensor of shape [batch, `seq_len`, `embed_dim`] with positional encoding added
     /// # Panics
     /// Sequence length exceeds max length
+    #[must_use]
     pub fn forward(&self, x: &Tensor) -> Tensor {
         let shape = x.borrow().shape.clone();
         let seq_len = *shape.get(1).unwrap();

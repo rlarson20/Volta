@@ -67,6 +67,7 @@ impl FeedForward {
     /// Output tensor of shape [batch, `seq_len`, `embed_dim`]
     /// # Panics
     /// reshape can panic
+    #[must_use]
     pub fn forward(&self, x: &Tensor) -> Tensor {
         let input_shape = x.borrow().shape.clone();
 

@@ -67,6 +67,7 @@ impl LSTMCell {
     /// # Returns
     /// Tuple of `(h_next, c_next)` both of shape `[batch, hidden_size]`
     #[allow(clippy::many_single_char_names)]
+    #[must_use]
     pub fn forward_step(
         &self,
         input: &Tensor,

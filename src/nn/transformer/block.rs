@@ -81,6 +81,7 @@ impl TransformerBlock {
     ///
     /// # Returns
     /// Output tensor of shape [batch, `seq_len`, `embed_dim`]
+    #[must_use]
     pub fn forward(&self, x: &Tensor, _causal: bool) -> Tensor {
         // Pre-LN Architecture:
         // 1. LN → Attention → Add

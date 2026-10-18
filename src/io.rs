@@ -79,6 +79,7 @@ impl fmt::Display for StateDictDiff {
 }
 
 impl TensorData {
+    #[must_use]
     pub fn from_tensor(t: &Tensor) -> Self {
         let borrowed = t.borrow();
         Self {

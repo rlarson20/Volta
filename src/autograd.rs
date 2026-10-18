@@ -31,9 +31,9 @@ pub trait GradFn {
 /// Edge creation function: the only code allowed to write `grad_fn`/`parents`.
 ///
 /// Every op used to hand-write this "build output tensor, then conditionally attach
-/// parents + grad_fn" ritual (see ADDENDUM.md §1.4). Centralizing it here means a new
+/// parents + `grad_fn`" ritual (see ADDENDUM.md §1.4). Centralizing it here means a new
 /// op can't attach its grad fn under the wrong condition (the B1/B2/B3 bug class) —
-/// "any input requires grad, no_grad() isn't active, and the grad isn't trivial" is
+/// "any input requires grad, `no_grad()` isn't active, and the grad isn't trivial" is
 /// the only rule that exists, everywhere.
 ///
 /// `shape`/`grad` are `Vec<usize>`/`Box<dyn GradFn>` rather than the `Shape`/`GradFn`
@@ -86,8 +86,9 @@ pub(crate) fn is_grad_enabled() -> bool {
 /// Suppress graph attachment for the lifetime of the returned guard.
 ///
 /// Use this to scope side-effecting mutations that shouldn't build graph — e.g.
-/// BatchNorm's running-stat update, or the perturbed forward passes inside
+/// `BatchNorm`'s running-stat update, or the perturbed forward passes inside
 /// `check_gradients`'s finite-difference loop (ADDENDUM.md §1.5).
+#[must_use]
 pub fn no_grad() -> NoGradGuard {
     NO_GRAD_DEPTH.with(|d| d.set(d.get() + 1));
     NoGradGuard

@@ -43,6 +43,7 @@ impl RawTensor {
     ///
     /// Currently all tensors are contiguous. This would be needed
     /// if we implement views/strides that share memory.
+    #[must_use]
     pub fn contiguous(self_t: &Tensor) -> Tensor {
         let s = self_t.borrow();
         Self::new(s.data.to_vec(), &s.shape, s.requires_grad)

@@ -102,6 +102,7 @@ impl MultiHeadAttention {
     /// Output tensor of shape [batch, `seq_len`, `embed_dim`]
     /// # Panics
     /// unwraps for batch size etc
+    #[must_use]
     pub fn forward(&self, x: &Tensor, causal: bool, attention_mask: Option<&Tensor>) -> Tensor {
         let input_shape = x.borrow().shape.clone();
         let (batch_size, seq_len, _embed_dim) = (

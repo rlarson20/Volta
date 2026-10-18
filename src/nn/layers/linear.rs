@@ -107,6 +107,7 @@ impl Linear {
     }
 
     /// Forward pass through the layer
+    #[must_use]
     pub fn forward(&self, x: &Tensor) -> Tensor {
         let out = x.matmul(&self.weight);
         if let Some(b) = &self.bias {

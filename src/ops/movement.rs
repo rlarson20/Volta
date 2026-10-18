@@ -619,6 +619,7 @@ impl RawTensor {
     /// Reshape tensor to new shape (same number of elements)
     /// # Panics
     /// Size mismatch
+    #[must_use]
     pub fn reshape(self_t: &Tensor, new_shape: &[usize]) -> Tensor {
         let (data, old_shape, device) = {
             let s = self_t.borrow();
@@ -716,6 +717,7 @@ impl RawTensor {
     /// * `axes` - New ordering of axes (must be a valid permutation of 0..rank)
     /// # Panics
     /// invalid permutation axes
+    #[must_use]
     pub fn permute(self_t: &Tensor, axes: &[usize]) -> Tensor {
         let old_shape = self_t.borrow().shape.clone();
 
@@ -748,6 +750,7 @@ impl RawTensor {
     /// Rank must remain the same.
     /// # Panics
     /// expand rank must match
+    #[must_use]
     pub fn expand(self_t: &Tensor, new_shape: &[usize]) -> Tensor {
         const MAX_ALLOC: usize = 100_000_000;
 
@@ -839,6 +842,7 @@ impl RawTensor {
     /// * `padding` - For each dimension, (`left_pad`, `right_pad`)
     /// # Panics
     /// padding must match rank
+    #[must_use]
     pub fn pad(self_t: &Tensor, padding: &[(usize, usize)]) -> Tensor {
         const MAX_ALLOC: usize = 100_000_000;
 
@@ -980,6 +984,7 @@ impl RawTensor {
     /// - If any range has `start > end`
     /// - If any range has `end > dimension size`
     /// - If any range has `start == end` (zero-sized dimension)
+    #[must_use]
     pub fn shrink(self_t: &Tensor, ranges: &[(usize, usize)]) -> Tensor {
         Self::try_shrink(self_t, ranges).expect("Invalid shrink ranges")
     }
@@ -1065,6 +1070,7 @@ impl RawTensor {
     /// Similar to slicing with step: array\[`::2`\] takes every other element
     /// # Panics
     /// Strides length must match rank
+    #[must_use]
     pub fn stride_op(self_t: &Tensor, strides: &[usize]) -> Tensor {
         let (data, old_shape, device) = {
             let s = self_t.borrow();

@@ -26,6 +26,7 @@ pub struct Tensor {
 }
 
 impl Tensor {
+    #[must_use]
     pub fn requires_grad(&self) -> bool {
         self.inner.borrow().requires_grad
     }
@@ -66,8 +67,10 @@ impl Tensor {
     /// argument so a `TensorOps` method can be called on it) — `inner` being private
     /// means a `Tensor { inner: .. }` struct literal only compiles inside this
     /// module, so this is the crate-wide way to do it instead.
-    pub(crate) fn from_raw(raw: RawTensor) -> Tensor {
-        Tensor {
+    /// TODO: investigate why i actually need this
+    #[must_use]
+    pub(crate) fn from_raw(raw: RawTensor) -> Self {
+        Self {
             inner: Rc::new(RefCell::new(raw)),
         }
     }
@@ -77,16 +80,19 @@ impl Tensor {
     /// Read-only — unlike `requires_grad`/`grad_fn`/`parents`, nothing about graph
     /// correctness depends on who can *see* a shape, only on who can overwrite the
     /// fields that encode graph structure. Safe to expose without qualification.
+    #[must_use]
     pub fn shape(&self) -> Vec<usize> {
         self.inner.borrow().shape.clone()
     }
 
     /// This tensor's data, decoded to `f32` regardless of underlying dtype/device.
+    #[must_use]
     pub fn data(&self) -> Vec<f32> {
         self.inner.borrow().data.to_vec()
     }
 
     /// The device this tensor's data lives on.
+    #[must_use]
     pub fn device(&self) -> Device {
         self.inner.borrow().device.clone()
     }
@@ -95,6 +101,7 @@ impl Tensor {
     ///
     /// Prefer `TensorOps::grad()` (returns `Option<Vec<f32>>`) unless you
     /// specifically need the `Storage` handle rather than decoded values.
+    #[must_use]
     pub fn grad_storage(&self) -> Option<Storage> {
         self.inner.borrow().grad.clone()
     }
@@ -104,8 +111,8 @@ impl Tensor {
     /// # Panics
     /// Panics if called on a tensor that already has a `grad_fn` attached —
     /// flipping the flag on a non-leaf tensor would contradict the invariant
-    /// `edge()` maintains (requires_grad is derived from inputs, not hand-set,
-    /// on anything that isn't a leaf). This is the same rule PyTorch enforces on
+    /// `edge()` maintains (`requires_grad` is derived from inputs, not hand-set,
+    /// on anything that isn't a leaf). This is the same rule `PyTorch` enforces on
     /// `.requires_grad = ...` for non-leaf tensors, and it's an unconditional
     /// `assert!` rather than `debug_assert!` deliberately: if this method is public,
     /// the check needs to actually hold in release builds too, or it's the same
@@ -121,9 +128,10 @@ impl Tensor {
     }
 
     /// Return a new leaf tensor sharing this tensor's data but detached from the graph.
-    pub fn detach(&self) -> Tensor {
+    #[must_use]
+    pub fn detach(&self) -> Self {
         let t = self.inner.borrow();
-        Tensor {
+        Self {
             inner: Rc::new(RefCell::new(RawTensor {
                 data: t.data.clone(),
                 shape: t.shape.clone(),
@@ -299,6 +307,10 @@ impl RawTensor {
     ///
     /// # Panics
     /// Panics if `data.len()` != `shape.product()`
+    #[allow(
+        clippy::new_ret_no_self,
+        reason = "Public wrapper around private struct"
+    )]
     #[must_use]
     pub fn new(data: Vec<f32>, shape: &[usize], requires_grad: bool) -> Tensor {
         Self::try_new(data, shape, requires_grad).expect("Data length must match shape")
@@ -391,6 +403,7 @@ impl RawTensor {
     }
 
     /// Create a tensor filled with random values from N(0, 1) with the same shape as the input
+    #[must_use]
     pub fn randn_like(tensor: &Tensor) -> Tensor {
         let shape = tensor.borrow().shape.clone();
         Self::randn(&shape)
@@ -513,12 +526,14 @@ impl RawTensor {
 
 // ===== LOSS FUNCTIONS =====
 impl RawTensor {
+    #[must_use]
     pub fn mse_loss(pred: &Tensor, target: &Tensor) -> Tensor {
         let diff = pred.sub(target);
         let squared = diff.elem_mul(&diff);
         squared.mean()
     }
 
+    #[must_use]
     pub fn cross_entropy_loss(logits: &Tensor, targets: &Tensor) -> Tensor {
         // Use log_softmax for numerical stability
         let log_probs = Self::log_softmax(logits, 1);
@@ -532,6 +547,7 @@ impl RawTensor {
     /// Negative log likelihood loss
     /// Takes log-probabilities and one-hot targets
     /// Equivalent to `cross_entropy` but expects pre-computed log probabilities
+    #[must_use]
     pub fn nll_loss(log_probs: &Tensor, targets: &Tensor) -> Tensor {
         // -sum(targets * log_probs, dim=1).mean()
         let prod = targets.elem_mul(log_probs);
@@ -547,6 +563,7 @@ impl RawTensor {
     /// # Arguments
     /// * `mu` - Mean of learned distribution
     /// * `logvar` - Log variance of learned distribution
+    #[must_use]
     pub fn kl_divergence_gaussian(mu: &Tensor, logvar: &Tensor) -> Tensor {
         // 1 + logvar
         let one = Self::ones(&mu.borrow().shape);
@@ -577,6 +594,7 @@ impl RawTensor {
     /// # Note
     /// Predictions should be passed through sigmoid before calling this.
     /// For numerical stability with logits, use `bce_with_logits_loss` instead.
+    #[must_use]
     pub fn bce_loss(pred: &Tensor, target: &Tensor) -> Tensor {
         // y * log(y_hat)
         let log_pred = pred.log();
@@ -601,6 +619,7 @@ impl RawTensor {
     /// # Arguments
     /// * `logits` - Raw network outputs (before sigmoid)
     /// * `target` - Target labels (0 or 1)
+    #[must_use]
     pub fn bce_with_logits_loss(logits: &Tensor, target: &Tensor) -> Tensor {
         // log(1 + exp(x))
         let exp_logits = logits.exp();
@@ -841,6 +860,7 @@ impl RawTensor {
     /// `x.sum_dim(1`, true)  // -> [\[6\], \[15\]] shape \[2,1\]
     /// # Panics
     /// dim out of bounds
+    #[must_use]
     pub fn sum_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
         Self::try_sum_dim(self_t, dim, keepdim).expect("Dimension out of bounds")
     }
@@ -852,6 +872,7 @@ impl RawTensor {
     ///   all gradient accumulation logic are CPU-only.
     /// - Autograd metadata (`requires_grad`, `grad_fn`, `parents`) is preserved,
     ///   so the returned tensor participates in the same computation graph.
+    #[must_use]
     pub fn to_device(self_t: &Tensor, device: Device) -> Tensor {
         // Fast path: already on requested device
         {
@@ -886,6 +907,7 @@ impl RawTensor {
     /// Returns maximum value along dimension and stores indices for backward pass.
     /// # Panics
     /// dim out of bounds
+    #[must_use]
     pub fn max_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
         let (data, shape, device) = {
             let s = self_t.borrow();
@@ -960,6 +982,7 @@ impl RawTensor {
         )
     }
 
+    #[must_use]
     pub fn softmax(self_t: &Tensor, dim: usize) -> Tensor {
         let max = Self::max_dim(self_t, dim, true);
         let shifted = self_t.sub(&max);
@@ -970,6 +993,7 @@ impl RawTensor {
     /// `LogSoftmax` along a specific axis (numerically stable)
     /// `log(exp(x_i)` / `sum(exp(x_j))`) = `x_i` - `log(sum(exp(x_j)))`
     /// Uses `LogSumExp` trick: log(sum(exp(x))) = m + log(sum(exp(x-m)))
+    #[must_use]
     pub fn log_softmax(self_t: &Tensor, dim: usize) -> Tensor {
         let max = Self::max_dim(self_t, dim, true);
         let shifted = self_t.sub(&max);
@@ -985,6 +1009,7 @@ impl RawTensor {
     /// Implemented as `sum_dim(dim)` / size(dim)
     /// # Panics
     /// dim out of bounds
+    #[must_use]
     pub fn mean_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
         let (shape, device) = {
             let t = self_t.borrow();
@@ -1511,44 +1536,54 @@ pub fn randn(shape: &[usize]) -> Tensor {
     RawTensor::randn(shape)
 }
 
+#[must_use]
 pub fn randn_like(tensor: &Tensor) -> Tensor {
     RawTensor::randn_like(tensor)
 }
 
 // Loss functions
+#[must_use]
 pub fn mse_loss(pred: &Tensor, target: &Tensor) -> Tensor {
     RawTensor::mse_loss(pred, target)
 }
 
+#[must_use]
 pub fn cross_entropy_loss(logits: &Tensor, targets: &Tensor) -> Tensor {
     RawTensor::cross_entropy_loss(logits, targets)
 }
 
+#[must_use]
 pub fn nll_loss(log_probs: &Tensor, targets: &Tensor) -> Tensor {
     RawTensor::nll_loss(log_probs, targets)
 }
 
+#[must_use]
 pub fn kl_divergence_gaussian(mu: &Tensor, logvar: &Tensor) -> Tensor {
     RawTensor::kl_divergence_gaussian(mu, logvar)
 }
 
+#[must_use]
 pub fn bce_loss(pred: &Tensor, target: &Tensor) -> Tensor {
     RawTensor::bce_loss(pred, target)
 }
 
+#[must_use]
 pub fn bce_with_logits_loss(logits: &Tensor, target: &Tensor) -> Tensor {
     RawTensor::bce_with_logits_loss(logits, target)
 }
 
 // Axis reductions
+#[must_use]
 pub fn sum_dim(t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
     RawTensor::sum_dim(t, dim, keepdim)
 }
 
+#[must_use]
 pub fn max_dim(t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
     RawTensor::max_dim(t, dim, keepdim)
 }
 
+#[must_use]
 pub fn softmax(t: &Tensor, dim: usize) -> Tensor {
     RawTensor::softmax(t, dim)
 }
