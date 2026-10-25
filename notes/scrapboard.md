@@ -1,15 +1,7 @@
+TODO: pull out actually useful crap here
+move the linting audit to its own thing
+
 # FILES READ THROUGH
-
-- `./REFACTOR_SUGGESTIONS.md` - been updating as suggestions done
-
-## Rest of my solns
-
-tldr:
-me figuring out what exactly needs to get done
-
-### misc
-
-cargo machete says cblas and serde-json are no longer used
 
 ## Refactors:
 
@@ -17,11 +9,6 @@ cargo machete says cblas and serde-json are no longer used
 
 in progress; added implicit GEMM, direct conv, algo selection
 still has some components to add but workable
-
-### `TensorOps`: every tensor op impl twice: once as `RawTensor`, once as `TensorOps` trait wrapper, remove parallel APIs
-
-done
-delete, test, verify works even without TensorOps
 
 ### 400~+ clones: look for hotspots, the ones mentioned might not be the best examples
 
@@ -113,7 +100,6 @@ TLDR: yes, i grabbed pretty much everything from clippy
 yes, I am going to go through each of these and try to make:
 a) the best clippy default config in general
 b) the best clippy config for specifically Volta
-c) the best clippy defaults for starting new projects
 the more tools that statically prove things right or wrong w/o dealing w probabilistic crap improves the performance of coding agents on such a task
 bacon, subset of this, good tool that makes working w clippy that much easier
 
