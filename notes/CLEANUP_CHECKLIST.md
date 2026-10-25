@@ -1,26 +1,8 @@
 # Development Experience Cleanup Checklist
 
-This checklist focuses on improving the development experience of the Volta project - making it easier to work with, cleaner, and more maintainable. This is **not** about refactors or feature improvements, but about hygiene and developer experience.
-
 ## 📝 Configuration Files
 
 ### Cargo.toml Cleanup
-
-- [x] **Address TODOs in Cargo.toml**
-  - [x] Line 77: "TODO: go over and properly organize lints" - ✅ **COMPLETED**
-    - Reorganized into 3 clear categories: Defensive/Safety, Code Quality, Allowed
-    - Added comprehensive inline documentation for each lint
-    - Added 30+ additional quality lints from bacon.toml
-    - Added missing `conv_algorithms` benchmark
-    - **Note**: This surfaced 111 clippy violations that need fixing (see below)
-
-- [x] **Fix new clippy violations** - 111 errors found after lint reorganization:
-  - 99 `uninlined_format_args` - Use `{var}` instead of `{}, var` in format strings (mostly in tests)
-  - 6 `explicit_iter_loop` - Use `for val in &result` instead of `for val in result.iter()`
-  - 3 `items_after_statements` - Move `use` statements to top of test function
-  - 2 `doc_markdown` - Add backticks around `PyTorch` in doc comments
-  - 1 other minor issue
-  - **Next step**: Fix these violations (can be done incrementally or in bulk)
 
 - [ ] **Review and document default features**
   - [ ] Document why `gpu` and `accelerate` are default features in comments
@@ -109,29 +91,12 @@ This checklist focuses on improving the development experience of the Volta proj
 
 ### Dependency Audit
 
-- [ ] **Review unused dependencies**
-  - `scrapboard.md` mentions "cargo machete says cblas and serde-json are no longer used"
-  - Run `cargo machete` or `cargo-udeps` to find unused deps
-  - Remove any truly unused dependencies
-
 - [ ] **Review dev dependencies**
   - Not listed in Cargo.toml analysis - ensure they're properly categorized
 
 ## 🎯 Developer Experience
 
 ### Documentation
-
-- [ ] **Create CONTRIBUTING.md**
-  - Guide for new contributors
-  - Testing guidelines
-  - PR process
-  - Code style preferences
-
-- [ ] **Create DEVELOPMENT.md**
-  - Quick start guide
-  - Common development tasks
-  - Troubleshooting common issues
-  - How to run different test suites
 
 - [ ] **Update README.md**
   - Verify all examples listed actually exist
@@ -144,10 +109,6 @@ This checklist focuses on improving the development experience of the Volta proj
   - Ensure all examples in Cargo.toml exist
   - Ensure all examples work
   - Add README in examples/ explaining each
-
-- [ ] **Review docs/ directory structure**
-  - Many analysis docs - consider archiving old ones
-  - Create clear hierarchy of current vs archived docs
 
 ### Pre-commit Hooks
 
@@ -177,7 +138,6 @@ This checklist focuses on improving the development experience of the Volta proj
 ### Project Health
 
 - [ ] **Set up code coverage tracking**
-  - `coverage.txt` exists but no clear workflow
   - Document how to generate and interpret
 
 - [ ] **Document benchmarking workflow**
@@ -192,7 +152,6 @@ This checklist focuses on improving the development experience of the Volta proj
 1. Clean up root directory temporary files
 2. Fix .gitignore to be more specific
 3. Address TODOs in configuration files
-4. Create CONTRIBUTING.md and DEVELOPMENT.md
 
 ### Medium Priority (Do Soon)
 
@@ -206,10 +165,3 @@ This checklist focuses on improving the development experience of the Volta proj
 9. Enhance CI/CD with more checks
 10. Set up additional code quality tools
 11. Improve benchmark organization
-
-## Notes
-
-- This checklist focuses on **developer experience** and **repository hygiene**
-- Does not include feature work or architectural refactors (see REFACTOR_SUGGESTIONS.md)
-- Many items can be done in parallel
-- Each checkbox represents a discrete, completable task

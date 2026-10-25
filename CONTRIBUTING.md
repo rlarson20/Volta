@@ -1,0 +1,5 @@
+- [ ] **Create CONTRIBUTING.md**
+  - Guide for new contributors
+  - Testing guidelines
+  - PR process
+  - Code style preferences
