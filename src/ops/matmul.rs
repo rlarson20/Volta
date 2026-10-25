@@ -382,6 +382,7 @@ impl GradFn for MatMulGradFn {
                     || (!x.requires_grad || !y.requires_grad));
 
             if gpu_available {
+                //FIXME: MVP issue, find and locate early return if EITHER grad succeeds
                 // For MVP, only handle the standard 2D×2D case on GPU
                 if x.shape.len() == 2 && y.shape.len() == 2 {
                     let m = out_grad.shape.first().copied().unwrap_or(1);

@@ -137,6 +137,7 @@ impl GradFn for BinaryGradFn {
                         };
 
                         // If GPU path succeeded, return early
+                        // FIXME: if gx fails but gy succeeds, output is vec![None, gy]
                         if (x_val.requires_grad && gx.is_some())
                             || (y_val.requires_grad && gy.is_some())
                         {
