@@ -1,6 +1,6 @@
 # ADDENDUM — Preventive Architecture for Volta
 
-_Companion to `glm-53-report.md`.
+_Companion to `glm-53-adversarial-audit.md`.
 Parts I and II established what's broken and why.
 This document is not about fixing those bugs:
 it's about the structural changes that make each bug **class** impossible or compiler-enforced,
@@ -559,11 +559,11 @@ Supporting cast: `insta` snapshot for `state_dict()` round-trips (catches key-fo
 
 Ordered by prevention-per-risk; each phase compiles and ships independently.
 
-| Phase                      | Contents                                                                                                                                                 | Prevents                                               | Size                      |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------- |
-| 2 — types for dims and ops | `Shape`/`Axis`/`Strides` (§1.2); specs replace positional args (§1.3); `GradFn` enum (§2.5); `define_ops!` (§5.1); `PadValue` (§2.4); `into_loss` (§2.2) | B4 class, forward/backward/kernel drift, H1            | ~1–2 weeks                |
-| 3 — traits and storage     | Sealed + split traits w/ trybuild (§3); `DevicePolicy` (§2.1); storage `Arc`/`OnceCell`/no-Deref (§7); indexing policy + `fetch` (§8)                    | H3/H6/H8, silent fallback, clone economy, silent zeros | ~2 weeks                  |
-| 4 — endgame, optional      | Arena graph (§6); `Backend` trait (§3.5); proptest DAG checks (§10.2) if not already in phase 2                                                          | cycles, `Send`, memory determinism                     | multi-week, do last       |
+| Phase                      | Contents                                                                                                                                                 | Prevents                                               | Size                |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | ------------------- |
+| 2 — types for dims and ops | `Shape`/`Axis`/`Strides` (§1.2); specs replace positional args (§1.3); `GradFn` enum (§2.5); `define_ops!` (§5.1); `PadValue` (§2.4); `into_loss` (§2.2) | B4 class, forward/backward/kernel drift, H1            | ~1–2 weeks          |
+| 3 — traits and storage     | Sealed + split traits w/ trybuild (§3); `DevicePolicy` (§2.1); storage `Arc`/`OnceCell`/no-Deref (§7); indexing policy + `fetch` (§8)                    | H3/H6/H8, silent fallback, clone economy, silent zeros | ~2 weeks            |
+| 4 — endgame, optional      | Arena graph (§6); `Backend` trait (§3.5); proptest DAG checks (§10.2) if not already in phase 2                                                          | cycles, `Send`, memory determinism                     | multi-week, do last |
 
 Phases 0–2 alone retire every prevention target that maps to a Part I blocker.
 The arena (§6) is the only genuinely architectural bet,
