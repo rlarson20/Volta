@@ -1,7 +1,13 @@
 # DECISIONS.md — Volta Autograd Engine Audit
 
 Design decisions, implementation rationale, and known gaps.
-Updated: 2026-02-27
+Updated: 2026-10-25
+
+TODO: entries for:
+opaque tensor
+edge() func
+NoGrad
+async stays sync
 
 ---
 

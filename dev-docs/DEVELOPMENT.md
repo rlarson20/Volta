@@ -2,6 +2,8 @@
 
 This document provides detailed guidance for adding new features to the Volta deep learning framework.
 
+TODO: UPDATE WITH PHASE 1 CHANGES
+
 ## Adding New Operations
 
 To add a new tensor operation:
@@ -33,6 +35,7 @@ To add a new neural network layer:
 1. **Create new file** in `src/nn/layers/` (e.g., `my_layer.rs`)
 
 2. **Implement the Module trait**:
+
    ```rust
    impl Module for MyLayer {
        fn forward(&self, x: &Tensor) -> Tensor { /* ... */ }
@@ -70,6 +73,7 @@ The test suite (tests in `src/lib.rs`) validates:
 **Test Organization:**
 
 Tests are organized into modules by category:
+
 - **core**: Basic tensor operations, chain rule, shape manipulation
 - **grad_check**: Numerical gradient validation for all operations
 - **broadcasting**: NumPy-style broadcasting rules

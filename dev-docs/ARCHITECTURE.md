@@ -2,6 +2,8 @@
 
 This document provides detailed architecture documentation for the Volta deep learning framework.
 
+TODO: UPDATE THIS WITH PHASE 1 CHANGES
+
 ## Core Design Philosophy
 
 Volta is built around a few fundamental components that work together to provide a PyTorch-like deep learning experience.
