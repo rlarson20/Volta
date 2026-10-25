@@ -563,3 +563,82 @@ From NEXT_STEPS #2:
 - Per-parameter clipping (different max_norm per layer)
 - Adaptive clipping strategies (e.g., dynamic max_norm)
 - Clipping statistics tracking (history of clip operations)
+
+### Remaining PyTorch Examples (ordered by difficulty)
+
+1. **Advanced NLP/Computer Vision** (Harder):
+   - **Multi-layer RNN/LSTM** - Stack multiple LSTM layers
+   - **Attention mechanisms** - Self-attention, multi-head attention
+   - **Siamese networks** - Needs pretrained ResNet or simplified version
+   - **Style transfer** - Needs pretrained VGG, InstanceNorm, perceptual loss
+   - **Sequence-to-sequence** - Encoder-decoder with attention
+   - **Transformers** - Full Transformer architecture for translation/LM
+
+2. **Infrastructure Enhancements**:
+   - **Batched RNN processing** - Process entire sequences at once (vs timestep-by-timestep)
+   - **Gradient clipping** - Prevent exploding gradients in RNNs
+   - **Learning rate schedulers** - Adaptive learning rates
+   - **Multi-GPU training** - Distributed training support
+
+### Model Loading Enhancements
+
+- Test loading a real HuggingFace model (e.g., tiny BERT)
+- Consider ONNX support as stretch goal
+
+## Reference: Current Examples
+
+| Example                  | PyTorch Equivalent               | Status  |
+| ------------------------ | -------------------------------- | ------- |
+| `mnist_cnn.rs`           | mnist                            | ✅ Done |
+| `mnist_rnn.rs`           | mnist_rnn                        | ✅ Done |
+| `time_sequence.rs`       | time_sequence_prediction         | ✅ Done |
+| `vae.rs`                 | vae                              | ✅ Done |
+| `dcgan.rs`               | dcgan                            | ✅ Done |
+| `regression.rs`          | regression                       | ✅ Done |
+| `super_resolution.rs`    | super_resolution                 | ✅ Done |
+| `char_language_model.rs` | word_language_model (char-level) | ✅ Done |
+
+## Reference: Available Layers
+
+- **Core layers**: `Linear`, `Conv2d`, `ConvTranspose2d`, `MaxPool2d`
+- **Recurrent**: `LSTMCell` (single-step LSTM)
+- **Normalization**: `BatchNorm1d`, `BatchNorm2d`, `Dropout`
+- **Embedding**: `Embedding` (vocabulary → dense vectors)
+- **Utility**: `Flatten`, `PixelShuffle` (sub-pixel convolution)
+- **Activations**: `ReLU`, `Sigmoid`, `Tanh`
+- **Container**: `Sequential`
+
+## Suggested Next Task
+
+Consider implementing:
+
+- **Multi-layer LSTM** - Stack multiple LSTM layers for deeper models
+- **Attention mechanism** - Self-attention or basic seq2seq attention
+- **Gradient clipping** - Essential utility for training RNNs
+- **Learning rate schedulers** - StepLR, ExponentialLR, etc.
+
+## old notes
+
+main task:
+go through pytorch examples (~/src/forks/pytorch-examples/README.md is a good start)
+for each:
+determine if i can run them in Volta or not right now
+if i can
+run a side by side comparison on CPU
+else
+figure out minimal set of changes to make to get them runnable
+add tests for each example
+
+most of the basic examples are done
+
+subtask that's probably needed to finish main task:
+figure out how to load torch models
+how to load other model formats (onnx, candle, ggml, huggingface etc)
+go over save/load mechanics, could be unsafe, could accidentally allow loading arbitrary code or smth
+add tests for each format
+
+- Full HuggingFace Transformers compatibility
+- ONNX support
+- Tokenizer integration
+- Model hub integration
+- Automatic architecture inference from weights

@@ -1243,14 +1243,15 @@ gets cheaper w each phase before
 ##### 0: Mechanical, do immediately
 
 Contents: non-exhaustive on pub enums [done], approx dev dep [done], drop statrs [done], CI --no-default-features and cargo hack [done], cfg at defn consolidation [done], log facade for prints [done]
-  - `log` crate (facade, non-optional dep); `env_logger` dev-dep for examples/tests
-  - all non-test `eprintln!`/`println!` in src/ -> `log::{warn,info,debug,trace}!`
-    - GPU->CPU fallbacks = warn; GPU init = info; sync lifecycle = debug; pending/pool churn = trace
-  - deleted the bespoke `#[cfg(debug_assertions)] + VOLTA_GPU_DEBUG` gate in gpu/context.rs + gpu/staging_pool.rs; use `RUST_LOG=volta::gpu=trace` now
-  - `#![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]` in lib.rs as the regression guard; utils/progress.rs (interactive bar) opts out with a module `#[allow]`
-  - library is silent by default; downstream installs a logger to see diagnostics
-Prevents: B5 recurrence, dep bloat, print pollution
-Size: day, near 0 risk
+
+- `log` crate (facade, non-optional dep); `env_logger` dev-dep for examples/tests
+- all non-test `eprintln!`/`println!` in src/ -> `log::{warn,info,debug,trace}!`
+  - GPU->CPU fallbacks = warn; GPU init = info; sync lifecycle = debug; pending/pool churn = trace
+- deleted the bespoke `#[cfg(debug_assertions)] + VOLTA_GPU_DEBUG` gate in gpu/context.rs + gpu/staging_pool.rs; use `RUST_LOG=volta::gpu=trace` now
+- `#![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]` in lib.rs as the regression guard; utils/progress.rs (interactive bar) opts out with a module `#[allow]`
+- library is silent by default; downstream installs a logger to see diagnostics
+  Prevents: B5 recurrence, dep bloat, print pollution
+  Size: day, near 0 risk
 
 ##### 1: invariant wall
 
@@ -1301,29 +1302,3 @@ premature mutexing how bufferpoil guarding state 1 thread can reach
 async gpu api
 sync blocking design is coherent
 make transfers explicit before async
-
-## old notes
-
-main task:
-go through pytorch examples (~/src/forks/pytorch-examples/README.md is a good start)
-for each:
-determine if i can run them in Volta or not right now
-if i can
-run a side by side comparison on CPU
-else
-figure out minimal set of changes to make to get them runnable
-add tests for each example
-
-most of the basic examples are done
-
-subtask that's probably needed to finish main task:
-figure out how to load torch models
-how to load other model formats (onnx, candle, ggml, huggingface etc)
-go over save/load mechanics, could be unsafe, could accidentally allow loading arbitrary code or smth
-add tests for each format
-
-- Full HuggingFace Transformers compatibility
-- ONNX support
-- Tokenizer integration
-- Model hub integration
-- Automatic architecture inference from weights
