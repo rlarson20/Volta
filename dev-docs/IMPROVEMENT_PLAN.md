@@ -31,12 +31,6 @@ Volta's stated goals (README/CLAUDE.md): educational clarity, correctness-first,
 
 ## 2. Concrete bugs
 
-### P0-3: `bce_with_logits_loss` is not numerically stable — `src/tensor.rs:452-464`
-
-The docstring says "numerically stable" but the implementation is literally `log(1 + exp(x)) - x*y`. For logits ≳ 88.7, `exp(x)` overflows to `inf` → loss is `inf`, gradients are NaN. This defeats the entire purpose of the `_with_logits` variant (the README also advertises BCE among verified losses).
-
-**Fix:** the standard stable form: `max(x, 0) - x*y + log1p(exp(-|x|))`. All pieces exist as primitives (`max_elem`, `where_op`/`relu`, `exp`, `log`); or implement it as a fused op with a hand-written GradFn. Add a gradient check test with logits at ±100.
-
 ### P1-1: `xavier_uniform` panics for any non-2D shape — `src/tensor.rs:254-265`
 
 It samples `fan_in * fan_out` values (from `shape[0]`, `shape[1]`) but constructs the tensor with the _full_ shape — `RawTensor::new` asserts data length == shape product, so any rank-3+ shape panics, and the fan computation ignores receptive fields entirely. It only works today because `Linear` is its sole caller. Fix by sizing from `shape.iter().product()` and computing fans the way `he_initialization` does (which handles conv shapes correctly).

@@ -616,6 +616,10 @@ impl RawTensor {
     /// Combines sigmoid and BCE in a numerically stable way.
     /// Formula: log(1 + exp(x)) - x*y
     ///
+    ///FIXME:
+    ///The docstring says "numerically stable" but the implementation is literally `log(1 + exp(x)) - x*y`. For logits ≳ 88.7, `exp(x)` overflows to `inf` → loss is `inf`, gradients are NaN. This defeats the entire purpose of the `_with_logits` variant (the README also advertises BCE among verified losses).
+    ///**Fix:** the standard stable form: `max(x, 0) - x*y + log1p(exp(-|x|))`. All pieces exist as primitives (`max_elem`, `where_op`/`relu`, `exp`, `log`); or implement it as a fused op with a hand-written GradFn. Add a gradient check test with logits at ±100.
+    ///
     /// # Arguments
     /// * `logits` - Raw network outputs (before sigmoid)
     /// * `target` - Target labels (0 or 1)
