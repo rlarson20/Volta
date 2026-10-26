@@ -1,0 +1,218 @@
+command run to make this:
+RUSTFLAGS="-A missing_docs" RUST_BACKTRACE=1 cargo nextest run assert_trainable --no-fail-fast --verbose &> failures.txt
+
+   Compiling volta v0.3.0 (/Users/rjlarson/src/volta)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.33s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 480449e4-515b-4f37-8057-cf40c989ab44 with nextest profile: default
+    Starting 9 tests across 18 binaries (665 tests skipped)
+        PASS [   0.029s] (1/9) volta nn::layers::conv_transpose::tests::test_conv_transpose2d_assert_trainable
+        PASS [   0.029s] (2/9) volta linear_tests::assert_trainable_all_params_get_gradient
+        PASS [   0.029s] (3/9) volta nn::transformer::feed_forward::tests::test_ffn_assert_trainable
+        FAIL [   0.568s] (4/9) volta nn::transformer::multi_head_attention::tests::test_mha_assert_trainable
+  stdout ───
+
+    running 1 test
+    test nn::transformer::multi_head_attention::tests::test_mha_assert_trainable ... FAILED
+
+    failures:
+
+    failures:
+        nn::transformer::multi_head_attention::tests::test_mha_assert_trainable
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 543 filtered out; finished in 0.54s
+
+  stderr ───
+
+    thread 'nn::transformer::multi_head_attention::tests::test_mha_assert_trainable' (22644059) panicked at src/nn/transformer/multi_head_attention.rs:375:9:
+    parameter 1 gradient is identically zero
+    stack backtrace:
+       0: __rustc::rust_begin_unwind
+                 at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:679:5
+       1: core::panicking::panic_fmt
+                 at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/panicking.rs:80:14
+       2: volta::nn::transformer::multi_head_attention::tests::test_mha_assert_trainable
+                 at ./src/macros/assert_trainable.rs:39:13
+       3: volta::nn::transformer::multi_head_attention::tests::test_mha_assert_trainable::{closure#0}
+                 at ./src/nn/transformer/multi_head_attention.rs:372:35
+       4: <volta::nn::transformer::multi_head_attention::tests::test_mha_assert_trainable::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+                 at /Users/rjlarson/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+       5: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once
+                 at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250:5
+    note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+        FAIL [   0.599s] (5/9) volta nn::transformer::block::tests::test_block_assert_trainable
+  stdout ───
+
+    running 1 test
+    test nn::transformer::block::tests::test_block_assert_trainable ... FAILED
+
+    failures:
+
+    failures:
+        nn::transformer::block::tests::test_block_assert_trainable
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 543 filtered out; finished in 0.58s
+
+  stderr ───
+
+    thread 'nn::transformer::block::tests::test_block_assert_trainable' (22644050) panicked at src/nn/transformer/block.rs:299:9:
+    parameter 0 gradient is identically zero
+    stack backtrace:
+       0: __rustc::rust_begin_unwind
+                 at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:679:5
+       1: core::panicking::panic_fmt
+                 at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/panicking.rs:80:14
+       2: volta::nn::transformer::block::tests::test_block_assert_trainable
+                 at ./src/macros/assert_trainable.rs:39:13
+       3: volta::nn::transformer::block::tests::test_block_assert_trainable::{closure#0}
+                 at ./src/nn/transformer/block.rs:294:37
+       4: <volta::nn::transformer::block::tests::test_block_assert_trainable::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+                 at /Users/rjlarson/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+       5: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once
+                 at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250:5
+    note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+        FAIL [   0.599s] (6/9) volta batchnorm_tests::bn1d_assert_trainable_all_params_get_gradient
+  stdout ───
+
+    running 1 test
+    test batchnorm_tests::bn1d_assert_trainable_all_params_get_gradient ... FAILED
+
+    failures:
+
+    failures:
+        batchnorm_tests::bn1d_assert_trainable_all_params_get_gradient
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 543 filtered out; finished in 0.58s
+
+  stderr ───
+
+    thread 'batchnorm_tests::bn1d_assert_trainable_all_params_get_gradient' (22644053) panicked at src/lib.rs:5003:9:
+    parameter 0 gradient is identically zero
+    stack backtrace:
+       0: __rustc::rust_begin_unwind
+                 at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:679:5
+       1: core::panicking::panic_fmt
+                 at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/panicking.rs:80:14
+       2: volta::batchnorm_tests::bn1d_assert_trainable_all_params_get_gradient
+                 at ./src/macros/assert_trainable.rs:39:13
+       3: volta::batchnorm_tests::bn1d_assert_trainable_all_params_get_gradient::{closure#0}
+                 at ./src/lib.rs:4994:55
+       4: <volta::batchnorm_tests::bn1d_assert_trainable_all_params_get_gradient::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+                 at /Users/rjlarson/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+       5: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once
+                 at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250:5
+    note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+        FAIL [   0.599s] (7/9) volta nn::layers::lstm::tests::test_lstmcell_assert_trainable
+  stdout ───
+
+    running 1 test
+    test nn::layers::lstm::tests::test_lstmcell_assert_trainable ... FAILED
+
+    failures:
+
+    failures:
+        nn::layers::lstm::tests::test_lstmcell_assert_trainable
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 543 filtered out; finished in 0.58s
+
+  stderr ───
+
+    thread 'nn::layers::lstm::tests::test_lstmcell_assert_trainable' (22644052) panicked at src/nn/layers/lstm.rs:224:9:
+    parameter 0 has no gradient — graph severed or gate bug
+    stack backtrace:
+       0: __rustc::rust_begin_unwind
+                 at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:679:5
+       1: core::panicking::panic_fmt
+                 at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/panicking.rs:80:14
+       2: volta::nn::layers::lstm::tests::test_lstmcell_assert_trainable::{closure#0}
+                 at ./src/macros/assert_trainable.rs:34:17
+       3: <core::option::Option<alloc::vec::Vec<f32>>>::unwrap_or_else::<volta::nn::layers::lstm::tests::test_lstmcell_assert_trainable::{closure#0}>
+                 at /Users/rjlarson/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/option.rs:1065:21
+       4: volta::nn::layers::lstm::tests::test_lstmcell_assert_trainable
+                 at ./src/macros/assert_trainable.rs:33:30
+       5: volta::nn::layers::lstm::tests::test_lstmcell_assert_trainable::{closure#0}
+                 at ./src/nn/layers/lstm.rs:221:40
+       6: <volta::nn::layers::lstm::tests::test_lstmcell_assert_trainable::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+                 at /Users/rjlarson/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+       7: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once
+                 at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250:5
+    note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+        FAIL [   0.599s] (8/9) volta batchnorm_tests::bn2d_assert_trainable_all_params_get_gradient
+  stdout ───
+
+    running 1 test
+    test batchnorm_tests::bn2d_assert_trainable_all_params_get_gradient ... FAILED
+
+    failures:
+
+    failures:
+        batchnorm_tests::bn2d_assert_trainable_all_params_get_gradient
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 543 filtered out; finished in 0.57s
+
+  stderr ───
+
+    thread 'batchnorm_tests::bn2d_assert_trainable_all_params_get_gradient' (22644056) panicked at src/lib.rs:5064:9:
+    parameter 0 gradient is identically zero
+    stack backtrace:
+       0: __rustc::rust_begin_unwind
+                 at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:679:5
+       1: core::panicking::panic_fmt
+                 at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/panicking.rs:80:14
+       2: volta::batchnorm_tests::bn2d_assert_trainable_all_params_get_gradient
+                 at ./src/macros/assert_trainable.rs:39:13
+       3: volta::batchnorm_tests::bn2d_assert_trainable_all_params_get_gradient::{closure#0}
+                 at ./src/lib.rs:5061:55
+       4: <volta::batchnorm_tests::bn2d_assert_trainable_all_params_get_gradient::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+                 at /Users/rjlarson/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+       5: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once
+                 at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250:5
+    note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+        FAIL [   0.599s] (9/9) volta nn::layers::layernorm::tests::test_layernorm_assert_trainable
+  stdout ───
+
+    running 1 test
+    test nn::layers::layernorm::tests::test_layernorm_assert_trainable ... FAILED
+
+    failures:
+
+    failures:
+        nn::layers::layernorm::tests::test_layernorm_assert_trainable
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 543 filtered out; finished in 0.58s
+
+  stderr ───
+
+    thread 'nn::layers::layernorm::tests::test_layernorm_assert_trainable' (22644051) panicked at src/nn/layers/layernorm.rs:186:9:
+    parameter 0 gradient is identically zero
+    stack backtrace:
+       0: __rustc::rust_begin_unwind
+                 at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/std/src/panicking.rs:679:5
+       1: core::panicking::panic_fmt
+                 at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/panicking.rs:80:14
+       2: volta::nn::layers::layernorm::tests::test_layernorm_assert_trainable
+                 at ./src/macros/assert_trainable.rs:39:13
+       3: volta::nn::layers::layernorm::tests::test_layernorm_assert_trainable::{closure#0}
+                 at ./src/nn/layers/layernorm.rs:183:41
+       4: <volta::nn::layers::layernorm::tests::test_layernorm_assert_trainable::{closure#0} as core::ops::function::FnOnce<()>>::call_once
+                 at /Users/rjlarson/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+       5: <fn() -> core::result::Result<(), alloc::string::String> as core::ops::function::FnOnce<()>>::call_once
+                 at /rustc/58cf8f9c35b355199727627d07ae34a4e2846d67/library/core/src/ops/function.rs:250:5
+    note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+────────────
+     Summary [   0.604s] 9 tests run: 3 passed, 6 failed, 665 skipped
+        FAIL [   0.568s] (4/9) volta nn::transformer::multi_head_attention::tests::test_mha_assert_trainable
+        FAIL [   0.599s] (5/9) volta nn::transformer::block::tests::test_block_assert_trainable
+        FAIL [   0.599s] (6/9) volta batchnorm_tests::bn1d_assert_trainable_all_params_get_gradient
+        FAIL [   0.599s] (7/9) volta nn::layers::lstm::tests::test_lstmcell_assert_trainable
+        FAIL [   0.599s] (8/9) volta batchnorm_tests::bn2d_assert_trainable_all_params_get_gradient
+        FAIL [   0.599s] (9/9) volta nn::layers::layernorm::tests::test_layernorm_assert_trainable
+error: test run failed

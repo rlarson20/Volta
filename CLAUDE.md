@@ -10,26 +10,21 @@ Whenever you're corrected on something, or you learn something about the codebas
 
 ### Recent Refactoring Work (2025-2026)
 
-**TensorOps Duplication Removal (COMPLETED):**
-- Eliminated 107 lines of boilerplate from tensor operations
-- TensorOps implementations now call helper functions directly (`binary_op()`, `unary_op()`, `reduce_op()`, `ternary_op()`)
-- When adding new operations, follow the pattern in `src/ops/` - implement the operation logic in the appropriate file, then add a thin wrapper in TensorOps trait
-
 **Conv2d Algorithm Improvements (COMPLETED):**
+
 - Direct convolution implemented with full gradient support (memory-efficient)
 - iGEMM (Implicit GEMM) implemented with tiled computation (balanced memory/performance)
 - im2col+GEMM remains available but is memory-intensive
 - Auto-selection chooses algorithm based on input size, kernel size, batch size, and device
 - All three algorithms support both forward and backward passes on GPU with zero CPU fallback
 
-**See `notes/REFACTOR_SUGGESTIONS.md` for ongoing and planned refactoring work, and `dev-docs/IMPROVEMENT_PLAN.md` (2026-07) for the current prioritized bug/improvement roadmap.**
+**See `docs/plans/ADDENDUM.md` for ongoing and planned refactoring work, and the current prioritized bug/improvement roadmap.**
 
 **Feature flags gotcha:** `Cargo.toml` sets `default = ["gpu", "accelerate"]`, so plain `cargo build`/`cargo test`/`cargo clippy` compile WITH the GPU backend (contrary to the README's opt-in framing, and CI's "no features" step labels). Use `--no-default-features` for a CPU-only build.
 
-**Build is currently lint-blocked, not code-broken:** `[lints.rust] missing_docs = "deny"` (added recently) makes plain `cargo build` fail with ~230 missing-module-doc errors on both feature configs. The code itself compiles — `RUSTFLAGS="--cap-lints=warn" cargo build/test` is green (all feature configs, including `--no-default-features`; the old B5 CPU-only compile failure was fixed in c8a5006). Use the cap-lints trick to functionally verify changes until the doc backlog is cleared.
-
 **ADDENDUM.md Phase 1 (opaque `Tensor`, `edge()` constructor, `NoGrad`, `assert_trainable!`) — COMPLETED:**
-- `Tensor` is now `struct Tensor { inner: Rc<RefCell<RawTensor>> }` (was a bare type alias). `.borrow()`/`.borrow_mut()`/`.as_ptr()` are `pub(crate)` forwarding methods, not renamed — this keeps every *internal* `t.borrow()` call site compiling unchanged (method resolution is by name, not by whether `Tensor` derefs to `RefCell`), while making the fields genuinely unreachable from outside the crate.
+
+- `Tensor` is now `struct Tensor { inner: Rc<RefCell<RawTensor>> }` (was a bare type alias). `.borrow()`/`.borrow_mut()`/`.as_ptr()` are `pub(crate)` forwarding methods, not renamed — this keeps every _internal_ `t.borrow()` call site compiling unchanged (method resolution is by name, not by whether `Tensor` derefs to `RefCell`), while making the fields genuinely unreachable from outside the crate.
 - Because of that `pub(crate)` boundary, `tests/*.rs` and `examples/*.rs` (which only see the crate's public API, same as any downstream user) needed a small public API added to `Tensor` before they'd compile again: `shape()`, `data()`, `device()`, `grad_storage()`, `detach()`, a now-`pub` `set_requires_grad()`, and `set_grad(&self, grad: Storage)` (the second sanctioned writer of `grad` outside init, alongside `accumulate_grad`, added specifically so optimizer tests can seed a synthetic gradient without a real `backward()` pass). All call sites in `tests/` and `examples/` were rewritten to use it instead of raw `.borrow()`/`.borrow_mut()`.
 - `NO_GRAD` (in `src/autograd.rs`) is a `thread_local!` reentrant depth counter (`Cell<u32>`), not a plain bool — needed so a `no_grad()` scope can nest inside another (e.g. a layer's own `no_grad()` running inside `check_gradients`'s wrapping one) without the inner guard's `Drop` prematurely re-enabling grad tracking.
 - `edge()` (in `src/autograd.rs`) is now the only code that attaches `parents`/`grad_fn` to a tensor; all of `src/ops/*`, `src/nn/layers/conv.rs`, `conv_transpose.rs`, `embedding.rs`, and `maxpool.rs` go through it. Along the way this fixed a latent bug shared by `conv.rs`'s `direct_conv`/`igemm_forward` and `conv_transpose.rs`'s `forward`: they used to gate graph attachment on only the input tensor's `requires_grad`, silently ignoring the weight/bias tensors.
@@ -41,10 +36,10 @@ Whenever you're corrected on something, or you learn something about the codebas
 Volta is a PyTorch-like deep learning framework written in pure Rust. It's an educational project designed to demystify automatic differentiation engines and neural network computation graphs.
 
 **Key Characteristics:**
+
 - **Educational focus**: Prioritizes correctness and clarity over performance
 - **PyTorch-like API**: Familiar patterns for ML practitioners
 - **Pure Rust**: No Python dependencies, suitable for Rust-native ML
-- **Verified gradients**: All operations validated with numerical gradient checking
 - **GPU acceleration**: Experimental WGPU-based support for core operations
 - **Extensible**: Clean architecture for adding new operations and layers
 
@@ -87,22 +82,10 @@ cargo test shape_tests         # Shape manipulation tests
 cargo test test_name -- --nocapture
 ```
 
-### GPU Support
-
-```bash
-# Build with GPU support
-cargo build --features gpu
-cargo test --features gpu -- --nocapture
-cargo run --example gpu --features gpu
-
-# Build with BLAS acceleration (macOS only)
-cargo build --features accelerate
-cargo test --features accelerate -- --nocapture
-```
-
 ## Testing Overview
 
 **Test Organization:**
+
 - **core**: Basic tensor operations, chain rule, shape manipulation
 - **grad_check**: Numerical gradient validation for all operations
 - **broadcasting**: NumPy-style broadcasting rules
@@ -112,12 +95,14 @@ cargo test --features accelerate -- --nocapture
 - **shape_tests**: Shape manipulation operations (reshape, permute, transpose)
 
 **Test Coverage:**
+
 - Core operations, gradient correctness, broadcasting
 - Neural networks (Linear, Sequential, Conv2d, ConvTranspose2d, MaxPool2d)
 - Optimizers (Adam, SGD)
 - Edge cases (numerical edge cases, empty tensors, scalar tensors)
 
 **Workflow:**
+
 - Always run `cargo test` before committing changes
 - Use `check_gradients_simple()` for basic gradient validation
 - Use full `check_gradients()` for comprehensive validation
@@ -150,6 +135,7 @@ must_use_candidate = "deny"        # Suggests #[must_use] attributes
 ```
 
 **Key principles:**
+
 - **No direct indexing**: Use `.get()`, iterators, or safe wrappers instead of `[]` indexing
 - **No panicking From impls**: Use `TryFrom` for fallible conversions
 - **Exhaustive matching**: Always handle all enum variants explicitly
@@ -165,15 +151,18 @@ Run `cargo clippy --all-targets` (not just `cargo clippy --all`) to catch lintin
 The framework supports multiple serialization formats for model weights:
 
 **Supported Formats:**
+
 - **bincode**: Binary format for Volta-native model saving/loading
 - **SafeTensors**: Industry-standard format for interoperability with PyTorch, HuggingFace, etc.
 
 **Key Types:**
+
 - `StateDict`: `BTreeMap<String, TensorData>` - Human-readable parameter names to tensor data
 - `TensorData`: Serializable struct containing `data: Vec<f32>` and `shape: Vec<usize>`
 - `StateDictDiff`: Debugging tool for comparing expected vs loaded state dicts
 
 **Key Functions:**
+
 - `save_state_dict()`: Save model weights to bincode format
 - `load_state_dict()`: Load model weights from bincode format
 - `load_safetensors()`: Load from SafeTensors format
@@ -191,28 +180,23 @@ Load weights from PyTorch, HuggingFace, and other frameworks using weight mappin
 ## Known Issues and Limitations
 
 **Current Limitations:**
+
 - **Single-threaded only**: Uses Rc<RefCell> instead of Arc<Mutex>
 - **No distributed training**
 - **No learning rate schedulers**
 - **No full RNN layer** (LSTMCell exists; transformer components — `MultiHeadAttention`, `TransformerBlock`, `PositionalEncoding` — ARE implemented in `src/nn/transformer/`)
 - **Incomplete GPU support**: Some operations still CPU-only (check `src/gpu/mod.rs` for current status)
 
-**Known Anti-Patterns (from notes/REFACTOR_SUGGESTIONS.md):**
-1. **Excessive Clone Operations**: 424+ clone operations across 45 files due to Rc<RefCell> design
-2. **Gradient Function Boilerplate**: Each operation requires ~30 lines of repetitive GradFn code
-3. **Recursive Movement Ops**: Deep nesting in movement operations (pad, shrink, stride)
-
 ## Code Conventions
 
 When working with this codebase:
 
 1. **All operations must have verified gradients**: Add numerical gradient check tests in `src/lib.rs`
-2. **Use TensorOps trait**: User-facing API for all tensor operations
-3. **Module trait for layers**: Implement `forward()`, `parameters()`, `state_dict()`, `load_state_dict()`
-4. **GradFn for backprop**: Each operation implements the GradFn trait for reverse-mode autodiff
-5. **Shape semantics**: Follow PyTorch conventions (NCHW for conv layers)
-6. **Error handling**: Return `VoltaError` results instead of panicking where possible
-7. **Defensive indexing**: Use `.get()`, iterators, or safe wrappers; avoid direct `[]` indexing
+2. **Module trait for layers**: Implement `forward()`, `parameters()`, `state_dict()`, `load_state_dict()`
+3. **GradFn for backprop**: Each operation implements the GradFn trait for reverse-mode autodiff
+4. **Shape semantics**: Follow PyTorch conventions (NCHW for conv layers)
+5. **Error handling**: Return `VoltaError` results instead of panicking where possible
+6. **Defensive indexing**: Use `.get()`, iterators, or safe wrappers; avoid direct `[]` indexing
 
 ## Performance Characteristics
 
@@ -242,13 +226,6 @@ When working with this codebase:
 ### Development Dependencies
 
 - `criterion`: Benchmarking framework
-
-## Development Notes
-
-- **scrapboard.md**: Contains development notes, TODOs, and clippy linting progress
-- **notes/REFACTOR_SUGGESTIONS.md**: Detailed analysis of completed and planned refactoring work
-- **responses/**: Directory containing LLM-assisted development recommendations
-- **sys-prompts/**: System prompts for external LLM assistance (maintainer use only)
 
 ## Reference Documentation
 

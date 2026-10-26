@@ -1,6 +1,7 @@
 /target
 
 *.txt
+!failures.txt
 
 .bacon-locations
 responses/context.md
