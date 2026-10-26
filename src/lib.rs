@@ -31,6 +31,7 @@ pub mod gpu;
 pub mod dtype;
 pub mod error;
 pub mod shape;
+pub(crate) mod spec;
 pub mod storage;
 
 // Add to re-exports:
