@@ -58,12 +58,7 @@ fn reshape_parity() {
     let y_cpu = x_cpu.reshape(&[6, 4]);
     let y_gpu = x_gpu.reshape(&[6, 4]).to_device(Device::CPU);
 
-    assert_close(
-        "reshape fwd",
-        &y_cpu.data(),
-        &y_gpu.data(),
-        TOL_FWD_GPU,
-    );
+    assert_close("reshape fwd", &y_cpu.data(), &y_gpu.data(), TOL_FWD_GPU);
 }
 
 #[test]
@@ -108,12 +103,7 @@ fn permute_parity() {
     let y_cpu = x_cpu.permute(&[1, 2, 0]);
     let y_gpu = x_gpu.permute(&[1, 2, 0]).to_device(Device::CPU);
 
-    assert_close(
-        "permute fwd",
-        &y_cpu.data(),
-        &y_gpu.data(),
-        TOL_FWD_GPU,
-    );
+    assert_close("permute fwd", &y_cpu.data(), &y_gpu.data(), TOL_FWD_GPU);
 }
 
 #[test]
@@ -158,12 +148,7 @@ fn flatten_parity() {
     let y_cpu = x_cpu.reshape(&[2, 12]);
     let y_gpu = x_gpu.reshape(&[2, 12]).to_device(Device::CPU);
 
-    assert_close(
-        "flatten fwd",
-        &y_cpu.data(),
-        &y_gpu.data(),
-        TOL_FWD_GPU,
-    );
+    assert_close("flatten fwd", &y_cpu.data(), &y_gpu.data(), TOL_FWD_GPU);
 }
 
 #[test]

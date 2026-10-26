@@ -5,6 +5,7 @@ use crate::ops::binary::BinaryOp;
 use crate::ops::reduce::ReduceOp;
 use crate::ops::ternary::TernaryOp;
 use crate::ops::unary::UnaryOp;
+use crate::shape::Shape;
 use crate::{Result, VoltaError};
 use rand::Rng;
 use rand::SeedableRng;
@@ -870,7 +871,7 @@ impl RawTensor {
         Ok(edge(
             [self_t.clone()],
             storage,
-            final_shape,
+            Shape::derived(final_shape),
             device,
             Box::new(SumDimGradFn {
                 input_shape: shape,
@@ -1001,7 +1002,7 @@ impl RawTensor {
         edge(
             [self_t.clone()],
             storage,
-            final_shape,
+            Shape::derived(final_shape),
             device,
             Box::new(MaxDimGradFn {
                 input_shape: shape,

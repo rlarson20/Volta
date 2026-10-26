@@ -8,6 +8,7 @@ use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
+use crate::shape::Shape;
 use crate::tensor::{RawTensor, Tensor, TensorOps};
 
 /// Transposed 2D convolution (also called deconvolution)
@@ -432,7 +433,7 @@ impl Module for ConvTranspose2d {
         edge(
             inputs,
             final_data,
-            final_shape,
+            Shape::derived(final_shape),
             Device::CPU,
             Box::new(ConvTranspose2dGradFn {
                 input_shape,

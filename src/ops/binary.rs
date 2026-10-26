@@ -1,5 +1,6 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
+use crate::shape::Shape;
 use crate::storage::Storage;
 use crate::{RawTensor, Result, Tensor, VoltaError};
 
@@ -631,7 +632,7 @@ impl RawTensor {
                 return edge(
                     [self_t.clone(), other.clone()],
                     storage,
-                    shape,
+                    Shape::derived(shape),
                     device,
                     Box::new(BinaryGradFn { op }),
                 );
@@ -672,7 +673,7 @@ impl RawTensor {
         edge(
             [self_t.clone(), other.clone()],
             Storage::cpu(result_data),
-            out_shape,
+            Shape::derived(out_shape),
             Device::CPU,
             Box::new(BinaryGradFn { op }),
         )

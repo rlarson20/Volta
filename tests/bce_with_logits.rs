@@ -25,7 +25,10 @@ fn test_bce_with_logits_saturated_logits_finite() {
         / n;
     let got = f64::from(loss.data()[0]);
     assert!(got.is_finite(), "loss not finite: {got}");
-    assert!((got - expected).abs() < 1e-3 * expected.max(1.0), "{got} vs {expected}");
+    assert!(
+        (got - expected).abs() < 1e-3 * expected.max(1.0),
+        "{got} vs {expected}"
+    );
 
     let grad = logits.grad().expect("logits grad missing");
     for ((&x, &y), &g) in xs.iter().zip(&ys).zip(&grad) {

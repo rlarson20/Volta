@@ -1,5 +1,6 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
+use crate::shape::Shape;
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
 
@@ -186,7 +187,7 @@ impl RawTensor {
                                 return edge(
                                     [x.clone(), y.clone(), z.clone()],
                                     sum,
-                                    shape_x,
+                                    Shape::derived(shape_x),
                                     dev_x,
                                     Box::new(MulAccGradFn),
                                 );
@@ -208,7 +209,7 @@ impl RawTensor {
                 edge(
                     [x.clone(), y.clone(), z.clone()],
                     Storage::cpu(result_data),
-                    shape_x,
+                    Shape::derived(shape_x),
                     Device::CPU,
                     Box::new(MulAccGradFn),
                 )
@@ -247,7 +248,7 @@ impl RawTensor {
                 edge(
                     [y.clone(), z.clone()],
                     Storage::cpu(result_data),
-                    out_shape,
+                    Shape::derived(out_shape),
                     Device::CPU,
                     Box::new(WhereGradFn {
                         condition: cond_bc,

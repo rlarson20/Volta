@@ -1,6 +1,7 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::error::Result;
+use crate::shape::Shape;
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
 
@@ -634,7 +635,7 @@ impl RawTensor {
         edge(
             [self_t.clone()],
             data,
-            new_shape.to_vec(),
+            Shape::derived(new_shape.to_vec()),
             device,
             Box::new(MovementGradFn {
                 op: MovementOp::Reshape {
@@ -733,7 +734,7 @@ impl RawTensor {
         edge(
             [self_t.clone()],
             storage,
-            new_shape,
+            Shape::derived(new_shape),
             device,
             Box::new(MovementGradFn {
                 op: MovementOp::Permute {
@@ -783,7 +784,7 @@ impl RawTensor {
             return edge(
                 [self_t.clone()],
                 storage,
-                new_shape.to_vec(),
+                Shape::derived(new_shape.to_vec()),
                 device,
                 Box::new(MovementGradFn {
                     op: MovementOp::Expand {
@@ -825,7 +826,7 @@ impl RawTensor {
         edge(
             [self_t.clone()],
             Storage::cpu(result),
-            new_shape.to_vec(),
+            Shape::derived(new_shape.to_vec()),
             Device::CPU,
             Box::new(MovementGradFn {
                 op: MovementOp::Expand {
@@ -877,7 +878,7 @@ impl RawTensor {
             return edge(
                 [self_t.clone()],
                 storage,
-                new_shape,
+                Shape::derived(new_shape),
                 device,
                 Box::new(MovementGradFn {
                     op: MovementOp::Pad {
@@ -905,7 +906,7 @@ impl RawTensor {
         edge(
             [self_t.clone()],
             Storage::cpu(result),
-            new_shape,
+            Shape::derived(new_shape),
             Device::CPU,
             Box::new(MovementGradFn {
                 op: MovementOp::Pad {
@@ -1026,7 +1027,7 @@ impl RawTensor {
             return Ok(edge(
                 [self_t.clone()],
                 storage,
-                new_shape,
+                Shape::derived(new_shape),
                 device,
                 Box::new(MovementGradFn {
                     op: MovementOp::Shrink {
@@ -1054,7 +1055,7 @@ impl RawTensor {
         Ok(edge(
             [self_t.clone()],
             Storage::cpu(result),
-            new_shape,
+            Shape::derived(new_shape),
             Device::CPU,
             Box::new(MovementGradFn {
                 op: MovementOp::Shrink {
@@ -1097,7 +1098,7 @@ impl RawTensor {
             return edge(
                 [self_t.clone()],
                 storage,
-                new_shape,
+                Shape::derived(new_shape),
                 device,
                 Box::new(MovementGradFn {
                     op: MovementOp::Stride {
@@ -1125,7 +1126,7 @@ impl RawTensor {
         edge(
             [self_t.clone()],
             Storage::cpu(result),
-            new_shape,
+            Shape::derived(new_shape),
             Device::CPU,
             Box::new(MovementGradFn {
                 op: MovementOp::Stride {

@@ -7,6 +7,9 @@
 
 use crate::error::{Result, VoltaError};
 
+/// Largest element count a tensor may have (guards against runaway allocations).
+pub const MAX_NUMEL: usize = 100_000_000;
+
 /// Pads `dims` with leading `1`s (right-aligning it to `len`) for broadcasting.
 fn left_pad_ones(dims: &[usize], len: usize) -> impl Iterator<Item = usize> + '_ {
     std::iter::repeat_n(1, len - dims.len()).chain(dims.iter().copied())
@@ -32,18 +35,43 @@ impl Shape {
     ///
     /// # Errors
     ///
-    /// Returns `VoltaError::InvalidParameter` if the product of `dims`
-    /// (the element count) would overflow `usize`.
+    /// Returns `VoltaError::InvalidParameter` if any dimension is `0`, if the
+    /// product of `dims` (the element count) would overflow `usize`, or if it
+    /// exceeds [`MAX_NUMEL`].
     pub fn from_dims(dims: impl Into<Vec<usize>>) -> Result<Self> {
         let dims = dims.into();
-        dims.iter()
+        if dims.contains(&0) {
+            return Err(VoltaError::InvalidParameter(format!(
+                "shape {dims:?} has a zero dimension"
+            )));
+        }
+        let numel = dims
+            .iter()
             .try_fold(1usize, |acc, &d| acc.checked_mul(d))
             .ok_or_else(|| {
                 VoltaError::InvalidParameter(format!(
                     "shape {dims:?} overflows usize while computing element count"
                 ))
             })?;
+        if numel > MAX_NUMEL {
+            return Err(VoltaError::InvalidParameter(format!(
+                "shape {dims:?} has {numel} elements > {MAX_NUMEL} - check for memory issues"
+            )));
+        }
         Ok(Self(dims))
+    }
+
+    /// Builds a `Shape` for a size an op computed from tensors that already exist.
+    ///
+    /// An error here means the op's shape arithmetic is wrong, not that the caller
+    /// passed bad input, so it panics instead of returning a `Result`.
+    ///
+    /// # Panics
+    ///
+    /// If [`Shape::from_dims`] rejects `dims`.
+    #[track_caller]
+    pub(crate) fn derived(dims: impl Into<Vec<usize>>) -> Self {
+        Self::from_dims(dims).expect("op computed an invalid output shape")
     }
 
     /// Number of dimensions.
@@ -95,10 +123,13 @@ impl Shape {
     /// Returns `VoltaError::DimensionOutOfBounds` if `axis` is not a valid
     /// dimension of this shape.
     pub fn dim(&self, axis: Axis) -> Result<usize> {
-        self.0.get(axis.0).copied().ok_or_else(|| VoltaError::DimensionOutOfBounds {
-            dim: axis.0,
-            shape: self.0.clone(),
-        })
+        self.0
+            .get(axis.0)
+            .copied()
+            .ok_or_else(|| VoltaError::DimensionOutOfBounds {
+                dim: axis.0,
+                shape: self.0.clone(),
+            })
     }
 
     /// Named, explicit demotion to a raw `&[usize]` view of the dimensions.
@@ -174,6 +205,29 @@ mod tests {
     fn from_dims_overflow_errs() {
         let result = Shape::from_dims(vec![usize::MAX, 2]);
         assert!(matches!(result, Err(VoltaError::InvalidParameter(_))));
+    }
+
+    #[test]
+    fn from_dims_zero_dim_errs() {
+        let result = Shape::from_dims(vec![3, 0, 2]);
+        assert!(matches!(result, Err(VoltaError::InvalidParameter(_))));
+    }
+
+    #[test]
+    fn from_dims_at_max_numel_is_ok() {
+        assert!(Shape::from_dims(vec![MAX_NUMEL]).is_ok());
+    }
+
+    #[test]
+    fn from_dims_over_max_numel_errs() {
+        let result = Shape::from_dims(vec![MAX_NUMEL + 1]);
+        assert!(matches!(result, Err(VoltaError::InvalidParameter(_))));
+    }
+
+    #[test]
+    #[should_panic(expected = "op computed an invalid output shape")]
+    fn derived_panics_on_zero_dim() {
+        let _ = Shape::derived(vec![2, 0]);
     }
 
     #[test]

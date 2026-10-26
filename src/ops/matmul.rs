@@ -1,5 +1,6 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
+use crate::shape::Shape;
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
 
@@ -163,7 +164,7 @@ impl RawTensor {
                             return edge(
                                 [self_t.clone(), other.clone()],
                                 storage,
-                                vec![m, p],
+                                Shape::derived(vec![m, p]),
                                 device,
                                 Box::new(MatMulGradFn),
                             );
@@ -177,7 +178,7 @@ impl RawTensor {
                 edge(
                     [self_t.clone(), other.clone()],
                     Storage::cpu(result_data),
-                    vec![m, p],
+                    Shape::derived(vec![m, p]),
                     Device::CPU,
                     Box::new(MatMulGradFn),
                 )
@@ -207,7 +208,7 @@ impl RawTensor {
                 edge(
                     [self_t.clone(), other.clone()],
                     Storage::cpu(result_data),
-                    vec![m],
+                    Shape::derived(vec![m]),
                     Device::CPU,
                     Box::new(MatMulGradFn),
                 )
@@ -238,7 +239,7 @@ impl RawTensor {
                 edge(
                     [self_t.clone(), other.clone()],
                     Storage::cpu(result_data),
-                    vec![p],
+                    Shape::derived(vec![p]),
                     Device::CPU,
                     Box::new(MatMulGradFn),
                 )
@@ -253,7 +254,7 @@ impl RawTensor {
                 edge(
                     [self_t.clone(), other.clone()],
                     Storage::cpu(vec![sum]),
-                    vec![1],
+                    Shape::derived(vec![1]),
                     Device::CPU,
                     Box::new(MatMulGradFn),
                 )
@@ -314,7 +315,7 @@ impl RawTensor {
                 edge(
                     [self_t.clone(), other.clone()],
                     Storage::cpu(result_data),
-                    out_shape,
+                    Shape::derived(out_shape),
                     Device::CPU,
                     Box::new(MatMulGradFn),
                 )
@@ -342,7 +343,7 @@ impl RawTensor {
         edge(
             [self_t.clone()],
             Storage::cpu(transposed_data),
-            new_shape,
+            Shape::derived(new_shape),
             Device::CPU,
             Box::new(TransposeGradFn),
         )

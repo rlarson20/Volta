@@ -112,10 +112,7 @@ pub fn assert_unary_parity_backward<F>(
     );
 
     let g_cpu = x_cpu.grad().expect("CPU gradient missing");
-    let g_gpu = x_gpu
-        .grad_storage()
-        .expect("GPU gradient missing")
-        .to_vec();
+    let g_gpu = x_gpu.grad_storage().expect("GPU gradient missing").to_vec();
     assert_close(&format!("{op_name} bwd"), &g_cpu, &g_gpu, tol_bwd);
 }
 

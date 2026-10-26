@@ -1,4 +1,5 @@
 use crate::device::Device;
+use crate::shape::Shape;
 use crate::storage::Storage;
 use crate::tensor::{RawTensor, Tensor};
 use std::cell::Cell;
@@ -36,16 +37,17 @@ pub trait GradFn {
 /// "any input requires grad, `no_grad()` isn't active, and the grad isn't trivial" is
 /// the only rule that exists, everywhere.
 ///
-/// `shape`/`grad` are `Vec<usize>`/`Box<dyn GradFn>` rather than the `Shape`/`GradFn`
-/// (enum) types ADDENDUM.md sketches, since those are Phase 2 work (§1.2, §2.5) not
-/// yet landed — this uses what exists today. `device` isn't in the ADDENDUM sketch
+/// `shape` is a [`Shape`] (§1.2); `grad` is still `Box<dyn GradFn>` rather than the
+/// `GradFn` enum ADDENDUM.md sketches, since that is Phase 2 work (§2.5) not yet
+/// landed. Build `shape` with `Shape::derived` when the op computed it from existing
+/// tensors. `device` isn't in the ADDENDUM sketch
 /// either, but is required in practice: `Storage` doesn't uniquely determine a
 /// `Device` value, and every real call site (GPU vs CPU op paths) already tracks
 /// device separately from the data it produced.
 pub(crate) fn edge(
     inputs: impl AsRef<[Tensor]>,
     data: Storage,
-    shape: Vec<usize>,
+    shape: Shape,
     device: Device,
     grad: Box<dyn GradFn>,
 ) -> Tensor {
@@ -53,7 +55,7 @@ pub(crate) fn edge(
         && inputs.as_ref().iter().any(Tensor::requires_grad)
         && !grad.is_trivial();
 
-    let out = RawTensor::new_with_storage(data, &shape, device, requires_grad);
+    let out = RawTensor::new_with_storage(data, shape.truncate_rank(), device, requires_grad);
     if requires_grad {
         let mut o = out.borrow_mut();
         o.parents = inputs.as_ref().to_vec();

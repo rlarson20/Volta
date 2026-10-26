@@ -2,6 +2,7 @@ use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::io::StateDict;
 use crate::nn::Module;
+use crate::shape::Shape;
 use crate::storage::Storage;
 use crate::tensor::{RawTensor, Tensor, TensorOps};
 
@@ -135,7 +136,7 @@ impl MaxPool2d {
         edge(
             [x_padded],
             Storage::cpu(out_data),
-            out_shape,
+            Shape::derived(out_shape),
             Device::CPU,
             Box::new(MaxPool2dGradFn { max_indices }),
         )

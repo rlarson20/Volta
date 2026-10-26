@@ -4,6 +4,7 @@ use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
+use crate::shape::Shape;
 use crate::tensor::{RawTensor, Tensor, TensorOps};
 
 /// Algorithm to use for convolution
@@ -1175,7 +1176,7 @@ impl Conv2d {
                 return edge(
                     [x.clone()],
                     col_data,
-                    vec![rows, cols],
+                    Shape::derived(vec![rows, cols]),
                     device,
                     Box::new(Im2colGradFn {
                         input_shape: shape,
@@ -1235,7 +1236,7 @@ impl Conv2d {
         edge(
             [x.clone()],
             Storage::cpu(result),
-            vec![rows, cols],
+            Shape::derived(vec![rows, cols]),
             Device::CPU,
             Box::new(Im2colGradFn {
                 input_shape: shape,
@@ -1426,7 +1427,7 @@ impl Conv2d {
         edge(
             [x.clone(), weight.clone()],
             Storage::cpu(output),
-            vec![batch, out_ch, h_out, w_out],
+            Shape::derived(vec![batch, out_ch, h_out, w_out]),
             Device::CPU,
             Box::new(DirectConvGradFn {
                 input_shape: x_shape,
@@ -1491,7 +1492,7 @@ impl Conv2d {
             edge(
                 [x.clone(), weight.clone()],
                 storage,
-                vec![batch, out_channels, h_out, w_out],
+                Shape::derived(vec![batch, out_channels, h_out, w_out]),
                 device,
                 Box::new(DirectConvGradFn {
                     input_shape: x_shape,
@@ -1595,7 +1596,7 @@ impl Conv2d {
             edge(
                 [x.clone(), weight.clone()],
                 storage,
-                vec![batch, out_ch, h_out, w_out],
+                Shape::derived(vec![batch, out_ch, h_out, w_out]),
                 x_device,
                 Box::new(IGEMMGradFn {
                     input_shape: x_shape,
@@ -1644,7 +1645,7 @@ impl Conv2d {
             edge(
                 [x.clone(), weight.clone()],
                 Storage::cpu(output),
-                vec![batch, out_ch, h_out, w_out],
+                Shape::derived(vec![batch, out_ch, h_out, w_out]),
                 Device::CPU,
                 Box::new(IGEMMGradFn {
                     input_shape: x_shape,

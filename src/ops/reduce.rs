@@ -1,4 +1,5 @@
 use crate::autograd::{GradFn, edge};
+use crate::shape::Shape;
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
 
@@ -256,6 +257,12 @@ impl RawTensor {
         // as the input tensor. The reduction computation may have happened on GPU.
         let storage = Storage::cpu(vec![result_val]).to_device(&device);
 
-        edge([self_t.clone()], storage, vec![1], device, grad_fn)
+        edge(
+            [self_t.clone()],
+            storage,
+            Shape::derived(vec![1]),
+            device,
+            grad_fn,
+        )
     }
 }

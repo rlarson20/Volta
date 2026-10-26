@@ -1,5 +1,6 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
+use crate::shape::Shape;
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
 
@@ -234,7 +235,7 @@ impl RawTensor {
                 return edge(
                     [t.clone()],
                     storage,
-                    shape,
+                    Shape::derived(shape),
                     device,
                     Box::new(UnaryGradFn { op }),
                 );
@@ -265,7 +266,7 @@ impl RawTensor {
         edge(
             [t.clone()],
             Storage::cpu(result),
-            shape,
+            Shape::derived(shape),
             Device::CPU,
             Box::new(UnaryGradFn { op }),
         )
