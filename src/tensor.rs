@@ -289,31 +289,22 @@ impl RawTensor {
     ///
     /// # Errors
     ///
+    /// Returns `VoltaError::InvalidParameter` if `shape` has a zero dimension or
+    /// more than `MAX_NUMEL` elements (see [`Shape::from_dims`])
     /// Returns `VoltaError::ShapeDataMismatch` if data length doesn't match shape
-    /// Returns `VoltaError::InvalidParameter` if tensor would be empty or too large
     pub fn try_new(data: Vec<f32>, shape: &[usize], requires_grad: bool) -> Result<Tensor> {
-        let elements: usize = shape.iter().product();
-        if data.len() != elements {
+        let shape = Shape::from_dims(shape)?;
+        if data.len() != shape.numel() {
             return Err(VoltaError::ShapeDataMismatch {
-                shape: shape.to_vec(),
-                elements,
+                shape: shape.truncate_rank().to_vec(),
+                elements: shape.numel(),
                 len: data.len(),
             });
-        }
-        if elements == 0 {
-            return Err(VoltaError::InvalidParameter(
-                "Cannot create tensor with zero elements".to_string(),
-            ));
-        }
-        if elements > 100_000_000 {
-            return Err(VoltaError::InvalidParameter(format!(
-                "Tensor too large ({elements} elements > 100M) - check for memory issues"
-            )));
         }
 
         let raw = Self {
             data: Storage::cpu(data),
-            shape: shape.to_vec(),
+            shape: shape.truncate_rank().to_vec(),
             grad: None,
             requires_grad,
             grad_fn: None,
@@ -351,18 +342,18 @@ impl RawTensor {
         device: Device,
         requires_grad: bool,
     ) -> Result<Tensor> {
-        let elements: usize = shape.iter().product();
-        if data.len() != elements {
+        let shape = Shape::from_dims(shape)?;
+        if data.len() != shape.numel() {
             return Err(VoltaError::ShapeDataMismatch {
-                shape: shape.to_vec(),
-                elements,
+                shape: shape.truncate_rank().to_vec(),
+                elements: shape.numel(),
                 len: data.len(),
             });
         }
 
         let raw = Self {
             data,
-            shape: shape.to_vec(),
+            shape: shape.truncate_rank().to_vec(),
             grad: None,
             requires_grad,
             grad_fn: None,

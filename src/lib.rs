@@ -1865,7 +1865,7 @@ mod edge_case_tests {
     }
 
     #[test]
-    #[should_panic(expected = "Expand would create tensor with")]
+    #[should_panic(expected = "Pad: invalid output shape")]
     fn test_pad_excessive_padding() {
         // Attempt to pad with huge values that would exceed MAX_ALLOC
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
@@ -2926,14 +2926,63 @@ mod edge_case_tests {
     // ===== EMPTY TENSOR CREATION ATTEMPTS (SHOULD PANIC) =====
 
     #[test]
-    #[should_panic(expected = "Cannot create tensor with zero elements")]
+    #[should_panic(expected = "has a zero dimension")]
     fn test_create_empty_tensor_explicit() {
         // Direct attempt to create tensor with zero elements
         let _empty = RawTensor::new(vec![], &[0], false);
     }
 
     #[test]
-    #[should_panic(expected = "Cannot create tensor with zero elements")]
+    fn test_try_new_zero_dim_is_invalid_parameter() {
+        // The zero check lives in `Shape::from_dims`; assert the variant, not the wording.
+        let err = RawTensor::try_new(vec![], &[0], false).err().unwrap();
+        assert!(matches!(err, VoltaError::InvalidParameter(_)), "{err:?}");
+        let err = RawTensor::try_new(vec![], &[0, 5], false).err().unwrap();
+        assert!(matches!(err, VoltaError::InvalidParameter(_)), "{err:?}");
+    }
+
+    #[test]
+    fn test_try_new_over_max_numel_is_invalid_parameter() {
+        // Shape is rejected before data is compared, so no 100M-element allocation is needed.
+        let err = RawTensor::try_new(vec![], &[crate::shape::MAX_NUMEL + 1], false)
+            .err()
+            .unwrap();
+        assert!(matches!(err, VoltaError::InvalidParameter(_)), "{err:?}");
+    }
+
+    #[test]
+    fn test_try_new_data_length_mismatch_is_shape_data_mismatch() {
+        let err = RawTensor::try_new(vec![1.0], &[2], false).err().unwrap();
+        assert!(
+            matches!(err, VoltaError::ShapeDataMismatch { .. }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn test_try_new_with_storage_rejects_zero_dim() {
+        let err = RawTensor::try_new_with_storage(Storage::cpu(vec![]), &[0], Device::CPU, false)
+            .err()
+            .unwrap();
+        assert!(matches!(err, VoltaError::InvalidParameter(_)), "{err:?}");
+    }
+
+    #[test]
+    #[should_panic(expected = "Expand: invalid target shape")]
+    fn test_expand_over_max_numel_panics() {
+        let x = RawTensor::new(vec![1.0, 2.0], &[1, 2], false);
+        let _ = x.expand(&[crate::shape::MAX_NUMEL, 2]);
+    }
+
+    #[test]
+    fn test_try_broadcast_shape_over_max_numel_is_invalid_parameter() {
+        // Each operand is valid, but the broadcast result (400M) exceeds the cap.
+        let err = RawTensor::try_broadcast_shape(&[20_000, 1], &[1, 20_000]).unwrap_err();
+        assert!(matches!(err, VoltaError::InvalidParameter(_)), "{err:?}");
+    }
+
+    #[test]
+    #[should_panic(expected = "has a zero dimension")]
     fn test_create_empty_tensor_2d() {
         // 2D tensor with zero in first dimension
         let _empty = RawTensor::new(vec![], &[0, 5], false);

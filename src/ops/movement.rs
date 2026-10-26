@@ -753,8 +753,6 @@ impl RawTensor {
     /// expand rank must match
     #[must_use]
     pub fn expand(self_t: &Tensor, new_shape: &[usize]) -> Tensor {
-        const MAX_ALLOC: usize = 100_000_000;
-
         let (data, old_shape, device) = {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone(), s.device.clone())
@@ -770,11 +768,10 @@ impl RawTensor {
             );
         }
 
-        let new_size: usize = new_shape.iter().product();
-        assert!(
-            new_size <= MAX_ALLOC,
-            "Expand would create tensor with {new_size} elements (max: {MAX_ALLOC}). Check shapes {old_shape:?} -> {new_shape:?}"
-        );
+        let out_shape = Shape::from_dims(new_shape).unwrap_or_else(|e| {
+            panic!("Expand: invalid target shape {new_shape:?} from {old_shape:?}: {e}")
+        });
+        let new_size = out_shape.numel();
 
         // Try GPU path first if available
         #[cfg(feature = "gpu")]
@@ -784,7 +781,7 @@ impl RawTensor {
             return edge(
                 [self_t.clone()],
                 storage,
-                Shape::derived(new_shape.to_vec()),
+                out_shape,
                 device,
                 Box::new(MovementGradFn {
                     op: MovementOp::Expand {
@@ -826,7 +823,7 @@ impl RawTensor {
         edge(
             [self_t.clone()],
             Storage::cpu(result),
-            Shape::derived(new_shape.to_vec()),
+            out_shape,
             Device::CPU,
             Box::new(MovementGradFn {
                 op: MovementOp::Expand {
@@ -845,8 +842,6 @@ impl RawTensor {
     /// padding must match rank
     #[must_use]
     pub fn pad(self_t: &Tensor, padding: &[(usize, usize)]) -> Tensor {
-        const MAX_ALLOC: usize = 100_000_000;
-
         let (data, old_shape, device) = {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone(), s.device.clone())
@@ -864,11 +859,10 @@ impl RawTensor {
             .map(|(d, (l, r))| d + l + r)
             .collect();
 
-        let new_size: usize = new_shape.iter().product();
-        assert!(
-            new_size <= MAX_ALLOC,
-            "Expand would create tensor with {new_size} elements (max: {MAX_ALLOC}). Check shapes {old_shape:?} -> {new_shape:?}"
-        );
+        let out_shape = Shape::from_dims(new_shape.clone()).unwrap_or_else(|e| {
+            panic!("Pad: invalid output shape {new_shape:?} from {old_shape:?}: {e}")
+        });
+        let new_size = out_shape.numel();
 
         // Try GPU path first if available
         #[cfg(feature = "gpu")]
@@ -878,7 +872,7 @@ impl RawTensor {
             return edge(
                 [self_t.clone()],
                 storage,
-                Shape::derived(new_shape),
+                out_shape,
                 device,
                 Box::new(MovementGradFn {
                     op: MovementOp::Pad {
@@ -906,7 +900,7 @@ impl RawTensor {
         edge(
             [self_t.clone()],
             Storage::cpu(result),
-            Shape::derived(new_shape),
+            out_shape,
             Device::CPU,
             Box::new(MovementGradFn {
                 op: MovementOp::Pad {

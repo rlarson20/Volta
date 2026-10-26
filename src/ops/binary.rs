@@ -439,43 +439,13 @@ impl RawTensor {
     ///
     /// # Errors
     ///
-    /// Returns `VoltaError::BroadcastError` if shapes cannot be broadcast together
+    /// Returns `VoltaError::BroadcastError` if shapes cannot be broadcast together, or
+    /// `VoltaError::InvalidParameter` if an operand or the result is not a valid
+    /// [`Shape`] (zero dimension, or more than `MAX_NUMEL` elements)
     pub fn try_broadcast_shape(shape_a: &[usize], shape_b: &[usize]) -> Result<Vec<usize>> {
-        let max_len = shape_a.len().max(shape_b.len());
-        let mut result = vec![1; max_len];
-
-        // Align from right (trailing dimensions)
-        for i in 0..max_len {
-            let a_dim = if i < shape_a.len() && !shape_a.is_empty() {
-                let idx = shape_a.len() - 1 - i;
-                shape_a.get(idx).copied().unwrap_or(1)
-            } else {
-                1
-            };
-            let b_dim = if i < shape_b.len() && !shape_b.is_empty() {
-                let idx = shape_b.len() - 1 - i;
-                shape_b.get(idx).copied().unwrap_or(1)
-            } else {
-                1
-            };
-
-            let result_idx = max_len - 1 - i;
-            if let Some(slot) = result.get_mut(result_idx) {
-                if a_dim == b_dim {
-                    *slot = a_dim;
-                } else if a_dim == 1 {
-                    *slot = b_dim;
-                } else if b_dim == 1 {
-                    *slot = a_dim;
-                } else {
-                    return Err(VoltaError::BroadcastError(
-                        shape_a.to_vec(),
-                        shape_b.to_vec(),
-                    ));
-                }
-            }
-        }
-        Ok(result)
+        let a = Shape::from_dims(shape_a)?;
+        let b = Shape::from_dims(shape_b)?;
+        Ok(a.broadcast(&b)?.truncate_rank().to_vec())
     }
 
     /// Broadcast data from one shape to another
@@ -483,17 +453,15 @@ impl RawTensor {
     /// This repeats values along dimensions where `from_shape` is 1
     /// and `to_shape` is larger.
     pub(crate) fn broadcast_to(data: &[f32], from_shape: &[usize], to_shape: &[usize]) -> Vec<f32> {
-        const MAX_ALLOC: usize = 100_000_000;
-
         if from_shape == to_shape {
             return data.to_vec();
         }
 
-        let to_size: usize = to_shape.iter().product();
-        assert!(
-            to_size <= MAX_ALLOC,
-            "Broadcast would create tensor with {to_size} elements (max: {MAX_ALLOC}). Check shapes {from_shape:?} -> {to_shape:?}"
-        );
+        let to_size = Shape::from_dims(to_shape)
+            .unwrap_or_else(|e| {
+                panic!("Broadcast: invalid target shape {to_shape:?} from {from_shape:?}: {e}")
+            })
+            .numel();
         let mut result = vec![0.0; to_size];
 
         // Pad from_shape with leading 1s to match rank
