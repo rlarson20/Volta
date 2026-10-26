@@ -45,25 +45,6 @@ mod gpu_tests {
     }
 
     #[test]
-    fn test_gpu_matmul() {
-        if !gpu::is_gpu_available() {
-            println!("Skipping GPU test - no GPU available");
-            return;
-        }
-
-        // 2x2 @ 2x2
-        let a = gpu::GpuBuffer::from_slice(&[1.0, 2.0, 3.0, 4.0]).unwrap();
-        let b = gpu::GpuBuffer::from_slice(&[5.0, 6.0, 7.0, 8.0]).unwrap();
-
-        let c = gpu::GpuKernels::matmul(&a, &b, 2, 2, 2).unwrap();
-        let result = c.to_vec();
-
-        // Expected: [[1*5+2*7, 1*6+2*8], [3*5+4*7, 3*6+4*8]]
-        //         = [[19, 22], [43, 50]]
-        assert_eq!(result, vec![19.0, 22.0, 43.0, 50.0]);
-    }
-
-    #[test]
     fn test_gpu_autograd_root_grad_on_gpu() {
         if !gpu::is_gpu_available() {
             println!("Skipping GPU autograd test - no GPU available");

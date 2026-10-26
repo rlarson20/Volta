@@ -1119,13 +1119,20 @@ impl GpuKernels {
     /// # Arguments
     /// * `a` - Matrix A with shape (m, k)
     /// * `b` - Matrix B with shape (k, n)
-    /// * `m` - Number of rows in A
-    /// * `k` - Number of columns in A / rows in B
-    /// * `n` - Number of columns in B
+    /// * `spec` - Validated `m x k @ k x n` geometry; must not be batched
     /// # Panics
-    /// Buffer size doesn't match dims
+    /// If `spec` is batched, or a buffer size doesn't match dims
     #[must_use]
-    pub fn matmul(a: &GpuBuffer, b: &GpuBuffer, m: usize, k: usize, n: usize) -> Option<GpuBuffer> {
+    pub(crate) fn matmul(
+        a: &GpuBuffer,
+        b: &GpuBuffer,
+        spec: &crate::spec::MatmulSpec,
+    ) -> Option<GpuBuffer> {
+        assert!(
+            !spec.is_batched(),
+            "GPU matmul kernels are 2D only; batched products run on the CPU path"
+        );
+        let (m, k, n) = (spec.m, spec.k, spec.n);
         assert_eq!(a.len(), m * k, "A buffer size doesn't match dimensions");
         assert_eq!(b.len(), k * n, "B buffer size doesn't match dimensions");
 
@@ -1209,19 +1216,20 @@ impl GpuKernels {
     /// # Arguments
     /// * `grad` - Output gradient with shape (m, n)
     /// * `b` - Matrix B from forward pass with shape (k, n)
-    /// * `m` - Number of rows in grad / rows in dA
-    /// * `k` - Number of columns in grad / rows in B
-    /// * `n` - Number of columns in B / columns in grad
+    /// * `spec` - Validated `m x k @ k x n` geometry; must not be batched
     /// # Panics
     /// Grad buffer size doesn't match dimensions
     #[must_use]
-    pub fn matmul_backward_a(
+    pub(crate) fn matmul_backward_a(
         grad: &GpuBuffer,
         b: &GpuBuffer,
-        m: usize,
-        k: usize,
-        n: usize,
+        spec: &crate::spec::MatmulSpec,
     ) -> Option<GpuBuffer> {
+        assert!(
+            !spec.is_batched(),
+            "GPU matmul kernels are 2D only; batched products run on the CPU path"
+        );
+        let (m, k, n) = (spec.m, spec.k, spec.n);
         assert_eq!(
             grad.len(),
             m * n,
@@ -1309,19 +1317,20 @@ impl GpuKernels {
     /// # Arguments
     /// * `a` - Matrix A from forward pass with shape (m, k)
     /// * `grad` - Output gradient with shape (m, n)
-    /// * `m` - Number of rows in A / rows in grad
-    /// * `k` - Number of columns in A / rows in dB
-    /// * `n` - Number of columns in grad / columns in B
+    /// * `spec` - Validated `m x k @ k x n` geometry; must not be batched
     /// # Panics
     /// `A` buffer size doesn't match dimensions
     #[must_use]
-    pub fn matmul_backward_b(
+    pub(crate) fn matmul_backward_b(
         a: &GpuBuffer,
         grad: &GpuBuffer,
-        m: usize,
-        k: usize,
-        n: usize,
+        spec: &crate::spec::MatmulSpec,
     ) -> Option<GpuBuffer> {
+        assert!(
+            !spec.is_batched(),
+            "GPU matmul kernels are 2D only; batched products run on the CPU path"
+        );
+        let (m, k, n) = (spec.m, spec.k, spec.n);
         assert_eq!(a.len(), m * k, "A buffer size doesn't match dimensions");
         assert_eq!(
             grad.len(),
@@ -3044,3 +3053,72 @@ fn movement_op(
 }
 
 use wgpu::util::DeviceExt;
+
+#[cfg(test)]
+mod matmul_tests {
+    use super::{GpuBuffer, GpuKernels};
+    use crate::gpu;
+    use crate::shape::Shape;
+    use crate::spec::MatmulSpec;
+
+    fn spec(a: &[usize], b: &[usize]) -> MatmulSpec {
+        MatmulSpec::new(&Shape::from_dims(a).unwrap(), &Shape::from_dims(b).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn test_gpu_matmul() {
+        if !gpu::is_gpu_available() {
+            return;
+        }
+
+        // 2x2 @ 2x2
+        let a = GpuBuffer::from_slice(&[1.0, 2.0, 3.0, 4.0]).unwrap();
+        let b = GpuBuffer::from_slice(&[5.0, 6.0, 7.0, 8.0]).unwrap();
+
+        let c = GpuKernels::matmul(&a, &b, &spec(&[2, 2], &[2, 2])).unwrap();
+
+        // Expected: [[1*5+2*7, 1*6+2*8], [3*5+4*7, 3*6+4*8]]
+        //         = [[19, 22], [43, 50]]
+        assert_eq!(c.to_vec(), vec![19.0, 22.0, 43.0, 50.0]);
+    }
+
+    #[test]
+    fn test_gpu_matmul_non_square_uses_the_right_dims() {
+        if !gpu::is_gpu_available() {
+            return;
+        }
+
+        // (2x3) @ (3x4): m, k, n are all different, so a swapped pair gives wrong values.
+        let a = GpuBuffer::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+        let b =
+            GpuBuffer::from_slice(&[1.0, 0.0, 2.0, 0.0, 0.0, 1.0, 0.0, 3.0, 1.0, 1.0, 1.0, 1.0])
+                .unwrap();
+
+        let c = GpuKernels::matmul(&a, &b, &spec(&[2, 3], &[3, 4])).unwrap();
+
+        assert_eq!(c.to_vec(), vec![4.0, 5.0, 5.0, 9.0, 10.0, 11.0, 14.0, 21.0]);
+    }
+
+    #[test]
+    fn test_gpu_matmul_rejects_a_batched_spec() {
+        if !gpu::is_gpu_available() {
+            return;
+        }
+        let a = GpuBuffer::from_slice(&[0.0; 12]).unwrap();
+        let b = GpuBuffer::from_slice(&[0.0; 12]).unwrap();
+        let batched = spec(&[2, 2, 3], &[2, 3, 2]);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            GpuKernels::matmul(&a, &b, &batched)
+        }));
+        let Err(payload) = result else {
+            panic!("a batched spec must not reach the 2D kernel");
+        };
+        let msg = payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+            .expect("panic payload should be a string");
+        assert!(msg.contains("2D only"), "{msg}");
+    }
+}

@@ -1,6 +1,7 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::shape::Shape;
+use crate::spec::MatmulSpec;
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
 
@@ -128,11 +129,12 @@ impl RawTensor {
     ///
     /// Supports:
     /// - (m,n) @ (n,p) -> (m,p)  [standard matmul]
+    /// - (..b,m,k) @ (..b,k,n) -> (..b,m,n)  [batched; equal rank, batch dims may broadcast]
     /// - (m,n) @ (n,) -> (m,)    [matrix-vector]
     /// - (n,) @ (n,p) -> (p,)    [vector-matrix]
     /// - (n,) @ (n,) -> scalar   [dot product]
     /// # Panics
-    /// Dimension mismatch
+    /// Dimension mismatch, or matrix operands of unequal rank (see [`MatmulSpec`])
     #[allow(clippy::too_many_lines)]
     #[must_use]
     pub fn matmul(self_t: &Tensor, other: &Tensor) -> Tensor {
@@ -147,42 +149,6 @@ impl RawTensor {
 
         // Handle different cases
         match (shape_a.len(), shape_b.len()) {
-            (2, 2) => {
-                // Standard 2D matmul: (m,n) @ (n,p) -> (m,p)
-                let m = shape_a.first().copied().unwrap_or(1);
-                let n = shape_a.get(1).copied().unwrap_or(1);
-                let n2 = shape_b.first().copied().unwrap_or(1);
-                let p = shape_b.get(1).copied().unwrap_or(1);
-                assert_eq!(n, n2, "Matmul dimension mismatch: ({m},{n}) @ ({n2},{p})");
-
-                // If both inputs live on the same GPU device, try the GPU path first.
-                // Fallback to the existing CPU implementation if anything fails.
-                #[cfg(feature = "gpu")]
-                {
-                    if let Some(device) = Self::common_gpu_device(&[self_t, other]) {
-                        if let Some(storage) = Self::gpu_matmul(&data_a, &data_b, m, n, p) {
-                            return edge(
-                                [self_t.clone(), other.clone()],
-                                storage,
-                                Shape::derived(vec![m, p]),
-                                device,
-                                Box::new(MatMulGradFn),
-                            );
-                        }
-                        log::warn!("GPU matmul requested but failed; falling back to CPU");
-                    }
-                }
-
-                // CPU fallback: BLAS/Accelerate or matrixmultiply on host data.
-                let result_data = Self::matmul_raw(&data_a, &data_b, m, n, p);
-                edge(
-                    [self_t.clone(), other.clone()],
-                    Storage::cpu(result_data),
-                    Shape::derived(vec![m, p]),
-                    Device::CPU,
-                    Box::new(MatMulGradFn),
-                )
-            }
             (2, 1) => {
                 // Matrix-vector: (m,n) @ (n,) -> (m,)
                 let m = shape_a.first().copied().unwrap_or(1);
@@ -210,7 +176,7 @@ impl RawTensor {
                     Storage::cpu(result_data),
                     Shape::derived(vec![m]),
                     Device::CPU,
-                    Box::new(MatMulGradFn),
+                    Box::new(MatMulGradFn::vector()),
                 )
             }
             (1, 2) => {
@@ -241,7 +207,7 @@ impl RawTensor {
                     Storage::cpu(result_data),
                     Shape::derived(vec![p]),
                     Device::CPU,
-                    Box::new(MatMulGradFn),
+                    Box::new(MatMulGradFn::vector()),
                 )
             }
             (1, 1) => {
@@ -256,68 +222,84 @@ impl RawTensor {
                     Storage::cpu(vec![sum]),
                     Shape::derived(vec![1]),
                     Device::CPU,
-                    Box::new(MatMulGradFn),
+                    Box::new(MatMulGradFn::vector()),
                 )
             }
             _ => {
-                // Batched MatMul: (B, M, K) @ (B, K, N) -> (B, M, N)
-                // We require strict matching of batch dimensions for now.
-                let rank_a = shape_a.len();
-                let rank_b = shape_b.len();
-                assert!(
-                    rank_a >= 3 && rank_b >= 3,
-                    "Batched matmul requires rank >= 3"
-                );
+                // Matrix forms: rank >= 2 on both sides. The spec validates rank, inner dims and
+                // batch broadcasting once; everything below reads m/k/n from it.
+                let spec = MatmulSpec::new(
+                    &Shape::derived(shape_a.clone()),
+                    &Shape::derived(shape_b.clone()),
+                )
+                .unwrap_or_else(|e| panic!("{e}"));
 
-                let m = *shape_a.get(rank_a.wrapping_sub(2)).unwrap_or(&1);
-                let k = *shape_a.get(rank_a.wrapping_sub(1)).unwrap_or(&1);
-                let k2 = *shape_b.get(rank_b.wrapping_sub(2)).unwrap_or(&1);
-                let n = *shape_b.get(rank_b.wrapping_sub(1)).unwrap_or(&1);
-                assert_eq!(k, k2, "Matmul dimension mismatch in batch");
-
-                // 1. Broadcast batch dimensions
-                let batch_a = shape_a.get(..rank_a.saturating_sub(2)).unwrap_or(&[]);
-                let batch_b = shape_b.get(..rank_b.saturating_sub(2)).unwrap_or(&[]);
-                let batch_out = Self::broadcast_shape(batch_a, batch_b);
-
-                // 2. Expand inputs to broadcasted batch shape
-                // Target shapes for A: [*batch_out, m, k]
-                let mut target_a = batch_out.clone();
-                target_a.extend_from_slice(&[m, k]);
-                let data_a_expanded = Self::broadcast_to(&data_a, &shape_a, &target_a);
-
-                let mut target_b = batch_out.clone();
-                target_b.extend_from_slice(&[k, n]);
-                let data_b_expanded = Self::broadcast_to(&data_b, &shape_b, &target_b);
-
-                let batch_count: usize = batch_out.iter().product();
-
-                let mut result_data = Vec::with_capacity(batch_count * m * n);
-
-                let stride_a = m * k;
-                let stride_b = k * n;
-
-                for b in 0..batch_count {
-                    let start_a = b * stride_a;
-                    let start_b = b * stride_b;
-                    if let Some(slice_a) = data_a_expanded.get(start_a..start_a + stride_a)
-                        && let Some(slice_b) = data_b_expanded.get(start_b..start_b + stride_b)
+                if !spec.is_batched() {
+                    // Standard 2D matmul: (m,k) @ (k,n) -> (m,n)
+                    //
+                    // If both inputs live on the same GPU device, try the GPU path first.
+                    // Fallback to the existing CPU implementation if anything fails.
+                    #[cfg(feature = "gpu")]
                     {
-                        let chunk_result = Self::matmul_raw(slice_a, slice_b, m, k, n);
-                        result_data.extend_from_slice(&chunk_result);
+                        if let Some(device) = Self::common_gpu_device(&[self_t, other]) {
+                            if let Some(storage) = Self::gpu_matmul(&data_a, &data_b, &spec) {
+                                return edge(
+                                    [self_t.clone(), other.clone()],
+                                    storage,
+                                    Shape::derived(spec.out_dims()),
+                                    device,
+                                    Box::new(MatMulGradFn::matrix(spec)),
+                                );
+                            }
+                            log::warn!("GPU matmul requested but failed; falling back to CPU");
+                        }
                     }
+
+                    // CPU fallback: BLAS/Accelerate or matrixmultiply on host data.
+                    let result_data = Self::matmul_raw(&data_a, &data_b, spec.m, spec.k, spec.n);
+                    return edge(
+                        [self_t.clone(), other.clone()],
+                        Storage::cpu(result_data),
+                        Shape::derived(spec.out_dims()),
+                        Device::CPU,
+                        Box::new(MatMulGradFn::matrix(spec)),
+                    );
                 }
 
-                let mut out_shape = batch_out;
-                out_shape.push(m);
-                out_shape.push(n);
+                // Batched: (..b, m, k) @ (..b, k, n) -> (..b, m, n)
+                let (m, k, n) = (spec.m, spec.k, spec.n);
+                let data_a_expanded =
+                    Self::broadcast_to(&data_a, &spec.a_dims(), &spec.a_expanded_dims());
+                let data_b_expanded =
+                    Self::broadcast_to(&data_b, &spec.b_dims(), &spec.b_expanded_dims());
+
+                let batch_count = spec.batch_count();
+                let (stride_a, stride_b) = (m * k, k * n);
+                assert_eq!(
+                    data_a_expanded.len(),
+                    batch_count * stride_a,
+                    "broadcast A has the wrong length"
+                );
+                assert_eq!(
+                    data_b_expanded.len(),
+                    batch_count * stride_b,
+                    "broadcast B has the wrong length"
+                );
+
+                let mut result_data = Vec::with_capacity(batch_count * m * n);
+                for (slice_a, slice_b) in data_a_expanded
+                    .chunks_exact(stride_a)
+                    .zip(data_b_expanded.chunks_exact(stride_b))
+                {
+                    result_data.extend_from_slice(&Self::matmul_raw(slice_a, slice_b, m, k, n));
+                }
 
                 edge(
                     [self_t.clone(), other.clone()],
                     Storage::cpu(result_data),
-                    Shape::derived(out_shape),
+                    Shape::derived(spec.out_dims()),
                     Device::CPU,
-                    Box::new(MatMulGradFn),
+                    Box::new(MatMulGradFn::matrix(spec)),
                 )
             }
         }
@@ -356,8 +338,73 @@ impl RawTensor {
 /// - ∂L/∂x = ∂L/∂z @ y^T
 /// - ∂L/∂y = x^T @ ∂L/∂z
 ///
-/// Handles multiple cases: 2D×2D, 2D×1D, 1D×2D, 1D×1D (dot product)
-pub struct MatMulGradFn;
+/// Handles 2D×2D, batched (equal rank, batch dims may broadcast), 2D×1D, 1D×2D, and
+/// 1D×1D (dot product).
+pub struct MatMulGradFn {
+    /// `Some` for the matrix forms (rank >= 2 on both sides). `None` for the vector
+    /// forms, whose backward reads the parents' shapes directly.
+    spec: Option<MatmulSpec>,
+}
+
+impl MatMulGradFn {
+    fn matrix(spec: MatmulSpec) -> Self {
+        Self { spec: Some(spec) }
+    }
+
+    fn vector() -> Self {
+        Self { spec: None }
+    }
+
+    /// ∂L/∂a = ∂L/∂c @ b^T, summed back to `a`'s shape if its batch dims were broadcast.
+    fn matrix_grad_a(spec: &MatmulSpec, out_grad: &[f32], b: &[f32]) -> Vec<f32> {
+        let (m, k, n) = (spec.m, spec.k, spec.n);
+        if !spec.is_batched() {
+            let b_t = RawTensor::transpose_2d(b, &[k, n]);
+            return RawTensor::matmul_raw(out_grad, &b_t, m, n, k);
+        }
+        let batch_count = spec.batch_count();
+        assert_eq!(
+            out_grad.len(),
+            batch_count * m * n,
+            "out_grad has the wrong length"
+        );
+        let b_expanded = RawTensor::broadcast_to(b, &spec.b_dims(), &spec.b_expanded_dims());
+        let mut expanded = Vec::with_capacity(batch_count * m * k);
+        for (og, b_slice) in out_grad
+            .chunks_exact(m * n)
+            .zip(b_expanded.chunks_exact(k * n))
+        {
+            let b_t = RawTensor::transpose_2d(b_slice, &[k, n]);
+            expanded.extend_from_slice(&RawTensor::matmul_raw(og, &b_t, m, n, k));
+        }
+        RawTensor::sum_over_broadcast_dims(&expanded, &spec.a_expanded_dims(), &spec.a_dims())
+    }
+
+    /// ∂L/∂b = a^T @ ∂L/∂c, summed back to `b`'s shape if its batch dims were broadcast.
+    fn matrix_grad_b(spec: &MatmulSpec, a: &[f32], out_grad: &[f32]) -> Vec<f32> {
+        let (m, k, n) = (spec.m, spec.k, spec.n);
+        if !spec.is_batched() {
+            let a_t = RawTensor::transpose_2d(a, &[m, k]);
+            return RawTensor::matmul_raw(&a_t, out_grad, k, m, n);
+        }
+        let batch_count = spec.batch_count();
+        assert_eq!(
+            out_grad.len(),
+            batch_count * m * n,
+            "out_grad has the wrong length"
+        );
+        let a_expanded = RawTensor::broadcast_to(a, &spec.a_dims(), &spec.a_expanded_dims());
+        let mut expanded = Vec::with_capacity(batch_count * k * n);
+        for (a_slice, og) in a_expanded
+            .chunks_exact(m * k)
+            .zip(out_grad.chunks_exact(m * n))
+        {
+            let a_t = RawTensor::transpose_2d(a_slice, &[m, k]);
+            expanded.extend_from_slice(&RawTensor::matmul_raw(&a_t, og, k, m, n));
+        }
+        RawTensor::sum_over_broadcast_dims(&expanded, &spec.b_expanded_dims(), &spec.b_dims())
+    }
+}
 
 impl GradFn for MatMulGradFn {
     #[allow(clippy::too_many_lines, clippy::many_single_char_names)]
@@ -382,51 +429,33 @@ impl GradFn for MatMulGradFn {
                 && ((x.device.is_gpu() && y.device.is_gpu())
                     || (!x.requires_grad || !y.requires_grad));
 
-            if gpu_available {
-                //FIXME: MVP issue, find and locate early return if EITHER grad succeeds
-                // For MVP, only handle the standard 2D×2D case on GPU
-                if x.shape.len() == 2 && y.shape.len() == 2 {
-                    let m = out_grad.shape.first().copied().unwrap_or(1);
-                    let n = out_grad.shape.get(1).copied().unwrap_or(1);
-                    let k = y.shape.first().copied().unwrap_or(1); // y is (k, n)
+            // Only the plain 2D×2D case runs on GPU; everything else uses the CPU path below.
+            if gpu_available && let Some(spec) = self.spec.as_ref().filter(|s| !s.is_batched()) {
+                let grad_x = if x.requires_grad {
+                    RawTensor::gpu_matmul_backward_a(&out_grad.data, &y.data, spec).map(|storage| {
+                        RawTensor::new_with_storage(storage, &x.shape, x.device.clone(), false)
+                    })
+                } else {
+                    None
+                };
 
-                    let grad_x = if x.requires_grad {
-                        if let Some(storage) =
-                            RawTensor::gpu_matmul_backward_a(&out_grad.data, &y.data, m, k, n)
-                        {
-                            Some(RawTensor::new_with_storage(
-                                storage,
-                                &x.shape,
-                                x.device.clone(),
-                                false,
-                            ))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
+                let grad_y = if y.requires_grad {
+                    RawTensor::gpu_matmul_backward_b(&x.data, &out_grad.data, spec).map(|storage| {
+                        RawTensor::new_with_storage(storage, &y.shape, y.device.clone(), false)
+                    })
+                } else {
+                    None
+                };
 
-                    let grad_y = if y.requires_grad {
-                        if let Some(storage) =
-                            RawTensor::gpu_matmul_backward_b(&x.data, &out_grad.data, m, k, n)
-                        {
-                            Some(RawTensor::new_with_storage(
-                                storage,
-                                &y.shape,
-                                y.device.clone(),
-                                false,
-                            ))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
-
+                // Return early only if *every* required gradient was computed. A `None` for a
+                // tensor that needs one would silently freeze that parameter.
+                if (!x.requires_grad || grad_x.is_some()) && (!y.requires_grad || grad_y.is_some())
+                {
                     return vec![grad_x, grad_y];
                 }
-                // For other cases (matrix-vector, etc.), fall through to CPU implementation
+                log::warn!(
+                    "GPU matmul backward failed for a required gradient; falling back to CPU"
+                );
             }
         }
 
@@ -435,17 +464,13 @@ impl GradFn for MatMulGradFn {
         // ∂L/∂y = x^T @ ∂L/∂z  -> (n,m) @ (m,p) = (n,p)
 
         let grad_x = if x.requires_grad {
-            match (x.shape.len(), y.shape.len()) {
-                (2, 2) => {
-                    // Standard 2D: ∂L/∂x = out_grad @ y^T
-                    let y_t = RawTensor::transpose_2d(&y.data, &y.shape);
-                    let m = out_grad.shape.first().copied().unwrap_or(1);
-                    let n = out_grad.shape.get(1).copied().unwrap_or(1);
-                    let k = y.shape.first().copied().unwrap_or(1);
-                    let grad_data = RawTensor::matmul_raw(&out_grad.data, &y_t, m, n, k);
-                    Some(RawTensor::new(grad_data, &x.shape, false))
-                }
-                (2, 1) => {
+            match (&self.spec, x.shape.len(), y.shape.len()) {
+                (Some(spec), _, _) => Some(RawTensor::new(
+                    Self::matrix_grad_a(spec, &out_grad.data, &y.data),
+                    &x.shape,
+                    false,
+                )),
+                (None, 2, 1) => {
                     // Matrix-vector: (m,n) @ (n,) -> (m,)
                     // ∂L/∂x = ∂L/∂z[:,None] @ v[None,:] = outer(out_grad, v)
                     let m = x.shape.first().copied().unwrap_or(1);
@@ -463,7 +488,7 @@ impl GradFn for MatMulGradFn {
                     }
                     Some(RawTensor::new(grad_data, &x.shape, false))
                 }
-                (1, 2) => {
+                (None, 1, 2) => {
                     // Vector-matrix: (n,) @ (n,p) -> (p,)
                     // ∂L/∂x: out_grad is (p,), y is (n,p)
                     // grad_x = out_grad @ y^T -> (p,) @ (p,n) -> (n,)
@@ -483,66 +508,15 @@ impl GradFn for MatMulGradFn {
                     }
                     Some(RawTensor::new(grad_data, &x.shape, false))
                 }
-                (1, 1) => {
+                (None, 1, 1) => {
                     // Dot: (n,) @ (n,) -> scalar
                     // ∂L/∂x = out_grad * y
                     let og = out_grad.data.first().copied().unwrap_or(0.0);
                     let grad_data: Vec<f32> = y.data.iter().map(|&v| og * v).collect();
                     Some(RawTensor::new(grad_data, &x.shape, false))
                 }
-                _ => {
-                    // Batched case: (B, M, K) @ (B, K, N) -> (B, M, N)
-                    // dL/dx = dL/dz @ y^T
-                    // Performed batch-wise
-                    let rank = x.shape.len();
-                    let m = *x.shape.get(rank.wrapping_sub(2)).unwrap_or(&1);
-                    let k = *x.shape.get(rank.wrapping_sub(1)).unwrap_or(&1);
-                    let n = *y.shape.get(rank.wrapping_sub(1)).unwrap_or(&1); // y is (B, K, N)
-
-                    // Batch dimensions of output
-                    let batch_dims_out = out_grad
-                        .shape
-                        .get(..out_grad.shape.len().saturating_sub(2))
-                        .unwrap_or(&[]);
-                    let batch_count: usize = batch_dims_out.iter().product();
-
-                    // We need y broadcasted to match out_grad's batch dims + [K, N]
-                    let mut target_y_shape = batch_dims_out.to_vec();
-                    target_y_shape.extend_from_slice(&[k, n]);
-                    let y_data_expanded =
-                        RawTensor::broadcast_to(&y.data, &y.shape, &target_y_shape);
-
-                    let stride_out = m * n;
-                    let stride_y = k * n;
-
-                    let mut grad_data_expanded = Vec::with_capacity(batch_count * m * k);
-
-                    for b in 0..batch_count {
-                        if let Some(out_slice) =
-                            out_grad.data.get(b * stride_out..(b + 1) * stride_out)
-                            && let Some(y_slice) =
-                                y_data_expanded.get(b * stride_y..(b + 1) * stride_y)
-                        {
-                            // Transpose y_slice (K, N) -> (N, K)
-                            // But for matmul_raw we need (M,N) @ (N,K) -> (M,K)
-                            // We can use transpose_2d helper on the slice
-                            let y_t = RawTensor::transpose_2d(y_slice, &[k, n]);
-                            let chunk = RawTensor::matmul_raw(out_slice, &y_t, m, n, k);
-                            grad_data_expanded.extend_from_slice(&chunk);
-                        }
-                    }
-                    // Reduce gradients if x was broadcast
-                    // grad_data_expanded has shape [*batch_out, m, k]
-                    let mut grad_x_full_shape = batch_dims_out.to_vec();
-                    grad_x_full_shape.extend_from_slice(&[m, k]);
-
-                    let grad_reduced = RawTensor::sum_over_broadcast_dims(
-                        &grad_data_expanded,
-                        &grad_x_full_shape,
-                        &x.shape,
-                    );
-
-                    Some(RawTensor::new(grad_reduced, &x.shape, false))
+                (None, rx, ry) => {
+                    unreachable!("vector matmul backward with ranks {rx} and {ry}")
                 }
             }
         } else {
@@ -550,16 +524,13 @@ impl GradFn for MatMulGradFn {
         };
 
         let grad_y = if y.requires_grad {
-            match (x.shape.len(), y.shape.len()) {
-                (2, 2) => {
-                    let x_t = RawTensor::transpose_2d(&x.data, &x.shape);
-                    let n = x.shape.get(1).copied().unwrap_or(1);
-                    let m = x.shape.first().copied().unwrap_or(1);
-                    let p = out_grad.shape.get(1).copied().unwrap_or(1);
-                    let grad_data = RawTensor::matmul_raw(&x_t, &out_grad.data, n, m, p);
-                    Some(RawTensor::new(grad_data, &y.shape, false))
-                }
-                (2, 1) => {
+            match (&self.spec, x.shape.len(), y.shape.len()) {
+                (Some(spec), _, _) => Some(RawTensor::new(
+                    Self::matrix_grad_b(spec, &x.data, &out_grad.data),
+                    &y.shape,
+                    false,
+                )),
+                (None, 2, 1) => {
                     // Matrix-vector: (m,n) @ (n,) -> (m,)
                     // ∂L/∂v = X^T @ ∂L/∂z -> (n,)
                     let m = x.shape.first().copied().unwrap_or(1);
@@ -581,7 +552,7 @@ impl GradFn for MatMulGradFn {
                     }
                     Some(RawTensor::new(grad_data, &y.shape, false))
                 }
-                (1, 2) => {
+                (None, 1, 2) => {
                     // grad_y = x^T @ out_grad -> (n,1) @ (1,p) -> (n,p)
                     let dim0 = y.shape.first().copied().unwrap_or(1);
                     let dim1 = y.shape.get(1).copied().unwrap_or(1);
@@ -598,60 +569,14 @@ impl GradFn for MatMulGradFn {
                     }
                     Some(RawTensor::new(grad_data, &y.shape, false))
                 }
-                (1, 1) => {
+                (None, 1, 1) => {
                     // Dot: (n,) @ (n,) -> scalar
                     let og = out_grad.data.first().copied().unwrap_or(0.0);
                     let grad_data: Vec<f32> = x.data.iter().map(|&u| og * u).collect();
                     Some(RawTensor::new(grad_data, &y.shape, false))
                 }
-                _ => {
-                    // Batched case: (B, M, K) @ (B, K, N) -> (B, M, N)
-                    // dL/dy = x^T @ dL/dz
-                    let rank = y.shape.len();
-                    let m = *x.shape.get(rank.wrapping_sub(2)).unwrap_or(&1);
-                    let k = *x.shape.get(rank.wrapping_sub(1)).unwrap_or(&1);
-                    let n = *y.shape.get(rank.wrapping_sub(1)).unwrap_or(&1);
-
-                    let batch_dims_out = out_grad
-                        .shape
-                        .get(..out_grad.shape.len().saturating_sub(2))
-                        .unwrap_or(&[]);
-                    let batch_count: usize = batch_dims_out.iter().product();
-
-                    // Expand X to match output batch dims
-                    let mut target_x_shape = batch_dims_out.to_vec();
-                    target_x_shape.extend_from_slice(&[m, k]);
-                    let x_data_expanded =
-                        RawTensor::broadcast_to(&x.data, &x.shape, &target_x_shape);
-
-                    let stride_x = m * k;
-                    let stride_out = m * n;
-
-                    let mut grad_data_expanded = Vec::with_capacity(batch_count * k * n);
-
-                    for b in 0..batch_count {
-                        if let Some(x_slice) = x_data_expanded.get(b * stride_x..(b + 1) * stride_x)
-                            && let Some(out_slice) =
-                                out_grad.data.get(b * stride_out..(b + 1) * stride_out)
-                        {
-                            let x_t = RawTensor::transpose_2d(x_slice, &[m, k]);
-                            // (K, M) @ (M, N) -> (K, N)
-                            let chunk = RawTensor::matmul_raw(&x_t, out_slice, k, m, n);
-                            grad_data_expanded.extend_from_slice(&chunk);
-                        }
-                    }
-
-                    // Reduce gradients if y was broadcast
-                    let mut grad_y_full_shape = batch_dims_out.to_vec();
-                    grad_y_full_shape.extend_from_slice(&[k, n]);
-
-                    let grad_reduced = RawTensor::sum_over_broadcast_dims(
-                        &grad_data_expanded,
-                        &grad_y_full_shape,
-                        &y.shape,
-                    );
-
-                    Some(RawTensor::new(grad_reduced, &y.shape, false))
+                (None, rx, ry) => {
+                    unreachable!("vector matmul backward with ranks {rx} and {ry}")
                 }
             }
         } else {
@@ -662,6 +587,114 @@ impl GradFn for MatMulGradFn {
     }
 
     fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(Self)
+        Box::new(Self {
+            spec: self.spec.clone(),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::spec::MatmulSpec;
+    use crate::tensor::{RawTensor, Tensor, TensorOps, randn};
+
+    /// Runs `f` and returns the panic message, failing if it does not panic.
+    fn panic_message(f: impl FnOnce() -> Tensor) -> String {
+        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+            .expect_err("expected a panic");
+        payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+            .expect("panic payload should be a string")
+    }
+
+    fn operand(dims: &[usize]) -> Tensor {
+        let t = randn(dims);
+        t.set_requires_grad(true);
+        t
+    }
+
+    /// Finite-difference check of both operands of `a @ b` under a randomly
+    /// weighted sum. A plain sum would be blind to some transposed-dim bugs.
+    fn assert_matmul_gradients(a_dims: &[usize], b_dims: &[usize]) {
+        crate::tensor::manual_seed(0x5EED);
+        let a = operand(a_dims);
+        let b = operand(b_dims);
+        let spec = MatmulSpec::new(
+            &crate::shape::Shape::derived(a_dims.to_vec()),
+            &crate::shape::Shape::derived(b_dims.to_vec()),
+        )
+        .expect("test shapes must be valid");
+        let w = randn(&spec.out_dims());
+
+        let (max_a, mean_a, ok_a) =
+            RawTensor::check_gradients(&a, |t| t.matmul(&b).elem_mul(&w).sum(), 1e-2, 2e-2);
+        assert!(
+            ok_a,
+            "grad wrt A failed for {a_dims:?} @ {b_dims:?}: max={max_a:.3e} mean={mean_a:.3e}"
+        );
+        let (max_b, mean_b, ok_b) =
+            RawTensor::check_gradients(&b, |t| a.matmul(t).elem_mul(&w).sum(), 1e-2, 2e-2);
+        assert!(
+            ok_b,
+            "grad wrt B failed for {a_dims:?} @ {b_dims:?}: max={max_b:.3e} mean={mean_b:.3e}"
+        );
+    }
+
+    #[test]
+    fn test_matmul_2d_gradients() {
+        assert_matmul_gradients(&[3, 4], &[4, 5]);
+    }
+
+    #[test]
+    fn test_matmul_batched_equal_batch_gradients() {
+        assert_matmul_gradients(&[2, 3, 4], &[2, 4, 5]);
+    }
+
+    #[test]
+    fn test_matmul_batch_dims_broadcast_on_both_sides_gradients() {
+        assert_matmul_gradients(&[2, 1, 3, 4], &[1, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_matmul_batch_dim_broadcast_on_one_side_gradients() {
+        assert_matmul_gradients(&[1, 3, 4], &[2, 4, 5]);
+        assert_matmul_gradients(&[2, 3, 4], &[1, 4, 5]);
+    }
+
+    #[test]
+    fn test_matmul_rejects_unequal_rank_b4_repro() {
+        // B4: [2,3,4] @ [2,1,4,6] was accepted and gave a 36-100% wrong gradient.
+        let a = operand(&[2, 3, 4]);
+        let b = operand(&[2, 1, 4, 6]);
+        let msg = panic_message(|| a.matmul(&b));
+        assert!(msg.contains("equal rank"), "{msg}");
+        let msg = panic_message(|| b.matmul(&a));
+        assert!(msg.contains("equal rank"), "{msg}");
+    }
+
+    #[test]
+    fn test_matmul_rejects_3d_against_2d() {
+        let a = operand(&[2, 3, 4]);
+        let b = operand(&[4, 5]);
+        let msg = panic_message(|| a.matmul(&b));
+        assert!(msg.contains("equal rank"), "{msg}");
+    }
+
+    #[test]
+    fn test_matmul_rejects_inner_dim_mismatch() {
+        let a = operand(&[3, 4]);
+        let b = operand(&[5, 6]);
+        let msg = panic_message(|| a.matmul(&b));
+        assert!(msg.contains("inner dims"), "{msg}");
+    }
+
+    #[test]
+    fn test_matmul_rejects_batch_dims_that_do_not_broadcast() {
+        let a = operand(&[2, 3, 4]);
+        let b = operand(&[3, 4, 5]);
+        let msg = panic_message(|| a.matmul(&b));
+        assert!(msg.contains("do not broadcast"), "{msg}");
     }
 }

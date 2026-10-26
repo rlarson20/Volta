@@ -152,14 +152,12 @@ impl RawTensor {
     pub(crate) fn gpu_matmul(
         a: &Storage,
         b: &Storage,
-        m: usize,
-        k: usize,
-        n: usize,
+        spec: &crate::spec::MatmulSpec,
     ) -> Option<Storage> {
         let buf_a = a.gpu_buffer()?;
         let buf_b = b.gpu_buffer()?;
 
-        let result = GpuKernels::matmul(buf_a, buf_b, m, k, n)?;
+        let result = GpuKernels::matmul(buf_a, buf_b, spec)?;
         Some(Storage::Gpu {
             buffer: Arc::new(result),
             dtype: crate::dtype::DType::F32,
@@ -409,14 +407,12 @@ impl RawTensor {
     pub(crate) fn gpu_matmul_backward_a(
         grad: &Storage,
         b: &Storage,
-        m: usize,
-        k: usize,
-        n: usize,
+        spec: &crate::spec::MatmulSpec,
     ) -> Option<Storage> {
         let buf_grad = grad.gpu_buffer()?;
         let buf_b = b.gpu_buffer()?;
 
-        let result = GpuKernels::matmul_backward_a(buf_grad, buf_b, m, k, n)?;
+        let result = GpuKernels::matmul_backward_a(buf_grad, buf_b, spec)?;
         Some(Storage::Gpu {
             buffer: Arc::new(result),
             dtype: crate::dtype::DType::F32,
@@ -431,14 +427,12 @@ impl RawTensor {
     pub(crate) fn gpu_matmul_backward_b(
         a: &Storage,
         grad: &Storage,
-        m: usize,
-        k: usize,
-        n: usize,
+        spec: &crate::spec::MatmulSpec,
     ) -> Option<Storage> {
         let buf_a = a.gpu_buffer()?;
         let buf_grad = grad.gpu_buffer()?;
 
-        let result = GpuKernels::matmul_backward_b(buf_a, buf_grad, m, k, n)?;
+        let result = GpuKernels::matmul_backward_b(buf_a, buf_grad, spec)?;
         Some(Storage::Gpu {
             buffer: Arc::new(result),
             dtype: crate::dtype::DType::F32,
