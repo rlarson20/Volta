@@ -1,4 +1,3 @@
-use crate::Storage;
 use crate::device::Device;
 use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
@@ -35,15 +34,11 @@ impl Module for Linear {
 
     fn load_state_dict(&mut self, state: &StateDict) {
         if let Some(w) = state.get("weight") {
-            let mut t = self.weight.borrow_mut();
-            t.data = Storage::cpu(w.data.clone());
-            t.shape.clone_from(&w.shape);
+            self.weight.load_weight("weight", w);
         }
         // Load bias if state has it and layer has bias
         if let (Some(b), Some(bias_tensor)) = (state.get("bias"), self.bias.as_ref()) {
-            let mut t = bias_tensor.borrow_mut();
-            t.data = Storage::cpu(b.data.clone());
-            t.shape.clone_from(&b.shape);
+            bias_tensor.load_weight("bias", b);
         }
     }
 }

@@ -4,7 +4,6 @@
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation
 )]
-use crate::Storage;
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::io::{StateDict, TensorData};
@@ -465,17 +464,13 @@ impl Module for ConvTranspose2d {
 
     fn load_state_dict(&mut self, state: &StateDict) {
         if let Some(w) = state.get("weight") {
-            let mut t = self.weight.borrow_mut();
-            t.data = Storage::cpu(w.data.clone());
-            t.shape.clone_from(&w.shape);
+            self.weight.load_weight("weight", w);
         }
         if let Some(b) = state.get("bias")
             && self.bias.is_some()
         {
             let bias_tensor = self.bias.as_ref().unwrap();
-            let mut t = bias_tensor.borrow_mut();
-            t.data = Storage::cpu(b.data.clone());
-            t.shape.clone_from(&b.shape);
+            bias_tensor.load_weight("bias", b);
         }
     }
 }

@@ -136,14 +136,20 @@ pub fn diff_state_dict(expected: &StateDict, loaded: &StateDict) -> StateDictDif
 /// This helper computes the diff between what the module currently expects
 /// (`module.state_dict()`) and what was provided before delegating to
 /// `module.load_state_dict`. It is safe to call even when some keys are missing,
-/// since we inspect the diff up front.
+/// since we inspect the diff up front. Entries whose shape mismatches are reported
+/// in the diff and *not* loaded (`load_state_dict` itself panics on a mismatch, H7).
 pub fn load_state_dict_checked<M: Module + ?Sized>(
     module: &mut M,
     state: &StateDict,
 ) -> StateDictDiff {
     let expected = module.state_dict();
     let diff = diff_state_dict(&expected, state);
-    module.load_state_dict(state);
+    let loadable: StateDict = state
+        .iter()
+        .filter(|(key, _)| !diff.shape_mismatches.iter().any(|(k, _, _)| k == *key))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    module.load_state_dict(&loadable);
     diff
 }
 

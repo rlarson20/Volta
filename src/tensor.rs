@@ -85,6 +85,32 @@ impl Tensor {
         self.inner.borrow().shape.clone()
     }
 
+    /// Overwrite this tensor's values from a state-dict entry (H7).
+    ///
+    /// Keeps the tensor's shape, device, `requires_grad` and graph metadata: only the
+    /// values change. A GPU-resident tensor stays on the GPU.
+    ///
+    /// # Panics
+    /// If `src.shape` differs from this tensor's shape, or `src.data.len()` does not
+    /// match it. `name` is the state-dict key, used in the message.
+    pub(crate) fn load_weight(&self, name: &str, src: &crate::io::TensorData) {
+        let mut t = self.inner.borrow_mut();
+        assert_eq!(
+            src.shape, t.shape,
+            "load_state_dict: shape mismatch for '{name}'"
+        );
+        let numel: usize = t.shape.iter().product();
+        assert_eq!(
+            src.data.len(),
+            numel,
+            "load_state_dict: '{name}' has {} values but shape {:?} needs {numel}",
+            src.data.len(),
+            t.shape
+        );
+        let cpu = Storage::cpu(src.data.clone());
+        t.data = cpu.to_device(&t.device);
+    }
+
     /// This tensor's data, decoded to `f32` regardless of underlying dtype/device.
     #[must_use]
     pub fn data(&self) -> Vec<f32> {
@@ -1632,5 +1658,37 @@ mod tensor_tests {
         assert_eq!(b.shape, vec![16, 3, 3, 3]);
         assert_eq!(b.data.len(), 16 * 3 * 3 * 3);
         assert!(b.data.iter().any(|v| v.abs() > 0.0));
+    }
+}
+
+#[cfg(all(test, feature = "gpu"))]
+mod load_weight_tests {
+    use super::*;
+    use crate::io::TensorData;
+
+    /// H7: loading into a GPU-resident tensor must keep it on the GPU with the new values.
+    #[test]
+    fn test_load_weight_preserves_gpu_storage() {
+        if !crate::is_gpu_available() {
+            eprintln!("SKIPPED: no GPU available");
+            return;
+        }
+        let dev = Device::GPU("TestDevice".to_string());
+        let t = RawTensor::new(vec![0.0; 6], &[2, 3], true).to_device(dev.clone());
+        assert!(t.borrow().data.is_gpu(), "precondition: tensor on GPU");
+
+        let vals = vec![1.5, -2.0, 3.25, 0.5, -0.75, 4.0];
+        t.load_weight(
+            "w",
+            &TensorData {
+                data: vals.clone(),
+                shape: vec![2, 3],
+            },
+        );
+
+        assert!(t.borrow().data.is_gpu(), "load_weight demoted GPU to CPU");
+        assert_eq!(t.borrow().device, dev);
+        assert_eq!(t.data(), vals);
+        assert!(t.requires_grad());
     }
 }

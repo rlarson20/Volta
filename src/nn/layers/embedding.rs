@@ -139,16 +139,7 @@ impl Module for Embedding {
 
     fn load_state_dict(&mut self, state: &StateDict) {
         if let Some(weight_data) = state.get("weight") {
-            // Validate shape
-            assert_eq!(
-                weight_data.shape,
-                vec![self.vocab_size, self.dim],
-                "Weight shape mismatch"
-            );
-
-            let mut weight = self.weight.borrow_mut();
-            weight.data = crate::storage::Storage::cpu(weight_data.data.clone());
-            weight.shape.clone_from(&weight_data.shape);
+            self.weight.load_weight("weight", weight_data);
         }
     }
 }

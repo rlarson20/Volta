@@ -22,7 +22,7 @@ Last verified: 2026-10-26.
 - [ ] **H4** The library panics on ordinary data. Panic-vs-`Result` policy is undecided (see Rust/errors).
 - [ ] **H5** GPU broadcast backward silently truncates rank > 4.
 - [ ] **H6** TransformerBlock is decorative: parameterless `SimpleAttention`. Trait split §3.2 (Phase 3).
-- [ ] **H7** `load_state_dict` demotes GPU tensors to CPU (`linear.rs:39,45` → `Storage::cpu`; the same pattern is in other layers). Fix: a `load_weight` that preserves device and checks numel.
+- [x] **H7** `load_state_dict` demoted GPU tensors to CPU. Every layer now goes through `Tensor::load_weight`, which checks shape (and numel) and keeps the destination's device. Evidence: `tests/load_state_dict_device.rs`, plus `tensor::load_weight_tests` on GPU. `load_state_dict_checked` now reports shape mismatches and skips them instead of loading them (2026-10-26).
 - [ ] **H8** Muon is a toy and panics on GPU params.
 
 ## Medium (OPUS §3)
@@ -34,6 +34,8 @@ Last verified: 2026-10-26.
 - [ ] Broadcast backward pass 2 is O(targets × out_size).
 - [ ] `check_gradients` doesn't zero pre-existing grads, so reusing a tensor gives false failures.
 - [ ] Conv finite-difference tolerances are loosened (5e-2), and GPU consistency tests use all-ones data.
+- [ ] `test_conv_transpose2d_gradient_multiple_channels` is flaky (about 1 in 15 runs): unseeded random init against a finite-difference tolerance.
+- [ ] Doctests in `embedding.rs` and `pixelshuffle.rs` call the now-private `borrow()` and fail under `cargo test --doc`.
 - [ ] `Sequential::load_state_dict` prefix match is greedy (`"10.weight"` matches `"1."`).
 - [ ] RNG reproducibility holes: the dataloader shuffle is unseeded, and `with_rng` falls back silently under a reentrant borrow.
 - [ ] `src/io/config.rs` is dead pseudocode that no module declares. Delete it.

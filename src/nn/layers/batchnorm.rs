@@ -1,6 +1,5 @@
 use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
-use crate::storage::Storage;
 use crate::tensor::{RawTensor, Tensor, TensorOps};
 
 pub struct BatchNorm2d {
@@ -180,10 +179,7 @@ impl Module for BatchNorm2d {
 
         for (key, tensor) in params {
             if let Some(t) = state.get(key) {
-                let mut b = tensor.borrow_mut();
-                // Logic defined exactly once
-                b.data = Storage::cpu(t.data.clone());
-                b.shape.clone_from(&t.shape);
+                tensor.load_weight(key, t);
             }
         }
     }
@@ -340,9 +336,7 @@ impl Module for BatchNorm1d {
 
         for (key, tensor) in params {
             if let Some(t) = state.get(key) {
-                let mut b = tensor.borrow_mut();
-                b.data = Storage::cpu(t.data.clone());
-                b.shape.clone_from(&t.shape);
+                tensor.load_weight(key, t);
             }
         }
     }

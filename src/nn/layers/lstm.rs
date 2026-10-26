@@ -1,4 +1,3 @@
-use crate::Storage;
 use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
 use crate::tensor::{RawTensor, Tensor, TensorOps};
@@ -185,30 +184,22 @@ impl Module for LSTMCell {
 
     fn load_state_dict(&mut self, state: &StateDict) {
         if let Some(w) = state.get("weight_ih") {
-            let mut t = self.weight_ih.borrow_mut();
-            t.data = Storage::cpu(w.data.clone());
-            t.shape.clone_from(&w.shape);
+            self.weight_ih.load_weight("weight_ih", w);
         }
         if let Some(w) = state.get("weight_hh") {
-            let mut t = self.weight_hh.borrow_mut();
-            t.data = Storage::cpu(w.data.clone());
-            t.shape.clone_from(&w.shape);
+            self.weight_hh.load_weight("weight_hh", w);
         }
         if let Some(b) = state.get("bias_ih")
             && self.bias_ih.is_some()
         {
             let bias_tensor = self.bias_ih.as_ref().unwrap();
-            let mut t = bias_tensor.borrow_mut();
-            t.data = Storage::cpu(b.data.clone());
-            t.shape.clone_from(&b.shape);
+            bias_tensor.load_weight("bias", b);
         }
         if let Some(b) = state.get("bias_hh")
             && self.bias_hh.is_some()
         {
             let bias_tensor = self.bias_hh.as_ref().unwrap();
-            let mut t = bias_tensor.borrow_mut();
-            t.data = Storage::cpu(b.data.clone());
-            t.shape.clone_from(&b.shape);
+            bias_tensor.load_weight("bias", b);
         }
     }
 }
