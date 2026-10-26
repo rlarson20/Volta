@@ -214,7 +214,7 @@ fn main() {
     // Show first 10 pixels
     println!(
         "Generated image (first 10 pixels): {:?}",
-        &gen_data.get(0..10).unwrap_or(&[])
+        gen_data.get(0..10).unwrap_or(&[])
     );
     println!("Values should be in [-1, 1] range (tanh output)");
 }

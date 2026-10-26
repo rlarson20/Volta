@@ -139,11 +139,11 @@ fn main() {
     // Show first 10 pixels
     println!(
         "Original (first 10 pixels): {:?}",
-        &orig_data.get(0..10).unwrap_or(&[])
+        orig_data.get(0..10).unwrap_or(&[])
     );
     println!(
         "Reconstructed (first 10):    {:?}",
-        &recon_data.get(0..10).unwrap_or(&[])
+        recon_data.get(0..10).unwrap_or(&[])
     );
 
     let mse = orig_data

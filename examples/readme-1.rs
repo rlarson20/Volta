@@ -1,3 +1,4 @@
+//! The first example in the README
 use volta::{
     Adam, Sequential, TensorOps, io,
     nn::{Linear, Module, ReLU},

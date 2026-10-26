@@ -48,10 +48,7 @@ fn main() {
         "\nGamma shape: {:?}",
         params.first().map(volta::Tensor::shape)
     );
-    println!(
-        "Beta shape: {:?}",
-        params.get(1).map(volta::Tensor::shape)
-    );
+    println!("Beta shape: {:?}", params.get(1).map(volta::Tensor::shape));
     println!(
         "Gamma requires_grad: {}",
         params.first().is_some_and(volta::Tensor::requires_grad)
