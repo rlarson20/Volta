@@ -3,6 +3,9 @@ check:
 	cargo build
 	cargo test
 
+test-all:
+	RUSTFLAGS="-A missing_docs" cargo nextest run --no-fail-fast
+
 # ===== CODE HEALTH & ANALYSIS =====
 
 # Run coverage with llvm-cov and open HTML report
