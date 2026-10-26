@@ -293,6 +293,113 @@ impl Window2dSpec {
     }
 }
 
+/// Validated geometry of a matrix product `[..batch, m, k] @ [..batch, k, n]`.
+///
+/// Both operands must have the same rank (at least 2); batch dims may broadcast
+/// against each other, so `[2, 1, m, k] @ [1, 3, k, n]` gives batch `[2, 3]`.
+/// Vector forms (rank 1) are not covered: `matmul` handles them separately.
+/// A rank mismatch is rejected here, which is what makes B4 unreachable: the
+/// backward never has to guess which operand's rank indexes which shape.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MatmulSpec {
+    pub a_batch: Vec<usize>,
+    pub b_batch: Vec<usize>,
+    pub out_batch: Vec<usize>,
+    pub m: usize,
+    pub k: usize,
+    pub n: usize,
+}
+
+impl MatmulSpec {
+    pub(crate) fn new(a: &Shape, b: &Shape) -> Result<Self> {
+        let (a_dims, b_dims) = (a.truncate_rank(), b.truncate_rank());
+        let (rank_a, rank_b) = (a_dims.len(), b_dims.len());
+        if rank_a < 2 || rank_b < 2 {
+            return Err(VoltaError::InvalidParameter(format!(
+                "matmul needs rank >= 2 operands, got {a_dims:?} @ {b_dims:?}"
+            )));
+        }
+        if rank_a != rank_b {
+            return Err(VoltaError::InvalidParameter(format!(
+                "matmul operands must have equal rank, got {a_dims:?} @ {b_dims:?} \
+                 (rank {rank_a} vs {rank_b})"
+            )));
+        }
+        let (a_batch, a_mat) = a_dims.split_at(rank_a - 2);
+        let (b_batch, b_mat) = b_dims.split_at(rank_b - 2);
+        let (&[m, k], &[k2, n]) = (a_mat, b_mat) else {
+            unreachable!("split_at(rank - 2) leaves exactly two trailing dims");
+        };
+        if k != k2 {
+            return Err(VoltaError::InvalidParameter(format!(
+                "matmul dimension mismatch: {a_dims:?} @ {b_dims:?} (inner dims {k} vs {k2})"
+            )));
+        }
+        let out_batch = a_batch
+            .iter()
+            .zip(b_batch)
+            .map(|(&x, &y)| match (x, y) {
+                (x, y) if x == y => Ok(x),
+                (1, y) => Ok(y),
+                (x, 1) => Ok(x),
+                _ => Err(VoltaError::InvalidParameter(format!(
+                    "matmul batch dims {a_batch:?} and {b_batch:?} do not broadcast"
+                ))),
+            })
+            .collect::<Result<Vec<usize>>>()?;
+        Ok(Self {
+            a_batch: a_batch.to_vec(),
+            b_batch: b_batch.to_vec(),
+            out_batch,
+            m,
+            k,
+            n,
+        })
+    }
+
+    /// Number of independent `m x k @ k x n` products (1 when there are no batch dims).
+    pub(crate) fn batch_count(&self) -> usize {
+        self.out_batch.iter().product()
+    }
+
+    /// `true` when there are batch dims, i.e. the product is not a plain 2D matmul.
+    pub(crate) fn is_batched(&self) -> bool {
+        !self.out_batch.is_empty()
+    }
+
+    /// Dims of `a`: `[..a_batch, m, k]`.
+    pub(crate) fn a_dims(&self) -> Vec<usize> {
+        with_matrix(&self.a_batch, self.m, self.k)
+    }
+
+    /// Dims of `b`: `[..b_batch, k, n]`.
+    pub(crate) fn b_dims(&self) -> Vec<usize> {
+        with_matrix(&self.b_batch, self.k, self.n)
+    }
+
+    /// Dims of the result: `[..out_batch, m, n]`.
+    pub(crate) fn out_dims(&self) -> Vec<usize> {
+        with_matrix(&self.out_batch, self.m, self.n)
+    }
+
+    /// `a` broadcast to the output batch: `[..out_batch, m, k]`.
+    pub(crate) fn a_expanded_dims(&self) -> Vec<usize> {
+        with_matrix(&self.out_batch, self.m, self.k)
+    }
+
+    /// `b` broadcast to the output batch: `[..out_batch, k, n]`.
+    pub(crate) fn b_expanded_dims(&self) -> Vec<usize> {
+        with_matrix(&self.out_batch, self.k, self.n)
+    }
+}
+
+/// `[..batch, rows, cols]`.
+fn with_matrix(batch: &[usize], rows: usize, cols: usize) -> Vec<usize> {
+    let mut dims = batch.to_vec();
+    dims.extend([rows, cols]);
+    dims
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -584,5 +691,72 @@ mod tests {
             (1, 1),
         ));
         assert!(msg.contains("larger than padded input"), "{msg}");
+    }
+
+    // ===== MatmulSpec =====
+
+    #[test]
+    fn matmul_2d_has_no_batch() {
+        let spec = MatmulSpec::new(&shape(&[3, 4]), &shape(&[4, 5])).unwrap();
+        assert_eq!((spec.m, spec.k, spec.n), (3, 4, 5));
+        assert!(!spec.is_batched());
+        assert_eq!(spec.batch_count(), 1);
+        assert_eq!(spec.out_dims(), vec![3, 5]);
+        assert_eq!(spec.a_dims(), vec![3, 4]);
+        assert_eq!(spec.b_dims(), vec![4, 5]);
+    }
+
+    #[test]
+    fn matmul_3d_equal_batch() {
+        let spec = MatmulSpec::new(&shape(&[2, 3, 4]), &shape(&[2, 4, 5])).unwrap();
+        assert_eq!((spec.m, spec.k, spec.n), (3, 4, 5));
+        assert!(spec.is_batched());
+        assert_eq!(spec.batch_count(), 2);
+        assert_eq!(spec.out_dims(), vec![2, 3, 5]);
+    }
+
+    #[test]
+    fn matmul_batch_dims_broadcast_within_equal_rank() {
+        let spec = MatmulSpec::new(&shape(&[2, 1, 3, 4]), &shape(&[1, 6, 4, 5])).unwrap();
+        assert_eq!(spec.a_batch, vec![2, 1]);
+        assert_eq!(spec.b_batch, vec![1, 6]);
+        assert_eq!(spec.out_batch, vec![2, 6]);
+        assert_eq!(spec.batch_count(), 12);
+        assert_eq!(spec.a_dims(), vec![2, 1, 3, 4]);
+        assert_eq!(spec.b_dims(), vec![1, 6, 4, 5]);
+        assert_eq!(spec.a_expanded_dims(), vec![2, 6, 3, 4]);
+        assert_eq!(spec.b_expanded_dims(), vec![2, 6, 4, 5]);
+        assert_eq!(spec.out_dims(), vec![2, 6, 3, 5]);
+    }
+
+    #[test]
+    fn matmul_rejects_rank_mismatch_the_b4_shape() {
+        // The audit's B4 repro: [2,3,4] @ [2,1,4,6].
+        let msg = err_text(MatmulSpec::new(&shape(&[2, 3, 4]), &shape(&[2, 1, 4, 6])));
+        assert!(msg.contains("equal rank"), "{msg}");
+    }
+
+    #[test]
+    fn matmul_rejects_2d_against_3d() {
+        let msg = err_text(MatmulSpec::new(&shape(&[3, 4]), &shape(&[2, 4, 5])));
+        assert!(msg.contains("equal rank"), "{msg}");
+    }
+
+    #[test]
+    fn matmul_rejects_rank_below_two() {
+        let msg = err_text(MatmulSpec::new(&shape(&[4]), &shape(&[4, 5])));
+        assert!(msg.contains("rank >= 2"), "{msg}");
+    }
+
+    #[test]
+    fn matmul_rejects_inner_dim_mismatch() {
+        let msg = err_text(MatmulSpec::new(&shape(&[2, 3, 4]), &shape(&[2, 5, 6])));
+        assert!(msg.contains("inner dims"), "{msg}");
+    }
+
+    #[test]
+    fn matmul_rejects_batch_dims_that_do_not_broadcast() {
+        let msg = err_text(MatmulSpec::new(&shape(&[2, 3, 4]), &shape(&[3, 4, 5])));
+        assert!(msg.contains("do not broadcast"), "{msg}");
     }
 }
