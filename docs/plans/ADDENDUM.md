@@ -582,6 +582,16 @@ and it gets cheaper every phase that lands before it.
 - Applied to 10 of the 11 parameterized layers; skipped `Embedding`, whose `Module::forward` is a deliberate panic stub (`Embedding::forward` takes `&[usize]`, not `&Tensor`, so it can't implement `Module`'s signature) — `assert_trainable!` calls forward through that trait, so it would always panic there. `Embedding`'s existing `test_embedding_backward_flow` already checks exact per-index accumulated gradient values, stronger than "nonzero."
 - `Tensor::borrow()`/`borrow_mut()`/`as_ptr()` are `pub(crate)`, which is the actual opacity guarantee (external crates can't reach `inner`), but it also breaks every `tests/*.rs` integration test and `examples/*.rs` example that touched these directly as the old `Rc<RefCell<RawTensor>>` alias (~195 call sites total) — those were **not** fixed this pass (`examples/TODO.md` was referenced here but never actually created; the fix landed directly). `tests/TODO.md` tracked the remaining gap — 8 sites needing a public `grad`-seeding method — and was resolved and removed once `Tensor::set_grad` was added.
 
+**Phase 2 deviations so far** (Phase 2 is in progress; §1.2 `Shape`/`Axis` threading landed in `31e2edd`, `b12efe5`, `567946f`):
+
+- `RawTensor.shape` is still `Vec<usize>`, and `Tensor::shape()` still returns `Vec<usize>`. The `Shape` boundary is the signatures: `edge()` takes `Shape`, and `RawTensor::try_new`/`try_new_with_storage`, `expand`, `pad`, `broadcast_to`, and `try_broadcast_shape` validate through `Shape::from_dims`. Flipping the field is deferred (DECISIONS.md, "Shape boundary").
+- Public constructors (`new`, `zeros`, `randn`, `reshape`, `expand`, ...) keep `&[usize]` parameters, so literal shapes stay ergonomic. They still pass through the one checked constructor.
+- `Shape::from_dims` rejects zero dimensions and more than `MAX_NUMEL` (100M) elements, as §1.2 sketches. It cannot assert `data.len() == numel()` because it never sees the data; that check lives in `try_new`/`try_new_with_storage` and reports `ShapeDataMismatch`.
+- Added `Shape::derived` (`pub(crate)`, panics), which the sketch doesn't have. Op code builds output shapes from tensors that already exist, so an invalid one is an op bug and should fail loudly.
+- `Axis` replaces `usize` on `sum_dim`, `try_sum_dim`, `max_dim`, `mean_dim`, `softmax`, `log_softmax`, and `permute` (including the `TensorOps` trait). `GradFn` structs keep `usize` dims internally.
+- `Strides` is defined but unused: `RawTensor::compute_strides` still returns `Vec<usize>`.
+- Still open from §1.2/§1.3: `MatmulSpec` and the conv specs (this retires B4).
+
 ---
 
 ## Patterns explicitly declined (so the next reviewer knows they were considered)

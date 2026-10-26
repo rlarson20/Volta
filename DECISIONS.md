@@ -185,7 +185,7 @@ With the alias, `x.borrow_mut().requires_grad = true` was the documented idiom, 
 
 Before this, about 25 hand-written copies of the attach ritual existed, and each was a chance to gate on the wrong flag (B1: ConvTranspose gated on the input only, which froze the weights) or to drop parents (B2/B3). Migrating to `edge()` also exposed the same latent gating bug in `conv.rs`'s `direct_conv`/`igemm_forward`.
 
-**Deviation from the ADDENDUM sketch:** `edge()` takes `Vec<usize>` and `Box<dyn GradFn>` because the `Shape` and `GradFn` enum are Phase 2 work. It also takes an explicit `device`, since `Storage` doesn't uniquely determine a `Device` and every call site already tracked one.
+**Deviation from the ADDENDUM sketch:** `edge()` took `Vec<usize>` and `Box<dyn GradFn>` because the `Shape` and `GradFn` enum were Phase 2 work. (Since Phase 2, `edge()` takes `Shape`; `GradFn` is still boxed.) It also takes an explicit `device`, since `Storage` doesn't uniquely determine a `Device` and every call site already tracked one.
 
 ### `NO_GRAD` as a reentrant depth counter
 
@@ -198,6 +198,32 @@ A bool breaks as soon as one `no_grad()` scope nests inside another, for example
 **Decision:** every parameterized layer has a test asserting that each parameter gets a nonzero gradient after forward and backward. This is the check that would have caught B1–B3.
 
 **Revision (2026-10-26):** the macro first backpropped a plain `.sum()` of the output, and the tests fed all-ones inputs. That produced five false failures. Under a plain sum, BatchNorm's gamma gradient is exactly zero for any input, because the normalized activations sum to zero. Constant inputs also make LayerNorm's normalized values and attention's scores constant, which zeroes their gradients mathematically. The macro now backprops `(output ⊙ randn_like(output)).sum()`, and the tests take seeded random inputs from `macros::trainable_input`. After the fix, only LSTMCell (B2) fails; it is `#[ignore]`d with the defect ID until fixed.
+
+## Types for Dims and Ops (ADDENDUM Phase 2)
+
+### Shape boundary: signatures, not the field
+
+**Decision:** `Shape` is the type at function boundaries (`edge()`, tensor construction and validation), and `Axis` is the type of dim arguments. `RawTensor.shape` stays a `Vec<usize>`, and `Tensor::shape()` still returns one.
+
+Roughly 440 places in `src/` read the `.shape` field (about 365 outside `lib.rs`): kernels, `GradFn` structs, and conv/matmul index math. `Shape` deliberately has no `Deref`; stepping outside it must be spelled `truncate_rank()` so the demotion stays greppable. Storing a `Shape` in the field would turn those reads into hundreds of `truncate_rank()` calls, and a grep that matches everything finds nothing. The field flips naturally with the storage work (ADDENDUM §7), when kernels stop reading it directly.
+
+**Rejected:** adding `Deref<Target = [usize]>` so the field could change without touching readers. It compiles with a small diff, but it removes the explicit demotion that §1.2 is built around, and any `&[usize]`-taking function would then silently accept a shape.
+
+**Consequence:** `truncate_rank()` has six calls outside `shape.rs`, in four places: `edge()`, the two `RawTensor` constructors (two calls each), and `try_broadcast_shape`. Each is where a validated `Shape` is written into the field or handed back as a `Vec`. Add a new one only at a boundary like those.
+
+### One validation point, and `Shape::derived`
+
+**Decision:** `Shape::from_dims` is the only place that rejects a zero dimension or more than `MAX_NUMEL` (100M) elements. `expand`, `pad`, `broadcast_to`, and the tensor constructors call it instead of keeping private `MAX_ALLOC` checks. Op code that builds an output shape from existing tensors uses `Shape::derived`, which panics on failure.
+
+Before this, the zero/cap checks lived in `Tensor::try_new` only. `try_new_with_storage`, which `edge()` reaches, checked neither, and `expand`, `pad`, and `broadcast_to` each carried a copy of the cap. `pad`'s message even said "Expand would create tensor", copied from `expand`. An op whose output was zero-sized could therefore build a degenerate tensor that no check ever saw.
+
+**Consequence:** an op that produces a zero-sized or over-cap output now panics at `edge()` instead. No existing test hit this. `reshape` needed no change: its size-equality assert already guarantees the target is a valid `Shape`, and `edge()` validates it.
+
+### `Axis` and the silent default
+
+**Decision:** an axis's size comes from `Shape::dim(axis)`, which returns `DimensionOutOfBounds`. The `shape.get(dim).unwrap_or(&1)` pattern in `sum_dim`, `max_dim`, and `mean_dim` is gone.
+
+A size silently defaulting to 1 is the same class as `.get(i).unwrap_or(0.0)` (invariant 5): after the up-front bounds check it could not fire, but it would have hidden a future mismatch between the check and the lookup. `max_dim`, `mean_dim`, and `softmax` panic with the `DimensionOutOfBounds` text; `try_sum_dim` returns it.
 
 ## Concurrency and Async
 

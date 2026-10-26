@@ -68,7 +68,9 @@ Last verified: 2026-10-26.
 ## Phase 2 — types for dims and ops (in progress)
 
 - [x] `Shape` / `Axis` / `Strides` defined (`f1cc5ea`).
-- [ ] Thread `Shape`/`Axis` through signatures; `edge()` takes `Shape` (§1.2).
+- [x] `edge()` takes `Shape`; tensor constructors, `expand`, `pad`, `broadcast_to`, and `try_broadcast_shape` validate through `Shape::from_dims`; `Axis` on `sum_dim`/`max_dim`/`mean_dim`/`softmax`/`log_softmax`/`permute` (§1.2; `31e2edd`, `b12efe5`, `567946f`).
+- [ ] Flip `RawTensor.shape` to `Shape` and make `Tensor::shape()` return it. Deferred with the storage work (§7): about 440 kernel reads of the field (DECISIONS.md, "Shape boundary").
+- [ ] `Strides` is defined but unused; `RawTensor::compute_strides` is still a free fn returning `Vec<usize>`.
 - [ ] Specs replace positional args (`MatmulSpec`, conv specs) (§1.3). Retires B4.
 - [ ] Closed `GradFn` enum instead of `Box<dyn GradFn>` (§2.5).
 - [ ] `define_ops!` macro (§5.1).

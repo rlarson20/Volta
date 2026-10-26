@@ -8,7 +8,7 @@ Area-specific rules live in `.claude/rules/` and load automatically when you rea
 
 Update this section when a phase lands or the merge gate changes. Keep it short.
 
-- **Roadmap:** `docs/plans/ADDENDUM.md` § Sequencing is the only plan. Phases 0–1 are done. Phase 2 (types for dims and ops) is in progress: `Shape`/`Axis`/`Strides` are defined in `src/shape.rs` but not yet threaded through signatures.
+- **Roadmap:** `docs/plans/ADDENDUM.md` § Sequencing is the only plan. Phases 0–1 are done. Phase 2 (types for dims and ops) is in progress: `edge()`, tensor construction, and the dim arguments now use `Shape`/`Axis`; `RawTensor.shape` is still a `Vec<usize>` field. Next: specs (`MatmulSpec`, conv specs; §1.3), then `PadValue`.
 - **Open defects:** IDs B1–B5 and H1–H8 come from `docs/audits/OPUS_5_EVAL_AUDIT.md`. Live status is in `notes/TODO.md`.
 - **Merge gate:** `src/lib.rs` carries a temporary `#![allow(missing_docs)]` (FIXME). `improvements` does not merge into `main` until that line is removed and the docs pass.
 
