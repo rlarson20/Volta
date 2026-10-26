@@ -4,6 +4,7 @@ use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
+use crate::shape::Axis;
 use crate::shape::Shape;
 use crate::tensor::{RawTensor, Tensor, TensorOps};
 
@@ -1884,14 +1885,14 @@ impl Conv2d {
                 let weight_2d = self
                     .weight
                     .reshape(&[out_channels, in_channels * kernel_h * kernel_w]);
-                let weight_t = weight_2d.permute(&[1, 0]); // Transpose to (C*K*K, O)
+                let weight_t = weight_2d.permute(&[Axis(1), Axis(0)]); // Transpose to (C*K*K, O)
 
                 // 4. Matmul: (B*H_out*W_out, C*K*K) @ (C*K*K, O) → (B*H_out*W_out, O)
                 let out_2d = col.matmul(&weight_t);
 
                 // 5. Reshape: (B*H_out*W_out, O) → (B, H_out, W_out, O) → (B, O, H_out, W_out)
                 let out_4d = out_2d.reshape(&[batch, h_out, w_out, out_channels]);
-                out_4d.permute(&[0, 3, 1, 2]) // (B, O, H_out, W_out)
+                out_4d.permute(&[Axis(0), Axis(3), Axis(1), Axis(2)]) // (B, O, H_out, W_out)
             }
         };
 

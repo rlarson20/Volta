@@ -10,6 +10,7 @@
 mod common;
 
 use common::{TOL_FWD_GPU, assert_reduce_parity};
+use volta::Axis;
 use volta::tensor::TensorOps;
 
 #[test]
@@ -31,7 +32,7 @@ fn max_reduce_whole_tensor_parity() {
 fn sum_dim_keepdim_parity() {
     assert_reduce_parity(
         "sum_dim keepdim",
-        |t| t.sum_dim(1, true),
+        |t| t.sum_dim(Axis(1), true),
         &[4, 5],
         TOL_FWD_GPU,
     );
@@ -39,14 +40,19 @@ fn sum_dim_keepdim_parity() {
 
 #[test]
 fn sum_dim_no_keepdim_parity() {
-    assert_reduce_parity("sum_dim", |t| t.sum_dim(0, false), &[4, 5], TOL_FWD_GPU);
+    assert_reduce_parity(
+        "sum_dim",
+        |t| t.sum_dim(Axis(0), false),
+        &[4, 5],
+        TOL_FWD_GPU,
+    );
 }
 
 #[test]
 fn mean_dim_keepdim_parity() {
     assert_reduce_parity(
         "mean_dim keepdim",
-        |t| t.mean_dim(1, true),
+        |t| t.mean_dim(Axis(1), true),
         &[4, 5],
         TOL_FWD_GPU,
     );
@@ -54,14 +60,19 @@ fn mean_dim_keepdim_parity() {
 
 #[test]
 fn mean_dim_no_keepdim_parity() {
-    assert_reduce_parity("mean_dim", |t| t.mean_dim(0, false), &[4, 5], TOL_FWD_GPU);
+    assert_reduce_parity(
+        "mean_dim",
+        |t| t.mean_dim(Axis(0), false),
+        &[4, 5],
+        TOL_FWD_GPU,
+    );
 }
 
 #[test]
 fn max_dim_keepdim_parity() {
     assert_reduce_parity(
         "max_dim keepdim",
-        |t| t.max_dim(1, true),
+        |t| t.max_dim(Axis(1), true),
         &[4, 5],
         TOL_FWD_GPU,
     );

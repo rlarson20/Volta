@@ -1,5 +1,6 @@
 use crate::io::StateDict;
 use crate::nn::{LayerNorm, Linear, Module};
+use crate::shape::Axis;
 use crate::tensor::TensorOps;
 use crate::tensor::{RawTensor, Tensor};
 
@@ -157,12 +158,12 @@ impl MultiHeadAttention {
         let reshaped = x.reshape(&[batch_size, seq_len, self.num_heads, self.head_dim]);
 
         // [batch, seq_len, num_heads, head_dim] -> [batch, num_heads, seq_len, head_dim]
-        reshaped.permute(&[0, 2, 1, 3])
+        reshaped.permute(&[Axis(0), Axis(2), Axis(1), Axis(3)])
     }
 
     fn reshape_from_heads(&self, x: &Tensor, batch_size: usize, seq_len: usize) -> Tensor {
         // [batch, num_heads, seq_len, head_dim] -> [batch, seq_len, num_heads, head_dim]
-        let permuted = x.permute(&[0, 2, 1, 3]);
+        let permuted = x.permute(&[Axis(0), Axis(2), Axis(1), Axis(3)]);
 
         // [batch, seq_len, num_heads, head_dim] -> [batch, seq_len, embed_dim]
         permuted.reshape(&[batch_size, seq_len, self.embed_dim])
@@ -183,7 +184,7 @@ impl MultiHeadAttention {
         // Compute scaled dot-product attention
         // QK^T: [batch, num_heads, seq_len, head_dim] @ [batch, num_heads, head_dim, seq_len]
         //      = [batch, num_heads, seq_len, seq_len]
-        let k_t = k.permute(&[0, 1, 3, 2]); // [batch, num_heads, head_dim, seq_len]
+        let k_t = k.permute(&[Axis(0), Axis(1), Axis(3), Axis(2)]); // [batch, num_heads, head_dim, seq_len]
         let scores = q.matmul(&k_t); // [batch, num_heads, seq_len, seq_len]
 
         // Scale by sqrt(head_dim)
@@ -206,7 +207,7 @@ impl MultiHeadAttention {
         };
 
         // Apply softmax over the last dimension
-        let attention_weights = scores.softmax(3); // [batch, num_heads, seq_len, seq_len]
+        let attention_weights = scores.softmax(Axis(3)); // [batch, num_heads, seq_len, seq_len]
 
         // Apply attention weights to values
         attention_weights.matmul(v) // [batch, num_heads, seq_len, head_dim]

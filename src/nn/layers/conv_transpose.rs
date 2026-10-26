@@ -8,6 +8,7 @@ use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
+use crate::shape::Axis;
 use crate::shape::Shape;
 use crate::tensor::{RawTensor, Tensor, TensorOps};
 
@@ -328,9 +329,9 @@ impl GradFn for ConvTranspose2dGradFn {
         if self.has_bias && parents.len() > 2 {
             // Sum over all dimensions except the channel dimension (dim=1)
             // out_grad: [B, C_out, H_out, W_out] → [C_out]
-            let grad_bias = out_grad_tensor.sum_dim(3, false); // Sum over W
-            let grad_bias = grad_bias.sum_dim(2, false); // Sum over H
-            let grad_bias = grad_bias.sum_dim(0, false); // Sum over B
+            let grad_bias = out_grad_tensor.sum_dim(Axis(3), false); // Sum over W
+            let grad_bias = grad_bias.sum_dim(Axis(2), false); // Sum over H
+            let grad_bias = grad_bias.sum_dim(Axis(0), false); // Sum over B
             grads.push(Some(grad_bias));
         } else if self.has_bias {
             grads.push(None);
@@ -381,7 +382,7 @@ impl Module for ConvTranspose2d {
 
         // 1. Permute and reshape input: [B, C_in, H, W] → [B, H, W, C_in] → [B*H*W, C_in]
         // Must permute first so that the reshape groups (h,w) positions with their channel values
-        let input_permuted = x.permute(&[0, 2, 3, 1]); // [B, H, W, C_in]
+        let input_permuted = x.permute(&[Axis(0), Axis(2), Axis(3), Axis(1)]); // [B, H, W, C_in]
         let input_reshaped = input_permuted.reshape(&[batch * in_h * in_w, in_channels]);
 
         // 2. Reshape weight: [C_in, C_out, K, K] → [C_in, C_out*K*K]

@@ -13,6 +13,7 @@ use common::{
     TOL_BWD_GPU, TOL_FWD_GPU, assert_close, assert_unary_parity, assert_unary_parity_backward,
     gpu_device, make_input, skip_if_no_gpu,
 };
+use volta::Axis;
 use volta::Device;
 use volta::tensor::TensorOps;
 
@@ -100,8 +101,10 @@ fn permute_parity() {
     let x_gpu = x_cpu.to_device(gpu_device());
 
     // [2,3,4] permute [1,2,0] -> [3,4,2]
-    let y_cpu = x_cpu.permute(&[1, 2, 0]);
-    let y_gpu = x_gpu.permute(&[1, 2, 0]).to_device(Device::CPU);
+    let y_cpu = x_cpu.permute(&[Axis(1), Axis(2), Axis(0)]);
+    let y_gpu = x_gpu
+        .permute(&[Axis(1), Axis(2), Axis(0)])
+        .to_device(Device::CPU);
 
     assert_close("permute fwd", &y_cpu.data(), &y_gpu.data(), TOL_FWD_GPU);
 }
@@ -114,10 +117,10 @@ fn permute_backward_parity() {
     let x_cpu = make_input(&[2, 3, 4], true, (-2.0, 2.0));
     let x_gpu = x_cpu.to_device(gpu_device());
 
-    let y_cpu = x_cpu.permute(&[1, 2, 0]);
+    let y_cpu = x_cpu.permute(&[Axis(1), Axis(2), Axis(0)]);
     y_cpu.sum().backward();
 
-    let y_gpu = x_gpu.permute(&[1, 2, 0]);
+    let y_gpu = x_gpu.permute(&[Axis(1), Axis(2), Axis(0)]);
     y_gpu.sum().backward();
 
     assert_close(

@@ -8,6 +8,7 @@
 //! - Movement operations (reshape, transpose, etc.)
 #![allow(clippy::cast_precision_loss)]
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use volta::Axis;
 use volta::{RawTensor, Tensor, TensorOps};
 
 /// Generate a random tensor of the given size
@@ -196,7 +197,7 @@ fn bench_movement_ops(c: &mut Criterion) {
     group.bench_function("permute", |b| {
         let data: Vec<f32> = (0..10000).map(|i| i as f32 * 0.01).collect();
         let a = RawTensor::new(data, &[10, 10, 10, 10], false);
-        b.iter(|| black_box(&a).permute(&[2, 3, 1, 0]));
+        b.iter(|| black_box(&a).permute(&[Axis(2), Axis(3), Axis(1), Axis(0)]));
     });
 
     // Pad

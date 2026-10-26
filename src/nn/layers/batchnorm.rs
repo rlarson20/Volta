@@ -1,5 +1,6 @@
 use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
+use crate::shape::Axis;
 use crate::tensor::{RawTensor, Tensor, TensorOps};
 
 pub struct BatchNorm2d {
@@ -66,7 +67,7 @@ impl Module for BatchNorm2d {
         // We want stats per channel.
         // Input: (B, C, H, W)
         // Permute -> (C, B, H, W)
-        let x_perm = x.permute(&[1, 0, 2, 3]);
+        let x_perm = x.permute(&[Axis(1), Axis(0), Axis(2), Axis(3)]);
 
         // We need reshaping to utilize current Tensor ops for mean/var
         // (C, B, H, W) -> (C, B*H*W)
@@ -80,13 +81,13 @@ impl Module for BatchNorm2d {
 
         let (mean, var) = if self.training {
             // Calculate batch stats
-            let batch_mean = x_flat.mean_dim(1, true); // (C, 1)
+            let batch_mean = x_flat.mean_dim(Axis(1), true); // (C, 1)
 
             // Unbiased var: sum((x - mean)^2) / (N - 1)
             // We'll use biased for simplicity/PyTorch-parity in train mode freq: sum / N
             let diff = x_flat.sub(&batch_mean);
             let sq_diff = diff.elem_mul(&diff);
-            let batch_var = sq_diff.mean_dim(1, true); // (C, 1)
+            let batch_var = sq_diff.mean_dim(Axis(1), true); // (C, 1)
 
             // Update running stats.
             // running_mean = (1 - m) * running_mean + m * batch_mean
@@ -142,7 +143,7 @@ impl Module for BatchNorm2d {
 
         // Reshape back: (C, B*H*W) -> (C, B, H, W) -> (B, C, H, W)
         let out_perm = out_flat.reshape(&[self.num_features, b, h, w]);
-        out_perm.permute(&[1, 0, 2, 3])
+        out_perm.permute(&[Axis(1), Axis(0), Axis(2), Axis(3)])
     }
 
     fn parameters(&self) -> Vec<Tensor> {
@@ -250,12 +251,12 @@ impl Module for BatchNorm1d {
 
         let (mean, var) = if self.training {
             // Calculate batch stats: mean over dim=0
-            let batch_mean = x.mean_dim(0, true); // [1, C]
+            let batch_mean = x.mean_dim(Axis(0), true); // [1, C]
 
             // Variance: mean((x - mean)^2)
             let diff = x.sub(&batch_mean);
             let sq_diff = diff.elem_mul(&diff);
-            let batch_var = sq_diff.mean_dim(0, true); // [1, C]
+            let batch_var = sq_diff.mean_dim(Axis(0), true); // [1, C]
 
             // Update running stats.
             {

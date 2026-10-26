@@ -1,5 +1,6 @@
 //! Tests exercising all `VoltaError` variants through public APIs.
 
+use volta::Axis;
 use volta::dtype::DType;
 use volta::error::VoltaError;
 use volta::{RawTensor, Storage};
@@ -21,7 +22,7 @@ fn test_shape_data_mismatch() {
 fn test_dimension_out_of_bounds() {
     // 2D tensor (shape [2,3]), requesting sum along dim 5
     let x = RawTensor::try_new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false).unwrap();
-    let result = RawTensor::try_sum_dim(&x, 5, false);
+    let result = RawTensor::try_sum_dim(&x, Axis(5), false);
     assert!(result.is_err());
     let err = result.err().unwrap();
     assert!(matches!(

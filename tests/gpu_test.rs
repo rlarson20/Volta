@@ -1,5 +1,6 @@
 #![allow(clippy::cast_precision_loss)]
 #[cfg(feature = "gpu")]
+use volta::Axis;
 use volta::gpu;
 #[cfg(all(test, feature = "gpu"))]
 mod gpu_tests {
@@ -129,7 +130,7 @@ mod gpu_tests {
 
         // Test permute (transpose 2D) - uses CPU fallback for now
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false).to_device(device.clone());
-        let x_t = x.permute(&[1, 0]);
+        let x_t = x.permute(&[Axis(1), Axis(0)]);
         assert_eq!(x_t.shape(), vec![2, 2]);
         assert_eq!(x_t.data(), vec![1.0, 3.0, 2.0, 4.0]);
 

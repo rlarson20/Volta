@@ -415,7 +415,7 @@ mod movement_tests {
     #[test]
     fn test_permute_backward() {
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], true);
-        let y = x.permute(&[1, 0]); // transpose
+        let y = x.permute(&[Axis(1), Axis(0)]); // transpose
         let loss = y.sum();
         loss.backward();
 
@@ -936,7 +936,7 @@ mod misc_tests {
         // Test permute gradient
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], true);
         let passed = RawTensor::check_gradients_simple(&x, |t| {
-            let y = t.permute(&[1, 0]);
+            let y = t.permute(&[Axis(1), Axis(0)]);
             y.sum()
         });
         assert!(passed, "Permute gradient check failed");
@@ -1807,7 +1807,7 @@ mod edge_case_tests {
             &[2, 2, 2],
             false,
         );
-        x.permute(&[0, 1]); // Missing third axis
+        x.permute(&[Axis(0), Axis(1)]); // Missing third axis
     }
 
     #[test]
@@ -1815,7 +1815,7 @@ mod edge_case_tests {
     fn test_permute_wrong_length_too_long() {
         // Attempt to permute rank-2 tensor with 3 axes
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
-        x.permute(&[0, 1, 2]); // Too many axes for rank-2 tensor
+        x.permute(&[Axis(0), Axis(1), Axis(2)]); // Too many axes for rank-2 tensor
     }
 
     #[test]
@@ -1823,7 +1823,7 @@ mod edge_case_tests {
     fn test_permute_out_of_bounds_axis() {
         // Attempt to permute with axis exceeding tensor rank
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
-        x.permute(&[0, 5]); // Axis 5 doesn't exist in rank-2 tensor
+        x.permute(&[Axis(0), Axis(5)]); // Axis 5 doesn't exist in rank-2 tensor
     }
 
     #[test]
@@ -1831,7 +1831,7 @@ mod edge_case_tests {
     fn test_permute_duplicate_axes() {
         // Attempt to permute with duplicate axes
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
-        x.permute(&[0, 0]); // Axis 0 appears twice
+        x.permute(&[Axis(0), Axis(0)]); // Axis 0 appears twice
     }
 
     #[test]
@@ -1843,7 +1843,7 @@ mod edge_case_tests {
             &[2, 2, 2],
             false,
         );
-        x.permute(&[0, 1, 3]); // Axis 3 doesn't exist (should be 0, 1, 2)
+        x.permute(&[Axis(0), Axis(1), Axis(3)]); // Axis 3 doesn't exist (should be 0, 1, 2)
     }
 
     // ===== PAD INVALID SIZE TESTS =====
@@ -1872,6 +1872,61 @@ mod edge_case_tests {
         // This would create a tensor with (2 + 5000) * (2 + 5000) = ~25M elements
         // To exceed 100M, we need even larger padding
         x.pad(&[(50000, 50000), (50000, 50000)]); // Way over 100M elements
+    }
+
+    // ===== AXIS BOUNDS TESTS =====
+
+    #[test]
+    fn test_try_sum_dim_out_of_range_axis_errs() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
+        let err = RawTensor::try_sum_dim(&x, Axis(2), false).unwrap_err();
+        assert!(
+            matches!(err, VoltaError::DimensionOutOfBounds { dim: 2, .. }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Dimension 2 out of bounds for shape [2, 2]")]
+    fn test_max_dim_out_of_range_axis_panics() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
+        let _ = x.max_dim(Axis(2), false);
+    }
+
+    #[test]
+    #[should_panic(expected = "Dimension 2 out of bounds for shape [2, 2]")]
+    fn test_mean_dim_out_of_range_axis_panics() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
+        let _ = x.mean_dim(Axis(2), false);
+    }
+
+    #[test]
+    #[should_panic(expected = "Dimension 2 out of bounds for shape [2, 2]")]
+    fn test_softmax_out_of_range_axis_panics() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
+        let _ = x.softmax(Axis(2));
+    }
+
+    #[test]
+    fn test_axis_reductions_use_the_named_axis() {
+        // [[1, 2, 3], [4, 5, 6]]: Axis(0) collapses rows, Axis(1) collapses columns.
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
+        assert_eq!(
+            x.sum_dim(Axis(0), false).borrow().data.to_vec(),
+            vec![5.0, 7.0, 9.0]
+        );
+        assert_eq!(
+            x.sum_dim(Axis(1), false).borrow().data.to_vec(),
+            vec![6.0, 15.0]
+        );
+        assert_eq!(
+            x.max_dim(Axis(1), false).borrow().data.to_vec(),
+            vec![3.0, 6.0]
+        );
+        assert_eq!(
+            x.mean_dim(Axis(0), false).borrow().data.to_vec(),
+            vec![2.5, 3.5, 4.5]
+        );
     }
 
     // ===== SHRINK VALIDATION TESTS =====
@@ -3030,7 +3085,7 @@ mod axis_reduce_tests {
     fn test_sum_dim_basic() {
         // [2,3] sum along dim=1 -> [2]
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
-        let y = RawTensor::sum_dim(&x, 1, false);
+        let y = RawTensor::sum_dim(&x, Axis(1), false);
 
         assert_eq!(y.borrow().shape, vec![2]);
         assert_eq!(y.borrow().data, vec![6.0, 15.0]); // [1+2+3, 4+5+6]
@@ -3039,7 +3094,7 @@ mod axis_reduce_tests {
     #[test]
     fn test_sum_dim_keepdim() {
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
-        let y = RawTensor::sum_dim(&x, 0, true);
+        let y = RawTensor::sum_dim(&x, Axis(0), true);
 
         assert_eq!(y.borrow().shape, vec![1, 2]);
         assert_eq!(y.borrow().data, vec![4.0, 6.0]); // [1+3, 2+4]
@@ -3048,7 +3103,7 @@ mod axis_reduce_tests {
     #[test]
     fn test_sum_dim_backward() {
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], true);
-        let y = RawTensor::sum_dim(&x, 1, false); // [6, 15]
+        let y = RawTensor::sum_dim(&x, Axis(1), false); // [6, 15]
         y.backward();
 
         // Gradient broadcasts back: each element contributed once
@@ -3058,7 +3113,7 @@ mod axis_reduce_tests {
     #[test]
     fn test_max_dim_basic() {
         let x = RawTensor::new(vec![1.0, 5.0, 3.0, 2.0, 8.0, 4.0], &[2, 3], false);
-        let y = RawTensor::max_dim(&x, 1, false);
+        let y = RawTensor::max_dim(&x, Axis(1), false);
 
         assert_eq!(y.borrow().shape, vec![2]);
         assert_eq!(y.borrow().data, vec![5.0, 8.0]); // max of each row
@@ -3067,7 +3122,7 @@ mod axis_reduce_tests {
     #[test]
     fn test_max_dim_backward() {
         let x = RawTensor::new(vec![1.0, 5.0, 3.0, 2.0, 8.0, 4.0], &[2, 3], true);
-        let y = RawTensor::max_dim(&x, 1, false);
+        let y = RawTensor::max_dim(&x, Axis(1), false);
         y.backward();
 
         // Only max elements get gradient
@@ -3078,7 +3133,7 @@ mod axis_reduce_tests {
     fn test_gradcheck_sum_dim() {
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], true);
         let passed =
-            RawTensor::check_gradients_simple(&x, |t| RawTensor::sum_dim(t, 0, false).sum());
+            RawTensor::check_gradients_simple(&x, |t| RawTensor::sum_dim(t, Axis(0), false).sum());
         assert!(passed, "sum_dim gradient check failed");
     }
 
@@ -3086,7 +3141,7 @@ mod axis_reduce_tests {
     fn test_gradcheck_max_dim() {
         let x = RawTensor::new(vec![1.0, 5.0, 3.0, 2.0], &[2, 2], true);
         let passed =
-            RawTensor::check_gradients_simple(&x, |t| RawTensor::max_dim(t, 1, false).sum());
+            RawTensor::check_gradients_simple(&x, |t| RawTensor::max_dim(t, Axis(1), false).sum());
         assert!(passed, "max_dim gradient check failed");
     }
 
@@ -3094,7 +3149,7 @@ mod axis_reduce_tests {
     fn test_softmax_forward() {
         // Test softmax computation
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
-        let y = RawTensor::softmax(&x, 1);
+        let y = RawTensor::softmax(&x, Axis(1));
 
         // Each row should sum to 1.0
         let data = y.borrow();
@@ -3108,7 +3163,8 @@ mod axis_reduce_tests {
     #[test]
     fn test_gradcheck_softmax() {
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], true);
-        let passed = RawTensor::check_gradients_simple(&x, |t| RawTensor::softmax(t, 1).sum());
+        let passed =
+            RawTensor::check_gradients_simple(&x, |t| RawTensor::softmax(t, Axis(1)).sum());
         assert!(passed, "Softmax gradient check failed");
     }
 
@@ -3190,7 +3246,7 @@ mod axis_reduce_tests {
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], true);
 
         // mean(dim=1) -> [2, 5]
-        let m = x.mean_dim(1, false);
+        let m = x.mean_dim(Axis(1), false);
         assert_eq!(m.borrow().shape, vec![2]);
         assert!(
             (m.borrow()
@@ -4508,7 +4564,7 @@ mod reduce_ops_tests {
     fn sum_dim_keepdim_shape() {
         // (2, 3) -> sum over dim 1 with keepdim -> (2, 1)
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
-        let s = x.sum_dim(1, true);
+        let s = x.sum_dim(Axis(1), true);
         assert_eq!(s.borrow().shape, vec![2, 1]);
         assert_eq!(s.borrow().data.to_vec(), vec![6.0, 15.0]);
     }
@@ -4516,7 +4572,7 @@ mod reduce_ops_tests {
     #[test]
     fn sum_dim_no_keepdim_shape() {
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
-        let s = x.sum_dim(0, false);
+        let s = x.sum_dim(Axis(0), false);
         // (2, 3) reduced over dim 0 -> (3,)
         assert_eq!(s.borrow().shape, vec![3]);
         assert_eq!(s.borrow().data.to_vec(), vec![5.0, 7.0, 9.0]);
@@ -4526,14 +4582,14 @@ mod reduce_ops_tests {
     fn sum_dim_gradcheck() {
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], true);
         assert!(RawTensor::check_gradients_simple(&x, |t| t
-            .sum_dim(1, true)
+            .sum_dim(Axis(1), true)
             .sum()));
     }
 
     #[test]
     fn mean_dim_keepdim_value() {
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
-        let m = x.mean_dim(1, true);
+        let m = x.mean_dim(Axis(1), true);
         assert_eq!(m.borrow().shape, vec![2, 1]);
         let out = m.borrow().data.to_vec();
         assert_relative_eq!(out.first().copied().unwrap_or(0.0), 2.0, epsilon = 1e-6);
@@ -4544,7 +4600,7 @@ mod reduce_ops_tests {
     fn mean_dim_gradcheck() {
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], true);
         assert!(RawTensor::check_gradients_simple(&x, |t| t
-            .mean_dim(0, true)
+            .mean_dim(Axis(0), true)
             .sum()));
     }
 
@@ -4552,7 +4608,7 @@ mod reduce_ops_tests {
     fn max_dim_value_and_shape() {
         // distinct values per row to avoid tie ambiguity
         let x = RawTensor::new(vec![1.0, 5.0, 3.0, 9.0, 2.0, 7.0], &[2, 3], false);
-        let m = x.max_dim(1, true);
+        let m = x.max_dim(Axis(1), true);
         assert_eq!(m.borrow().shape, vec![2, 1]);
         assert_eq!(m.borrow().data.to_vec(), vec![5.0, 9.0]);
     }
@@ -4560,7 +4616,7 @@ mod reduce_ops_tests {
     #[test]
     fn max_dim_routes_grad_to_argmax_per_row() {
         let x = RawTensor::new(vec![1.0, 5.0, 3.0, 9.0, 2.0, 7.0], &[2, 3], true);
-        x.max_dim(1, true).sum().backward();
+        x.max_dim(Axis(1), true).sum().backward();
         // argmax row 0 -> col 1; row 1 -> col 0
         assert_eq!(x.grad(), Some(vec![0.0, 1.0, 0.0, 1.0, 0.0, 0.0]));
     }

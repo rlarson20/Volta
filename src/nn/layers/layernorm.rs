@@ -1,5 +1,6 @@
 use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
+use crate::shape::Axis;
 use crate::tensor::{RawTensor, Tensor, TensorOps};
 
 /// Layer Normalization layer.
@@ -108,12 +109,12 @@ impl Module for LayerNorm {
         let x_reshaped = x.reshape(&[leading_dims, trailing_dims]);
 
         // Compute mean over dim=1 (the feature dimension)
-        let mean = x_reshaped.mean_dim(1, true); // (leading_dims, 1)
+        let mean = x_reshaped.mean_dim(Axis(1), true); // (leading_dims, 1)
 
         // Compute variance: E[(x - mean)^2]
         let diff = x_reshaped.sub(&mean);
         let sq_diff = diff.elem_mul(&diff);
-        let var = sq_diff.mean_dim(1, true); // (leading_dims, 1)
+        let var = sq_diff.mean_dim(Axis(1), true); // (leading_dims, 1)
 
         // Normalize: (x - mean) / sqrt(var + eps)
         let eps_tensor = RawTensor::constant(self.eps, &[1]);

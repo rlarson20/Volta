@@ -1,4 +1,5 @@
 #![allow(clippy::similar_names)]
+use volta::Axis;
 #[test]
 #[cfg(feature = "gpu")]
 fn test_tensor_gpu_unary_add_binary_smoke() {
@@ -328,7 +329,7 @@ fn test_tensor_gpu_sum_dim_device_and_grad_on_gpu() {
     let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], true).to_device(dev.clone());
 
     // Sum over last dim: [[1,2],[3,4]] -> [3,7]
-    let y = x.sum_dim(1, false);
+    let y = x.sum_dim(Axis(1), false);
     assert!(
         y.device().is_gpu(),
         "sum_dim output should remain on the same GPU device as the input"
@@ -362,7 +363,7 @@ fn test_tensor_gpu_max_dim_device_and_grad_on_gpu() {
     let x =
         RawTensor::new(vec![1.0, 5.0, 3.0, 2.0, 8.0, 4.0], &[2, 3], true).to_device(dev.clone());
 
-    let y = x.max_dim(1, false);
+    let y = x.max_dim(Axis(1), false);
     assert!(
         y.device().is_gpu(),
         "max_dim output should remain on the same GPU device as the input"

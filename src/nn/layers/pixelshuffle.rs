@@ -1,5 +1,6 @@
 use crate::io::StateDict;
 use crate::nn::Module;
+use crate::shape::Axis;
 use crate::tensor::{Tensor, TensorOps};
 
 /// `PixelShuffle`: Rearranges elements from (B, C*r², H, W) to (B, C, H*r, W*r)
@@ -79,7 +80,8 @@ impl Module for PixelShuffle {
         let x_reshaped = x.reshape(&[batch_size, out_channels, r, r, height, width]);
 
         // Step 2: Permute [0, 1, 4, 2, 5, 3] → (B, C, H, r, W, r)
-        let x_permuted = x_reshaped.permute(&[0, 1, 4, 2, 5, 3]);
+        let x_permuted =
+            x_reshaped.permute(&[Axis(0), Axis(1), Axis(4), Axis(2), Axis(5), Axis(3)]);
 
         // Step 3: Reshape (B, C, H, r, W, r) → (B, C, H*r, W*r)
         x_permuted.reshape(&[batch_size, out_channels, height * r, width * r])

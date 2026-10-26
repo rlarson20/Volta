@@ -1,3 +1,4 @@
+use crate::shape::Axis;
 use crate::tensor::TensorOps;
 use crate::tensor::{RawTensor, Tensor};
 
@@ -113,7 +114,7 @@ impl ScaledDotProductAttention {
 
         // Compute QK^T: [batch, seq_len, d_k] @ [batch, d_k, seq_len] = [batch, seq_len, seq_len]
         // For 3D tensors, we need to permute to swap the last two dimensions
-        let key_t = key.permute(&[0, 2, 1]); // [batch, d_k, seq_len]
+        let key_t = key.permute(&[Axis(0), Axis(2), Axis(1)]); // [batch, d_k, seq_len]
         let scores = query.matmul(&key_t); // [batch, seq_len, seq_len]
 
         // Scale by sqrt(d_k)
@@ -136,7 +137,7 @@ impl ScaledDotProductAttention {
         };
 
         // Apply softmax over the last dimension (key sequence length)
-        let attention_weights = scores.softmax(2); // [batch, seq_len, seq_len]
+        let attention_weights = scores.softmax(Axis(2)); // [batch, seq_len, seq_len]
 
         // Apply attention weights to values: [batch, seq_len, seq_len] @ [batch, seq_len, d_v] = [batch, seq_len, d_v]
         attention_weights.matmul(value)

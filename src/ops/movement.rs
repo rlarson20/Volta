@@ -1,7 +1,7 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::error::Result;
-use crate::shape::Shape;
+use crate::shape::{Axis, Shape};
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
 
@@ -719,17 +719,18 @@ impl RawTensor {
     /// # Panics
     /// invalid permutation axes
     #[must_use]
-    pub fn permute(self_t: &Tensor, axes: &[usize]) -> Tensor {
+    pub fn permute(self_t: &Tensor, axes: &[Axis]) -> Tensor {
         let old_shape = self_t.borrow().shape.clone();
+        let axes: Vec<usize> = axes.iter().map(|a| a.0).collect();
 
         // Verify axes is a valid permutation
-        let mut sorted_axes = axes.to_vec();
+        let mut sorted_axes = axes.clone();
         sorted_axes.sort_unstable();
         for (i, &ax) in sorted_axes.iter().enumerate() {
             assert_eq!(i, ax, "Invalid permutation axes");
         }
 
-        let (storage, new_shape, device) = Self::permute_impl(self_t, axes);
+        let (storage, new_shape, device) = Self::permute_impl(self_t, &axes);
 
         edge(
             [self_t.clone()],
@@ -737,9 +738,7 @@ impl RawTensor {
             Shape::derived(new_shape),
             device,
             Box::new(MovementGradFn {
-                op: MovementOp::Permute {
-                    axes: axes.to_vec(),
-                },
+                op: MovementOp::Permute { axes },
                 original_shape: old_shape,
             }),
         )

@@ -5,7 +5,7 @@ use crate::ops::binary::BinaryOp;
 use crate::ops::reduce::ReduceOp;
 use crate::ops::ternary::TernaryOp;
 use crate::ops::unary::UnaryOp;
-use crate::shape::Shape;
+use crate::shape::{Axis, Shape};
 use crate::{Result, VoltaError};
 use rand::Rng;
 use rand::SeedableRng;
@@ -283,6 +283,13 @@ impl std::fmt::Debug for RawTensor {
     }
 }
 
+/// Size of `axis` in `shape`, or `DimensionOutOfBounds`.
+///
+/// `shape` comes from an existing tensor, so it is already a valid [`Shape`].
+fn axis_size(shape: &[usize], axis: Axis) -> Result<usize> {
+    Shape::from_dims(shape)?.dim(axis)
+}
+
 // ===== TENSOR CONSTRUCTORS =====
 impl RawTensor {
     /// Create a new tensor from data and shape (fallible)
@@ -554,11 +561,11 @@ impl RawTensor {
     #[must_use]
     pub fn cross_entropy_loss(logits: &Tensor, targets: &Tensor) -> Tensor {
         // Use log_softmax for numerical stability
-        let log_probs = Self::log_softmax(logits, 1);
+        let log_probs = Self::log_softmax(logits, Axis(1));
 
         // -sum(targets * log_probs, dim=1).mean()
         let prod = targets.elem_mul(&log_probs);
-        let sum = Self::sum_dim(&prod, 1, false);
+        let sum = Self::sum_dim(&prod, Axis(1), false);
         sum.neg().mean()
     }
 
@@ -569,7 +576,7 @@ impl RawTensor {
     pub fn nll_loss(log_probs: &Tensor, targets: &Tensor) -> Tensor {
         // -sum(targets * log_probs, dim=1).mean()
         let prod = targets.elem_mul(log_probs);
-        let sum = Self::sum_dim(&prod, 1, false);
+        let sum = Self::sum_dim(&prod, Axis(1), false);
         sum.neg().mean()
     }
 
@@ -795,26 +802,24 @@ impl RawTensor {
     /// * `keepdim` - If true, keep reduced dimension as size 1
     ///
     /// # Examples
-    /// let x = `Tensor::new(vec`![1,2,3,4,5,6], &\[2,3\], true);
-    /// `x.sum_dim(1`, false) // -> [6, 15] shape \[2\]
-    /// `x.sum_dim(1`, true)  // -> [\[6\], \[15\]] shape \[2,1\]
+    /// ```
+    /// use volta::{Axis, RawTensor, TensorOps};
+    /// let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], true);
+    /// assert_eq!(x.sum_dim(Axis(1), false).shape(), vec![2]); // [6, 15]
+    /// assert_eq!(x.sum_dim(Axis(1), true).shape(), vec![2, 1]); // [[6], [15]]
+    /// ```
     ///
     /// # Errors
     ///
     /// Returns `VoltaError::DimensionOutOfBounds` if dim is >= tensor rank
-    pub fn try_sum_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Result<Tensor> {
+    pub fn try_sum_dim(self_t: &Tensor, dim: Axis, keepdim: bool) -> Result<Tensor> {
         let (data, shape, device) = {
             let s = self_t.borrow();
-            if dim >= s.shape.len() {
-                return Err(VoltaError::DimensionOutOfBounds {
-                    dim,
-                    shape: s.shape.clone(),
-                });
-            }
             (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
-        let dim_size = *shape.get(dim).unwrap_or(&1);
+        let dim_size = axis_size(&shape, dim)?;
+        let dim = dim.0;
         let mut out_shape = shape.clone();
         if let Some(slot) = out_shape.get_mut(dim) {
             *slot = 1; // intermediate shape before squeeze
@@ -877,13 +882,16 @@ impl RawTensor {
     /// * `keepdim` - If true, keep reduced dimension as size 1
     ///
     /// # Examples
-    /// let x = `Tensor::new(vec`![1,2,3,4,5,6], &\[2,3\], true);
-    /// `x.sum_dim(1`, false) // -> [6, 15] shape \[2\]
-    /// `x.sum_dim(1`, true)  // -> [\[6\], \[15\]] shape \[2,1\]
+    /// ```
+    /// use volta::{Axis, RawTensor, TensorOps};
+    /// let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], true);
+    /// assert_eq!(x.sum_dim(Axis(1), false).shape(), vec![2]); // [6, 15]
+    /// assert_eq!(x.sum_dim(Axis(1), true).shape(), vec![2, 1]); // [[6], [15]]
+    /// ```
     /// # Panics
     /// dim out of bounds
     #[must_use]
-    pub fn sum_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
+    pub fn sum_dim(self_t: &Tensor, dim: Axis, keepdim: bool) -> Tensor {
         Self::try_sum_dim(self_t, dim, keepdim).expect("Dimension out of bounds")
     }
 
@@ -930,19 +938,14 @@ impl RawTensor {
     /// # Panics
     /// dim out of bounds
     #[must_use]
-    pub fn max_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
+    pub fn max_dim(self_t: &Tensor, dim: Axis, keepdim: bool) -> Tensor {
         let (data, shape, device) = {
             let s = self_t.borrow();
-            assert!(
-                dim < s.shape.len(),
-                "dim {} out of bounds for shape {:?}",
-                dim,
-                s.shape
-            );
             (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
-        let dim_size = *shape.get(dim).unwrap_or(&1);
+        let dim_size = axis_size(&shape, dim).unwrap_or_else(|e| panic!("max_dim: {e}"));
+        let dim = dim.0;
         let mut out_shape = shape.clone();
         if let Some(slot) = out_shape.get_mut(dim) {
             *slot = 1;
@@ -1005,7 +1008,7 @@ impl RawTensor {
     }
 
     #[must_use]
-    pub fn softmax(self_t: &Tensor, dim: usize) -> Tensor {
+    pub fn softmax(self_t: &Tensor, dim: Axis) -> Tensor {
         let max = Self::max_dim(self_t, dim, true);
         let shifted = self_t.sub(&max);
         let exp_x = shifted.exp();
@@ -1016,7 +1019,7 @@ impl RawTensor {
     /// `log(exp(x_i)` / `sum(exp(x_j))`) = `x_i` - `log(sum(exp(x_j)))`
     /// Uses `LogSumExp` trick: log(sum(exp(x))) = m + log(sum(exp(x-m)))
     #[must_use]
-    pub fn log_softmax(self_t: &Tensor, dim: usize) -> Tensor {
+    pub fn log_softmax(self_t: &Tensor, dim: Axis) -> Tensor {
         let max = Self::max_dim(self_t, dim, true);
         let shifted = self_t.sub(&max);
         let exp_x = shifted.exp();
@@ -1032,14 +1035,13 @@ impl RawTensor {
     /// # Panics
     /// dim out of bounds
     #[must_use]
-    pub fn mean_dim(self_t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
+    pub fn mean_dim(self_t: &Tensor, dim: Axis, keepdim: bool) -> Tensor {
         let (shape, device) = {
             let t = self_t.borrow();
             (t.shape.clone(), t.device.clone())
         };
-        assert!(dim < shape.len(), "Dimension out of bounds");
 
-        let n = *shape.get(dim).unwrap_or(&1) as f32;
+        let n = axis_size(&shape, dim).unwrap_or_else(|e| panic!("mean_dim: {e}")) as f32;
         let sum = Self::sum_dim(self_t, dim, keepdim);
         let div_tensor = Self::new(vec![n], &[1], false);
 
@@ -1234,7 +1236,7 @@ pub trait TensorOps {
 
     // Movement ops
     fn reshape(&self, new_shape: &[usize]) -> Tensor;
-    fn permute(&self, axes: &[usize]) -> Tensor;
+    fn permute(&self, axes: &[Axis]) -> Tensor;
     fn expand(&self, new_shape: &[usize]) -> Tensor;
     fn pad(&self, padding: &[(usize, usize)]) -> Tensor;
     fn shrink(&self, ranges: &[(usize, usize)]) -> Tensor;
@@ -1251,13 +1253,13 @@ pub trait TensorOps {
     fn zero_grad(&self);
 
     // Axis reductions
-    fn sum_dim(&self, dim: usize, keepdim: bool) -> Tensor;
-    fn max_dim(&self, dim: usize, keepdim: bool) -> Tensor;
-    fn mean_dim(&self, dim: usize, keepdim: bool) -> Tensor;
+    fn sum_dim(&self, dim: Axis, keepdim: bool) -> Tensor;
+    fn max_dim(&self, dim: Axis, keepdim: bool) -> Tensor;
+    fn mean_dim(&self, dim: Axis, keepdim: bool) -> Tensor;
 
     // Softmax
-    fn softmax(&self, dim: usize) -> Tensor;
-    fn log_softmax(&self, dim: usize) -> Tensor;
+    fn softmax(&self, dim: Axis) -> Tensor;
+    fn log_softmax(&self, dim: Axis) -> Tensor;
 }
 
 impl TensorOps for Tensor {
@@ -1343,7 +1345,7 @@ impl TensorOps for Tensor {
     fn reshape(&self, new_shape: &[usize]) -> Tensor {
         RawTensor::reshape(self, new_shape)
     }
-    fn permute(&self, axes: &[usize]) -> Tensor {
+    fn permute(&self, axes: &[Axis]) -> Tensor {
         RawTensor::permute(self, axes)
     }
     fn expand(&self, new_shape: &[usize]) -> Tensor {
@@ -1382,19 +1384,19 @@ impl TensorOps for Tensor {
     fn zero_grad(&self) {
         RawTensor::zero_grad(self);
     }
-    fn sum_dim(&self, dim: usize, keepdim: bool) -> Tensor {
+    fn sum_dim(&self, dim: Axis, keepdim: bool) -> Tensor {
         RawTensor::sum_dim(self, dim, keepdim)
     }
-    fn max_dim(&self, dim: usize, keepdim: bool) -> Tensor {
+    fn max_dim(&self, dim: Axis, keepdim: bool) -> Tensor {
         RawTensor::max_dim(self, dim, keepdim)
     }
-    fn mean_dim(&self, dim: usize, keepdim: bool) -> Tensor {
+    fn mean_dim(&self, dim: Axis, keepdim: bool) -> Tensor {
         RawTensor::mean_dim(self, dim, keepdim)
     }
-    fn softmax(&self, dim: usize) -> Tensor {
+    fn softmax(&self, dim: Axis) -> Tensor {
         RawTensor::softmax(self, dim)
     }
-    fn log_softmax(&self, dim: usize) -> Tensor {
+    fn log_softmax(&self, dim: Axis) -> Tensor {
         RawTensor::log_softmax(self, dim)
     }
 }
@@ -1596,17 +1598,17 @@ pub fn bce_with_logits_loss(logits: &Tensor, target: &Tensor) -> Tensor {
 
 // Axis reductions
 #[must_use]
-pub fn sum_dim(t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
+pub fn sum_dim(t: &Tensor, dim: Axis, keepdim: bool) -> Tensor {
     RawTensor::sum_dim(t, dim, keepdim)
 }
 
 #[must_use]
-pub fn max_dim(t: &Tensor, dim: usize, keepdim: bool) -> Tensor {
+pub fn max_dim(t: &Tensor, dim: Axis, keepdim: bool) -> Tensor {
     RawTensor::max_dim(t, dim, keepdim)
 }
 
 #[must_use]
-pub fn softmax(t: &Tensor, dim: usize) -> Tensor {
+pub fn softmax(t: &Tensor, dim: Axis) -> Tensor {
     RawTensor::softmax(t, dim)
 }
 

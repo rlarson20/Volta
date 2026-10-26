@@ -2,6 +2,7 @@
 #![allow(clippy::cast_precision_loss)]
 #![cfg(feature = "gpu")]
 
+use volta::Axis;
 use volta::device::Device;
 use volta::gpu::is_gpu_available;
 use volta::{RawTensor, TensorOps};
@@ -32,11 +33,11 @@ fn test_permute_backward_cpu_vs_gpu() {
     let cpu_t = RawTensor::new(data.clone(), &[2, 3], true);
 
     // Permute: swap axes [2,3] -> [3,2]
-    let cpu_permuted = cpu_t.permute(&[1, 0]);
+    let cpu_permuted = cpu_t.permute(&[Axis(1), Axis(0)]);
 
     // Create same tensor on GPU
     let gpu_t = RawTensor::new(data, &[2, 3], true).to_device(device.clone());
-    let gpu_permuted = gpu_t.permute(&[1, 0]);
+    let gpu_permuted = gpu_t.permute(&[Axis(1), Axis(0)]);
 
     // Backward pass
     cpu_permuted.backward();
@@ -207,13 +208,17 @@ fn test_movement_backward_chain_cpu_vs_gpu() {
 
     // CPU path
     let cpu_t = RawTensor::new(data.clone(), &[2, 1, 3], true);
-    let cpu_out = cpu_t.permute(&[2, 1, 0]).expand(&[3, 2, 2]);
+    let cpu_out = cpu_t
+        .permute(&[Axis(2), Axis(1), Axis(0)])
+        .expand(&[3, 2, 2]);
     cpu_out.backward();
     let cpu_grad = cpu_t.grad_storage().unwrap().to_vec();
 
     // GPU path
     let gpu_t = RawTensor::new(data, &[2, 1, 3], true).to_device(device.clone());
-    let gpu_out = gpu_t.permute(&[2, 1, 0]).expand(&[3, 2, 2]);
+    let gpu_out = gpu_t
+        .permute(&[Axis(2), Axis(1), Axis(0)])
+        .expand(&[3, 2, 2]);
     gpu_out.backward();
     let gpu_grad = gpu_t.grad_storage().unwrap().to_vec();
 
