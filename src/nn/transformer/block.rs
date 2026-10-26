@@ -295,7 +295,7 @@ mod tests {
         // SimpleAttention (the current placeholder attention) has no parameters of
         // its own, so this exercises norm1/norm2/ffn — everything that does.
         let block = TransformerBlock::new(16, 2, 2, 0.0);
-        let x = RawTensor::new(vec![1.0; 2 * 3 * 16], &[2, 3, 16], true);
+        let x = crate::macros::trainable_input(&[2, 3, 16]);
         crate::assert_trainable!(block, x);
     }
 }

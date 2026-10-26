@@ -935,7 +935,7 @@ mod tests {
     #[test]
     fn test_conv_transpose2d_assert_trainable() {
         let conv = ConvTranspose2d::new(2, 4, 3, 1, 0, true);
-        let x = RawTensor::new(vec![1.0; 2 * 5 * 5], &[1, 2, 5, 5], true);
+        let x = crate::macros::trainable_input(&[1, 2, 5, 5]);
         crate::assert_trainable!(conv, x);
     }
 }

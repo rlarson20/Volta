@@ -4728,7 +4728,7 @@ mod linear_tests {
     #[test]
     fn assert_trainable_all_params_get_gradient() {
         let layer = Linear::new(4, 3, true);
-        let x = RawTensor::new(vec![1.0; 2 * 4], &[2, 4], true);
+        let x = crate::macros::trainable_input(&[2, 4]);
         crate::assert_trainable!(layer, x);
     }
 }
@@ -5060,7 +5060,7 @@ mod batchnorm_tests {
     #[test]
     fn bn2d_assert_trainable_all_params_get_gradient() {
         let layer = BatchNorm2d::new(2);
-        let x = RawTensor::new(vec![1.0; 2 * 2 * 2 * 2], &[2, 2, 2, 2], true);
+        let x = crate::macros::trainable_input(&[2, 2, 2, 2]);
         crate::assert_trainable!(layer, x);
     }
 }

@@ -197,7 +197,7 @@ A bool breaks as soon as one `no_grad()` scope nests inside another, for example
 
 **Decision:** every parameterized layer has a test asserting that each parameter gets a nonzero gradient after forward and backward. This is the check that would have caught B1–B3.
 
-**Known weakness (2026-10-26):** the macro backprops `.sum()` of the output. For BatchNorm that makes gamma's gradient exactly zero for any input, because the normalized activations sum to zero. Combined with all-ones test inputs, it also made LayerNorm, MultiHeadAttention, and TransformerBlock fail spuriously. With random inputs and a randomly weighted loss, only LSTMCell (B2) fails.
+**Revision (2026-10-26):** the macro first backpropped a plain `.sum()` of the output, and the tests fed all-ones inputs. That produced five false failures. Under a plain sum, BatchNorm's gamma gradient is exactly zero for any input, because the normalized activations sum to zero. Constant inputs also make LayerNorm's normalized values and attention's scores constant, which zeroes their gradients mathematically. The macro now backprops `(output ⊙ randn_like(output)).sum()`, and the tests take seeded random inputs from `macros::trainable_input`. After the fix, only LSTMCell (B2) fails; it is `#[ignore]`d with the defect ID until fixed.
 
 ## Concurrency and Async
 

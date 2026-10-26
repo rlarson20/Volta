@@ -371,7 +371,7 @@ mod tests {
     #[test]
     fn test_mha_assert_trainable() {
         let mha = MultiHeadAttention::new(16, 2, 0.0);
-        let x = RawTensor::new(vec![1.0; 2 * 3 * 16], &[2, 3, 16], true);
+        let x = crate::macros::trainable_input(&[2, 3, 16]);
         crate::assert_trainable!(mha, x);
     }
 }

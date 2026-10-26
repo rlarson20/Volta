@@ -5,6 +5,10 @@
 /// bugs from Part I (ADDENDUM.md §5.3): a layer whose output is silently disconnected
 /// from a parameter's autograd graph looks fine at a glance but never trains.
 ///
+/// `$input` must be non-degenerate — use [`crate::macros::trainable_input`]. Constant
+/// inputs make tokens/features identical, which zeroes gradients mathematically for
+/// normalization and attention layers (`LayerNorm` gamma, attention Q/K projections).
+///
 /// Two deliberate departures from the originally-sketched version of this macro:
 ///
 /// - It called `.into_loss()` on the summed output (ADDENDUM.md §2.2's `ScalarLoss`
@@ -24,7 +28,11 @@ macro_rules! assert_trainable {
         use $crate::tensor::TensorOps as _;
 
         let output = <_ as $crate::nn::Module>::forward(&$layer, &$input);
-        let loss = output.sum();
+        // Randomly weighted sum, not plain `.sum()`: under a plain sum, normalized
+        // activations sum to zero, so e.g. BatchNorm's gamma gets an exactly-zero
+        // gradient for ANY input — a false positive, not a severed graph.
+        let weights = $crate::tensor::randn_like(&output);
+        let loss = output.elem_mul(&weights).sum();
         loss.backward();
         for (i, p) in <_ as $crate::nn::Module>::parameters(&$layer)
             .iter()

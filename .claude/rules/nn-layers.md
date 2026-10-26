@@ -7,7 +7,7 @@ paths:
 
 - Implement `Module`: `forward`, `parameters`, `state_dict`, `load_state_dict`. `parameters()` must return every learnable tensor.
 - Build outputs from graph ops (`shrink`, broadcast add, `matmul`, …) or from `edge()`. Never copy values into a fresh tensor, which severs the graph. LSTMCell's gate slice (B2) and PositionalEncoding (B3) both still do this.
-- **Every parameterized layer gets an `assert_trainable!` test with random input** (`randn` plus `set_requires_grad(true)`). All-ones input makes gradients mathematically zero for LayerNorm, BatchNorm, MultiHeadAttention, and TransformerBlock, so those tests fail even though the layers are fine (verified 2026-10-26).
+- **Every parameterized layer gets an `assert_trainable!` test**, with its input from `crate::macros::trainable_input(&shape)`. All-ones input makes gradients mathematically zero for normalization and attention layers.
 - Exception: `Embedding::forward` takes `&[usize]`, so it can't go through `Module`. Test its per-index gradients directly.
 - `MultiHeadAttention` and `TransformerBlock` have an inherent `forward(x, mask, …)` alongside `Module::forward`. In generic code, call the trait version through UFCS: `<_ as Module>::forward(&layer, &x)`.
 - `load_state_dict` must validate numel and preserve the destination's device (H7). Never replace `data` with `Storage::cpu(..)`.
