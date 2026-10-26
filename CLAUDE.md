@@ -29,8 +29,20 @@ Never violate these. If a task seems to require it, stop and ask.
 - Default features are `gpu` + `accelerate`, so a plain `cargo build` compiles the GPU backend. For CPU-only, add `--no-default-features`.
 - Until the merge gate clears, run functional checks with `RUSTFLAGS="-A missing_docs"`. `just test-all` does this through nextest.
 - Fast loop: `RUSTFLAGS="-A missing_docs" cargo test --no-default-features --lib <name-filter>`.
-- Before committing, run `just ci` (fmt, `clippy --all-targets -D warnings`, test, doc, examples) or `pre-commit run`.
+- Before committing, run `just ci` (fmt, `clippy --all-targets -D warnings`, test, doc, examples) or `pre-commit run`. Until the merge gate clears, both fail on a clean `HEAD`: clippy and the test hook run with `-D missing-docs`, and `benches/`, `examples/`, and `tests/` have no docs. Verify by hand instead: `cargo fmt --check`, `RUSTFLAGS="-A missing_docs" cargo clippy --lib -- -D warnings`, `just test-all`, and `cargo test --doc --no-default-features` (two doctests, `embedding.rs` and `pixelshuffle.rs`, already fail; see `notes/TODO.md`).
+- Committing past the hooks: `SKIP=clippy,cargo-test git commit ...` (ask the user first; never `--no-verify`). The `fmt` hook runs `cargo fmt --all` and fails whenever it rewrites a file, so make the tree `cargo fmt --check`-clean first. Stage everything you want and leave nothing unstaged: pre-commit stashes unstaged changes, and that conflicts with its own fixes (also with `git commit -- <paths>`).
 - `cargo test <filter>` matches test *names*. There are no category modules called `core`, `neural`, or similar.
+
+## Shell gotchas
+
+The shell is zsh on macOS, and a Claude Code hook rewrites commands through `rtk`.
+
+- `grep` becomes `rtk grep`, which rejects `-n`, `-E`, and `--include`. Use `rtk proxy grep ...` for a standalone search. In a pipeline, `rtk proxy grep` can silently print nothing, so use `command grep` there.
+- Quote globs (`--include='*.rs'`); zsh errors on unmatched ones. A bare `===` is also an error in zsh (`=` expansion), so don't use it as a separator in `echo`.
+- BSD `sed`: `sed -i '2i text'` fails. Use the Edit tool or a short `python3` script.
+- Don't chain a `VAR=...` assignment and its use across `&&` where an earlier command can fail; the next command runs with `VAR` unset (this happened with a scratchpad path). Set it inside the same command.
+- Format single files with `rustfmt --edition 2024 <file>`. `cargo fmt` rewrites unrelated, already-dirty files.
+- For a mechanical signature change that touches many call sites, change the signature and wrap the spans from `cargo check --message-format=json` (E0308 spans) with a script instead of hand-editing each site.
 
 ## Where knowledge lives
 
