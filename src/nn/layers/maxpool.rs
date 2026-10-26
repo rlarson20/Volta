@@ -3,6 +3,7 @@ use crate::device::Device;
 use crate::io::StateDict;
 use crate::nn::Module;
 use crate::shape::Shape;
+use crate::spec::Window2dSpec;
 use crate::storage::Storage;
 use crate::tensor::{RawTensor, Tensor, TensorOps};
 
@@ -47,49 +48,35 @@ impl MaxPool2d {
     }
 
     fn pool_forward(&self, x: &Tensor) -> Tensor {
-        let (batch, channels, _height, _width) = {
-            let x_borrow = x.borrow();
-            assert_eq!(
-                x_borrow.shape.len(),
-                4,
-                "MaxPool2d expects input shape (B, C, H, W)"
-            );
-            (
-                x_borrow.shape.first().copied().unwrap_or(1),
-                x_borrow.shape.get(1).copied().unwrap_or(1),
-                x_borrow.shape.get(2).copied().unwrap_or(1),
-                x_borrow.shape.get(3).copied().unwrap_or(1),
-            )
-        };
+        let spec = Window2dSpec::new(
+            &Shape::derived(x.shape()),
+            self.kernel,
+            self.stride,
+            self.padding,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let Window2dSpec {
+            batch,
+            channels,
+            kernel_h,
+            kernel_w,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            out_h: h_out,
+            out_w: w_out,
+            ..
+        } = spec;
+        let (padded_h, padded_w) = (spec.padded_h(), spec.padded_w());
 
-        let (pad_h, pad_w) = self.padding;
         let x_padded = if pad_h > 0 || pad_w > 0 {
             x.pad(&[(0, 0), (0, 0), (pad_h, pad_h), (pad_w, pad_w)])
         } else {
             x.clone()
         };
 
-        let (data, shape) = {
-            let xp = x_padded.borrow();
-            (xp.data.clone(), xp.shape.clone())
-        };
-
-        let (padded_h, padded_w) = (
-            shape.get(2).copied().unwrap_or(1),
-            shape.get(3).copied().unwrap_or(1),
-        );
-        let (kernel_h, kernel_w) = self.kernel;
-        let (stride_h, stride_w) = self.stride;
-
-        assert!(kernel_h > 0 && kernel_w > 0, "Kernel size must be positive");
-        assert!(stride_h > 0 && stride_w > 0, "Stride must be positive");
-        assert!(
-            padded_h >= kernel_h && padded_w >= kernel_w,
-            "Kernel larger than input"
-        );
-
-        let h_out = (padded_h - kernel_h) / stride_h + 1;
-        let w_out = (padded_w - kernel_w) / stride_w + 1;
+        let data = x_padded.borrow().data.clone();
 
         let mut out_data = vec![0.0; batch * channels * h_out * w_out];
         let mut max_indices = vec![0usize; out_data.len()];
@@ -131,12 +118,10 @@ impl MaxPool2d {
             }
         }
 
-        let out_shape = vec![batch, channels, h_out, w_out];
-
         edge(
             [x_padded],
             Storage::cpu(out_data),
-            Shape::derived(out_shape),
+            Shape::derived(spec.output_dims()),
             Device::CPU,
             Box::new(MaxPool2dGradFn { max_indices }),
         )
@@ -721,5 +706,50 @@ mod tests {
                 .sum();
             assert!(channel_sum > 0.0, "Channel {c} should have gradients");
         }
+    }
+
+    // ==================== Window geometry errors ====================
+
+    /// Runs `pool.forward(x)` and returns the panic message, failing if it does not panic.
+    fn forward_panic_message(pool: &MaxPool2d, x: &crate::tensor::Tensor) -> String {
+        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pool.forward(x)))
+            .expect_err("forward should have panicked");
+        payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+            .expect("panic payload should be a string")
+    }
+
+    #[test]
+    fn test_maxpool2d_zero_stride_panics_with_spec_message() {
+        let pool = MaxPool2d::new(2, 0, 0);
+        let x = RawTensor::randn(&[1, 1, 8, 8]);
+        let msg = forward_panic_message(&pool, &x);
+        assert!(msg.contains("stride must be non-zero"), "{msg}");
+    }
+
+    #[test]
+    fn test_maxpool2d_zero_kernel_panics_with_spec_message() {
+        let pool = MaxPool2d::new(0, 1, 0);
+        let x = RawTensor::randn(&[1, 1, 8, 8]);
+        let msg = forward_panic_message(&pool, &x);
+        assert!(msg.contains("kernel must be positive"), "{msg}");
+    }
+
+    #[test]
+    fn test_maxpool2d_kernel_larger_than_padded_input_panics_with_spec_message() {
+        let pool = MaxPool2d::new(5, 1, 0);
+        let x = RawTensor::randn(&[1, 1, 3, 3]);
+        let msg = forward_panic_message(&pool, &x);
+        assert!(msg.contains("larger than padded input"), "{msg}");
+    }
+
+    #[test]
+    fn test_maxpool2d_non_4d_input_panics_with_spec_message() {
+        let pool = MaxPool2d::new(2, 2, 0);
+        let x = RawTensor::randn(&[8, 8]);
+        let msg = forward_panic_message(&pool, &x);
+        assert!(msg.contains("input must be 4D"), "{msg}");
     }
 }
