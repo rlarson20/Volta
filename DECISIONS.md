@@ -240,6 +240,21 @@ A size silently defaulting to 1 is the same class as `.get(i).unwrap_or(0.0)` (i
 
 **Found on the way:** `ConvAlgo::auto_select` computed `height - kernel_size` from the *unpadded* height, so a valid conv whose kernel fits only after padding (5x5 kernel, pad 1, 3x3 input) panicked under `Auto`. `forward` now passes the padded extents, which makes the heuristic's "stride 1, pad 0" estimate exactly the stride-1 output size. The selection heuristic for padded convs now sees larger (correct) output sizes.
 
+### MatmulSpec (ADDENDUM §1.2)
+
+**Decision:** `MatmulSpec` in `src/spec.rs` is built once in `matmul` from the two operand `Shape`s and stored in `MatMulGradFn` (`Option<MatmulSpec>`; `None` for the vector forms). It validates rank >= 2 on both sides, **equal rank**, matching inner dims, and that the batch dims broadcast (equal or 1 per axis). Forward, backward, and the three GPU matmul wrappers read `m`, `k`, `n`, and the broadcast shapes from it. The batched forward and backward loops use `chunks_exact` plus length asserts, so a mismatch fails instead of skipping.
+
+**Why equal rank is rejected:** B4 came from the backward indexing one operand's shape with the other's rank. With a spec that never happens, but supporting `[2,3,4] @ [2,1,4,6]` or 3D@2D would still need a correct unequal-rank forward (the audit found today's `broadcast_to` path wrong for these shapes) and a matching backward. That is a new feature, not a defect fix, so the spec rejects it with an `equal rank` message, as ADDENDUM §1.2 and the audit propose.
+
+**Rejected:**
+- NumPy/PyTorch right-aligned batch broadcasting for unequal ranks. Deferred as a feature; it can be added by teaching `MatmulSpec::new` to left-pad the shorter batch.
+- Folding the vector forms into the spec. They have different semantics (the rank-1 operand is not a matrix), and `MatmulSpec` is "a matrix product" by definition. They keep their own forward and backward arms, so the `None` case is the vector forms.
+- Letting a batched spec reach the GPU kernels. The kernels are 2D only; `GpuKernels::matmul*` assert `!spec.is_batched()` instead of silently using only `m, k, n`.
+
+**Also changed:**
+- `GpuKernels::matmul`, `matmul_backward_a`, and `matmul_backward_b` are now `pub(crate)`, for the same reason as the conv wrappers. `test_gpu_matmul` was the only external caller; it moved from `tests/gpu_test.rs` into `src/gpu/kernels.rs` as a unit test (with a non-square case, so swapped `m/k/n` shows up).
+- The GPU matmul backward returned early even when a gradient kernel failed (a `FIXME`), which silently froze a parameter. It now returns early only if every required gradient was computed, and otherwise falls through to the CPU path with a `warn`. No test forces a kernel failure, so the fall-through path itself is untested.
+
 ## Concurrency and Async
 
 ### Stay synchronous

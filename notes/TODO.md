@@ -11,7 +11,7 @@ Last verified: 2026-10-26.
 - [x] **B1** ConvTranspose2d weights get no gradient. Fixed by `edge()`; `test_conv_transpose2d_assert_trainable` passes.
 - [ ] **B2** LSTMCell `slice_gate` severs the graph (`lstm.rs` gate slice → `RawTensor::new`). The test is `#[ignore]`d under B2; fix with `shrink` or a slice GradFn, then un-ignore.
 - [ ] **B3** `PositionalEncoding::forward` rebuilds its output from raw data in both modes (`positional_encoding.rs:163,196`). It has no trainability test. The fix composes it from graph ops and adds `assert_trainable!` for learned mode. `examples/char_transformer_model.rs` hand-rolls positional encoding around this bug.
-- [~] **B4** Unequal-rank batched matmul backward. 3D@2D now *panics in forward* ("Batched matmul requires rank >= 3"), so it is loud instead of wrong. Unequal ranks ≥3 are not re-verified. The structural fix is a `MatmulSpec` (Phase 2); then add a test.
+- [x] **B4** Unequal-rank batched matmul backward. Fixed by `MatmulSpec`: matrix operands of unequal rank are rejected in forward (the audit's `[2,3,4] @ [2,1,4,6]` and 3D@2D both panic with "equal rank"), so the bad backward is unreachable. Evidence: `ops::matmul::tests::test_matmul_rejects_unequal_rank_b4_repro`, plus finite-difference checks of both operands for 2D, equal-batch, and broadcast-batch shapes. NumPy-style unequal-rank broadcasting is not supported (DECISIONS.md, "MatmulSpec").
 - [x] **B5** The CPU-only build failed to compile. Fixed in `c8a5006`; `--no-default-features` builds and tests (2026-10-26).
 
 ## High (OPUS §2)
@@ -27,6 +27,7 @@ Last verified: 2026-10-26.
 
 ## Medium (OPUS §3)
 
+- [ ] The vector matmul arms ((2,1), (1,2), (1,1)) in `ops/matmul.rs` still write results through `if let Some` and `unwrap_or(0.0)`, which skip silently (invariant 5). They are not covered by `MatmulSpec`.
 - [ ] Every op deep-copies storage; broadcasts are materialized (no stride-0 views). Phase 3/4.
 - [ ] im2col copies the whole tensor per kernel element (`to_vec` inside the `kw_idx` loop).
 - [ ] Conv input gradient scans all output positions per input pixel. It should iterate the ≤K² contributing positions.
@@ -34,7 +35,7 @@ Last verified: 2026-10-26.
 - [ ] Broadcast backward pass 2 is O(targets × out_size).
 - [ ] `check_gradients` doesn't zero pre-existing grads, so reusing a tensor gives false failures.
 - [ ] Conv finite-difference tolerances are loosened (5e-2), and GPU consistency tests use all-ones data.
-- [ ] `test_conv_transpose2d_gradient_multiple_channels` is flaky (about 1 in 15 runs): unseeded random init against a finite-difference tolerance.
+- [ ] `test_conv_transpose2d_gradient_multiple_channels` is flaky (about 1 in 15 runs): unseeded random init against a finite-difference tolerance. `test_conv_transpose2d_gradient_5x5` is too: 1 failure in 80 runs on `HEAD` and 1 in 80 after the matmul change (2026-10-26).
 - [ ] `test_direct_conv_gradient_multiple_configs` is flaky too: 4 failures in 80 runs on a clean `HEAD`, 3 in 80 after the spec change (2026-10-26). Same cause: unseeded `randn` against a finite-difference tolerance.
 - [ ] Doctests in `embedding.rs` and `pixelshuffle.rs` call the now-private `borrow()` and fail under `cargo test --doc`.
 - [ ] `Sequential::load_state_dict` prefix match is greedy (`"10.weight"` matches `"1."`).
@@ -48,7 +49,7 @@ Last verified: 2026-10-26.
 
 - [x] `assert_trainable!` exists for every parameterized layer, with a weighted loss and seeded random inputs (2026-10-26).
 - [ ] Add a regression test for multi-consumer (diamond) gradient accumulation.
-- [ ] Add a gradient test for `PositionalEncoding` (B3) and one for unequal-rank matmul (B4).
+- [ ] Add a gradient test for `PositionalEncoding` (B3).
 - [ ] Remove example workarounds for broken components once the components are fixed.
 
 ## Rust / API (OPUS §7–14)
@@ -61,7 +62,7 @@ Last verified: 2026-10-26.
 - [ ] Pick one error regime (panic on programmer error, `Result` on runtime failure), document it in `dev-docs/DEVELOPMENT.md`, and prune redundant `try_*` variants.
 - [ ] GPU layer returns `Option` for everything; move to `Result<_, GpuError>` with a single dispatch choke point.
 - [ ] Rewrite the `storage.rs` unsafe block as owned data or a `OnceCell` cache (H3).
-- [~] 16 positional `usize` arguments on GPU kernel wrappers. The eight conv wrappers now take a spec (Phase 2). The matmul wrappers' `m, k, n` wait for `MatmulSpec`.
+- [x] 16 positional `usize` arguments on GPU kernel wrappers. The eight conv wrappers take a conv spec and the three matmul wrappers take a `MatmulSpec` (Phase 2). No wrapper in `kernels.rs` takes three or more bare `usize`s now.
 - [ ] Move about 5,000 lines of tests out of `lib.rs`.
 - [ ] Stop exporting diagnostic tooling as public API.
 - [ ] Merge gate: remove `#![allow(missing_docs)]` in `src/lib.rs` before merging into `main`.
@@ -73,7 +74,7 @@ Last verified: 2026-10-26.
 - [ ] Flip `RawTensor.shape` to `Shape` and make `Tensor::shape()` return it. Deferred with the storage work (§7): about 440 kernel reads of the field (DECISIONS.md, "Shape boundary").
 - [ ] `Strides` is defined but unused; `RawTensor::compute_strides` is still a free fn returning `Vec<usize>`.
 - [x] Conv specs: `Conv2dSpec`, `ConvTranspose2dSpec`, `Window2dSpec` in `src/spec.rs` replace positional args in Conv2d, ConvTranspose2d, MaxPool2d, and the conv GPU wrappers (§1.3; DECISIONS.md, "Conv-family specs").
-- [ ] `MatmulSpec` (§1.2/§1.3). Retires B4. Goes in `src/spec.rs`.
+- [x] `MatmulSpec` in `src/spec.rs` (§1.2/§1.3). Retires B4. Covers rank ≥ 2 operands; the vector forms are untouched.
 - [ ] Closed `GradFn` enum instead of `Box<dyn GradFn>` (§2.5).
 - [ ] `define_ops!` macro (§5.1).
 - [ ] `PadValue` (§2.4). Retires H1.
@@ -84,7 +85,7 @@ Last verified: 2026-10-26.
 - [ ] Sealed and split traits with trybuild tests (§3). Retires H6 and the Embedding panic.
 - [ ] `DevicePolicy` (§2.1). Retires the silent GPU→CPU fallback.
 - [ ] Storage: `Arc` / `OnceCell` / no `Deref` (§7). Retires H3 and the clone economy.
-- [ ] Indexing policy plus `fetch` (NaN, not zero) (§8). Retires the silent-zero class.
+- [ ] Indexing policy plus `fetch` (NaN, not zero) (§8). Retires the silent-zero class, including the `broadcast_to` / `sum_over_broadcast_dims` zero-fill that kept B4 silent.
 - [ ] Delete `TensorOps` (§3).
 
 ## Phase 4 — endgame (optional, last)

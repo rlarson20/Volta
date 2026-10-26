@@ -16,4 +16,4 @@ paths:
 - `NO_GRAD` is a thread-local, reentrant depth counter (`Cell<u32>`), so `no_grad()` scopes nest. Don't simplify it to a bool.
 - `TensorOps` is slated for deletion (ADDENDUM §3). Keep any method you add to it as a one-line forward; the logic belongs in `src/ops/`.
 - **Every new op needs a numerical gradient check** (`check_gradients`) with random inputs, covering unequal-rank and broadcast cases. B4 (wrong unequal-rank matmul backward) shipped because only equal-rank shapes were tested.
-- When a backward pass derives dims, take them from the tensor whose gradient you are computing. Better still, compute a validated spec once in forward (ADDENDUM §1.2, `MatmulSpec`).
+- When a backward pass derives dims, take them from the tensor whose gradient you are computing. Better still, compute a validated spec once in forward and store it in the `GradFn` (`MatmulSpec` and the conv specs in `src/spec.rs`).
