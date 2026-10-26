@@ -17,7 +17,7 @@ Last verified: 2026-10-26.
 ## High (OPUS §2)
 
 - [ ] **H1** MaxPool2d pads with `0.0` instead of `-inf`. Re-verified 2026-10-26: all-`-5` input with pad=1 outputs `0.0`. Fixed by `PadValue` (Phase 2).
-- [ ] **H2** `bce_with_logits_loss` is still `log(1 + exp(x))` and overflows at about 88.7; its doc comment claims stability. Fix: `max(x,0) - x*y + log1p(exp(-|x|))`, plus a grad check at ±100.
+- [x] **H2** `bce_with_logits_loss` now uses `max(x,0) - x*y + ln(1+exp(-|x|))`; `tests/bce_with_logits.rs` checks loss and gradient at ±100 and at x=0.
 - [~] **H3** Unsafe GPU cache accessors. `invalidate_cpu_cache` now takes `&mut self` (`991a8b7`). The `unsafe` slice accessors and the f64/f16/bf16 GPU reinterpretation remain. Fixed by `OnceCell` storage (Phase 3).
 - [ ] **H4** The library panics on ordinary data. Panic-vs-`Result` policy is undecided (see Rust/errors).
 - [ ] **H5** GPU broadcast backward silently truncates rank > 4.

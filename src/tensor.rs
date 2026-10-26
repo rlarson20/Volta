@@ -613,29 +613,29 @@ impl RawTensor {
 
     /// Binary Cross Entropy with logits (numerically stable)
     ///
-    /// Combines sigmoid and BCE in a numerically stable way.
-    /// Formula: log(1 + exp(x)) - x*y
-    ///
-    ///FIXME:
-    ///The docstring says "numerically stable" but the implementation is literally `log(1 + exp(x)) - x*y`. For logits ≳ 88.7, `exp(x)` overflows to `inf` → loss is `inf`, gradients are NaN. This defeats the entire purpose of the `_with_logits` variant (the README also advertises BCE among verified losses).
-    ///**Fix:** the standard stable form: `max(x, 0) - x*y + log1p(exp(-|x|))`. All pieces exist as primitives (`max_elem`, `where_op`/`relu`, `exp`, `log`); or implement it as a fused op with a hand-written GradFn. Add a gradient check test with logits at ±100.
+    /// Combines sigmoid and BCE using the stable form
+    /// `max(x, 0) - x*y + ln(1 + exp(-|x|))`, which never exponentiates a positive
+    /// value, so large `|x|` neither overflows nor produces NaN gradients.
+    /// The gradient is `sigmoid(x) - y` (divided by the element count for the mean).
     ///
     /// # Arguments
     /// * `logits` - Raw network outputs (before sigmoid)
     /// * `target` - Target labels (0 or 1)
     #[must_use]
     pub fn bce_with_logits_loss(logits: &Tensor, target: &Tensor) -> Tensor {
-        // log(1 + exp(x))
-        let exp_logits = logits.exp();
-        let one = Self::ones(&logits.borrow().shape);
-        let one_plus_exp = one.add(&exp_logits);
-        let log_term = one_plus_exp.log();
+        let shape = logits.borrow().shape.clone();
+        let zeros = Self::zeros(&shape);
+        let one = Self::ones(&shape);
 
-        // x * y
+        // max(x, 0); ties at x == 0 route gradient to `logits`, giving relu'(0) = 1.
+        let pos_part = logits.max_elem(&zeros);
+        // |x| = max(x, -x)
+        let abs_logits = logits.max_elem(&logits.neg());
+        // ln(1 + exp(-|x|)); exp argument is <= 0, so it cannot overflow.
+        let softplus_term = one.add(&abs_logits.neg().exp()).log();
         let xy_term = logits.elem_mul(target);
 
-        // log(1 + exp(x)) - x*y
-        log_term.sub(&xy_term).mean()
+        pos_part.sub(&xy_term).add(&softplus_term).mean()
     }
 }
 
