@@ -6,6 +6,7 @@ use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
 use crate::shape::Axis;
 use crate::shape::Shape;
+use crate::spec::{Conv2dSpec, Window2dSpec};
 use crate::tensor::{RawTensor, Tensor, TensorOps};
 
 /// Algorithm to use for convolution
@@ -28,6 +29,9 @@ pub enum ConvAlgo {
 
 impl ConvAlgo {
     /// Auto-select algorithm based on input characteristics
+    ///
+    /// `height` and `width` are the *padded* input extents: the heuristic assumes
+    /// stride 1, and `height - kernel_size` underflows if the kernel is larger.
     #[must_use]
     pub fn auto_select(
         batch: usize,
@@ -140,9 +144,7 @@ pub struct Conv2d {
 /// Gradient function for im2col operation
 #[derive(Clone)]
 struct Im2colGradFn {
-    input_shape: Vec<usize>,
-    kernel: (usize, usize),
-    stride: (usize, usize),
+    spec: Window2dSpec,
 }
 
 impl GradFn for Im2colGradFn {
@@ -153,52 +155,20 @@ impl GradFn for Im2colGradFn {
         // Try GPU-accelerated col2im first (when the GPU backend is compiled in)
         #[cfg(feature = "gpu")]
         let grad_storage = if out_grad.data.is_gpu() {
-            let (batch, channels, height, width) = (
-                self.input_shape.first().copied().unwrap_or(1),
-                self.input_shape.get(1).copied().unwrap_or(1),
-                self.input_shape.get(2).copied().unwrap_or(1),
-                self.input_shape.get(3).copied().unwrap_or(1),
-            );
-            let (kh, kw) = self.kernel;
-            let (sh, sw) = self.stride;
-            let h_out = (height - kh) / sh + 1;
-            let w_out = (width - kw) / sw + 1;
-
-            // Try GPU col2im
-            if let Some(gpu_storage) = RawTensor::gpu_col2im(
-                &out_grad.data,
-                batch,
-                channels,
-                height,
-                width,
-                kh,
-                kw,
-                sh,
-                sw,
-                h_out,
-                w_out,
-            ) {
+            if let Some(gpu_storage) = RawTensor::gpu_col2im(&out_grad.data, &self.spec) {
                 gpu_storage
             } else {
                 // Fallback to CPU - convert Vec<f32> to Storage
-                let cpu_data =
-                    Conv2d::col2im(&out_grad.data, &self.input_shape, self.kernel, self.stride);
-                crate::storage::Storage::cpu(cpu_data)
+                crate::storage::Storage::cpu(Conv2d::col2im(&out_grad.data, &self.spec))
             }
         } else {
             // CPU path - convert Vec<f32> to Storage
-            let cpu_data =
-                Conv2d::col2im(&out_grad.data, &self.input_shape, self.kernel, self.stride);
-            crate::storage::Storage::cpu(cpu_data)
+            crate::storage::Storage::cpu(Conv2d::col2im(&out_grad.data, &self.spec))
         };
 
         #[cfg(not(feature = "gpu"))]
-        let grad_storage = {
-            // CPU-only build: col2im always runs on the host
-            let cpu_data =
-                Conv2d::col2im(&out_grad.data, &self.input_shape, self.kernel, self.stride);
-            crate::storage::Storage::cpu(cpu_data)
-        };
+        // CPU-only build: col2im always runs on the host
+        let grad_storage = crate::storage::Storage::cpu(Conv2d::col2im(&out_grad.data, &self.spec));
 
         // Determine device from storage
         let device = if grad_storage.is_gpu() {
@@ -208,7 +178,7 @@ impl GradFn for Im2colGradFn {
         };
 
         let grad_tensor =
-            RawTensor::try_new_with_storage(grad_storage, &self.input_shape, device, false)
+            RawTensor::try_new_with_storage(grad_storage, &self.spec.input_dims(), device, false)
                 .expect("col2im gradient shape mismatch");
 
         vec![Some(grad_tensor)]
@@ -226,10 +196,7 @@ impl GradFn for Im2colGradFn {
 /// - Weight gradient: Direct accumulation (outer products of input patches and output gradients)
 #[derive(Clone)]
 struct DirectConvGradFn {
-    input_shape: Vec<usize>,  // (B, C, H, W)
-    weight_shape: Vec<usize>, // (O, C, K, K)
-    padding: (usize, usize),  // (pad_h, pad_w)
-    stride: (usize, usize),   // (stride_h, stride_w)
+    spec: Conv2dSpec,
 }
 
 impl GradFn for DirectConvGradFn {
@@ -238,29 +205,6 @@ impl GradFn for DirectConvGradFn {
         // parents: [input, weight]
         let x = parents.first().cloned();
         let weight = parents.get(1).cloned();
-
-        // Unpack shapes
-        let (batch, in_ch, height, width) = (
-            self.input_shape.first().copied().unwrap_or(1),
-            self.input_shape.get(1).copied().unwrap_or(1),
-            self.input_shape.get(2).copied().unwrap_or(1),
-            self.input_shape.get(3).copied().unwrap_or(1),
-        );
-
-        let (out_ch, _, kernel_h, kernel_w) = (
-            self.weight_shape.first().copied().unwrap_or(1),
-            self.weight_shape.get(1).copied().unwrap_or(1),
-            self.weight_shape.get(2).copied().unwrap_or(1),
-            self.weight_shape.get(3).copied().unwrap_or(1),
-        );
-
-        let (pad_h, pad_w) = self.padding;
-        let (stride_h, stride_w) = self.stride;
-
-        let padded_h = height + 2 * pad_h;
-        let padded_w = width + 2 * pad_w;
-        let h_out = (padded_h - kernel_h) / stride_h + 1;
-        let w_out = (padded_w - kernel_w) / stride_w + 1;
 
         // Determine if we can use GPU acceleration
         #[cfg(feature = "gpu")]
@@ -281,24 +225,12 @@ impl GradFn for DirectConvGradFn {
                 RawTensor::gpu_conv_backward_input(
                     &out_grad.data,
                     &weight.as_ref().unwrap().borrow().data,
-                    batch,
-                    in_ch,
-                    out_ch,
-                    height,
-                    width,
-                    kernel_h,
-                    kernel_w,
-                    stride_h,
-                    stride_w,
-                    pad_h,
-                    pad_w,
-                    h_out,
-                    w_out,
+                    &self.spec,
                 )
                 .map(|storage| {
                     RawTensor::new_with_storage(
                         storage,
-                        &self.input_shape,
+                        &self.spec.input_dims(),
                         out_grad.device.clone(),
                         false,
                     )
@@ -308,19 +240,6 @@ impl GradFn for DirectConvGradFn {
                 Some(self.compute_input_gradient_cpu(
                     &out_grad.data.to_vec(),
                     &weight.as_ref().unwrap().borrow().data.to_vec(),
-                    batch,
-                    in_ch,
-                    out_ch,
-                    height,
-                    width,
-                    kernel_h,
-                    kernel_w,
-                    stride_h,
-                    stride_w,
-                    pad_h,
-                    pad_w,
-                    h_out,
-                    w_out,
                 ))
             }
 
@@ -329,19 +248,6 @@ impl GradFn for DirectConvGradFn {
                 Some(self.compute_input_gradient_cpu(
                     &out_grad.data.to_vec(),
                     &weight.as_ref().unwrap().borrow().data.to_vec(),
-                    batch,
-                    in_ch,
-                    out_ch,
-                    height,
-                    width,
-                    kernel_h,
-                    kernel_w,
-                    stride_h,
-                    stride_w,
-                    pad_h,
-                    pad_w,
-                    h_out,
-                    w_out,
                 ))
             }
         } else {
@@ -358,24 +264,12 @@ impl GradFn for DirectConvGradFn {
                 RawTensor::gpu_conv_backward_weight(
                     &out_grad.data,
                     &x.as_ref().unwrap().borrow().data,
-                    batch,
-                    in_ch,
-                    out_ch,
-                    height,
-                    width,
-                    kernel_h,
-                    kernel_w,
-                    stride_h,
-                    stride_w,
-                    pad_h,
-                    pad_w,
-                    h_out,
-                    w_out,
+                    &self.spec,
                 )
                 .map(|storage| {
                     RawTensor::new_with_storage(
                         storage,
-                        &self.weight_shape,
+                        &self.spec.weight_dims(),
                         out_grad.device.clone(),
                         false,
                     )
@@ -385,19 +279,6 @@ impl GradFn for DirectConvGradFn {
                 Some(self.compute_weight_gradient_cpu(
                     &out_grad.data.to_vec(),
                     &x.as_ref().unwrap().borrow().data.to_vec(),
-                    batch,
-                    in_ch,
-                    out_ch,
-                    height,
-                    width,
-                    kernel_h,
-                    kernel_w,
-                    stride_h,
-                    stride_w,
-                    pad_h,
-                    pad_w,
-                    h_out,
-                    w_out,
                 ))
             }
 
@@ -406,19 +287,6 @@ impl GradFn for DirectConvGradFn {
                 Some(self.compute_weight_gradient_cpu(
                     &out_grad.data.to_vec(),
                     &x.as_ref().unwrap().borrow().data.to_vec(),
-                    batch,
-                    in_ch,
-                    out_ch,
-                    height,
-                    width,
-                    kernel_h,
-                    kernel_w,
-                    stride_h,
-                    stride_w,
-                    pad_h,
-                    pad_w,
-                    h_out,
-                    w_out,
                 ))
             }
         } else {
@@ -435,25 +303,22 @@ impl GradFn for DirectConvGradFn {
 
 impl DirectConvGradFn {
     /// CPU implementation of input gradient computation
-    #[allow(clippy::too_many_arguments)]
-    fn compute_input_gradient_cpu(
-        &self,
-        out_grad_data: &[f32],
-        weight_data: &[f32],
-        batch: usize,
-        in_ch: usize,
-        out_ch: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
-        h_out: usize,
-        w_out: usize,
-    ) -> Tensor {
+    fn compute_input_gradient_cpu(&self, out_grad_data: &[f32], weight_data: &[f32]) -> Tensor {
+        let Conv2dSpec {
+            batch,
+            in_ch,
+            out_ch,
+            in_h: height,
+            in_w: width,
+            kernel_h,
+            kernel_w,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            out_h: h_out,
+            out_w: w_out,
+        } = self.spec;
         let mut grad_x_data = vec![0.0f32; batch * in_ch * height * width];
 
         // Input gradient: full convolution of output gradient with flipped weights
@@ -526,29 +391,26 @@ impl DirectConvGradFn {
             }
         }
 
-        RawTensor::new(grad_x_data, &self.input_shape, false)
+        RawTensor::new(grad_x_data, &self.spec.input_dims(), false)
     }
 
     /// CPU implementation of weight gradient computation
-    #[allow(clippy::too_many_arguments)]
-    fn compute_weight_gradient_cpu(
-        &self,
-        out_grad_data: &[f32],
-        x_data: &[f32],
-        batch: usize,
-        in_ch: usize,
-        out_ch: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
-        h_out: usize,
-        w_out: usize,
-    ) -> Tensor {
+    fn compute_weight_gradient_cpu(&self, out_grad_data: &[f32], x_data: &[f32]) -> Tensor {
+        let Conv2dSpec {
+            batch,
+            in_ch,
+            out_ch,
+            in_h: height,
+            in_w: width,
+            kernel_h,
+            kernel_w,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            out_h: h_out,
+            out_w: w_out,
+        } = self.spec;
         let mut grad_w_data = vec![0.0f32; out_ch * in_ch * kernel_h * kernel_w];
 
         // Weight gradient: sum of outer products of input patches and output gradients
@@ -617,7 +479,7 @@ impl DirectConvGradFn {
             }
         }
 
-        RawTensor::new(grad_w_data, &self.weight_shape, false)
+        RawTensor::new(grad_w_data, &self.spec.weight_dims(), false)
     }
 }
 
@@ -627,11 +489,8 @@ impl DirectConvGradFn {
 /// as the forward pass to maintain consistency and efficiency.
 #[derive(Clone)]
 struct IGEMMGradFn {
-    input_shape: Vec<usize>,  // (B, C, H, W)
-    weight_shape: Vec<usize>, // (O, C, K, K)
-    padding: (usize, usize),  // (pad_h, pad_w)
-    stride: (usize, usize),   // (stride_h, stride_w)
-    _variant: IGEMMVariant,   // Which iGEMM variant was used
+    spec: Conv2dSpec,
+    _variant: IGEMMVariant, // Which iGEMM variant was used
 }
 
 impl GradFn for IGEMMGradFn {
@@ -641,28 +500,16 @@ impl GradFn for IGEMMGradFn {
         let x = parents.first().cloned();
         let weight = parents.get(1).cloned();
 
-        // Unpack shapes
-        let (batch, in_ch, height, width) = (
-            self.input_shape.first().copied().unwrap_or(1),
-            self.input_shape.get(1).copied().unwrap_or(1),
-            self.input_shape.get(2).copied().unwrap_or(1),
-            self.input_shape.get(3).copied().unwrap_or(1),
-        );
-
-        let (out_ch, _, kernel_h, kernel_w) = (
-            self.weight_shape.first().copied().unwrap_or(1),
-            self.weight_shape.get(1).copied().unwrap_or(1),
-            self.weight_shape.get(2).copied().unwrap_or(1),
-            self.weight_shape.get(3).copied().unwrap_or(1),
-        );
-
-        let (pad_h, pad_w) = self.padding;
-        let (stride_h, stride_w) = self.stride;
-
-        let padded_h = height + 2 * pad_h;
-        let padded_w = width + 2 * pad_w;
-        let h_out = (padded_h - kernel_h) / stride_h + 1;
-        let w_out = (padded_w - kernel_w) / stride_w + 1;
+        let Conv2dSpec {
+            batch,
+            in_ch,
+            out_ch,
+            in_h: height,
+            in_w: width,
+            kernel_h,
+            kernel_w,
+            ..
+        } = self.spec;
 
         // Check if we're on GPU
         let is_gpu = matches!(out_grad.device, Device::GPU(_));
@@ -676,24 +523,12 @@ impl GradFn for IGEMMGradFn {
                 RawTensor::gpu_igemm_backward_input(
                     &out_grad.data,
                     &weight.as_ref().unwrap().borrow().data,
-                    batch,
-                    in_ch,
-                    out_ch,
-                    height,
-                    width,
-                    kernel_h,
-                    kernel_w,
-                    stride_h,
-                    stride_w,
-                    pad_h,
-                    pad_w,
-                    h_out,
-                    w_out,
+                    &self.spec,
                 )
                 .map(|storage| {
                     RawTensor::new_with_storage(
                         storage,
-                        &self.input_shape,
+                        &self.spec.input_dims(),
                         out_grad.device.clone(),
                         false,
                     )
@@ -721,24 +556,12 @@ impl GradFn for IGEMMGradFn {
                         &out_grad_data,
                         wd,
                         &mut grad_x_data,
-                        batch,
-                        in_ch,
-                        out_ch,
-                        height,
-                        width,
-                        kernel_h,
-                        kernel_w,
-                        stride_h,
-                        stride_w,
-                        pad_h,
-                        pad_w,
-                        h_out,
-                        w_out,
+                        &self.spec,
                         &config,
                     );
                 }
 
-                Some(RawTensor::new(grad_x_data, &self.input_shape, false))
+                Some(RawTensor::new(grad_x_data, &self.spec.input_dims(), false))
             }
         } else {
             None
@@ -753,24 +576,12 @@ impl GradFn for IGEMMGradFn {
                 RawTensor::gpu_igemm_backward_weight(
                     &out_grad.data,
                     &x.as_ref().unwrap().borrow().data,
-                    batch,
-                    in_ch,
-                    out_ch,
-                    height,
-                    width,
-                    kernel_h,
-                    kernel_w,
-                    stride_h,
-                    stride_w,
-                    pad_h,
-                    pad_w,
-                    h_out,
-                    w_out,
+                    &self.spec,
                 )
                 .map(|storage| {
                     RawTensor::new_with_storage(
                         storage,
-                        &self.weight_shape,
+                        &self.spec.weight_dims(),
                         out_grad.device.clone(),
                         false,
                     )
@@ -797,24 +608,12 @@ impl GradFn for IGEMMGradFn {
                         xd,
                         &out_grad_data,
                         &mut grad_w_data,
-                        batch,
-                        in_ch,
-                        out_ch,
-                        height,
-                        width,
-                        kernel_h,
-                        kernel_w,
-                        stride_h,
-                        stride_w,
-                        pad_h,
-                        pad_w,
-                        h_out,
-                        w_out,
+                        &self.spec,
                         &config,
                     );
                 }
 
-                Some(RawTensor::new(grad_w_data, &self.weight_shape, false))
+                Some(RawTensor::new(grad_w_data, &self.spec.weight_dims(), false))
             }
         } else {
             None
@@ -830,26 +629,28 @@ impl GradFn for IGEMMGradFn {
 
 impl IGEMMGradFn {
     /// Compute input gradient for iGEMM using tiled approach
-    #[allow(clippy::too_many_arguments)]
     fn igemm_backward_input(
         out_grad: &[f32],
         weight: &[f32],
         grad_x: &mut [f32],
-        batch: usize,
-        in_ch: usize,
-        out_ch: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
-        h_out: usize,
-        w_out: usize,
+        spec: &Conv2dSpec,
         config: &TileConfig,
     ) {
+        let Conv2dSpec {
+            batch,
+            in_ch,
+            out_ch,
+            in_h: height,
+            in_w: width,
+            kernel_h,
+            kernel_w,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            out_h: h_out,
+            out_w: w_out,
+        } = *spec;
         let kernel_size = kernel_h * kernel_w;
         let spatial_out = h_out * w_out;
 
@@ -924,26 +725,28 @@ impl IGEMMGradFn {
     }
 
     /// Compute weight gradient for iGEMM using tiled approach
-    #[allow(clippy::too_many_arguments)]
     fn igemm_backward_weight(
         x: &[f32],
         out_grad: &[f32],
         grad_w: &mut [f32],
-        batch: usize,
-        in_ch: usize,
-        out_ch: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
-        h_out: usize,
-        w_out: usize,
+        spec: &Conv2dSpec,
         config: &TileConfig,
     ) {
+        let Conv2dSpec {
+            batch,
+            in_ch,
+            out_ch,
+            in_h: height,
+            in_w: width,
+            kernel_h,
+            kernel_w,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            out_h: h_out,
+            out_w: w_out,
+        } = *spec;
         let kernel_size = kernel_h * kernel_w;
         let spatial_out = h_out * w_out;
 
@@ -1128,41 +931,29 @@ impl Conv2d {
 
     /// Im2col: Convert (B, C, H, W) → (B*`H_out`*`W_out`, C*K*K) matrix
     /// Each row contains a flattened receptive field
-    fn im2col(x: &Tensor, kernel: (usize, usize), stride: (usize, usize)) -> Tensor {
+    fn im2col(x: &Tensor, spec: &Window2dSpec) -> Tensor {
         const MAX_ALLOC: usize = 100_000_000; // Maximum allowed allocation
 
-        let (data, shape, device) = {
+        let (data, device) = {
             let x_borrow = x.borrow();
-            assert_eq!(x_borrow.shape.len(), 4, "Input must be 4D: (B, C, H, W)");
-            (
-                x_borrow.data.clone(),
-                x_borrow.shape.clone(),
-                x_borrow.device.clone(),
-            )
+            (x_borrow.data.clone(), x_borrow.device.clone())
         };
 
-        let (batch, channels, height, width) = (
-            shape.first().copied().unwrap_or(1),
-            shape.get(1).copied().unwrap_or(1),
-            shape.get(2).copied().unwrap_or(1),
-            shape.get(3).copied().unwrap_or(1),
-        );
-        let (kh, kw) = kernel;
-        let (sh, sw) = stride;
-
-        // Check for reasonable parameters to prevent memory issues
-        assert!(height >= kh && width >= kw, "Input smaller than kernel");
-        assert!(
-            kh > 0 && kw > 0 && sh > 0 && sw > 0,
-            "Invalid kernel/stride parameters"
-        );
-
-        // Calculate output dimensions
-        let h_out = (height - kh) / sh + 1;
-        let w_out = (width - kw) / sw + 1;
+        let Window2dSpec {
+            batch,
+            channels,
+            in_h: height,
+            in_w: width,
+            kernel_h: kh,
+            kernel_w: kw,
+            stride_h: sh,
+            stride_w: sw,
+            out_h: h_out,
+            out_w: w_out,
+            ..
+        } = *spec;
 
         // Output shape: (B*H_out*W_out, C*K*K)
-        assert!(h_out > 0 && w_out > 0, "Invalid output dimensions");
         let rows = batch * h_out * w_out;
         let cols = channels * kh * kw;
 
@@ -1170,20 +961,14 @@ impl Conv2d {
         #[cfg(feature = "gpu")]
         {
             if matches!(device, Device::GPU(_))
-                && let Some(col_data) = crate::RawTensor::gpu_im2col(
-                    &data, batch, channels, height, width, kh, kw, sh, sw, h_out, w_out,
-                )
+                && let Some(col_data) = crate::RawTensor::gpu_im2col(&data, spec)
             {
                 return edge(
                     [x.clone()],
                     col_data,
                     Shape::derived(vec![rows, cols]),
                     device,
-                    Box::new(Im2colGradFn {
-                        input_shape: shape,
-                        kernel,
-                        stride,
-                    }),
+                    Box::new(Im2colGradFn { spec: *spec }),
                 );
             }
         }
@@ -1192,7 +977,7 @@ impl Conv2d {
         let total_elements = rows * cols;
         assert!(
             total_elements <= MAX_ALLOC,
-            "im2col would create tensor with {total_elements} elements (max: {MAX_ALLOC}). Input shape: {shape:?}, kernel: {kernel:?}, stride: {stride:?}"
+            "im2col would create tensor with {total_elements} elements (max: {MAX_ALLOC}). Window: {spec:?}"
         );
 
         let mut result = vec![0.0; total_elements];
@@ -1239,32 +1024,25 @@ impl Conv2d {
             Storage::cpu(result),
             Shape::derived(vec![rows, cols]),
             Device::CPU,
-            Box::new(Im2colGradFn {
-                input_shape: shape,
-                kernel,
-                stride,
-            }),
+            Box::new(Im2colGradFn { spec: *spec }),
         )
     }
 
     /// Col2im: Inverse of im2col, used for computing input gradients
-    fn col2im(
-        col: &[f32],
-        output_shape: &[usize], // (B, C, H, W)
-        kernel: (usize, usize),
-        stride: (usize, usize),
-    ) -> Vec<f32> {
-        let (batch, channels, height, width) = (
-            output_shape.first().copied().unwrap_or(1),
-            output_shape.get(1).copied().unwrap_or(1),
-            output_shape.get(2).copied().unwrap_or(1),
-            output_shape.get(3).copied().unwrap_or(1),
-        );
-        let (kh, kw) = kernel;
-        let (sh, sw) = stride;
-
-        let h_out = (height - kh) / sh + 1;
-        let w_out = (width - kw) / sw + 1;
+    fn col2im(col: &[f32], spec: &Window2dSpec) -> Vec<f32> {
+        let Window2dSpec {
+            batch,
+            channels,
+            in_h: height,
+            in_w: width,
+            kernel_h: kh,
+            kernel_w: kw,
+            stride_h: sh,
+            stride_w: sw,
+            out_h: h_out,
+            out_w: w_out,
+            ..
+        } = *spec;
 
         let mut result = vec![0.0; batch * channels * height * width];
 
@@ -1311,45 +1089,25 @@ impl Conv2d {
     ///
     /// Input: `(B, C, H, W)`, Weight: `(O, C, K, K)`
     /// Output: `(B, O, H_out, W_out)`
-    fn direct_conv(
-        x: &Tensor,
-        weight: &Tensor,
-        pad_h: usize,
-        pad_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-    ) -> Tensor {
-        let (x_data, x_shape) = {
-            let x_borrow = x.borrow();
-            (x_borrow.data.clone(), x_borrow.shape.clone())
-        };
+    fn direct_conv(x: &Tensor, weight: &Tensor, spec: &Conv2dSpec) -> Tensor {
+        let x_data = x.borrow().data.clone();
+        let w_data = weight.borrow().data.clone();
 
-        let (w_data, w_shape) = {
-            let w_borrow = weight.borrow();
-            (w_borrow.data.clone(), w_borrow.shape.clone())
-        };
-
-        let (batch, in_ch, height, width) = (
-            x_shape.first().copied().unwrap_or(1),
-            x_shape.get(1).copied().unwrap_or(1),
-            x_shape.get(2).copied().unwrap_or(1),
-            x_shape.get(3).copied().unwrap_or(1),
-        );
-
-        let (out_ch, _, kernel_h, kernel_w) = (
-            w_shape.first().copied().unwrap_or(1),
-            w_shape.get(1).copied().unwrap_or(1),
-            w_shape.get(2).copied().unwrap_or(1),
-            w_shape.get(3).copied().unwrap_or(1),
-        );
-
-        // Apply padding
-        let padded_h = height + 2 * pad_h;
-        let padded_w = width + 2 * pad_w;
-
-        // Calculate output dimensions
-        let h_out = (padded_h - kernel_h) / stride_h + 1;
-        let w_out = (padded_w - kernel_w) / stride_w + 1;
+        let Conv2dSpec {
+            batch,
+            in_ch,
+            out_ch,
+            in_h: height,
+            in_w: width,
+            kernel_h,
+            kernel_w,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            out_h: h_out,
+            out_w: w_out,
+        } = *spec;
 
         // Create padded input (virtually via index computation)
         let x_data_cpu = x_data.to_vec();
@@ -1428,83 +1186,35 @@ impl Conv2d {
         edge(
             [x.clone(), weight.clone()],
             Storage::cpu(output),
-            Shape::derived(vec![batch, out_ch, h_out, w_out]),
+            Shape::derived(spec.output_dims()),
             Device::CPU,
-            Box::new(DirectConvGradFn {
-                input_shape: x_shape,
-                weight_shape: w_shape,
-                padding: (pad_h, pad_w),
-                stride: (stride_h, stride_w),
-            }),
+            Box::new(DirectConvGradFn { spec: *spec }),
         )
     }
 
     /// GPU Direct convolution helper
-    #[allow(clippy::too_many_arguments)]
-    fn gpu_direct_conv_internal(
-        x: &Tensor,
-        weight: &Tensor,
-        batch: usize,
-        in_channels: usize,
-        out_channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        pad_h: usize,
-        pad_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-    ) -> Tensor {
-        let h_out = (height + 2 * pad_h - kernel_h) / stride_h + 1;
-        let w_out = (width + 2 * pad_w - kernel_w) / stride_w + 1;
-
+    fn gpu_direct_conv_internal(x: &Tensor, weight: &Tensor, spec: &Conv2dSpec) -> Tensor {
         let x_data = x.borrow().data.clone();
         let w_data = weight.borrow().data.clone();
 
         #[cfg(feature = "gpu")]
-        let result = {
-            RawTensor::gpu_direct_conv(
-                &x_data,
-                &w_data,
-                batch,
-                in_channels,
-                out_channels,
-                height,
-                width,
-                kernel_h,
-                kernel_w,
-                stride_h,
-                stride_w,
-                pad_h,
-                pad_w,
-                h_out,
-                w_out,
-            )
-        };
+        let result = { RawTensor::gpu_direct_conv(&x_data, &w_data, spec) };
 
         #[cfg(not(feature = "gpu"))]
         let result = None;
         if let Some(storage) = result {
             let device = x.borrow().device.clone();
-            let x_shape = x.borrow().shape.clone();
-            let w_shape = weight.borrow().shape.clone();
 
             edge(
                 [x.clone(), weight.clone()],
                 storage,
-                Shape::derived(vec![batch, out_channels, h_out, w_out]),
+                Shape::derived(spec.output_dims()),
                 device,
-                Box::new(DirectConvGradFn {
-                    input_shape: x_shape,
-                    weight_shape: w_shape,
-                    padding: (pad_h, pad_w),
-                    stride: (stride_h, stride_w),
-                }),
+                Box::new(DirectConvGradFn { spec: *spec }),
             )
         } else {
             log::warn!("GPU direct convolution failed, falling back to CPU");
-            Self::direct_conv(x, weight, pad_h, pad_w, stride_h, stride_w)
+            Self::direct_conv(x, weight, spec)
         }
     }
 
@@ -1531,57 +1241,29 @@ impl Conv2d {
     fn igemm_forward(
         x: &Tensor,
         weight: &Tensor,
-        pad_h: usize,
-        pad_w: usize,
-        stride_h: usize,
-        stride_w: usize,
+        spec: &Conv2dSpec,
         variant: IGEMMVariant,
     ) -> Tensor {
-        let (x_data, x_shape, x_device) = {
+        let (x_data, x_device) = {
             let x_borrow = x.borrow();
-            (
-                x_borrow.data.clone(),
-                x_borrow.shape.clone(),
-                x_borrow.device.clone(),
-            )
+            (x_borrow.data.clone(), x_borrow.device.clone())
         };
+        let w_data = weight.borrow().data.clone();
 
-        let (w_data, w_shape) = {
-            let w_borrow = weight.borrow();
-            (w_borrow.data.clone(), w_borrow.shape.clone())
-        };
-
-        let (batch, in_ch, height, width) = (
-            x_shape.first().copied().unwrap_or(1),
-            x_shape.get(1).copied().unwrap_or(1),
-            x_shape.get(2).copied().unwrap_or(1),
-            x_shape.get(3).copied().unwrap_or(1),
-        );
-
-        let (out_ch, _, kernel_h, kernel_w) = (
-            w_shape.first().copied().unwrap_or(1),
-            w_shape.get(1).copied().unwrap_or(1),
-            w_shape.get(2).copied().unwrap_or(1),
-            w_shape.get(3).copied().unwrap_or(1),
-        );
-
-        // Apply padding
-        let padded_h = height + 2 * pad_h;
-        let padded_w = width + 2 * pad_w;
-
-        // Calculate output dimensions
-        let h_out = (padded_h - kernel_h) / stride_h + 1;
-        let w_out = (padded_w - kernel_w) / stride_w + 1;
+        let Conv2dSpec {
+            batch,
+            out_ch,
+            out_h: h_out,
+            out_w: w_out,
+            ..
+        } = *spec;
 
         // Try GPU path first
         #[cfg(feature = "gpu")]
         let gpu_result = {
             let is_gpu = matches!(x_device, Device::GPU(_));
             if is_gpu {
-                RawTensor::gpu_igemm(
-                    &x_data, &w_data, batch, in_ch, out_ch, height, width, kernel_h, kernel_w,
-                    stride_h, stride_w, pad_h, pad_w, h_out, w_out,
-                )
+                RawTensor::gpu_igemm(&x_data, &w_data, spec)
             } else {
                 None
             }
@@ -1597,13 +1279,10 @@ impl Conv2d {
             edge(
                 [x.clone(), weight.clone()],
                 storage,
-                Shape::derived(vec![batch, out_ch, h_out, w_out]),
+                Shape::derived(spec.output_dims()),
                 x_device,
                 Box::new(IGEMMGradFn {
-                    input_shape: x_shape,
-                    weight_shape: w_shape,
-                    padding: (pad_h, pad_w),
-                    stride: (stride_h, stride_w),
+                    spec: *spec,
                     _variant: variant,
                 }),
             )
@@ -1620,25 +1299,7 @@ impl Conv2d {
             match variant {
                 IGEMMVariant::Tiled => {
                     let config = TileConfig::default();
-                    Self::igemm_tiled(
-                        &x_data_cpu,
-                        &w_data_cpu,
-                        &mut output,
-                        batch,
-                        in_ch,
-                        out_ch,
-                        height,
-                        width,
-                        kernel_h,
-                        kernel_w,
-                        stride_h,
-                        stride_w,
-                        pad_h,
-                        pad_w,
-                        h_out,
-                        w_out,
-                        &config,
-                    );
+                    Self::igemm_tiled(&x_data_cpu, &w_data_cpu, &mut output, spec, &config);
                 }
             }
 
@@ -1646,13 +1307,10 @@ impl Conv2d {
             edge(
                 [x.clone(), weight.clone()],
                 Storage::cpu(output),
-                Shape::derived(vec![batch, out_ch, h_out, w_out]),
+                Shape::derived(spec.output_dims()),
                 Device::CPU,
                 Box::new(IGEMMGradFn {
-                    input_shape: x_shape,
-                    weight_shape: w_shape,
-                    padding: (pad_h, pad_w),
-                    stride: (stride_h, stride_w),
+                    spec: *spec,
                     _variant: variant,
                 }),
             )
@@ -1663,26 +1321,28 @@ impl Conv2d {
     ///
     /// Computes convolution by tiling across output channels and spatial dimensions,
     /// iterating over input channels to accumulate partial results.
-    #[allow(clippy::too_many_arguments)]
     fn igemm_tiled(
         x_data: &[f32],
         w_data: &[f32],
         output: &mut [f32],
-        batch: usize,
-        in_ch: usize,
-        out_ch: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
-        h_out: usize,
-        w_out: usize,
+        spec: &Conv2dSpec,
         config: &TileConfig,
     ) {
+        let Conv2dSpec {
+            batch,
+            in_ch,
+            out_ch,
+            in_h: height,
+            in_w: width,
+            kernel_h,
+            kernel_w,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            out_h: h_out,
+            out_w: w_out,
+        } = *spec;
         // let _kernel_size = kernel_h * kernel_w; kept for reference
         let spatial_out = h_out * w_out;
 
@@ -1773,47 +1433,24 @@ impl Conv2d {
     /// Input needs to be 4D
     #[allow(clippy::too_many_lines)]
     pub fn forward(&self, x: &Tensor) -> Tensor {
-        let (batch, in_channels, height, width) = {
-            let x_borrow = x.borrow();
-            assert_eq!(x_borrow.shape.len(), 4, "Input must be 4D: (B, C, H, W)");
-            (
-                x_borrow.shape.first().copied().unwrap_or(1),
-                x_borrow.shape.get(1).copied().unwrap_or(1),
-                x_borrow.shape.get(2).copied().unwrap_or(1),
-                x_borrow.shape.get(3).copied().unwrap_or(1),
-            )
-        };
-
-        let (out_channels, kernel_h, kernel_w) = {
-            let w_borrow = self.weight.borrow();
-            assert_eq!(
-                w_borrow.shape.get(1).copied().unwrap_or(1),
-                in_channels,
-                "Channel mismatch"
-            );
-            (
-                w_borrow.shape.first().copied().unwrap_or(1),
-                w_borrow.shape.get(2).copied().unwrap_or(1),
-                w_borrow.shape.get(3).copied().unwrap_or(1),
-            )
-        };
-
-        let (pad_h, pad_w) = self.padding;
-        let (stride_h, stride_w) = self.stride;
-
-        // Check if gradients are needed
-        let _requires_grad = x.borrow().requires_grad;
+        let spec = Conv2dSpec::new(
+            &Shape::derived(x.shape()),
+            &Shape::derived(self.weight.shape()),
+            self.stride,
+            self.padding,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
 
         // Algorithm selection
         // Note: All algorithms now support gradients!
         let algo = self.algo.get();
         let algo = match algo {
             ConvAlgo::Auto => ConvAlgo::auto_select(
-                batch,
-                in_channels,
-                height,
-                width,
-                kernel_h,
+                spec.batch,
+                spec.in_ch,
+                spec.padded_h(),
+                spec.padded_w(),
+                spec.kernel_h,
                 x.borrow().device.is_gpu(),
             ),
             other @ (ConvAlgo::Direct | ConvAlgo::Im2col | ConvAlgo::IGEMM) => other,
@@ -1825,88 +1462,56 @@ impl Conv2d {
                 // Check if we're on GPU
                 if x.borrow().device.is_gpu() {
                     // GPU Direct Convolution
-                    Self::gpu_direct_conv_internal(
-                        x,
-                        &self.weight,
-                        batch,
-                        in_channels,
-                        out_channels,
-                        height,
-                        width,
-                        kernel_h,
-                        kernel_w,
-                        pad_h,
-                        pad_w,
-                        stride_h,
-                        stride_w,
-                    )
+                    Self::gpu_direct_conv_internal(x, &self.weight, &spec)
                 } else {
                     // CPU Direct Convolution (existing)
-                    Self::direct_conv(x, &self.weight, pad_h, pad_w, stride_h, stride_w)
+                    Self::direct_conv(x, &self.weight, &spec)
                 }
             }
             ConvAlgo::IGEMM => {
                 // Implicit GEMM convolution (CPU only for now)
-                Self::igemm_forward(
-                    x,
-                    &self.weight,
-                    pad_h,
-                    pad_w,
-                    stride_h,
-                    stride_w,
-                    IGEMMVariant::default(),
-                )
+                Self::igemm_forward(x, &self.weight, &spec, IGEMMVariant::default())
             }
             ConvAlgo::Im2col | ConvAlgo::Auto => {
                 // Auto already converted, but kept for exhaustiveness
                 // 1. Pad input
-                let x_padded = if pad_h > 0 || pad_w > 0 {
-                    x.pad(&[(0, 0), (0, 0), (pad_h, pad_h), (pad_w, pad_w)])
+                let x_padded = if spec.pad_h > 0 || spec.pad_w > 0 {
+                    x.pad(&[
+                        (0, 0),
+                        (0, 0),
+                        (spec.pad_h, spec.pad_h),
+                        (spec.pad_w, spec.pad_w),
+                    ])
                 } else {
                     x.clone()
                 };
 
-                let (padded_h, padded_w) = {
-                    let p = x_padded.borrow();
-                    (
-                        p.shape.get(2).copied().unwrap_or(1),
-                        p.shape.get(3).copied().unwrap_or(1),
-                    )
-                };
-
-                // Calculate output dimensions
-                let h_out = (padded_h - kernel_h) / stride_h + 1;
-                let w_out = (padded_w - kernel_w) / stride_w + 1;
-
                 // 2. Apply im2col: (B, C, H_pad, W_pad) → (B*H_out*W_out, C*K*K)
-                let col = Self::im2col(&x_padded, (kernel_h, kernel_w), (stride_h, stride_w));
+                let col = Self::im2col(&x_padded, &spec.padded_window());
 
                 // 3. Reshape weights: (O, C, K, K) → (C*K*K, O)
                 let weight_2d = self
                     .weight
-                    .reshape(&[out_channels, in_channels * kernel_h * kernel_w]);
+                    .reshape(&[spec.out_ch, spec.in_ch * spec.kernel_h * spec.kernel_w]);
                 let weight_t = weight_2d.permute(&[Axis(1), Axis(0)]); // Transpose to (C*K*K, O)
 
                 // 4. Matmul: (B*H_out*W_out, C*K*K) @ (C*K*K, O) → (B*H_out*W_out, O)
                 let out_2d = col.matmul(&weight_t);
 
                 // 5. Reshape: (B*H_out*W_out, O) → (B, H_out, W_out, O) → (B, O, H_out, W_out)
-                let out_4d = out_2d.reshape(&[batch, h_out, w_out, out_channels]);
+                let out_4d = out_2d.reshape(&[spec.batch, spec.out_h, spec.out_w, spec.out_ch]);
                 out_4d.permute(&[Axis(0), Axis(3), Axis(1), Axis(2)]) // (B, O, H_out, W_out)
             }
         };
 
         // Add bias if present (common to both algorithms)
-        let h_out = out.borrow().shape.get(2).copied().unwrap_or(1);
-        let w_out = out.borrow().shape.get(3).copied().unwrap_or(1);
-
         if let Some(ref b) = self.bias {
             // Reshape bias from (out_channels,) to (1, out_channels, 1, 1)
-            let bias_reshaped = b.reshape(&[1, out_channels, 1, 1]);
+            let bias_reshaped = b.reshape(&[1, spec.out_ch, 1, 1]);
 
             // Workaround: GPU broadcasting not yet implemented for binary ops
             // Manually expand bias to match output shape
-            let bias_expanded = bias_reshaped.expand(&[batch, out_channels, h_out, w_out]);
+            let bias_expanded = bias_reshaped.expand(&spec.output_dims());
 
             out.add(&bias_expanded)
         } else {
@@ -2871,6 +2476,74 @@ mod conv2d_tests {
             passed,
             "iGEMM no-bias gradient check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
         );
+    }
+
+    /// Runs `conv.forward(x)` and returns the panic message, failing if it does not panic.
+    fn forward_panic_message(conv: &Conv2d, x: &Tensor) -> String {
+        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| conv.forward(x)))
+            .expect_err("forward should have panicked");
+        payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+            .expect("panic payload should be a string")
+    }
+
+    const ALL_ALGOS: [ConvAlgo; 4] = [
+        ConvAlgo::Direct,
+        ConvAlgo::Im2col,
+        ConvAlgo::IGEMM,
+        ConvAlgo::Auto,
+    ];
+
+    #[test]
+    fn test_conv2d_kernel_larger_than_padded_input_panics_with_spec_message() {
+        // 5x5 kernel on a 3x3 input with no padding: (3 - 5) underflows in every algorithm.
+        let conv = Conv2d::new(1, 1, 5, 1, 0, false);
+        let x = RawTensor::randn(&[1, 1, 3, 3]);
+        for algo in ALL_ALGOS {
+            conv.set_algo(algo);
+            let msg = forward_panic_message(&conv, &x);
+            assert!(msg.contains("larger than padded input"), "{algo:?}: {msg}");
+        }
+    }
+
+    #[test]
+    fn test_conv2d_zero_stride_panics_with_spec_message() {
+        let conv = Conv2d::new(1, 1, 3, 0, 0, false);
+        let x = RawTensor::randn(&[1, 1, 8, 8]);
+        for algo in ALL_ALGOS {
+            conv.set_algo(algo);
+            let msg = forward_panic_message(&conv, &x);
+            assert!(msg.contains("stride must be non-zero"), "{algo:?}: {msg}");
+        }
+    }
+
+    #[test]
+    fn test_conv2d_channel_mismatch_panics() {
+        let conv = Conv2d::new(3, 4, 3, 1, 1, false);
+        let x = RawTensor::randn(&[1, 2, 8, 8]);
+        let msg = forward_panic_message(&conv, &x);
+        assert!(msg.contains("channel mismatch"), "{msg}");
+    }
+
+    #[test]
+    fn test_conv2d_non_4d_input_panics() {
+        let conv = Conv2d::new(3, 4, 3, 1, 1, false);
+        let x = RawTensor::randn(&[3, 8, 8]);
+        let msg = forward_panic_message(&conv, &x);
+        assert!(msg.contains("input must be 4D"), "{msg}");
+    }
+
+    #[test]
+    fn test_conv2d_kernel_equal_to_padded_input_gives_one_output_pixel() {
+        // Boundary: kernel == padded input is valid and yields a 1x1 output.
+        let conv = Conv2d::new(2, 3, 5, 1, 1, true);
+        let x = RawTensor::randn(&[2, 2, 3, 3]);
+        for algo in ALL_ALGOS {
+            conv.set_algo(algo);
+            assert_eq!(conv.forward(&x).shape(), vec![2, 3, 1, 1], "{algo:?}");
+        }
     }
 }
 

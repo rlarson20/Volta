@@ -512,25 +512,9 @@ impl RawTensor {
     ///
     /// Transforms 4D input `(B, C, H, W)` into 2D matrix `(B*H_out*W_out, C*K_h*K_w)`.
     #[cfg(feature = "gpu")]
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn gpu_im2col(
-        input: &Storage,
-        batch_size: usize,
-        channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        h_out: usize,
-        w_out: usize,
-    ) -> Option<Storage> {
+    pub(crate) fn gpu_im2col(input: &Storage, spec: &crate::spec::Window2dSpec) -> Option<Storage> {
         let buf_input = input.gpu_buffer()?;
-        let result = GpuKernels::im2col(
-            buf_input, batch_size, channels, height, width, kernel_h, kernel_w, stride_h, stride_w,
-            h_out, w_out,
-        )?;
+        let result = GpuKernels::im2col(buf_input, spec)?;
         Some(Storage::Gpu {
             buffer: Arc::new(result),
             dtype: crate::dtype::DType::F32,
@@ -543,25 +527,9 @@ impl RawTensor {
     /// Transforms 2D matrix `(B*H_out*W_out, C*K_h*K_w)` back to 4D tensor `(B, C, H, W)`.
     /// This is the inverse of im2col, accumulating gradients from output positions.
     #[cfg(feature = "gpu")]
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn gpu_col2im(
-        col: &Storage,
-        batch_size: usize,
-        channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        h_out: usize,
-        w_out: usize,
-    ) -> Option<Storage> {
+    pub(crate) fn gpu_col2im(col: &Storage, spec: &crate::spec::Window2dSpec) -> Option<Storage> {
         let buf_col = col.gpu_buffer()?;
-        let result = GpuKernels::col2im(
-            buf_col, batch_size, channels, height, width, kernel_h, kernel_w, stride_h, stride_w,
-            h_out, w_out,
-        )?;
+        let result = GpuKernels::col2im(buf_col, spec)?;
         Some(Storage::Gpu {
             buffer: Arc::new(result),
             dtype: crate::dtype::DType::F32,
@@ -571,44 +539,15 @@ impl RawTensor {
 
     /// GPU-accelerated direct convolution
     #[cfg(feature = "gpu")]
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn gpu_direct_conv(
         input: &Storage,
         weight: &Storage,
-        batch_size: usize,
-        in_channels: usize,
-        out_channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
-        h_out: usize,
-        w_out: usize,
+        spec: &crate::spec::Conv2dSpec,
     ) -> Option<Storage> {
         let buf_input = input.gpu_buffer()?;
         let buf_weight = weight.gpu_buffer()?;
 
-        let result = GpuKernels::direct_conv(
-            buf_input,
-            buf_weight,
-            batch_size,
-            in_channels,
-            out_channels,
-            height,
-            width,
-            kernel_h,
-            kernel_w,
-            stride_h,
-            stride_w,
-            pad_h,
-            pad_w,
-            h_out,
-            w_out,
-        )?;
+        let result = GpuKernels::direct_conv(buf_input, buf_weight, spec)?;
 
         Some(Storage::Gpu {
             buffer: Arc::new(result),
@@ -619,44 +558,15 @@ impl RawTensor {
 
     /// GPU-accelerated iGEMM convolution with tiled computation
     #[cfg(feature = "gpu")]
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn gpu_igemm(
         input: &Storage,
         weight: &Storage,
-        batch_size: usize,
-        in_channels: usize,
-        out_channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
-        h_out: usize,
-        w_out: usize,
+        spec: &crate::spec::Conv2dSpec,
     ) -> Option<Storage> {
         let buf_input = input.gpu_buffer()?;
         let buf_weight = weight.gpu_buffer()?;
 
-        let result = GpuKernels::igemm(
-            buf_input,
-            buf_weight,
-            batch_size,
-            in_channels,
-            out_channels,
-            height,
-            width,
-            kernel_h,
-            kernel_w,
-            stride_h,
-            stride_w,
-            pad_h,
-            pad_w,
-            h_out,
-            w_out,
-        )?;
+        let result = GpuKernels::igemm(buf_input, buf_weight, spec)?;
 
         Some(Storage::Gpu {
             buffer: Arc::new(result),
@@ -667,44 +577,15 @@ impl RawTensor {
 
     /// GPU-accelerated convolution backward: gradient with respect to input
     #[cfg(feature = "gpu")]
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn gpu_conv_backward_input(
         out_grad: &Storage,
         weight: &Storage,
-        batch_size: usize,
-        in_channels: usize,
-        out_channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
-        h_out: usize,
-        w_out: usize,
+        spec: &crate::spec::Conv2dSpec,
     ) -> Option<Storage> {
         let buf_out_grad = out_grad.gpu_buffer()?;
         let buf_weight = weight.gpu_buffer()?;
 
-        let result = crate::gpu::GpuKernels::conv_backward_input(
-            buf_out_grad,
-            buf_weight,
-            batch_size,
-            in_channels,
-            out_channels,
-            height,
-            width,
-            kernel_h,
-            kernel_w,
-            stride_h,
-            stride_w,
-            pad_h,
-            pad_w,
-            h_out,
-            w_out,
-        )?;
+        let result = crate::gpu::GpuKernels::conv_backward_input(buf_out_grad, buf_weight, spec)?;
 
         Some(Storage::Gpu {
             buffer: Arc::new(result),
@@ -715,44 +596,15 @@ impl RawTensor {
 
     /// GPU-accelerated convolution backward: gradient with respect to weights
     #[cfg(feature = "gpu")]
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn gpu_conv_backward_weight(
         out_grad: &Storage,
         input: &Storage,
-        batch_size: usize,
-        in_channels: usize,
-        out_channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
-        h_out: usize,
-        w_out: usize,
+        spec: &crate::spec::Conv2dSpec,
     ) -> Option<Storage> {
         let buf_out_grad = out_grad.gpu_buffer()?;
         let buf_input = input.gpu_buffer()?;
 
-        let result = crate::gpu::GpuKernels::conv_backward_weight(
-            buf_out_grad,
-            buf_input,
-            batch_size,
-            in_channels,
-            out_channels,
-            height,
-            width,
-            kernel_h,
-            kernel_w,
-            stride_h,
-            stride_w,
-            pad_h,
-            pad_w,
-            h_out,
-            w_out,
-        )?;
+        let result = crate::gpu::GpuKernels::conv_backward_weight(buf_out_grad, buf_input, spec)?;
 
         Some(Storage::Gpu {
             buffer: Arc::new(result),
@@ -763,44 +615,15 @@ impl RawTensor {
 
     /// GPU-accelerated iGEMM convolution backward: gradient with respect to input
     #[cfg(feature = "gpu")]
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn gpu_igemm_backward_input(
         out_grad: &Storage,
         weight: &Storage,
-        batch_size: usize,
-        in_channels: usize,
-        out_channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
-        h_out: usize,
-        w_out: usize,
+        spec: &crate::spec::Conv2dSpec,
     ) -> Option<Storage> {
         let buf_out_grad = out_grad.gpu_buffer()?;
         let buf_weight = weight.gpu_buffer()?;
 
-        let result = crate::gpu::GpuKernels::igemm_backward_input(
-            buf_out_grad,
-            buf_weight,
-            batch_size,
-            in_channels,
-            out_channels,
-            height,
-            width,
-            kernel_h,
-            kernel_w,
-            stride_h,
-            stride_w,
-            pad_h,
-            pad_w,
-            h_out,
-            w_out,
-        )?;
+        let result = crate::gpu::GpuKernels::igemm_backward_input(buf_out_grad, buf_weight, spec)?;
 
         Some(Storage::Gpu {
             buffer: Arc::new(result),
@@ -811,44 +634,15 @@ impl RawTensor {
 
     /// GPU-accelerated iGEMM convolution backward: gradient with respect to weights
     #[cfg(feature = "gpu")]
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn gpu_igemm_backward_weight(
         out_grad: &Storage,
         input: &Storage,
-        batch_size: usize,
-        in_channels: usize,
-        out_channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
-        h_out: usize,
-        w_out: usize,
+        spec: &crate::spec::Conv2dSpec,
     ) -> Option<Storage> {
         let buf_out_grad = out_grad.gpu_buffer()?;
         let buf_input = input.gpu_buffer()?;
 
-        let result = crate::gpu::GpuKernels::igemm_backward_weight(
-            buf_out_grad,
-            buf_input,
-            batch_size,
-            in_channels,
-            out_channels,
-            height,
-            width,
-            kernel_h,
-            kernel_w,
-            stride_h,
-            stride_w,
-            pad_h,
-            pad_w,
-            h_out,
-            w_out,
-        )?;
+        let result = crate::gpu::GpuKernels::igemm_backward_weight(buf_out_grad, buf_input, spec)?;
 
         Some(Storage::Gpu {
             buffer: Arc::new(result),

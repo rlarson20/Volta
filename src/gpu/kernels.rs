@@ -2105,21 +2105,21 @@ impl GpuKernels {
     ///
     /// # Returns
     /// A 2D matrix of shape (B*`H_out`*`W_out`, C*`K_h`*`K_w`)
-    #[allow(clippy::too_many_arguments)]
     #[must_use]
-    pub fn im2col(
-        input: &GpuBuffer,
-        batch_size: usize,
-        channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        h_out: usize,
-        w_out: usize,
-    ) -> Option<GpuBuffer> {
+    pub(crate) fn im2col(input: &GpuBuffer, spec: &crate::spec::Window2dSpec) -> Option<GpuBuffer> {
+        let crate::spec::Window2dSpec {
+            batch: batch_size,
+            channels,
+            in_h: height,
+            in_w: width,
+            kernel_h,
+            kernel_w,
+            stride_h,
+            stride_w,
+            out_h: h_out,
+            out_w: w_out,
+            ..
+        } = *spec;
         let ctx = get_gpu_context()?;
 
         // Output matrix size: (B*H_out*W_out, C*K_h*K_w)
@@ -2218,21 +2218,21 @@ impl GpuKernels {
     ///
     /// # Returns
     /// A 4D tensor of shape (B, C, H, W)
-    #[allow(clippy::too_many_arguments)]
     #[must_use]
-    pub fn col2im(
-        col: &GpuBuffer,
-        batch_size: usize,
-        channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        h_out: usize,
-        w_out: usize,
-    ) -> Option<GpuBuffer> {
+    pub(crate) fn col2im(col: &GpuBuffer, spec: &crate::spec::Window2dSpec) -> Option<GpuBuffer> {
+        let crate::spec::Window2dSpec {
+            batch: batch_size,
+            channels,
+            in_h: height,
+            in_w: width,
+            kernel_h,
+            kernel_w,
+            stride_h,
+            stride_w,
+            out_h: h_out,
+            out_w: w_out,
+            ..
+        } = *spec;
         let ctx = get_gpu_context()?;
 
         // Output tensor size: (B, C, H, W)
@@ -2314,24 +2314,26 @@ impl GpuKernels {
     /// Direct convolution without im2col intermediate
     /// Each thread computes one output pixel
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
-    pub fn direct_conv(
+    pub(crate) fn direct_conv(
         input: &GpuBuffer,
         weight: &GpuBuffer,
-        batch_size: usize,
-        in_channels: usize,
-        out_channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
-        h_out: usize,
-        w_out: usize,
+        spec: &crate::spec::Conv2dSpec,
     ) -> Option<GpuBuffer> {
+        let crate::spec::Conv2dSpec {
+            batch: batch_size,
+            in_ch: in_channels,
+            out_ch: out_channels,
+            in_h: height,
+            in_w: width,
+            kernel_h,
+            kernel_w,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            out_h: h_out,
+            out_w: w_out,
+        } = *spec;
         let ctx = get_gpu_context()?;
 
         // Output size: [B, out_channels, h_out, w_out]
@@ -2421,24 +2423,26 @@ impl GpuKernels {
     /// Balances memory usage and performance by avoiding im2col materialization
     /// while using tiling for better cache efficiency
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
-    pub fn igemm(
+    pub(crate) fn igemm(
         input: &GpuBuffer,
         weight: &GpuBuffer,
-        batch_size: usize,
-        in_channels: usize,
-        out_channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
-        h_out: usize,
-        w_out: usize,
+        spec: &crate::spec::Conv2dSpec,
     ) -> Option<GpuBuffer> {
+        let crate::spec::Conv2dSpec {
+            batch: batch_size,
+            in_ch: in_channels,
+            out_ch: out_channels,
+            in_h: height,
+            in_w: width,
+            kernel_h,
+            kernel_w,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            out_h: h_out,
+            out_w: w_out,
+        } = *spec;
         let ctx = get_gpu_context()?;
 
         // Output size: [B, out_channels, h_out, w_out]
@@ -2539,24 +2543,26 @@ impl GpuKernels {
     /// GPU-accelerated convolution backward: gradient with respect to input
     /// Computes: ∂L/∂X\[b,ic,ih,iw\] = Σ ∂L/∂Y\[b,oc,oh,ow\] * W\[oc,ic,kh,kw\]
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
-    pub fn conv_backward_input(
+    pub(crate) fn conv_backward_input(
         out_grad: &GpuBuffer,
         weight: &GpuBuffer,
-        batch_size: usize,
-        in_channels: usize,
-        out_channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
-        h_out: usize,
-        w_out: usize,
+        spec: &crate::spec::Conv2dSpec,
     ) -> Option<GpuBuffer> {
+        let crate::spec::Conv2dSpec {
+            batch: batch_size,
+            in_ch: in_channels,
+            out_ch: out_channels,
+            in_h: height,
+            in_w: width,
+            kernel_h,
+            kernel_w,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            out_h: h_out,
+            out_w: w_out,
+        } = *spec;
         let ctx = get_gpu_context()?;
 
         // Output size: [B, in_channels, height, width]
@@ -2643,24 +2649,26 @@ impl GpuKernels {
     /// GPU-accelerated convolution backward: gradient with respect to weights
     /// Computes: ∂L/∂W\[oc,ic,kh,kw\] = Σ X\[b,ic,oh*sh+kh-ph,ow*sw+kw-pw\] * ∂L/∂Y\[b,oc,oh,ow\]
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
-    pub fn conv_backward_weight(
+    pub(crate) fn conv_backward_weight(
         out_grad: &GpuBuffer,
         input: &GpuBuffer,
-        batch_size: usize,
-        in_channels: usize,
-        out_channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
-        h_out: usize,
-        w_out: usize,
+        spec: &crate::spec::Conv2dSpec,
     ) -> Option<GpuBuffer> {
+        let crate::spec::Conv2dSpec {
+            batch: batch_size,
+            in_ch: in_channels,
+            out_ch: out_channels,
+            in_h: height,
+            in_w: width,
+            kernel_h,
+            kernel_w,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            out_h: h_out,
+            out_w: w_out,
+        } = *spec;
         let ctx = get_gpu_context()?;
 
         // Output size: [out_channels, in_channels, kernel_h, kernel_w]
@@ -2746,24 +2754,26 @@ impl GpuKernels {
 
     /// iGEMM convolution backward: gradient with respect to input
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
-    pub fn igemm_backward_input(
+    pub(crate) fn igemm_backward_input(
         out_grad: &GpuBuffer,
         weight: &GpuBuffer,
-        batch_size: usize,
-        in_channels: usize,
-        out_channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
-        h_out: usize,
-        w_out: usize,
+        spec: &crate::spec::Conv2dSpec,
     ) -> Option<GpuBuffer> {
+        let crate::spec::Conv2dSpec {
+            batch: batch_size,
+            in_ch: in_channels,
+            out_ch: out_channels,
+            in_h: height,
+            in_w: width,
+            kernel_h,
+            kernel_w,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            out_h: h_out,
+            out_w: w_out,
+        } = *spec;
         let ctx = get_gpu_context()?;
 
         // Output size: [B, in_channels, height, width]
@@ -2849,24 +2859,26 @@ impl GpuKernels {
 
     /// iGEMM convolution backward: gradient with respect to weights
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
-    pub fn igemm_backward_weight(
+    pub(crate) fn igemm_backward_weight(
         out_grad: &GpuBuffer,
         input: &GpuBuffer,
-        batch_size: usize,
-        in_channels: usize,
-        out_channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
-        h_out: usize,
-        w_out: usize,
+        spec: &crate::spec::Conv2dSpec,
     ) -> Option<GpuBuffer> {
+        let crate::spec::Conv2dSpec {
+            batch: batch_size,
+            in_ch: in_channels,
+            out_ch: out_channels,
+            in_h: height,
+            in_w: width,
+            kernel_h,
+            kernel_w,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            out_h: h_out,
+            out_w: w_out,
+        } = *spec;
         let ctx = get_gpu_context()?;
 
         // Output size: [out_channels, in_channels, kernel_h, kernel_w]
