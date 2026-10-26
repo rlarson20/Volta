@@ -1,13 +1,7 @@
 # DECISIONS.md — Volta Autograd Engine Audit
 
 Design decisions, implementation rationale, and known gaps.
-Updated: 2026-10-25
-
-TODO: entries for:
-opaque tensor
-edge() func
-NoGrad
-async stays sync
+Updated: 2026-10-26
 
 ---
 
@@ -174,6 +168,44 @@ Required because `m` and `v` are initialized at 0. Early in training, `(1 - β�
 > ⚠ **Gap:** Adam update rule required reference during audit. Understood bias correction purpose; recurrences and exact formula not memorized.
 
 ---
+
+## Invariant Wall (ADDENDUM Phase 1)
+
+### Opaque `Tensor`
+
+**Decision:** `Tensor` is `struct Tensor { inner: Rc<RefCell<RawTensor>> }` instead of a bare type alias. `borrow()`/`borrow_mut()`/`as_ptr()` are `pub(crate)` forwarding methods.
+
+With the alias, `x.borrow_mut().requires_grad = true` was the documented idiom, so every invariant was only a convention. Keeping the forwarding methods under their original names meant every internal `t.borrow()` call site compiled unchanged, because method resolution is by name. Meanwhile the fields became unreachable from outside the crate.
+
+**Consequence:** `tests/` and `examples/` see only the public API, so `Tensor` gained `shape()`, `data()`, `device()`, `grad_storage()`, `detach()`, a public `set_requires_grad()`, and `set_grad()`. `set_grad` is the second sanctioned `grad` writer after `accumulate_grad`. It exists so optimizer tests can seed a synthetic gradient without running `backward()`.
+
+### `edge()` — single graph-edge constructor
+
+**Decision:** `autograd::edge()` is the only code that attaches `parents`/`grad_fn`. It derives `requires_grad` as "grad enabled AND any input requires grad".
+
+Before this, about 25 hand-written copies of the attach ritual existed, and each was a chance to gate on the wrong flag (B1: ConvTranspose gated on the input only, which froze the weights) or to drop parents (B2/B3). Migrating to `edge()` also exposed the same latent gating bug in `conv.rs`'s `direct_conv`/`igemm_forward`.
+
+**Deviation from the ADDENDUM sketch:** `edge()` takes `Vec<usize>` and `Box<dyn GradFn>` because the `Shape` and `GradFn` enum are Phase 2 work. It also takes an explicit `device`, since `Storage` doesn't uniquely determine a `Device` and every call site already tracked one.
+
+### `NO_GRAD` as a reentrant depth counter
+
+**Decision:** `thread_local! { static NO_GRAD: Cell<u32> }`, not `Cell<bool>`.
+
+A bool breaks as soon as one `no_grad()` scope nests inside another, for example a layer's own `no_grad()` running inside `check_gradients`. The inner guard's `Drop` would re-enable tracking while the outer scope was still active. It is `thread_local!` because a bare `static Cell<_>` doesn't compile (`Cell` isn't `Sync`).
+
+### `assert_trainable!`
+
+**Decision:** every parameterized layer has a test asserting that each parameter gets a nonzero gradient after forward and backward. This is the check that would have caught B1–B3.
+
+**Known weakness (2026-10-26):** the macro backprops `.sum()` of the output. For BatchNorm that makes gamma's gradient exactly zero for any input, because the normalized activations sum to zero. Combined with all-ones test inputs, it also made LayerNorm, MultiHeadAttention, and TransformerBlock fail spuriously. With random inputs and a randomly weighted loss, only LSTMCell (B2) fails.
+
+## Concurrency and Async
+
+### Stay synchronous
+
+**Decision:** no async in the core or the GPU API. Revisit only for isolated data loading or serving.
+
+Autograd is a sequential graph walk over `Rc<RefCell<_>>`, and nothing in it is `Send`. The GPU path blocks on submission, which is coherent for a single-threaded engine. The prerequisites are explicit transfers (ADDENDUM §7) and the arena graph (§6), which is the actual route to threading. Premature `Arc<Mutex>` is how `BufferPool` ended up guarding state only one thread can reach. The full analysis lives in git history (`docs/plans/2026-02-23-async-*.md`, removed 2026-10-25).
 
 ## Known Gaps Summary
 
