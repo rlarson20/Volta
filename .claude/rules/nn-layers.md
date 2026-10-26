@@ -16,4 +16,5 @@ paths:
   - LSTMCell severs the graph at the gate slice (B2).
   - PositionalEncoding rebuilds its output from raw data (B3). It has no `assert_trainable!` test yet.
   - TransformerBlock uses a parameterless `SimpleAttention` placeholder (H6), so its trainability test covers only the norms and the FFN.
+- Conv-family geometry (`Conv2d`, `ConvTranspose2d`, `MaxPool2d`) comes from the spec in `src/spec.rs`, built once in `forward` and stored in the `GradFn`. Backward and GPU wrappers read the spec; never re-derive dims with `shape.get(i).unwrap_or(1)`.
 - Conv: there are three algorithms (direct, im2col+GEMM, iGEMM) plus auto-selection. Read `dev-docs/CONV2D_IMPLEMENTATION.md` before changing selection or any conv backward.

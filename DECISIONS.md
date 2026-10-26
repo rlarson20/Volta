@@ -225,6 +225,21 @@ Before this, the zero/cap checks lived in `Tensor::try_new` only. `try_new_with_
 
 A size silently defaulting to 1 is the same class as `.get(i).unwrap_or(0.0)` (invariant 5): after the up-front bounds check it could not fire, but it would have hidden a future mismatch between the check and the lookup. `max_dim`, `mean_dim`, and `softmax` panic with the `DimensionOutOfBounds` text; `try_sum_dim` returns it.
 
+### Conv-family specs (ADDENDUM §1.3)
+
+**Decision:** `src/spec.rs` holds `Conv2dSpec`, `ConvTranspose2dSpec`, and `Window2dSpec`. Each is built once in `forward` from the input and weight `Shape`s, validated (4D, channels agree, stride non-zero, kernel not larger than the padded input, transposed output positive), and then stored in the `GradFn`. Backward and the GPU wrappers read the spec instead of re-deriving dims from tensors. The eight conv `GpuKernels` wrappers and their `RawTensor::gpu_*` forwarders take `&Conv2dSpec` (or `&Window2dSpec` for `im2col`/`col2im`) in place of 11 to 15 positional `usize`s. The `#[repr(C)]` uniform structs are unchanged, so the WGSL shaders did not change.
+
+`Window2dSpec` exists because `im2col`/`col2im` run on the already-padded tensor and have no weight. It serves `MaxPool2d` too, and `Conv2dSpec::padded_window()` builds it from a conv spec, so the padded and unpadded extents cannot drift apart.
+
+**Rejected:**
+- Spec accessors returning `Shape` (`input_shape()`). The old code passes `&[usize]` to `RawTensor::new`, so each call site would need `truncate_rank()`, against the "Shape boundary" rule above. They return `[usize; 4]` (`input_dims()`, `weight_dims()`, `output_dims()`), which coerces to `&[usize]` and goes through `Shape::derived` for `edge()`.
+- Making the specs `pub` so the `pub` `GpuKernels` wrappers could keep their visibility. That widens the public API for a type with no external use. The eight wrappers are now `pub(crate)`; only `gpu_ops.rs` calls them.
+- `Channel(usize)` and `TensorIndex`/`NodeIndex` newtypes from §1.3. Named spec fields already remove the `batch_size`/`channels` transposition risk `Channel` targeted, and the index newtypes only mean something once the arena exists (§6, Phase 4).
+
+**Consequence:** invalid geometry now fails in `forward` with a message from the spec. Before, a kernel larger than the padded input was an arithmetic-underflow panic (debug) or a wrap (release). A zero stride was a divide-by-zero in `Conv2d` and `MaxPool2d` and, in `ConvTranspose2d`, silently produced a wrong-sized output.
+
+**Found on the way:** `ConvAlgo::auto_select` computed `height - kernel_size` from the *unpadded* height, so a valid conv whose kernel fits only after padding (5x5 kernel, pad 1, 3x3 input) panicked under `Auto`. `forward` now passes the padded extents, which makes the heuristic's "stride 1, pad 0" estimate exactly the stride-1 output size. The selection heuristic for padded convs now sees larger (correct) output sizes.
+
 ## Concurrency and Async
 
 ### Stay synchronous

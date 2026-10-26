@@ -35,6 +35,7 @@ Last verified: 2026-10-26.
 - [ ] `check_gradients` doesn't zero pre-existing grads, so reusing a tensor gives false failures.
 - [ ] Conv finite-difference tolerances are loosened (5e-2), and GPU consistency tests use all-ones data.
 - [ ] `test_conv_transpose2d_gradient_multiple_channels` is flaky (about 1 in 15 runs): unseeded random init against a finite-difference tolerance.
+- [ ] `test_direct_conv_gradient_multiple_configs` is flaky too: 4 failures in 80 runs on a clean `HEAD`, 3 in 80 after the spec change (2026-10-26). Same cause: unseeded `randn` against a finite-difference tolerance.
 - [ ] Doctests in `embedding.rs` and `pixelshuffle.rs` call the now-private `borrow()` and fail under `cargo test --doc`.
 - [ ] `Sequential::load_state_dict` prefix match is greedy (`"10.weight"` matches `"1."`).
 - [ ] RNG reproducibility holes: the dataloader shuffle is unseeded, and `with_rng` falls back silently under a reentrant borrow.
@@ -60,7 +61,7 @@ Last verified: 2026-10-26.
 - [ ] Pick one error regime (panic on programmer error, `Result` on runtime failure), document it in `dev-docs/DEVELOPMENT.md`, and prune redundant `try_*` variants.
 - [ ] GPU layer returns `Option` for everything; move to `Result<_, GpuError>` with a single dispatch choke point.
 - [ ] Rewrite the `storage.rs` unsafe block as owned data or a `OnceCell` cache (H3).
-- [ ] 16 positional `usize` arguments on GPU kernel wrappers; use specs or newtypes (Phase 2).
+- [~] 16 positional `usize` arguments on GPU kernel wrappers. The eight conv wrappers now take a spec (Phase 2). The matmul wrappers' `m, k, n` wait for `MatmulSpec`.
 - [ ] Move about 5,000 lines of tests out of `lib.rs`.
 - [ ] Stop exporting diagnostic tooling as public API.
 - [ ] Merge gate: remove `#![allow(missing_docs)]` in `src/lib.rs` before merging into `main`.
@@ -71,7 +72,8 @@ Last verified: 2026-10-26.
 - [x] `edge()` takes `Shape`; tensor constructors, `expand`, `pad`, `broadcast_to`, and `try_broadcast_shape` validate through `Shape::from_dims`; `Axis` on `sum_dim`/`max_dim`/`mean_dim`/`softmax`/`log_softmax`/`permute` (§1.2; `31e2edd`, `b12efe5`, `567946f`).
 - [ ] Flip `RawTensor.shape` to `Shape` and make `Tensor::shape()` return it. Deferred with the storage work (§7): about 440 kernel reads of the field (DECISIONS.md, "Shape boundary").
 - [ ] `Strides` is defined but unused; `RawTensor::compute_strides` is still a free fn returning `Vec<usize>`.
-- [ ] Specs replace positional args (`MatmulSpec`, conv specs) (§1.3). Retires B4.
+- [x] Conv specs: `Conv2dSpec`, `ConvTranspose2dSpec`, `Window2dSpec` in `src/spec.rs` replace positional args in Conv2d, ConvTranspose2d, MaxPool2d, and the conv GPU wrappers (§1.3; DECISIONS.md, "Conv-family specs").
+- [ ] `MatmulSpec` (§1.2/§1.3). Retires B4. Goes in `src/spec.rs`.
 - [ ] Closed `GradFn` enum instead of `Box<dyn GradFn>` (§2.5).
 - [ ] `define_ops!` macro (§5.1).
 - [ ] `PadValue` (§2.4). Retires H1.
@@ -87,6 +89,6 @@ Last verified: 2026-10-26.
 
 ## Phase 4 — endgame (optional, last)
 
-- [ ] Arena graph (§6).
+- [ ] Arena graph (§6), with the `TensorIndex`/`NodeIndex` newtypes (§1.3) it makes meaningful.
 - [ ] Sealed `Backend` trait (§3.5).
 - [ ] proptest DAG checks (§10.2).

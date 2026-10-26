@@ -590,7 +590,9 @@ and it gets cheaper every phase that lands before it.
 - Added `Shape::derived` (`pub(crate)`, panics), which the sketch doesn't have. Op code builds output shapes from tensors that already exist, so an invalid one is an op bug and should fail loudly.
 - `Axis` replaces `usize` on `sum_dim`, `try_sum_dim`, `max_dim`, `mean_dim`, `softmax`, `log_softmax`, and `permute` (including the `TensorOps` trait). `GradFn` structs keep `usize` dims internally.
 - `Strides` is defined but unused: `RawTensor::compute_strides` still returns `Vec<usize>`.
-- Still open from §1.2/§1.3: `MatmulSpec` and the conv specs (this retires B4).
+- Conv specs landed in `src/spec.rs` (`pub(crate)`): `Conv2dSpec`, `ConvTranspose2dSpec`, and `Window2dSpec`, which the sketch does not name. `Window2dSpec` covers `MaxPool2d` and `im2col`/`col2im`. The eight conv GPU wrappers are now `pub(crate)` and take a spec. Spec accessors return `[usize; 4]`, not `Shape` (DECISIONS.md, "Conv-family specs").
+- §1.3's `Channel`, `TensorIndex`, and `NodeIndex` newtypes are deferred: named spec fields cover the transposition risk, and the index types wait for the arena (§6).
+- Still open: `MatmulSpec` (this retires B4), then `PadValue`.
 
 ---
 
