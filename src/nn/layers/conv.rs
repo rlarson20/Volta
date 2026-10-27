@@ -6,7 +6,7 @@ use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
 use crate::shape::Axis;
 use crate::shape::Shape;
-use crate::spec::{Conv2dSpec, Window2dSpec};
+use crate::spec::{Conv2dSpec, PadValue, Window2dSpec};
 use crate::tensor::{RawTensor, Tensor, TensorOps};
 
 /// Algorithm to use for convolution
@@ -1476,12 +1476,15 @@ impl Conv2d {
                 // Auto already converted, but kept for exhaustiveness
                 // 1. Pad input
                 let x_padded = if spec.pad_h > 0 || spec.pad_w > 0 {
-                    x.pad(&[
-                        (0, 0),
-                        (0, 0),
-                        (spec.pad_h, spec.pad_h),
-                        (spec.pad_w, spec.pad_w),
-                    ])
+                    x.pad_with(
+                        &[
+                            (0, 0),
+                            (0, 0),
+                            (spec.pad_h, spec.pad_h),
+                            (spec.pad_w, spec.pad_w),
+                        ],
+                        PadValue::ZERO,
+                    )
                 } else {
                     x.clone()
                 };
@@ -2716,10 +2719,10 @@ mod conv2d_gpu_tests {
 
         // Test with padding to ensure pad operation works on GPU
         let x_cpu = RawTensor::new(vec![1.0; 16], &[1, 1, 4, 4], false);
-        let x_padded_cpu = x_cpu.pad(&[(0, 0), (0, 0), (1, 1), (1, 1)]);
+        let x_padded_cpu = x_cpu.pad_with(&[(0, 0), (0, 0), (1, 1), (1, 1)], PadValue::ZERO);
 
         let x_gpu = x_cpu.to_device(device.clone());
-        let x_padded_gpu = x_gpu.pad(&[(0, 0), (0, 0), (1, 1), (1, 1)]);
+        let x_padded_gpu = x_gpu.pad_with(&[(0, 0), (0, 0), (1, 1), (1, 1)], PadValue::ZERO);
 
         // Check shapes
         assert_eq!(x_padded_cpu.borrow().shape, vec![1, 1, 6, 6]);

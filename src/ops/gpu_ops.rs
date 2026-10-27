@@ -6,6 +6,8 @@
 use crate::RawTensor;
 #[cfg(feature = "gpu")]
 use crate::gpu::GpuKernels;
+#[cfg(feature = "gpu")]
+use crate::spec::PadValue;
 use crate::storage::Storage;
 #[cfg(feature = "gpu")]
 use std::cell::RefCell;
@@ -356,9 +358,10 @@ impl RawTensor {
         old_shape: &[usize],
         new_shape: &[usize],
         padding: &[(usize, usize)],
+        value: PadValue,
     ) -> Option<Storage> {
         let buf = data.gpu_buffer()?;
-        let result = GpuKernels::pad(buf, old_shape, new_shape, padding)?;
+        let result = GpuKernels::pad(buf, old_shape, new_shape, padding, value)?;
         Some(Storage::Gpu {
             buffer: Arc::new(result),
             dtype: crate::dtype::DType::F32,

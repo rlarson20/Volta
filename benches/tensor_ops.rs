@@ -8,7 +8,7 @@
 //! - Movement operations (reshape, transpose, etc.)
 #![allow(clippy::cast_precision_loss)]
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use volta::Axis;
+use volta::{Axis, PadValue};
 use volta::{RawTensor, Tensor, TensorOps};
 
 /// Generate a random tensor of the given size
@@ -203,7 +203,7 @@ fn bench_movement_ops(c: &mut Criterion) {
     // Pad
     group.bench_function("pad", |b| {
         let a = random_tensor_2d(50, 50);
-        b.iter(|| black_box(&a).pad(&[(0, 0), (5, 5)]));
+        b.iter(|| black_box(&a).pad_with(&[(0, 0), (5, 5)], PadValue::ZERO));
     });
 
     group.finish();

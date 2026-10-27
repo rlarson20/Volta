@@ -38,6 +38,7 @@ pub mod storage;
 pub use dtype::DType;
 pub use error::{Result, VoltaError};
 pub use shape::{Axis, Shape, Strides};
+pub use spec::PadValue;
 pub use storage::Storage;
 
 #[cfg(feature = "gpu")]
@@ -945,7 +946,7 @@ mod misc_tests {
         // Test pad gradient
         let x = RawTensor::new(vec![1.0, 2.0], &[2], true);
         let passed = RawTensor::check_gradients_simple(&x, |t| {
-            let y = t.pad(&[(1, 1)]);
+            let y = t.pad_with(&[(1, 1)], PadValue::ZERO);
             y.sum()
         });
         assert!(passed, "Pad gradient check failed");
@@ -1075,10 +1076,50 @@ mod misc_tests {
     fn test_gradcheck_pad() {
         let x = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], true);
         let passed = RawTensor::check_gradients_simple(&x, |t| {
-            let y = t.pad(&[(1, 1)]);
+            let y = t.pad_with(&[(1, 1)], PadValue::ZERO);
             y.sum()
         });
         assert!(passed, "Pad gradient check failed");
+    }
+
+    #[test]
+    fn test_pad_with_neg_inf_fills_border_only() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
+        let y = x.pad_with(&[(1, 0), (0, 1)], PadValue::NEG_INF);
+        assert_eq!(y.shape(), vec![3, 3]);
+        let ninf = f32::NEG_INFINITY;
+        assert_eq!(
+            y.data(),
+            vec![ninf, ninf, ninf, 1.0, 2.0, ninf, 3.0, 4.0, ninf]
+        );
+    }
+
+    #[test]
+    fn test_pad_with_neg_inf_gradient_is_finite_and_ones() {
+        // Backward shrinks the gradient back, so the fill never reaches it.
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], true);
+        let y = x.pad_with(&[(1, 1), (2, 0)], PadValue::NEG_INF);
+        // Sum over the interior only (a -inf in the loss would poison it).
+        let interior = y.shrink(&[(1, 3), (2, 4)]);
+        interior.sum().backward();
+        assert_eq!(x.grad().expect("grad"), vec![1.0; 4]);
+    }
+
+    #[test]
+    fn test_try_pad_with_reports_errors_instead_of_panicking() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
+        let rank = RawTensor::try_pad_with(&x, &[(1, 1)], PadValue::ZERO);
+        assert!(
+            matches!(&rank, Err(VoltaError::InvalidParameter(m)) if m.contains("must match tensor rank")),
+            "{rank:?}"
+        );
+        let huge =
+            RawTensor::try_pad_with(&x, &[(50_000, 50_000), (50_000, 50_000)], PadValue::ZERO);
+        assert!(
+            matches!(&huge, Err(VoltaError::InvalidParameter(m)) if m.contains("memory issues")),
+            "{huge:?}"
+        );
+        assert!(RawTensor::try_pad_with(&x, &[(1, 1), (0, 0)], PadValue::ZERO).is_ok());
     }
 
     #[test]
@@ -1850,29 +1891,29 @@ mod edge_case_tests {
     // ===== PAD INVALID SIZE TESTS =====
 
     #[test]
-    #[should_panic(expected = "Padding length must match rank")]
+    #[should_panic(expected = "must match tensor rank")]
     fn test_pad_wrong_length_too_short() {
         // Attempt to pad rank-2 tensor with only 1 dimension of padding
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
-        x.pad(&[(1, 1)]); // Missing padding for second dimension
+        x.pad_with(&[(1, 1)], PadValue::ZERO); // Missing padding for second dimension
     }
 
     #[test]
-    #[should_panic(expected = "Padding length must match rank")]
+    #[should_panic(expected = "must match tensor rank")]
     fn test_pad_wrong_length_too_long() {
         // Attempt to pad rank-2 tensor with 3 dimensions of padding
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
-        x.pad(&[(1, 1), (1, 1), (1, 1)]); // Too many padding specifications
+        x.pad_with(&[(1, 1), (1, 1), (1, 1)], PadValue::ZERO); // Too many padding specifications
     }
 
     #[test]
-    #[should_panic(expected = "Pad: invalid output shape")]
+    #[should_panic(expected = "check for memory issues")]
     fn test_pad_excessive_padding() {
         // Attempt to pad with huge values that would exceed MAX_ALLOC
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
         // This would create a tensor with (2 + 5000) * (2 + 5000) = ~25M elements
         // To exceed 100M, we need even larger padding
-        x.pad(&[(50000, 50000), (50000, 50000)]); // Way over 100M elements
+        x.pad_with(&[(50000, 50000), (50000, 50000)], PadValue::ZERO); // Way over 100M elements
     }
 
     // ===== AXIS BOUNDS TESTS =====

@@ -2,9 +2,9 @@
 #![allow(clippy::cast_precision_loss)]
 #![cfg(feature = "gpu")]
 
-use volta::Axis;
 use volta::device::Device;
 use volta::gpu::is_gpu_available;
+use volta::{Axis, PadValue};
 use volta::{RawTensor, TensorOps};
 
 fn approx_eq(a: f32, b: f32, epsilon: f32) -> bool {
@@ -106,11 +106,11 @@ fn test_pad_backward_cpu_vs_gpu() {
 
     // Pad: add 1 zero on each side -> [4,4]
     let padding = vec![(1, 1), (1, 1)];
-    let cpu_padded = cpu_t.pad(&padding);
+    let cpu_padded = cpu_t.pad_with(&padding, PadValue::ZERO);
 
     // Create same tensor on GPU
     let gpu_t = RawTensor::new(data, &[2, 2], true).to_device(device.clone());
-    let gpu_padded = gpu_t.pad(&padding);
+    let gpu_padded = gpu_t.pad_with(&padding, PadValue::ZERO);
 
     // Backward pass
     cpu_padded.backward();
@@ -123,6 +123,34 @@ fn test_pad_backward_cpu_vs_gpu() {
     assert!(
         tensors_approx_eq(&cpu_grad, &gpu_grad, 1e-5),
         "Pad backward: CPU and GPU gradients should match.\nCPU: {cpu_grad:?}\nGPU: {gpu_grad:?}"
+    );
+}
+
+#[test]
+fn test_pad_with_neg_inf_forward_cpu_vs_gpu() {
+    if !is_gpu_available() {
+        return;
+    }
+
+    let device = Device::gpu().expect("GPU should be available");
+    let data = vec![-1.0, -2.0, -3.0, -4.0, -5.0, -6.0];
+    let padding = [(1, 0), (0, 2)];
+
+    let cpu_t = RawTensor::new(data.clone(), &[2, 3], false);
+    let gpu_t = RawTensor::new(data, &[2, 3], false).to_device(device);
+
+    let cpu_out = cpu_t.pad_with(&padding, PadValue::NEG_INF).data();
+    let gpu_out = gpu_t.pad_with(&padding, PadValue::NEG_INF).data();
+
+    assert_eq!(cpu_out.len(), 3 * 5);
+    assert_eq!(
+        cpu_out.iter().filter(|v| **v == f32::NEG_INFINITY).count(),
+        15 - 6,
+        "CPU border should be exactly the non-interior cells"
+    );
+    assert_eq!(
+        cpu_out, gpu_out,
+        "pad_with(NEG_INF): CPU and GPU outputs should be identical"
     );
 }
 

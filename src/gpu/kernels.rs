@@ -10,6 +10,7 @@
     clippy::many_single_char_names
 )]
 use super::{GpuBuffer, get_gpu_context};
+use crate::spec::PadValue;
 
 /// Parameters for matrix dimensions (used in matmul shader)
 #[repr(C)]
@@ -1752,13 +1753,14 @@ impl GpuKernels {
         movement_op(input, result, &params, &ctx.pipelines().expand)
     }
 
-    /// Pad tensor with zeros
+    /// Pad tensor, filling the border with `value`
     #[must_use]
-    pub fn pad(
+    pub(crate) fn pad(
         input: &GpuBuffer,
         old_shape: &[usize],
         new_shape: &[usize],
         padding: &[(usize, usize)],
+        value: PadValue,
     ) -> Option<GpuBuffer> {
         let ctx = get_gpu_context()?;
         let output_size = new_shape.iter().product::<usize>();
@@ -1799,7 +1801,8 @@ impl GpuKernels {
             op_params: pad_params,
             rank: old_shape.len() as u32,
             padding2,
-            padding: [padding3, 0],
+            // padding[1] carries the fill value bits, read by `pad` in movement.wgsl
+            padding: [padding3, value.get().to_bits()],
         };
 
         movement_op(input, result, &params, &ctx.pipelines().pad)

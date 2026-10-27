@@ -400,6 +400,27 @@ fn with_matrix(batch: &[usize], rows: usize, cols: usize) -> Vec<usize> {
     dims
 }
 
+/// The scalar that fills the border added by [`pad_with`](crate::TensorOps::pad_with).
+///
+/// Padding used to be hard-wired to `0.0`, which is right for convolution and
+/// wrong for max pooling (H1: a zero border beat all-negative inputs). The
+/// value is now a required argument, and only named constants exist, so the
+/// choice is visible at every call site.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PadValue(f32);
+
+impl PadValue {
+    /// Zero padding, the neutral element for sums and convolution.
+    pub const ZERO: Self = Self(0.0);
+    /// Negative infinity, the neutral element for max pooling.
+    pub const NEG_INF: Self = Self(f32::NEG_INFINITY);
+
+    /// The raw fill value, for kernels.
+    pub(crate) const fn get(self) -> f32 {
+        self.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

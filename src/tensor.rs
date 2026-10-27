@@ -6,6 +6,7 @@ use crate::ops::reduce::ReduceOp;
 use crate::ops::ternary::TernaryOp;
 use crate::ops::unary::UnaryOp;
 use crate::shape::{Axis, Shape};
+use crate::spec::PadValue;
 use crate::{Result, VoltaError};
 use rand::Rng;
 use rand::SeedableRng;
@@ -1238,7 +1239,7 @@ pub trait TensorOps {
     fn reshape(&self, new_shape: &[usize]) -> Tensor;
     fn permute(&self, axes: &[Axis]) -> Tensor;
     fn expand(&self, new_shape: &[usize]) -> Tensor;
-    fn pad(&self, padding: &[(usize, usize)]) -> Tensor;
+    fn pad_with(&self, padding: &[(usize, usize)], value: PadValue) -> Tensor;
     fn shrink(&self, ranges: &[(usize, usize)]) -> Tensor;
     fn stride_op(&self, strides: &[usize]) -> Tensor;
     fn to_device(&self, device: Device) -> Tensor;
@@ -1351,8 +1352,8 @@ impl TensorOps for Tensor {
     fn expand(&self, new_shape: &[usize]) -> Tensor {
         RawTensor::expand(self, new_shape)
     }
-    fn pad(&self, padding: &[(usize, usize)]) -> Tensor {
-        RawTensor::pad(self, padding)
+    fn pad_with(&self, padding: &[(usize, usize)], value: PadValue) -> Tensor {
+        RawTensor::pad_with(self, padding, value)
     }
     fn shrink(&self, ranges: &[(usize, usize)]) -> Tensor {
         RawTensor::shrink(self, ranges)

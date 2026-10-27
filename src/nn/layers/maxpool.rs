@@ -3,7 +3,7 @@ use crate::device::Device;
 use crate::io::StateDict;
 use crate::nn::Module;
 use crate::shape::Shape;
-use crate::spec::Window2dSpec;
+use crate::spec::{PadValue, Window2dSpec};
 use crate::storage::Storage;
 use crate::tensor::{RawTensor, Tensor, TensorOps};
 
@@ -68,10 +68,22 @@ impl MaxPool2d {
             out_w: w_out,
             ..
         } = spec;
+        // A window made only of -inf padding would output -inf and route its
+        // gradient to index 0, so padding may cover at most half the kernel
+        // (PyTorch's rule). Conv shares `Window2dSpec` and allows more.
+        assert!(
+            pad_h <= kernel_h / 2 && pad_w <= kernel_w / 2,
+            "MaxPool2d padding must be at most half the kernel: padding {:?} with kernel {:?}",
+            (pad_h, pad_w),
+            (kernel_h, kernel_w),
+        );
         let (padded_h, padded_w) = (spec.padded_h(), spec.padded_w());
 
         let x_padded = if pad_h > 0 || pad_w > 0 {
-            x.pad(&[(0, 0), (0, 0), (pad_h, pad_h), (pad_w, pad_w)])
+            x.pad_with(
+                &[(0, 0), (0, 0), (pad_h, pad_h), (pad_w, pad_w)],
+                PadValue::NEG_INF,
+            )
         } else {
             x.clone()
         };
@@ -301,20 +313,20 @@ mod tests {
 
     #[test]
     fn test_maxpool2d_padding_2() {
-        let pool = MaxPool2d::new(3, 2, 2);
+        let pool = MaxPool2d::new(4, 2, 2);
         let x = RawTensor::randn(&[1, 1, 6, 6]);
         let y = pool.forward(&x);
-        // Padded: 6 + 4 = 10, (10 - 3) / 2 + 1 = 4
+        // Padded: 6 + 4 = 10, (10 - 4) / 2 + 1 = 4
         assert_eq!(y.borrow().shape, vec![1, 1, 4, 4]);
     }
 
     #[test]
     fn test_maxpool2d_padding_3() {
-        let pool = MaxPool2d::new(5, 2, 3);
+        let pool = MaxPool2d::new(7, 2, 3);
         let x = RawTensor::randn(&[1, 1, 8, 8]);
         let y = pool.forward(&x);
-        // Padded: 8 + 6 = 14, (14 - 5) / 2 + 1 = 5
-        assert_eq!(y.borrow().shape, vec![1, 1, 5, 5]);
+        // Padded: 8 + 6 = 14, (14 - 7) / 2 + 1 = 4
+        assert_eq!(y.borrow().shape, vec![1, 1, 4, 4]);
     }
 
     #[test]
@@ -637,26 +649,6 @@ mod tests {
     }
 
     #[test]
-    fn test_maxpool2d_large_padding() {
-        // Test with padding larger than typical
-        let pool = MaxPool2d::new(2, 1, 3);
-        let x = RawTensor::randn(&[1, 1, 4, 4]);
-        x.borrow_mut().requires_grad = true;
-        let y = pool.forward(&x);
-
-        // Padded: 4 + 6 = 10, (10 - 2) / 1 + 1 = 9
-        assert_eq!(y.borrow().shape, vec![1, 1, 9, 9]);
-
-        // Gradient should still flow correctly with padding
-        let loss = y.sum();
-        loss.backward();
-        assert!(
-            x.grad().is_some(),
-            "Gradient should exist with large padding"
-        );
-    }
-
-    #[test]
     fn test_maxpool2d_batch_gradient_isolation() {
         // Test that gradients for different batches don't interfere
         let pool = MaxPool2d::new(2, 2, 0);
@@ -719,6 +711,43 @@ mod tests {
             .cloned()
             .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
             .expect("panic payload should be a string")
+    }
+
+    #[test]
+    fn test_maxpool2d_padding_never_beats_negative_input_h1_repro() {
+        // H1: padding with 0.0 made every padded window win with 0.0.
+        let pool = MaxPool2d::new(2, 2, 1);
+        let x = RawTensor::new(vec![-5.0; 16], &[1, 1, 4, 4], false);
+        let y = pool.forward(&x);
+        assert_eq!(y.borrow().shape, vec![1, 1, 3, 3]);
+        let out = y.data();
+        assert!(
+            out.iter().all(|&v| v == -5.0),
+            "padding must not win a window of all -5.0, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn test_maxpool2d_padding_routes_one_unit_per_output_to_real_input() {
+        // Shifted negative so that a 0.0 pad would win every border window.
+        let pool = MaxPool2d::new(3, 2, 1);
+        let x = RawTensor::randn(&[1, 2, 6, 6]);
+        let shifted: Vec<f32> = x.data().iter().map(|v| v - 10.0).collect();
+        let x = RawTensor::new(shifted, &[1, 2, 6, 6], true);
+        let y = pool.forward(&x);
+        assert!(y.data().iter().all(|&v| v < 0.0), "output leaked the pad");
+        y.sum().backward();
+        let grad = x.grad().expect("input should receive a gradient");
+        let total: f32 = grad.iter().sum();
+        assert_eq!(total, y.data().len() as f32, "one unit per output window");
+    }
+
+    #[test]
+    fn test_maxpool2d_padding_over_half_kernel_panics() {
+        let pool = MaxPool2d::new(2, 1, 2);
+        let x = RawTensor::randn(&[1, 1, 4, 4]);
+        let msg = forward_panic_message(&pool, &x);
+        assert!(msg.contains("at most half"), "{msg}");
     }
 
     #[test]

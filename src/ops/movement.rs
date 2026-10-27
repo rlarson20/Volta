@@ -2,6 +2,7 @@ use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::error::Result;
 use crate::shape::{Axis, Shape};
+use crate::spec::PadValue;
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
 
@@ -833,24 +834,44 @@ impl RawTensor {
         )
     }
 
-    /// Pad tensor with zeros
+    /// Pad a tensor, filling the new border with `value`.
     ///
     /// # Arguments
     /// * `padding` - For each dimension, (`left_pad`, `right_pad`)
+    /// * `value` - Fill for the border. Convolution wants [`PadValue::ZERO`];
+    ///   max pooling wants [`PadValue::NEG_INF`] (H1).
     /// # Panics
-    /// padding must match rank
+    /// Panics if `padding` does not match the rank or the padded shape is
+    /// invalid. Use [`Self::try_pad_with`] to get an error instead.
     #[must_use]
-    pub fn pad(self_t: &Tensor, padding: &[(usize, usize)]) -> Tensor {
+    pub fn pad_with(self_t: &Tensor, padding: &[(usize, usize)], value: PadValue) -> Tensor {
+        Self::try_pad_with(self_t, padding, value).unwrap_or_else(|e| panic!("Pad: {e}"))
+    }
+
+    /// Fallible version of [`Self::pad_with`].
+    ///
+    /// # Errors
+    /// * `VoltaError::InvalidParameter` - `padding.len()` differs from the rank
+    /// * Any `Shape::from_dims` error for the padded shape (zero dim, over the element cap)
+    pub fn try_pad_with(
+        self_t: &Tensor,
+        padding: &[(usize, usize)],
+        value: PadValue,
+    ) -> Result<Tensor> {
+        use crate::error::VoltaError;
+
         let (data, old_shape, device) = {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
-        assert_eq!(
-            padding.len(),
-            old_shape.len(),
-            "Padding length must match rank"
-        );
+        if padding.len() != old_shape.len() {
+            return Err(VoltaError::InvalidParameter(format!(
+                "Padding length ({}) must match tensor rank ({})",
+                padding.len(),
+                old_shape.len()
+            )));
+        }
 
         let new_shape: Vec<usize> = old_shape
             .iter()
@@ -858,17 +879,15 @@ impl RawTensor {
             .map(|(d, (l, r))| d + l + r)
             .collect();
 
-        let out_shape = Shape::from_dims(new_shape.clone()).unwrap_or_else(|e| {
-            panic!("Pad: invalid output shape {new_shape:?} from {old_shape:?}: {e}")
-        });
+        let out_shape = Shape::from_dims(new_shape.clone())?;
         let new_size = out_shape.numel();
 
         // Try GPU path first if available
         #[cfg(feature = "gpu")]
         if device.is_gpu()
-            && let Some(storage) = Self::gpu_pad(&data, &old_shape, &new_shape, padding)
+            && let Some(storage) = Self::gpu_pad(&data, &old_shape, &new_shape, padding, value)
         {
-            return edge(
+            return Ok(edge(
                 [self_t.clone()],
                 storage,
                 out_shape,
@@ -879,11 +898,11 @@ impl RawTensor {
                     },
                     original_shape: old_shape,
                 }),
-            );
+            ));
         }
 
-        // CPU fallback
-        let mut result = vec![0.0; new_size];
+        // CPU fallback. `PadMapper` only writes the interior, so the fill is the border.
+        let mut result = vec![value.get(); new_size];
         let cpu_data = data.to_vec();
 
         // Copy old data into padded positions
@@ -896,7 +915,7 @@ impl RawTensor {
 
         apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
 
-        edge(
+        Ok(edge(
             [self_t.clone()],
             Storage::cpu(result),
             out_shape,
@@ -907,7 +926,7 @@ impl RawTensor {
                 },
                 original_shape: old_shape,
             }),
-        )
+        ))
     }
 
     /// Extract a sub-region of the tensor

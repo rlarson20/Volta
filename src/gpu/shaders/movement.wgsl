@@ -111,7 +111,7 @@ fn expand(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 }
 
-// Pad: add zeros around edges (supports up to 4D)
+// Pad: fill edges with the f32 whose bits are in _padding[1] (supports up to 4D)
 @compute @workgroup_size(256)
 fn pad(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
@@ -156,7 +156,7 @@ fn pad(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let old_idx = coords_to_idx(old_coords, old_strides, params.rank);
             result[idx] = input[old_idx];
         } else {
-            result[idx] = 0.0;
+            result[idx] = bitcast<f32>(params._padding[1]);
         }
     }
 }
