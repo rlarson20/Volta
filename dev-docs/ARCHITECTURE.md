@@ -18,7 +18,7 @@ pub struct RawTensor {
     pub shape: Vec<usize>,          // Dimensions: [B, C, H, W]
     pub grad: Option<Storage>,      // Gradient accumulation
     pub requires_grad: bool,        // Track gradients?
-    pub grad_fn: Option<Box<dyn GradFn>>, // Backprop function
+    pub(crate) grad_fn: Option<GradFn>, // Backprop function (closed enum)
     pub parents: Vec<Tensor>,       // Dependency graph
     pub device: Device,             // CPU/GPU
 }
@@ -81,7 +81,7 @@ Recent refactor introduced `VoltaError` types using `thiserror` for comprehensiv
 // Each tensor stores its computation graph dependencies
 pub struct RawTensor {
     pub parents: Vec<Tensor>,           // Input tensors to this operation
-    pub grad_fn: Option<Box<dyn GradFn>>, // How to compute gradients backward
+    pub(crate) grad_fn: Option<GradFn>, // How to compute gradients backward
     // ...
 }
 
@@ -106,7 +106,7 @@ Each operation type follows a consistent pattern:
 
 1. **Enum definition** (e.g., `BinaryOp::Add`, `UnaryOp::Sigmoid`)
 2. **Forward implementation** in operation-specific functions
-3. **GradFn implementation** for backward pass
+3. **`GradFn` variant** wrapping a per-op struct with a `backward` method, plus an arm in the `GradFn::backward` and `GradFn::is_trivial` matches (`src/autograd.rs`)
 4. **TensorOps wrapper** for user-facing API
 5. **GPU kernel** (in `src/gpu/kernels.rs`) for GPU acceleration
 

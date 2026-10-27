@@ -29,17 +29,24 @@ Recursive DFS risks stack overflow on deep computation graphs. Iterative DFS wit
 
 > ⚠ **Gap:** Could not trace the `Rc` → liveness guarantee unprompted. Understand it when shown; not yet automatic.
 
-**`RefCell` borrow discipline:** `RefCell` provides interior mutability but panics on simultaneous mutable + immutable borrows. The engine must drop the `RefCell` borrow on a node _before_ calling `backward` on its parents, since backward may need to re-borrow the same node. `clone_box` is the mechanism that makes this safe.
+**`RefCell` borrow discipline:** `RefCell` provides interior mutability but panics on simultaneous mutable + immutable borrows. The engine must drop the `RefCell` borrow on a node _before_ calling `backward` on its parents, since backward may need to re-borrow the same node. Cloning the node's `GradFn` out of the borrow is what makes this safe.
 
 ---
 
-### `clone_box` and `dyn GradFn`
+### Closed `GradFn` enum
 
-**Decision:** `clone_box` works around the `Clone: Sized` bound that prevents `Clone` on trait objects.
+**Decision:** `GradFn` is a `pub(crate)` enum with one variant per op struct (`Unary(UnaryGradFn)`, `Binary(BinaryGradFn)`, ...), replacing `Box<dyn GradFn>` and `clone_box` (ADDENDUM §2.5). `GradFn::backward` and `GradFn::is_trivial` are exhaustive matches, so `wildcard_enum_match_arm` (denied in `Cargo.toml`) makes a new variant a compile error until it has both arms. `is_trivial` lists every variant rather than using a default, so a new op has to decide.
 
-`Box<dyn GradFn>` can't implement `Clone` directly because `Clone` requires `Sized`. `clone_box` is a method on the trait that each implementor defines, returning a `Box<dyn GradFn>`. This lets the engine clone grad functions without knowing their concrete type.
+**Why closed:** an open trait let an op ship with no backward pass wired in, and cost every implementor a hand-written `clone_box`. `Clone` is derived now.
 
-**Secondary role:** Calling `clone_box` to get an owned copy of the grad function lets the engine drop the `RefCell` borrow on the current node before recursing into parents — preventing a borrow panic.
+**Still true from the trait version:** `backward` clones the node's `GradFn` out of the `RefCell` borrow before recursing into parents. That drops the borrow, so a backward pass can re-borrow the same node.
+
+**Deviations from the sketch:**
+- No `Custom(CustomGrad)` variant. `edge()` is `pub(crate)`, so no downstream crate could construct one. Add it with a public custom-op API, if that ever exists.
+- Variants wrap the existing structs instead of carrying inline fields (`SumDim { shape, axis, keepdim }`). The change is mechanical and behavior-identical. Flattening belongs with `define_ops!` (§5.1) and the `Shape` field flip.
+- `RawTensor.grad_fn` is now `pub(crate)`, and the `*GradFn` structs and the `GradFn` re-export left the public API. With the trait gone they had no public methods or constructors.
+- The variant is `Igemm`, not `IGEMM`, for `clippy::upper_case_acronyms`. The struct keeps its name.
+- `autograd.rs` imports the conv, pool, and embedding structs from `nn::layers`, a crate-internal layering cost of a closed enum.
 
 ---
 
@@ -185,7 +192,7 @@ With the alias, `x.borrow_mut().requires_grad = true` was the documented idiom, 
 
 Before this, about 25 hand-written copies of the attach ritual existed, and each was a chance to gate on the wrong flag (B1: ConvTranspose gated on the input only, which froze the weights) or to drop parents (B2/B3). Migrating to `edge()` also exposed the same latent gating bug in `conv.rs`'s `direct_conv`/`igemm_forward`.
 
-**Deviation from the ADDENDUM sketch:** `edge()` took `Vec<usize>` and `Box<dyn GradFn>` because the `Shape` and `GradFn` enum were Phase 2 work. (Since Phase 2, `edge()` takes `Shape`; `GradFn` is still boxed.) It also takes an explicit `device`, since `Storage` doesn't uniquely determine a `Device` and every call site already tracked one.
+**Deviation from the ADDENDUM sketch:** `edge()` took `Vec<usize>` and `Box<dyn GradFn>` because the `Shape` and `GradFn` enum were Phase 2 work. (Since Phase 2, `edge()` takes `Shape` and the closed `GradFn` enum.) It also takes an explicit `device`, since `Storage` doesn't uniquely determine a `Device` and every call site already tracked one.
 
 ### `NO_GRAD` as a reentrant depth counter
 

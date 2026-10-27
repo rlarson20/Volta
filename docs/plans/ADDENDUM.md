@@ -595,7 +595,8 @@ and it gets cheaper every phase that lands before it.
 - `MatmulSpec` landed in `src/spec.rs` with the signature sketched in §1.2. It adds `a_batch`/`b_batch`/`out_batch` fields, covers only rank >= 2 operands of equal rank (the vector forms keep their own arms), and the three GPU matmul wrappers are `pub(crate)` and take it. This retires B4.
 - `PadValue` landed in `src/spec.rs` and is the one `pub` type there, because it appears in `pad_with`'s signature (re-exported from the crate root). It has the two named constants and no arbitrary-value constructor. The zero-only `pad` was removed rather than kept as a shorthand, so every caller picks a value. `pad_with` panics and `try_pad_with` returns `Result`, the same pair as `shrink`/`try_shrink` (the sketch has only a `Result`-returning `pad_with`). The GPU kernel gets the value through the spare `padding[1]` uniform slot. This retires H1.
 - `MaxPool2d` rejects padding greater than half the kernel (not in the sketch). With a `-inf` border, a window of pure padding would output `-inf` and send its gradient to index 0.
-- Still open: the rest of Phase 2 (`GradFn` enum §2.5, `define_ops!` §5.1, `into_loss` §2.2).
+- `GradFn` is now the closed enum from §2.5 (DECISIONS.md, "Closed `GradFn` enum"). Each variant wraps the existing per-op struct instead of carrying inline fields, and there is no `Custom` variant because `edge()` is `pub(crate)`. `RawTensor.grad_fn` is `pub(crate)`, and the `*GradFn` structs are no longer exported.
+- Still open: the rest of Phase 2 (`define_ops!` §5.1, `into_loss` §2.2).
 
 ---
 
