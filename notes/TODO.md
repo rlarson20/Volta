@@ -16,7 +16,7 @@ Last verified: 2026-10-26.
 
 ## High (OPUS §2)
 
-- [ ] **H1** MaxPool2d pads with `0.0` instead of `-inf`. Re-verified 2026-10-26: all-`-5` input with pad=1 outputs `0.0`. Fixed by `PadValue` (Phase 2).
+- [x] **H1** MaxPool2d padded with `0.0` instead of `-inf`. Fixed by `PadValue`: `pool_forward` calls `pad_with(.., PadValue::NEG_INF)`, and padding above half the kernel is rejected. Evidence: `maxpool::tests::test_maxpool2d_padding_never_beats_negative_input_h1_repro` (all-`-5` input, was `0.0`), `..._padding_routes_one_unit_per_output_to_real_input`, `..._padding_over_half_kernel_panics`; GPU parity in `tests/movement_backward_test.rs` (ran on a real adapter).
 - [x] **H2** `bce_with_logits_loss` now uses `max(x,0) - x*y + ln(1+exp(-|x|))`; `tests/bce_with_logits.rs` checks loss and gradient at ±100 and at x=0.
 - [~] **H3** Unsafe GPU cache accessors. `invalidate_cpu_cache` now takes `&mut self` (`991a8b7`). The `unsafe` slice accessors and the f64/f16/bf16 GPU reinterpretation remain. Fixed by `OnceCell` storage (Phase 3).
 - [ ] **H4** The library panics on ordinary data. Panic-vs-`Result` policy is undecided (see Rust/errors).
@@ -26,6 +26,9 @@ Last verified: 2026-10-26.
 - [ ] **H8** Muon is a toy and panics on GPU params.
 
 ## Medium (OPUS §3)
+
+- [ ] GPU `pad` packs dims 2 and 3 into 16 bits each (`GpuKernels::pad`), so a pad over 65535 on those dims truncates silently (invariant 5). It is also limited to rank <= 4.
+- [ ] `MaxPool2d::pool_forward` reads with `data.get(in_idx)` and writes with `if let Some` (and `MaxPool2dGradFn::backward` does the same), which skip silently (invariant 5).
 
 - [ ] The vector matmul arms ((2,1), (1,2), (1,1)) in `ops/matmul.rs` still write results through `if let Some` and `unwrap_or(0.0)`, which skip silently (invariant 5). They are not covered by `MatmulSpec`.
 - [ ] Every op deep-copies storage; broadcasts are materialized (no stride-0 views). Phase 3/4.
@@ -77,7 +80,7 @@ Last verified: 2026-10-26.
 - [x] `MatmulSpec` in `src/spec.rs` (§1.2/§1.3). Retires B4. Covers rank ≥ 2 operands; the vector forms are untouched.
 - [ ] Closed `GradFn` enum instead of `Box<dyn GradFn>` (§2.5).
 - [ ] `define_ops!` macro (§5.1).
-- [ ] `PadValue` (§2.4). Retires H1.
+- [x] `PadValue` (§2.4) in `src/spec.rs`, re-exported from the crate root. `pad` is gone; `pad_with`/`try_pad_with` take a required value. Retires H1.
 - [ ] `into_loss` / `ScalarLoss` (§2.2); switch `assert_trainable!` to it.
 
 ## Phase 3 — traits and storage

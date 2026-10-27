@@ -255,6 +255,20 @@ A size silently defaulting to 1 is the same class as `.get(i).unwrap_or(0.0)` (i
 - `GpuKernels::matmul`, `matmul_backward_a`, and `matmul_backward_b` are now `pub(crate)`, for the same reason as the conv wrappers. `test_gpu_matmul` was the only external caller; it moved from `tests/gpu_test.rs` into `src/gpu/kernels.rs` as a unit test (with a non-square case, so swapped `m/k/n` shows up).
 - The GPU matmul backward returned early even when a gradient kernel failed (a `FIXME`), which silently froze a parameter. It now returns early only if every required gradient was computed, and otherwise falls through to the CPU path with a `warn`. No test forces a kernel failure, so the fall-through path itself is untested.
 
+### PadValue (ADDENDUM §2.4)
+
+**Decision:** `PadValue` (`src/spec.rs`, re-exported at the crate root) is the required fill argument of `pad_with`/`try_pad_with`. It has `ZERO` and `NEG_INF` and nothing else. Convolution pads with `ZERO`; `MaxPool2d` pads with `NEG_INF`. H1 existed because max pooling reused a `pad` whose zero fill was implicit.
+
+**Why `pad` was removed, not kept as a zero shorthand:** a shorthand leaves the implicit default in reach, and the next op with a neutral element that isn't zero would reuse it the same way. Every caller (conv, tests, benches) now names its value.
+
+**Why the half-kernel guard lives in `MaxPool2d`:** `-inf` padding makes a window that is all padding output `-inf`, and `max_idx` stays 0, so backward adds that window's gradient to element 0. PyTorch forbids padding above half the kernel for this reason. `Window2dSpec` is shared with conv and im2col, where large padding is legal, so the check is in `pool_forward`, after the spec is built. Four existing tests used larger padding. Three now use a legal geometry and `test_maxpool2d_large_padding` is gone; the guard has its own test.
+
+**Rejected:**
+- A public `PadValue::constant(f32)`. No caller needs it, and an arbitrary value is how a bare `0.0` crept back in. Add it with the first constant-pad caller.
+- Reducing the pooled maximum over only the real elements, which would allow any padding. That is a different kernel and would change the backward routing; out of scope for a fill-value fix.
+
+**GPU:** the value rides in `MovementParams.padding[1]` as `f32::to_bits`, which was an unused uniform slot, so the `#[repr(C)]` layout and the other movement shaders are unchanged. `pad` in `movement.wgsl` reads it with `bitcast<f32>`. Backward needs nothing: it shrinks the gradient, which never touches the border.
+
 ## Concurrency and Async
 
 ### Stay synchronous
