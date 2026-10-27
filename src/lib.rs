@@ -58,7 +58,6 @@ pub mod tensor;
 pub mod utils;
 
 // Re-export main types for easy access
-pub use autograd::GradFn;
 pub use device::Device;
 pub use nn::layers::Dropout;
 pub use nn::layers::flatten::Flatten;
@@ -84,10 +83,7 @@ pub use io::{
 };
 pub use utils::ProgressBar;
 
-pub use ops::{
-    BinaryGradFn, BinaryOp, MatMulGradFn, MaxReduceGradFn, MeanGradFn, MovementGradFn, MovementOp,
-    MulAccGradFn, ReduceOp, SumGradFn, TernaryOp, UnaryGradFn, UnaryOp, WhereGradFn,
-};
+pub use ops::{BinaryOp, MovementOp, ReduceOp, TernaryOp, UnaryOp};
 
 // ===== TESTS =====
 //

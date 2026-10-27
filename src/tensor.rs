@@ -224,9 +224,9 @@ pub struct RawTensor {
     pub shape: Vec<usize>,     //tensor dims, eg [B,C,H,W]
     pub grad: Option<Storage>, //grad w.r.t tensor data, None if req_grad == false
     pub requires_grad: bool,
-    pub grad_fn: Option<Box<dyn GradFn>>, //func to compute grad, if result of op
-    pub parents: Vec<Tensor>,             //refs to parent tensor on graph
-    pub device: Device,                   //cpu/gpu
+    pub(crate) grad_fn: Option<GradFn>, //func to compute grad, if result of op
+    pub parents: Vec<Tensor>,           //refs to parent tensor on graph
+    pub device: Device,                 //cpu/gpu
 }
 
 // ===== RNG HELPERS =====
@@ -266,7 +266,7 @@ impl Clone for RawTensor {
             shape: self.shape.clone(),
             grad: self.grad.clone(),
             requires_grad: self.requires_grad,
-            grad_fn: self.grad_fn.as_ref().map(|gf| gf.clone_box()),
+            grad_fn: self.grad_fn.clone(),
             parents: self.parents.clone(),
             device: self.device.clone(),
         }
@@ -668,14 +668,19 @@ impl RawTensor {
 // ===== SOFTMAX & AXIS REDUCTIONS =====
 
 /// Gradient for `sum_dim`: broadcast ones back to input shape
-struct SumDimGradFn {
+#[derive(Clone)]
+pub(crate) struct SumDimGradFn {
     input_shape: Vec<usize>,
     dim: usize,
     keepdim: bool,
 }
 
-impl GradFn for SumDimGradFn {
-    fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
+impl SumDimGradFn {
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        _parents: &[Tensor],
+    ) -> Vec<Option<Tensor>> {
         let grad_data = &out_grad.data;
         let grad_shape = &out_grad.shape;
 
@@ -725,26 +730,23 @@ impl GradFn for SumDimGradFn {
 
         vec![Some(RawTensor::new(result, &self.input_shape, false))]
     }
-
-    fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(Self {
-            input_shape: self.input_shape.clone(),
-            dim: self.dim,
-            keepdim: self.keepdim,
-        })
-    }
 }
 
 /// Gradient for `max_dim`: sparse gradient to max elements only
-struct MaxDimGradFn {
+#[derive(Clone)]
+pub(crate) struct MaxDimGradFn {
     input_shape: Vec<usize>,
     max_indices: Vec<usize>, // linear indices of max elements
     dim: usize,
     keepdim: bool,
 }
 
-impl GradFn for MaxDimGradFn {
-    fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
+impl MaxDimGradFn {
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        _parents: &[Tensor],
+    ) -> Vec<Option<Tensor>> {
         let grad_data = &out_grad.data;
         let grad_shape = &out_grad.shape;
 
@@ -783,15 +785,6 @@ impl GradFn for MaxDimGradFn {
         }
 
         vec![Some(RawTensor::new(result, &self.input_shape, false))]
-    }
-
-    fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(Self {
-            input_shape: self.input_shape.clone(),
-            max_indices: self.max_indices.clone(),
-            dim: self.dim,
-            keepdim: self.keepdim,
-        })
     }
 }
 
@@ -870,7 +863,7 @@ impl RawTensor {
             storage,
             Shape::derived(final_shape),
             device,
-            Box::new(SumDimGradFn {
+            GradFn::SumDim(SumDimGradFn {
                 input_shape: shape,
                 dim,
                 keepdim,
@@ -924,7 +917,7 @@ impl RawTensor {
             shape: t.shape.clone(),
             grad: new_grad,
             requires_grad: t.requires_grad,
-            grad_fn: t.grad_fn.as_ref().map(|gf| gf.clone_box()),
+            grad_fn: t.grad_fn.clone(),
             parents: t.parents.clone(),
             device,
         };
@@ -999,7 +992,7 @@ impl RawTensor {
             storage,
             Shape::derived(final_shape),
             device,
-            Box::new(MaxDimGradFn {
+            GradFn::MaxDim(MaxDimGradFn {
                 input_shape: shape,
                 max_indices,
                 dim,

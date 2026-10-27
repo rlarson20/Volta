@@ -395,14 +395,18 @@ pub enum MovementOp {
 /// Movement ops don't change data values, only how they're indexed.
 /// During backward, we need to "undo" the movement to restore the original shape.
 #[derive(Clone)]
-pub struct MovementGradFn {
+pub(crate) struct MovementGradFn {
     op: MovementOp,
     original_shape: Vec<usize>,
 }
 
-impl GradFn for MovementGradFn {
+impl MovementGradFn {
     #[allow(clippy::too_many_lines)]
-    fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        _parents: &[Tensor],
+    ) -> Vec<Option<Tensor>> {
         let grad_tensor = match &self.op {
             MovementOp::Reshape { .. } => {
                 // Reshape back to original shape
@@ -607,13 +611,6 @@ impl GradFn for MovementGradFn {
 
         vec![Some(grad_tensor)]
     }
-
-    fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(Self {
-            op: self.op.clone(),
-            original_shape: self.original_shape.clone(),
-        })
-    }
 }
 
 // ===== MOVEMENT OPERATIONS =====
@@ -638,7 +635,7 @@ impl RawTensor {
             data,
             Shape::derived(new_shape.to_vec()),
             device,
-            Box::new(MovementGradFn {
+            GradFn::Movement(MovementGradFn {
                 op: MovementOp::Reshape {
                     new_shape: new_shape.to_vec(),
                 },
@@ -738,7 +735,7 @@ impl RawTensor {
             storage,
             Shape::derived(new_shape),
             device,
-            Box::new(MovementGradFn {
+            GradFn::Movement(MovementGradFn {
                 op: MovementOp::Permute { axes },
                 original_shape: old_shape,
             }),
@@ -783,7 +780,7 @@ impl RawTensor {
                 storage,
                 out_shape,
                 device,
-                Box::new(MovementGradFn {
+                GradFn::Movement(MovementGradFn {
                     op: MovementOp::Expand {
                         new_shape: new_shape.to_vec(),
                     },
@@ -825,7 +822,7 @@ impl RawTensor {
             Storage::cpu(result),
             out_shape,
             Device::CPU,
-            Box::new(MovementGradFn {
+            GradFn::Movement(MovementGradFn {
                 op: MovementOp::Expand {
                     new_shape: new_shape.to_vec(),
                 },
@@ -892,7 +889,7 @@ impl RawTensor {
                 storage,
                 out_shape,
                 device,
-                Box::new(MovementGradFn {
+                GradFn::Movement(MovementGradFn {
                     op: MovementOp::Pad {
                         padding: padding.to_vec(),
                     },
@@ -920,7 +917,7 @@ impl RawTensor {
             Storage::cpu(result),
             out_shape,
             Device::CPU,
-            Box::new(MovementGradFn {
+            GradFn::Movement(MovementGradFn {
                 op: MovementOp::Pad {
                     padding: padding.to_vec(),
                 },
@@ -1041,7 +1038,7 @@ impl RawTensor {
                 storage,
                 Shape::derived(new_shape),
                 device,
-                Box::new(MovementGradFn {
+                GradFn::Movement(MovementGradFn {
                     op: MovementOp::Shrink {
                         ranges: ranges.to_vec(),
                     },
@@ -1069,7 +1066,7 @@ impl RawTensor {
             Storage::cpu(result),
             Shape::derived(new_shape),
             Device::CPU,
-            Box::new(MovementGradFn {
+            GradFn::Movement(MovementGradFn {
                 op: MovementOp::Shrink {
                     ranges: ranges.to_vec(),
                 },
@@ -1112,7 +1109,7 @@ impl RawTensor {
                 storage,
                 Shape::derived(new_shape),
                 device,
-                Box::new(MovementGradFn {
+                GradFn::Movement(MovementGradFn {
                     op: MovementOp::Stride {
                         strides: strides.to_vec(),
                     },
@@ -1140,7 +1137,7 @@ impl RawTensor {
             Storage::cpu(result),
             Shape::derived(new_shape),
             Device::CPU,
-            Box::new(MovementGradFn {
+            GradFn::Movement(MovementGradFn {
                 op: MovementOp::Stride {
                     strides: strides.to_vec(),
                 },

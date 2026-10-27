@@ -143,12 +143,16 @@ pub struct Conv2d {
 
 /// Gradient function for im2col operation
 #[derive(Clone)]
-struct Im2colGradFn {
+pub(crate) struct Im2colGradFn {
     spec: Window2dSpec,
 }
 
-impl GradFn for Im2colGradFn {
-    fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
+impl Im2colGradFn {
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        _parents: &[Tensor],
+    ) -> Vec<Option<Tensor>> {
         // out_grad has shape (B*H_out*W_out, C*K*K)
         // We need to convert it back to (B, C, H, W) using col2im
 
@@ -183,10 +187,6 @@ impl GradFn for Im2colGradFn {
 
         vec![Some(grad_tensor)]
     }
-
-    fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(self.clone())
-    }
 }
 
 /// Gradient function for direct convolution operation
@@ -195,13 +195,13 @@ impl GradFn for Im2colGradFn {
 /// - Input gradient: Reverse convolution (accumulate from output positions)
 /// - Weight gradient: Direct accumulation (outer products of input patches and output gradients)
 #[derive(Clone)]
-struct DirectConvGradFn {
+pub(crate) struct DirectConvGradFn {
     spec: Conv2dSpec,
 }
 
-impl GradFn for DirectConvGradFn {
+impl DirectConvGradFn {
     #[allow(clippy::too_many_lines)]
-    fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+    pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         // parents: [input, weight]
         let x = parents.first().cloned();
         let weight = parents.get(1).cloned();
@@ -294,10 +294,6 @@ impl GradFn for DirectConvGradFn {
         };
 
         vec![grad_x, grad_w]
-    }
-
-    fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(self.clone())
     }
 }
 
@@ -488,14 +484,14 @@ impl DirectConvGradFn {
 /// Computes gradients for iGEMM operation using the same tiling strategy
 /// as the forward pass to maintain consistency and efficiency.
 #[derive(Clone)]
-struct IGEMMGradFn {
+pub(crate) struct IGEMMGradFn {
     spec: Conv2dSpec,
     _variant: IGEMMVariant, // Which iGEMM variant was used
 }
 
-impl GradFn for IGEMMGradFn {
+impl IGEMMGradFn {
     #[allow(clippy::too_many_lines)]
-    fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+    pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         // parents: [input, weight]
         let x = parents.first().cloned();
         let weight = parents.get(1).cloned();
@@ -620,10 +616,6 @@ impl GradFn for IGEMMGradFn {
         };
 
         vec![grad_x, grad_w]
-    }
-
-    fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(self.clone())
     }
 }
 
@@ -968,7 +960,7 @@ impl Conv2d {
                     col_data,
                     Shape::derived(vec![rows, cols]),
                     device,
-                    Box::new(Im2colGradFn { spec: *spec }),
+                    GradFn::Im2col(Im2colGradFn { spec: *spec }),
                 );
             }
         }
@@ -1024,7 +1016,7 @@ impl Conv2d {
             Storage::cpu(result),
             Shape::derived(vec![rows, cols]),
             Device::CPU,
-            Box::new(Im2colGradFn { spec: *spec }),
+            GradFn::Im2col(Im2colGradFn { spec: *spec }),
         )
     }
 
@@ -1188,7 +1180,7 @@ impl Conv2d {
             Storage::cpu(output),
             Shape::derived(spec.output_dims()),
             Device::CPU,
-            Box::new(DirectConvGradFn { spec: *spec }),
+            GradFn::DirectConv(DirectConvGradFn { spec: *spec }),
         )
     }
 
@@ -1210,7 +1202,7 @@ impl Conv2d {
                 storage,
                 Shape::derived(spec.output_dims()),
                 device,
-                Box::new(DirectConvGradFn { spec: *spec }),
+                GradFn::DirectConv(DirectConvGradFn { spec: *spec }),
             )
         } else {
             log::warn!("GPU direct convolution failed, falling back to CPU");
@@ -1281,7 +1273,7 @@ impl Conv2d {
                 storage,
                 Shape::derived(spec.output_dims()),
                 x_device,
-                Box::new(IGEMMGradFn {
+                GradFn::Igemm(IGEMMGradFn {
                     spec: *spec,
                     _variant: variant,
                 }),
@@ -1309,7 +1301,7 @@ impl Conv2d {
                 Storage::cpu(output),
                 Shape::derived(spec.output_dims()),
                 Device::CPU,
-                Box::new(IGEMMGradFn {
+                GradFn::Igemm(IGEMMGradFn {
                     spec: *spec,
                     _variant: variant,
                 }),

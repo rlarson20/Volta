@@ -17,12 +17,17 @@ pub enum ReduceOp {
 /// Gradient function for Sum reduction
 ///
 /// Sum reduction collapses to scalar, so gradient broadcasts back to original shape.
-pub struct SumGradFn {
+#[derive(Clone)]
+pub(crate) struct SumGradFn {
     input_shape: Vec<usize>,
 }
 
-impl GradFn for SumGradFn {
-    fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
+impl SumGradFn {
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        _parents: &[Tensor],
+    ) -> Vec<Option<Tensor>> {
         let size: usize = self.input_shape.iter().product();
         let grad_val: f32 = out_grad.data.first().copied().unwrap_or(0.0);
 
@@ -48,24 +53,23 @@ impl GradFn for SumGradFn {
             false,
         ))]
     }
-
-    fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(Self {
-            input_shape: self.input_shape.clone(),
-        })
-    }
 }
 
 /// Gradient function for Max reduction
 ///
 /// Only the maximum element receives gradient; all others get zero.
-pub struct MaxReduceGradFn {
+#[derive(Clone)]
+pub(crate) struct MaxReduceGradFn {
     input_shape: Vec<usize>,
     max_index: usize, // Linear index of the maximum element
 }
 
-impl GradFn for MaxReduceGradFn {
-    fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
+impl MaxReduceGradFn {
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        _parents: &[Tensor],
+    ) -> Vec<Option<Tensor>> {
         let size: usize = self.input_shape.iter().product();
         let grad_val: f32 = out_grad.data.first().copied().unwrap_or(0.0);
 
@@ -92,24 +96,22 @@ impl GradFn for MaxReduceGradFn {
         }
         vec![Some(RawTensor::new(grad_data, &self.input_shape, false))]
     }
-
-    fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(Self {
-            input_shape: self.input_shape.clone(),
-            max_index: self.max_index,
-        })
-    }
 }
 
 /// Gradient function for Mean reduction
 ///
 /// Each element gets gradient / `num_elements`.
-pub struct MeanGradFn {
+#[derive(Clone)]
+pub(crate) struct MeanGradFn {
     input_shape: Vec<usize>,
 }
 
-impl GradFn for MeanGradFn {
-    fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
+impl MeanGradFn {
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        _parents: &[Tensor],
+    ) -> Vec<Option<Tensor>> {
         let size: usize = self.input_shape.iter().product();
         let grad_val: f32 = out_grad.data.first().copied().unwrap_or(0.0);
 
@@ -136,12 +138,6 @@ impl GradFn for MeanGradFn {
             false,
         ))]
     }
-
-    fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(Self {
-            input_shape: self.input_shape.clone(),
-        })
-    }
 }
 
 // ===== REDUCE OPERATIONS =====
@@ -160,7 +156,7 @@ impl RawTensor {
             (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
-        let (result_val, grad_fn): (f32, Box<dyn GradFn>) = match op {
+        let (result_val, grad_fn): (f32, GradFn) = match op {
             ReduceOp::Sum => {
                 // Try GPU first if available
                 let sum: f32 = if device.is_gpu() {
@@ -180,7 +176,7 @@ impl RawTensor {
                 } else {
                     data.iter().sum()
                 };
-                (sum, Box::new(SumGradFn { input_shape: shape }))
+                (sum, GradFn::Sum(SumGradFn { input_shape: shape }))
             }
             ReduceOp::Max => {
                 // Try GPU first if available
@@ -221,7 +217,7 @@ impl RawTensor {
                 };
                 (
                     max_val,
-                    Box::new(MaxReduceGradFn {
+                    GradFn::MaxReduce(MaxReduceGradFn {
                         input_shape: shape,
                         max_index: max_idx,
                     }),
@@ -249,7 +245,7 @@ impl RawTensor {
                     let sum: f32 = data.iter().sum();
                     sum / (data.len() as f32)
                 };
-                (mean_val, Box::new(MeanGradFn { input_shape: shape }))
+                (mean_val, GradFn::Mean(MeanGradFn { input_shape: shape }))
             }
         };
 

@@ -109,7 +109,7 @@ impl Embedding {
             Storage::cpu(output_data),
             Shape::derived(output_shape),
             Device::CPU,
-            Box::new(EmbeddingGradFn {
+            GradFn::Embedding(EmbeddingGradFn {
                 indices: indices.to_vec(),
                 vocab_size: self.vocab_size,
                 embedding_dim: self.dim,
@@ -150,14 +150,18 @@ impl Module for Embedding {
 /// Scatters gradients from output back to the weight matrix at specific indices.
 /// Handles gradient accumulation for repeated indices.
 #[derive(Clone)]
-struct EmbeddingGradFn {
+pub(crate) struct EmbeddingGradFn {
     indices: Vec<usize>,
     vocab_size: usize,
     embedding_dim: usize,
 }
 
-impl GradFn for EmbeddingGradFn {
-    fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
+impl EmbeddingGradFn {
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        _parents: &[Tensor],
+    ) -> Vec<Option<Tensor>> {
         // out_grad: [num_indices, embedding_dim]
         // Scatter gradients to weight: [vocab_size, embedding_dim]
 
@@ -179,10 +183,6 @@ impl GradFn for EmbeddingGradFn {
             RawTensor::new(grad_weight, &[self.vocab_size, self.embedding_dim], false);
 
         vec![Some(grad_tensor)]
-    }
-
-    fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(self.clone())
     }
 }
 

@@ -78,13 +78,14 @@ impl RawTensor {
 ///
 /// Handles broadcasting during backward pass - gradients must be summed
 /// over dimensions that were broadcast in the forward pass.
-pub struct BinaryGradFn {
+#[derive(Clone)]
+pub(crate) struct BinaryGradFn {
     op: BinaryOp,
 }
 
-impl GradFn for BinaryGradFn {
+impl BinaryGradFn {
     #[allow(clippy::too_many_lines)]
-    fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+    pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         // SAFETY: Binary operations always create exactly 2 parents during forward pass
         debug_assert!(parents.len() >= 2, "Binary grad requires 2 parents");
         let x_ref = parents.first().cloned().unwrap();
@@ -355,11 +356,7 @@ impl GradFn for BinaryGradFn {
         vec![grad_x, grad_y]
     }
 
-    fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(Self { op: self.op })
-    }
-
-    fn is_trivial(&self) -> bool {
+    pub(crate) fn is_trivial(&self) -> bool {
         matches!(self.op, BinaryOp::Mod | BinaryOp::Cmplt)
     }
 }
@@ -602,7 +599,7 @@ impl RawTensor {
                     storage,
                     Shape::derived(shape),
                     device,
-                    Box::new(BinaryGradFn { op }),
+                    GradFn::Binary(BinaryGradFn { op }),
                 );
             }
         }
@@ -643,7 +640,7 @@ impl RawTensor {
             Storage::cpu(result_data),
             Shape::derived(out_shape),
             Device::CPU,
-            Box::new(BinaryGradFn { op }),
+            GradFn::Binary(BinaryGradFn { op }),
         )
     }
 

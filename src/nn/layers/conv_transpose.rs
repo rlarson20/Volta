@@ -138,15 +138,16 @@ impl ConvTranspose2d {
 ///
 /// The backward pass of transposed convolution is equivalent to the forward pass
 /// of regular convolution with respect to the input.
-struct ConvTranspose2dGradFn {
+#[derive(Clone)]
+pub(crate) struct ConvTranspose2dGradFn {
     spec: ConvTranspose2dSpec,
     weight: Tensor,
     has_bias: bool,
 }
 
-impl GradFn for ConvTranspose2dGradFn {
+impl ConvTranspose2dGradFn {
     #[allow(clippy::too_many_lines)]
-    fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+    pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         // parents: [input, weight, bias] if has_bias, else [input, weight]
         let input = parents
             .first()
@@ -318,14 +319,6 @@ impl GradFn for ConvTranspose2dGradFn {
 
         grads
     }
-
-    fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(Self {
-            spec: self.spec,
-            weight: self.weight.clone(),
-            has_bias: self.has_bias,
-        })
-    }
 }
 
 impl Module for ConvTranspose2d {
@@ -394,7 +387,7 @@ impl Module for ConvTranspose2d {
             final_data,
             Shape::derived(final_shape),
             Device::CPU,
-            Box::new(ConvTranspose2dGradFn {
+            GradFn::ConvTranspose2d(ConvTranspose2dGradFn {
                 spec,
                 weight: self.weight.clone(),
                 has_bias,

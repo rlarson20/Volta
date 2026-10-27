@@ -1,31 +1,105 @@
 use crate::device::Device;
+use crate::nn::layers::conv::{DirectConvGradFn, IGEMMGradFn, Im2colGradFn};
+use crate::nn::layers::conv_transpose::ConvTranspose2dGradFn;
+use crate::nn::layers::embedding::EmbeddingGradFn;
+use crate::nn::layers::maxpool::MaxPool2dGradFn;
+use crate::ops::binary::BinaryGradFn;
+use crate::ops::matmul::{MatMulGradFn, TransposeGradFn};
+use crate::ops::movement::MovementGradFn;
+use crate::ops::reduce::{MaxReduceGradFn, MeanGradFn, SumGradFn};
+use crate::ops::ternary::{MulAccGradFn, WhereGradFn};
+use crate::ops::unary::UnaryGradFn;
 use crate::shape::Shape;
 use crate::storage::Storage;
-use crate::tensor::{RawTensor, Tensor};
+use crate::tensor::{MaxDimGradFn, RawTensor, SumDimGradFn, Tensor};
 use std::cell::Cell;
 use std::collections::HashSet;
 
-// ===== GRADIENT FUNCTION TRAIT =====
+// ===== GRADIENT FUNCTIONS =====
 
-/// Trait for gradient computation functions.
+/// How gradients flow backward through one operation.
 ///
-/// Each operation type implements this to define how gradients flow backward.
-/// The `backward` method takes:
+/// A closed enum (ADDENDUM §2.5): each variant wraps the per-op struct that holds the
+/// state `backward` needs. Because `wildcard_enum_match_arm` is denied, adding a variant
+/// forces an arm in both matches below, so an op can't ship without a backward pass.
+///
+/// `backward` takes:
 /// - `out_grad`: gradient of loss w.r.t. this operation's output
 /// - `parents`: the input tensors to this operation
 ///
-/// Returns: vector of gradients w.r.t. each parent (Some if `requires_grad`, None otherwise)
-pub trait GradFn {
-    /// Compute gradients for parent tensors given output gradient
-    fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>>;
-    /// Clone this gradient function (needed for Rc/RefCell)
-    fn clone_box(&self) -> Box<dyn GradFn>;
+/// and returns one gradient per parent (`Some` if it needs one, `None` otherwise).
+#[derive(Clone)]
+pub(crate) enum GradFn {
+    Unary(UnaryGradFn),
+    Binary(BinaryGradFn),
+    MatMul(MatMulGradFn),
+    Transpose(TransposeGradFn),
+    Sum(SumGradFn),
+    MaxReduce(MaxReduceGradFn),
+    Mean(MeanGradFn),
+    SumDim(SumDimGradFn),
+    MaxDim(MaxDimGradFn),
+    MulAcc(MulAccGradFn),
+    Where(WhereGradFn),
+    Movement(MovementGradFn),
+    Im2col(Im2colGradFn),
+    DirectConv(DirectConvGradFn),
+    Igemm(IGEMMGradFn),
+    ConvTranspose2d(ConvTranspose2dGradFn),
+    MaxPool2d(MaxPool2dGradFn),
+    Embedding(EmbeddingGradFn),
+}
+
+impl GradFn {
+    /// Compute gradients for parent tensors given output gradient.
+    pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+        match self {
+            Self::Unary(g) => g.backward(out_grad, parents),
+            Self::Binary(g) => g.backward(out_grad, parents),
+            Self::MatMul(g) => g.backward(out_grad, parents),
+            Self::Transpose(g) => g.backward(out_grad, parents),
+            Self::Sum(g) => g.backward(out_grad, parents),
+            Self::MaxReduce(g) => g.backward(out_grad, parents),
+            Self::Mean(g) => g.backward(out_grad, parents),
+            Self::SumDim(g) => g.backward(out_grad, parents),
+            Self::MaxDim(g) => g.backward(out_grad, parents),
+            Self::MulAcc(g) => g.backward(out_grad, parents),
+            Self::Where(g) => g.backward(out_grad, parents),
+            Self::Movement(g) => g.backward(out_grad, parents),
+            Self::Im2col(g) => g.backward(out_grad, parents),
+            Self::DirectConv(g) => g.backward(out_grad, parents),
+            Self::Igemm(g) => g.backward(out_grad, parents),
+            Self::ConvTranspose2d(g) => g.backward(out_grad, parents),
+            Self::MaxPool2d(g) => g.backward(out_grad, parents),
+            Self::Embedding(g) => g.backward(out_grad, parents),
+        }
+    }
+
     /// Whether this gradient function is a no-op (e.g. `Mod`/`Cmplt`'s comparison-like
     /// ops, which have no useful derivative). `edge()` never attaches a trivial
-    /// `GradFn`, even if an input requires grad. Defaults to `false` since most ops
-    /// are differentiable; override on the handful that aren't.
-    fn is_trivial(&self) -> bool {
-        false
+    /// `GradFn`, even if an input requires grad. Every variant is spelled out so a new
+    /// one has to decide.
+    pub(crate) fn is_trivial(&self) -> bool {
+        match self {
+            Self::Binary(g) => g.is_trivial(),
+            Self::Unary(_)
+            | Self::MatMul(_)
+            | Self::Transpose(_)
+            | Self::Sum(_)
+            | Self::MaxReduce(_)
+            | Self::Mean(_)
+            | Self::SumDim(_)
+            | Self::MaxDim(_)
+            | Self::MulAcc(_)
+            | Self::Where(_)
+            | Self::Movement(_)
+            | Self::Im2col(_)
+            | Self::DirectConv(_)
+            | Self::Igemm(_)
+            | Self::ConvTranspose2d(_)
+            | Self::MaxPool2d(_)
+            | Self::Embedding(_) => false,
+        }
     }
 }
 
@@ -37,10 +111,8 @@ pub trait GradFn {
 /// "any input requires grad, `no_grad()` isn't active, and the grad isn't trivial" is
 /// the only rule that exists, everywhere.
 ///
-/// `shape` is a [`Shape`] (§1.2); `grad` is still `Box<dyn GradFn>` rather than the
-/// `GradFn` enum ADDENDUM.md sketches, since that is Phase 2 work (§2.5) not yet
-/// landed. Build `shape` with `Shape::derived` when the op computed it from existing
-/// tensors. `device` isn't in the ADDENDUM sketch
+/// `shape` is a [`Shape`] (§1.2); `grad` is the closed [`GradFn`] enum (§2.5). Build
+/// `shape` with `Shape::derived` when the op computed it from existing tensors. `device` isn't in the ADDENDUM sketch
 /// either, but is required in practice: `Storage` doesn't uniquely determine a
 /// `Device` value, and every real call site (GPU vs CPU op paths) already tracks
 /// device separately from the data it produced.
@@ -49,7 +121,7 @@ pub(crate) fn edge(
     data: Storage,
     shape: Shape,
     device: Device,
-    grad: Box<dyn GradFn>,
+    grad: GradFn,
 ) -> Tensor {
     let requires_grad = is_grad_enabled()
         && inputs.as_ref().iter().any(Tensor::requires_grad)
@@ -184,7 +256,7 @@ impl RawTensor {
             let (grad_fn, parents, grad_data, shape, device) = {
                 let t = tensor.borrow();
                 (
-                    t.grad_fn.as_ref().map(|gf| gf.clone_box()),
+                    t.grad_fn.clone(),
                     t.parents.clone(),
                     t.grad.clone(),
                     t.shape.clone(),

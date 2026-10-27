@@ -17,9 +17,10 @@ pub enum TernaryOp {
 /// - ∂z/∂x = y
 /// - ∂z/∂y = x
 /// - ∂z/∂w = 1
-pub struct MulAccGradFn;
-impl GradFn for MulAccGradFn {
-    fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+#[derive(Clone)]
+pub(crate) struct MulAccGradFn;
+impl MulAccGradFn {
+    pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         // SAFETY: MulAcc operation always creates 2 or 3 parents (x, y, optional w)
         debug_assert!(
             parents.len() >= 2,
@@ -66,23 +67,21 @@ impl GradFn for MulAccGradFn {
 
         vec![grad_x, grad_y, grad_z]
     }
-    fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(Self)
-    }
 }
 
 /// Gradient function for Where (conditional selection)
 ///
 /// Gradients flow through the branch that was selected, and must be reduced
 /// along any dimensions that were broadcast.
-pub struct WhereGradFn {
+#[derive(Clone)]
+pub(crate) struct WhereGradFn {
     condition: Vec<f32>,     // broadcasted condition (matches out_grad shape)
     true_shape: Vec<usize>,  // original shape of the "true" branch
     false_shape: Vec<usize>, // original shape of the "false" branch
 }
 
-impl GradFn for WhereGradFn {
-    fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+impl WhereGradFn {
+    pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         // SAFETY: Where operation always creates exactly 2 parents (true_branch, false_branch)
         debug_assert!(parents.len() >= 2, "Where grad requires 2 parents");
         let true_ref = parents.first().cloned().unwrap();
@@ -134,14 +133,6 @@ impl GradFn for WhereGradFn {
 
         vec![grad_true, grad_false]
     }
-
-    fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(Self {
-            condition: self.condition.clone(),
-            true_shape: self.true_shape.clone(),
-            false_shape: self.false_shape.clone(),
-        })
-    }
 }
 
 // ===== TERNARY OPERATIONS =====
@@ -189,7 +180,7 @@ impl RawTensor {
                                     sum,
                                     Shape::derived(shape_x),
                                     dev_x,
-                                    Box::new(MulAccGradFn),
+                                    GradFn::MulAcc(MulAccGradFn),
                                 );
                             }
                             log::warn!("GPU add for MulAcc failed; falling back to CPU path");
@@ -211,7 +202,7 @@ impl RawTensor {
                     Storage::cpu(result_data),
                     Shape::derived(shape_x),
                     Device::CPU,
-                    Box::new(MulAccGradFn),
+                    GradFn::MulAcc(MulAccGradFn),
                 )
             }
             TernaryOp::Where => {
@@ -250,7 +241,7 @@ impl RawTensor {
                     Storage::cpu(result_data),
                     Shape::derived(out_shape),
                     Device::CPU,
-                    Box::new(WhereGradFn {
+                    GradFn::Where(WhereGradFn {
                         condition: cond_bc,
                         true_shape,
                         false_shape,

@@ -8,12 +8,11 @@ pub mod ternary;
 pub mod unary;
 
 // Re-export operation types
-pub use binary::{BinaryGradFn, BinaryOp};
-pub use matmul::MatMulGradFn;
-pub use movement::{MovementGradFn, MovementOp};
-pub use reduce::{MaxReduceGradFn, MeanGradFn, ReduceOp, SumGradFn};
-pub use ternary::{MulAccGradFn, TernaryOp, WhereGradFn};
-pub use unary::{UnaryGradFn, UnaryOp};
+pub use binary::BinaryOp;
+pub use movement::MovementOp;
+pub use reduce::ReduceOp;
+pub use ternary::TernaryOp;
+pub use unary::UnaryOp;
 
 // ===== LOAD OPERATIONS =====
 // DONT KNOW WHERE LOADS GO

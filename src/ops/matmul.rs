@@ -11,19 +11,20 @@ use crate::{RawTensor, Tensor};
 ///
 /// Transpose is its own inverse: (A^T)^T = A
 /// So the gradient just transposes back.
-pub struct TransposeGradFn;
+#[derive(Clone)]
+pub(crate) struct TransposeGradFn;
 
-impl GradFn for TransposeGradFn {
-    fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
+impl TransposeGradFn {
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        _parents: &[Tensor],
+    ) -> Vec<Option<Tensor>> {
         let transposed = RawTensor::transpose_2d(&out_grad.data, &out_grad.shape);
         let dim0 = out_grad.shape.first().copied().unwrap_or(1);
         let dim1 = out_grad.shape.get(1).copied().unwrap_or(1);
         let new_shape = vec![dim1, dim0];
         vec![Some(RawTensor::new(transposed, &new_shape, false))]
-    }
-
-    fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(Self)
     }
 }
 
@@ -176,7 +177,7 @@ impl RawTensor {
                     Storage::cpu(result_data),
                     Shape::derived(vec![m]),
                     Device::CPU,
-                    Box::new(MatMulGradFn::vector()),
+                    GradFn::MatMul(MatMulGradFn::vector()),
                 )
             }
             (1, 2) => {
@@ -207,7 +208,7 @@ impl RawTensor {
                     Storage::cpu(result_data),
                     Shape::derived(vec![p]),
                     Device::CPU,
-                    Box::new(MatMulGradFn::vector()),
+                    GradFn::MatMul(MatMulGradFn::vector()),
                 )
             }
             (1, 1) => {
@@ -222,7 +223,7 @@ impl RawTensor {
                     Storage::cpu(vec![sum]),
                     Shape::derived(vec![1]),
                     Device::CPU,
-                    Box::new(MatMulGradFn::vector()),
+                    GradFn::MatMul(MatMulGradFn::vector()),
                 )
             }
             _ => {
@@ -248,7 +249,7 @@ impl RawTensor {
                                     storage,
                                     Shape::derived(spec.out_dims()),
                                     device,
-                                    Box::new(MatMulGradFn::matrix(spec)),
+                                    GradFn::MatMul(MatMulGradFn::matrix(spec)),
                                 );
                             }
                             log::warn!("GPU matmul requested but failed; falling back to CPU");
@@ -262,7 +263,7 @@ impl RawTensor {
                         Storage::cpu(result_data),
                         Shape::derived(spec.out_dims()),
                         Device::CPU,
-                        Box::new(MatMulGradFn::matrix(spec)),
+                        GradFn::MatMul(MatMulGradFn::matrix(spec)),
                     );
                 }
 
@@ -299,7 +300,7 @@ impl RawTensor {
                     Storage::cpu(result_data),
                     Shape::derived(spec.out_dims()),
                     Device::CPU,
-                    Box::new(MatMulGradFn::matrix(spec)),
+                    GradFn::MatMul(MatMulGradFn::matrix(spec)),
                 )
             }
         }
@@ -327,7 +328,7 @@ impl RawTensor {
             Storage::cpu(transposed_data),
             Shape::derived(new_shape),
             Device::CPU,
-            Box::new(TransposeGradFn),
+            GradFn::Transpose(TransposeGradFn),
         )
     }
 }
@@ -340,7 +341,8 @@ impl RawTensor {
 ///
 /// Handles 2D×2D, batched (equal rank, batch dims may broadcast), 2D×1D, 1D×2D, and
 /// 1D×1D (dot product).
-pub struct MatMulGradFn {
+#[derive(Clone)]
+pub(crate) struct MatMulGradFn {
     /// `Some` for the matrix forms (rank >= 2 on both sides). `None` for the vector
     /// forms, whose backward reads the parents' shapes directly.
     spec: Option<MatmulSpec>,
@@ -406,9 +408,9 @@ impl MatMulGradFn {
     }
 }
 
-impl GradFn for MatMulGradFn {
+impl MatMulGradFn {
     #[allow(clippy::too_many_lines, clippy::many_single_char_names)]
-    fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+    pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let x = parents
             .first()
             .map(|p| p.borrow())
@@ -584,12 +586,6 @@ impl GradFn for MatMulGradFn {
         };
 
         vec![grad_x, grad_y]
-    }
-
-    fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(Self {
-            spec: self.spec.clone(),
-        })
     }
 }
 

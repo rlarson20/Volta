@@ -40,13 +40,14 @@ pub enum UnaryOp {
 /// Gradient function for unary operations
 ///
 /// Stores which operation was performed so backward can apply the correct derivative.
-pub struct UnaryGradFn {
+#[derive(Clone)]
+pub(crate) struct UnaryGradFn {
     op: UnaryOp,
 }
 
-impl GradFn for UnaryGradFn {
+impl UnaryGradFn {
     #[allow(clippy::too_many_lines)]
-    fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+    pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let x = parents
             .first()
             .map(|p| p.borrow())
@@ -165,10 +166,6 @@ impl GradFn for UnaryGradFn {
         };
         vec![Some(RawTensor::new(grad_data, &x.shape, false))]
     }
-
-    fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(Self { op: self.op })
-    }
 }
 // Map a `UnaryOp` to the corresponding GPU kernel name, if supported.
 #[cfg(feature = "gpu")]
@@ -237,7 +234,7 @@ impl RawTensor {
                     storage,
                     Shape::derived(shape),
                     device,
-                    Box::new(UnaryGradFn { op }),
+                    GradFn::Unary(UnaryGradFn { op }),
                 );
             }
         }
@@ -268,7 +265,7 @@ impl RawTensor {
             Storage::cpu(result),
             Shape::derived(shape),
             Device::CPU,
-            Box::new(UnaryGradFn { op }),
+            GradFn::Unary(UnaryGradFn { op }),
         )
     }
 }

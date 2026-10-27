@@ -18,7 +18,7 @@ pub struct MaxPool2d {
 }
 
 #[derive(Clone)]
-struct MaxPool2dGradFn {
+pub(crate) struct MaxPool2dGradFn {
     max_indices: Vec<usize>,
 }
 
@@ -135,7 +135,7 @@ impl MaxPool2d {
             Storage::cpu(out_data),
             Shape::derived(spec.output_dims()),
             Device::CPU,
-            Box::new(MaxPool2dGradFn { max_indices }),
+            GradFn::MaxPool2d(MaxPool2dGradFn { max_indices }),
         )
     }
 }
@@ -157,8 +157,8 @@ impl Module for MaxPool2d {
     }
 }
 
-impl GradFn for MaxPool2dGradFn {
-    fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+impl MaxPool2dGradFn {
+    pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let input_shape = parents.first().unwrap().borrow().shape.clone();
         let mut grad_input = vec![0.0; input_shape.iter().product()];
 
@@ -170,10 +170,6 @@ impl GradFn for MaxPool2dGradFn {
         }
 
         vec![Some(RawTensor::new(grad_input, &input_shape, false))]
-    }
-
-    fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(self.clone())
     }
 }
 
