@@ -1,4 +1,6 @@
-#![allow(missing_docs)] // not public API
+//! GPU smoke tests: unary, binary, `matmul` (forward and backward), `mulacc`, and `sum_dim` / `max_dim` results are compared with the CPU, and outputs and gradients are checked to stay on the GPU. Also checks that a mixed-device binary op currently returns a CPU result (`DevicePolicy` in Phase 3 will change that).
+//!
+//! Each test returns early when no GPU is available.
 #![allow(clippy::similar_names)]
 use volta::Axis;
 #[test]

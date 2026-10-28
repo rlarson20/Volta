@@ -62,6 +62,9 @@ Last verified: 2026-10-28.
 - [ ] Add a regression test for multi-consumer (diamond) gradient accumulation.
 - [ ] Add a gradient test for `PositionalEncoding` (B3).
 - [ ] Remove example workarounds for broken components once the components are fixed.
+  - `examples/char_transformer_model.rs` hand-rolls positional encoding (B3).
+  - `examples/load_external_mnist.rs::run_validation` does not compare against PyTorch outputs; it skips the JSON parse and runs the demo inference.
+  - `examples/vae.rs` falls back to constant synthetic data (0.5) when MNIST is missing.
 
 ## Rust / API (OPUS §7–14)
 
@@ -76,7 +79,7 @@ Last verified: 2026-10-28.
 - [x] 16 positional `usize` arguments on GPU kernel wrappers. The eight conv wrappers take a conv spec and the three matmul wrappers take a `MatmulSpec` (Phase 2). No wrapper in `kernels.rs` takes three or more bare `usize`s now.
 - [ ] Move about 5,000 lines of tests out of `lib.rs`.
 - [ ] Stop exporting diagnostic tooling as public API.
-- [x] Merge gate: `src/lib.rs` has no `#![allow(missing_docs)]`; `clippy --all-targets -D warnings` and `cargo test` pass with the default features (2026-10-28).
+- [ ] Merge gate: remove `#![allow(missing_docs, clippy::missing_docs_in_private_items)]` in `src/lib.rs` before merging into `main`. About 688 library items are undocumented (2026-10-28 count: `gpu/kernels.rs` 140, `tensor.rs` 91, `gpu/context.rs` 83, `spec.rs` 56, `ops/movement.rs` 26, the rest spread over 40 files). `examples/`, `benches/`, and `tests/` are done.
 
 ## Phase 2 — types for dims and ops (done)
 

@@ -1,14 +1,12 @@
-#![allow(missing_docs, clippy::missing_docs_in_private_items)]
-// not public API
-// Character-Level Language Model using LSTM
-//
-// This example demonstrates:
-// - Embedding layer for character-to-vector mapping
-// - LSTM for sequential processing
-// - Character-level text generation
-//
-// The model predicts the next character in a sequence, learning patterns
-// from a small text corpus.
+//! Character-Level Language Model using LSTM
+//!
+//! This example demonstrates:
+//! - Embedding layer for character-to-vector mapping
+//! - LSTM for sequential processing
+//! - Character-level text generation
+//!
+//! The model predicts the next character in a sequence, learning patterns
+//! from a small text corpus.
 #![allow(clippy::cast_precision_loss)]
 use std::collections::HashMap;
 use volta::{
@@ -17,11 +15,14 @@ use volta::{
 
 /// Vocabulary for character-level language modeling
 struct CharVocab {
+    /// Character to index, built from the sorted unique characters of the corpus.
     char_to_idx: HashMap<char, usize>,
+    /// Index to character: the sorted unique characters, so `idx_to_char[char_to_idx[c]] == c`.
     idx_to_char: Vec<char>,
 }
 
 impl CharVocab {
+    /// Builds the vocabulary from the unique characters of `text`, in sorted order.
     fn from_text(text: &str) -> Self {
         let mut chars: Vec<char> = text.chars().collect();
         chars.sort_unstable();
@@ -38,20 +39,24 @@ impl CharVocab {
         }
     }
 
+    /// Number of distinct characters.
     fn size(&self) -> usize {
         self.idx_to_char.len()
     }
 
+    /// Maps `text` to indices, dropping characters that are not in the vocabulary.
     fn encode(&self, text: &str) -> Vec<usize> {
         text.chars()
             .filter_map(|c| self.char_to_idx.get(&c).copied())
             .collect()
     }
 
+    /// Index of `c`. Panics if `c` is not in the vocabulary.
     fn encode_char(&self, c: char) -> usize {
         *self.char_to_idx.get(&c).unwrap()
     }
 
+    /// Character at `idx`, or a space if `idx` is out of range.
     fn decode_char(&self, idx: usize) -> char {
         *self.idx_to_char.get(idx).unwrap_or(&' ')
     }
@@ -59,13 +64,18 @@ impl CharVocab {
 
 /// Character-level RNN model
 struct CharRNN {
+    /// Token index to `emb_dim` vector.
     embedding: Embedding,
+    /// Recurrent core: `emb_dim` inputs, `hidden_size` hidden units.
     lstm: LSTMCell,
+    /// Applied to the LSTM output during training only (see `train_mode`).
     dropout: Dropout,
+    /// Projects the hidden state to `vocab_size` logits.
     decoder: Linear,
 }
 
 impl CharRNN {
+    /// Builds the embedding, `LSTMCell`, dropout (probability `dropout_p`), and decoder.
     fn new(vocab_size: usize, emb_dim: usize, hidden_size: usize, dropout_p: f32) -> Self {
         Self {
             embedding: Embedding::new(vocab_size, emb_dim),
@@ -75,6 +85,7 @@ impl CharRNN {
         }
     }
 
+    /// Trainable parameters: embedding, LSTM, then decoder. Dropout has none.
     fn parameters(&self) -> Vec<volta::Tensor> {
         let mut params = Vec::new();
         params.extend(self.embedding.parameters());
@@ -83,6 +94,7 @@ impl CharRNN {
         params
     }
 
+    /// Turns dropout on (`true`) or off (`false`).
     fn train_mode(&mut self, mode: bool) {
         self.dropout.train(mode);
     }

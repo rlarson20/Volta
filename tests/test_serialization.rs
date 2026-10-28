@@ -1,8 +1,7 @@
-#![allow(missing_docs)] // not public API
-/// Serialization round-trip tests for `BatchNorm2d`, `LSTMCell`, and `ConvTranspose2d`.
-///
-/// Each layer is tested with both bincode and safetensors formats.
-/// Layers with optional bias are also tested in no-bias mode.
+//! Serialization round-trip tests for `BatchNorm2d`, `LSTMCell`, and `ConvTranspose2d`.
+//!
+//! Each layer is tested with both bincode and safetensors formats.
+//! Layers with optional bias are also tested in no-bias mode.
 use volta::io::{load_safetensors, load_state_dict, save_safetensors, save_state_dict};
 use volta::nn::Module;
 use volta::{BatchNorm2d, ConvTranspose2d, LSTMCell, RawTensor};

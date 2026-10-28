@@ -1,4 +1,4 @@
-#![allow(missing_docs)] // not public API
+//! `LSTMCell`: output shapes, zero-state initialization, gate math against known weights, state propagation across steps, forget-gate dominance, gradient flow, the no-bias variant, and `Module::forward`.
 use volta::io::{StateDict, TensorData};
 use volta::nn::{LSTMCell, Module};
 use volta::tensor::{RawTensor, TensorOps};

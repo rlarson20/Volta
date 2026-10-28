@@ -1,4 +1,6 @@
-#![allow(missing_docs, clippy::missing_docs_in_private_items)] // not public API
+//! DCGAN on MNIST: a transposed-convolution `Generator` and a convolutional `Discriminator`, trained adversarially with `SGD` and `bce_with_logits_loss`.
+//!
+//! Images are normalized to `[-1, 1]` to match the generator's `Tanh` output.
 #![allow(clippy::cast_precision_loss)]
 use volta::{
     Conv2d, ConvTranspose2d, Flatten, Linear, Module, ProgressBar, RawTensor, SGD, Tanh, TensorOps,
@@ -6,14 +8,20 @@ use volta::{
 };
 
 // Generator: noise -> fake images
+/// Generator: latent noise to a fake 28x28 image.
 struct Generator {
+    /// Projects the latent vector to `256 * 7 * 7` features.
     fc: Linear,
+    /// Upsamples `[256, 7, 7]` to `[128, 14, 14]`.
     deconv1: ConvTranspose2d,
+    /// Upsamples `[128, 14, 14]` to `[1, 28, 28]`.
     deconv2: ConvTranspose2d,
+    /// Squashes the output into `[-1, 1]`.
     tanh: Tanh,
 }
 
 impl Generator {
+    /// Builds the generator for `latent_dim`-wide noise.
     fn new(latent_dim: usize) -> Self {
         Self {
             fc: Linear::new(latent_dim, 256 * 7 * 7, true),
@@ -23,6 +31,7 @@ impl Generator {
         }
     }
 
+    /// Maps noise `[batch, latent_dim]` to images `[batch, 1, 28, 28]` in `[-1, 1]`.
     fn forward(&self, z: &volta::Tensor) -> volta::Tensor {
         let batch = *z.shape().first().unwrap_or(&1);
 
@@ -42,6 +51,7 @@ impl Generator {
         self.tanh.forward(&x)
     }
 
+    /// Trainable parameters of `fc`, `deconv1`, and `deconv2`.
     fn parameters(&self) -> Vec<volta::Tensor> {
         let mut params = Vec::new();
         params.extend(self.fc.parameters());
@@ -52,14 +62,20 @@ impl Generator {
 }
 
 // Discriminator: images -> real/fake classification
+/// Discriminator: a 28x28 image to a single real-vs-fake logit.
 struct Discriminator {
+    /// Downsamples `[1, 28, 28]` to `[64, 14, 14]`.
     conv1: Conv2d,
+    /// Downsamples `[64, 14, 14]` to `[128, 7, 7]`.
     conv2: Conv2d,
+    /// Flattens to `128 * 7 * 7` features.
     flatten: Flatten,
+    /// Maps the features to one logit. There is no sigmoid; the loss is `bce_with_logits_loss`.
     fc: Linear,
 }
 
 impl Discriminator {
+    /// Builds the discriminator.
     fn new() -> Self {
         Self {
             conv1: Conv2d::new(1, 64, 4, 2, 1, true),
@@ -69,6 +85,7 @@ impl Discriminator {
         }
     }
 
+    /// Maps images `[batch, 1, 28, 28]` to logits `[batch, 1]`.
     fn forward(&self, x: &volta::Tensor) -> volta::Tensor {
         // [batch, 1, 28, 28] -> [batch, 64, 14, 14]
         let x = self.conv1.forward(x).relu();
@@ -83,6 +100,7 @@ impl Discriminator {
         self.fc.forward(&x)
     }
 
+    /// Trainable parameters of `conv1`, `conv2`, and `fc`.
     fn parameters(&self) -> Vec<volta::Tensor> {
         let mut params = Vec::new();
         params.extend(self.conv1.parameters());

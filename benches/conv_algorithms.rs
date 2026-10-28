@@ -1,4 +1,3 @@
-#![allow(missing_docs)] // not public API
 //! Convolution algorithm comparison benchmarks
 //!
 //! Compares Direct vs im2col+GEMM convolution algorithms across various scenarios.
@@ -10,7 +9,7 @@
 //! - im2col output: (B * `H_out` * `W_out`, C * K * K)
 //! - Memory = B * `H_out` * `W_out` * C * K * K * 4 bytes (f32)
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_main};
 use volta::{Conv2d, ConvAlgo, RawTensor, Tensor};
 
 /// Generate a random 4D tensor (batch, channels, height, width)
@@ -331,13 +330,14 @@ fn bench_conv_memory_scaling(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    bench_conv_algorithm_comparison,
-    bench_conv_kernel_size_comparison,
-    bench_conv_batch_size_comparison,
-    bench_conv_spatial_size_comparison,
-    bench_conv_auto_mode,
-    bench_conv_memory_scaling
-);
+/// Runs the convolution algorithm benchmarks: Direct vs im2col+GEMM across algorithm, kernel size, batch size, and spatial size, the auto-selected mode, and memory scaling.
+fn benches() {
+    let mut criterion = Criterion::default().configure_from_args();
+    bench_conv_algorithm_comparison(&mut criterion);
+    bench_conv_kernel_size_comparison(&mut criterion);
+    bench_conv_batch_size_comparison(&mut criterion);
+    bench_conv_spatial_size_comparison(&mut criterion);
+    bench_conv_auto_mode(&mut criterion);
+    bench_conv_memory_scaling(&mut criterion);
+}
 criterion_main!(benches);

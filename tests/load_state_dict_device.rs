@@ -1,4 +1,6 @@
-#![allow(missing_docs)] // not public API
+//! H7: `load_state_dict` goes through `Tensor::load_weight`. A `Linear` state dict round-trips into a fresh layer with distinct, non-degenerate values and keeps its shape; a transposed shape or short data is rejected for `Linear`, and a wrong shape is rejected for `Embedding`.
+//!
+//! Device preservation (a GPU destination stays on the GPU) is covered by `tensor::load_weight_tests` in `src/`.
 use volta::io::{StateDict, TensorData};
 use volta::{Embedding, Linear, Module};
 

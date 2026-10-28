@@ -1,4 +1,3 @@
-#![allow(missing_docs, clippy::missing_docs_in_private_items)] // not public API
 //! Core tensor operation benchmarks
 //!
 //! Benchmarks for low-level tensor operations including:
@@ -8,7 +7,7 @@
 //! - Reduction operations (sum, mean, max)
 //! - Movement operations (reshape, transpose, etc.)
 #![allow(clippy::cast_precision_loss)]
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_main};
 use volta::{Axis, PadValue};
 use volta::{RawTensor, Tensor, TensorOps};
 
@@ -27,6 +26,7 @@ fn random_tensor_2d(rows: usize, cols: usize) -> Tensor {
 
 // ===== BINARY OPERATIONS =====
 
+/// `add`, `sub`, elementwise `mul`, and `div` over 64 to 4096 elements, plus a broadcasting add.
 fn bench_binary_ops(c: &mut Criterion) {
     let mut group = c.benchmark_group("binary_ops");
 
@@ -69,6 +69,7 @@ fn bench_binary_ops(c: &mut Criterion) {
 
 // ===== UNARY OPERATIONS =====
 
+/// `exp`, `log`, `relu`, `sigmoid`, `tanh`, and `sqrt` over 1024 and 4096 elements.
 fn bench_unary_ops(c: &mut Criterion) {
     let mut group = c.benchmark_group("unary_ops");
 
@@ -110,6 +111,7 @@ fn bench_unary_ops(c: &mut Criterion) {
 
 // ===== MATRIX MULTIPLICATION =====
 
+/// Square matmul for `n` in 64..=1024, plus 128x256 and 256x128 rectangular cases.
 fn bench_matmul(c: &mut Criterion) {
     let mut group = c.benchmark_group("matmul");
 
@@ -141,6 +143,7 @@ fn bench_matmul(c: &mut Criterion) {
 
 // ===== REDUCTION OPERATIONS =====
 
+/// `sum`, `mean`, and `max_reduce` over 1024 to 16384 elements, plus a 2-D `sum`.
 fn bench_reduce_ops(c: &mut Criterion) {
     let mut group = c.benchmark_group("reduce_ops");
 
@@ -173,6 +176,7 @@ fn bench_reduce_ops(c: &mut Criterion) {
 
 // ===== MOVEMENT OPERATIONS =====
 
+/// `reshape`, 2-D `transpose`, `expand`, `permute`, and `pad_with` (zero padding).
 fn bench_movement_ops(c: &mut Criterion) {
     let mut group = c.benchmark_group("movement_ops");
 
@@ -212,6 +216,7 @@ fn bench_movement_ops(c: &mut Criterion) {
 
 // ===== TERNARY OPERATIONS =====
 
+/// `mulacc` (fused multiply-accumulate) over 512 and 2048 elements.
 fn bench_ternary_ops(c: &mut Criterion) {
     let mut group = c.benchmark_group("ternary_ops");
 
@@ -232,14 +237,15 @@ fn bench_ternary_ops(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    bench_binary_ops,
-    bench_unary_ops,
-    bench_matmul,
-    bench_reduce_ops,
-    bench_movement_ops,
-    bench_ternary_ops
-);
+/// Runs the core tensor-op benchmarks: binary, unary, matmul, reduce, movement, and ternary ops.
+fn benches() {
+    let mut criterion = Criterion::default().configure_from_args();
+    bench_binary_ops(&mut criterion);
+    bench_unary_ops(&mut criterion);
+    bench_matmul(&mut criterion);
+    bench_reduce_ops(&mut criterion);
+    bench_movement_ops(&mut criterion);
+    bench_ternary_ops(&mut criterion);
+}
 
 criterion_main!(benches);

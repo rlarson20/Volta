@@ -1,14 +1,12 @@
-#![allow(missing_docs, clippy::missing_docs_in_private_items)]
-// not public API
-// Character-Level Transformer Language Model
-//
-// Validates that Volta's transformer components compose correctly under backprop.
-// Uses a tiny 1-layer transformer with causal attention on toy text.
-// Loss should decrease visibly within 100 epochs.
-//
-// Architecture: Embedding -> PosEnc -> [MHA + LN -> FFN + LN] -> Linear head
-//
-// Usage: cargo run --example transformer_lm
+//! Character-Level Transformer Language Model
+//!
+//! Validates that Volta's transformer components compose correctly under backprop.
+//! Uses a tiny 1-layer transformer with causal attention on toy text.
+//! Loss should decrease visibly within the 150 epochs it trains for.
+//!
+//! Architecture: `Embedding` -> positional encoding -> [attention + `LayerNorm` -> feed-forward + `LayerNorm`] -> `Linear` head
+//!
+//! Usage: `cargo run --example char_transformer_model`
 //
 // TODO: handle these concerns
 //
@@ -34,12 +32,16 @@ use volta::{
 
 // ===== Vocabulary =====
 
+/// Character vocabulary, built from the sorted unique characters of the corpus.
 struct CharVocab {
+    /// Character to index.
     char_to_idx: HashMap<char, usize>,
+    /// Index to character: the sorted unique characters.
     idx_to_char: Vec<char>,
 }
 
 impl CharVocab {
+    /// Builds the vocabulary from the unique characters of `text`, in sorted order.
     fn from_text(text: &str) -> Self {
         let mut chars: Vec<char> = text.chars().collect();
         chars.sort_unstable();
@@ -51,10 +53,12 @@ impl CharVocab {
         }
     }
 
+    /// Number of distinct characters.
     fn size(&self) -> usize {
         self.idx_to_char.len()
     }
 
+    /// Maps `text` to indices, dropping characters that are not in the vocabulary.
     fn encode(&self, text: &str) -> Vec<usize> {
         text.chars()
             .filter_map(|c| self.char_to_idx.get(&c).copied())
@@ -66,14 +70,20 @@ impl CharVocab {
 // Note: MultiHeadAttention::forward already adds the residual (x + attn_out).
 // We apply LayerNorm after, then FFN + manual residual + LayerNorm.
 
+/// One transformer layer: causal self-attention, `LayerNorm`, feed-forward with a residual, `LayerNorm`.
 struct TransformerLayer {
+    /// Causal self-attention. Its `forward` already adds the residual.
     attn: MultiHeadAttention,
+    /// Applied after attention (and its residual).
     norm1: LayerNorm,
+    /// Position-wise feed-forward network with a 4x hidden expansion.
     ffn: FeedForward,
+    /// Applied after the feed-forward residual.
     norm2: LayerNorm,
 }
 
 impl TransformerLayer {
+    /// Builds the layer for `embed_dim`-wide inputs with `num_heads` attention heads and no dropout.
     fn new(embed_dim: usize, num_heads: usize) -> Self {
         Self {
             attn: MultiHeadAttention::new(embed_dim, num_heads, 0.0),
@@ -83,6 +93,7 @@ impl TransformerLayer {
         }
     }
 
+    /// Maps `[batch, seq, embed_dim]` to the same shape.
     fn forward(&self, x: &volta::Tensor) -> volta::Tensor {
         // Attention + residual (MHA does this internally) + LayerNorm
         let x = self.norm1.forward(&self.attn.forward(x, true, None));
@@ -91,6 +102,7 @@ impl TransformerLayer {
         self.norm2.forward(&x.add(&ffn_out))
     }
 
+    /// Trainable parameters: attention, `norm1`, feed-forward, `norm2`.
     fn parameters(&self) -> Vec<volta::Tensor> {
         let mut p = self.attn.parameters();
         p.extend(self.norm1.parameters());
@@ -101,16 +113,23 @@ impl TransformerLayer {
 }
 
 // ===== Model =====
+/// Embedding, one `TransformerLayer`, and a linear head that predicts the next character.
 #[allow(dead_code)]
 struct TinyTransformerLM {
+    /// Token index to `embed_dim` vector.
     embedding: Embedding,
+    /// The single transformer layer.
     layer: TransformerLayer,
+    /// Projects `embed_dim` to `vocab_size` logits.
     head: volta::nn::Linear,
+    /// Width of the embeddings and of the layer.
     embed_dim: usize,
+    /// Number of output classes. Stored but not read after construction, hence the `dead_code` allow on the struct.
     vocab_size: usize,
 }
 
 impl TinyTransformerLM {
+    /// Builds a model with the given vocabulary size, embedding width, and head count.
     fn new(vocab_size: usize, embed_dim: usize, num_heads: usize) -> Self {
         Self {
             embedding: Embedding::new(vocab_size, embed_dim),
@@ -121,6 +140,7 @@ impl TinyTransformerLM {
         }
     }
 
+    /// Trainable parameters: embedding, layer, then head. The positional encoding adds none.
     fn parameters(&self) -> Vec<volta::Tensor> {
         let mut p = self.embedding.parameters();
         p.extend(self.layer.parameters());
@@ -128,8 +148,8 @@ impl TinyTransformerLM {
         p
     }
 
-    // Forward pass over a sequence of token indices.
-    // Returns logits of shape [seq_len, vocab_size].
+    /// Forward pass over a sequence of token indices.
+    /// Returns logits of shape `[seq_len, vocab_size]`.
     fn forward(&self, indices: &[usize]) -> volta::Tensor {
         let seq_len = indices.len();
 
@@ -152,6 +172,9 @@ impl TinyTransformerLM {
         self.head.forward(&x)
     }
 
+    /// Adds fixed sinusoidal positional encodings to `x` (`[seq_len, embed_dim]`).
+    ///
+    /// This hand-rolls what `PositionalEncoding` should do: that layer severs the graph (defect B3 in `notes/TODO.md`), so the encoding is built here as a constant without `requires_grad`. Remove this workaround once B3 is fixed.
     fn add_positional_encoding(&self, x: volta::Tensor, seq_len: usize) -> volta::Tensor {
         let d = self.embed_dim;
         let mut pe_data = vec![0.0f32; seq_len * d];

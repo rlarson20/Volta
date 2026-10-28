@@ -1,13 +1,12 @@
-#![allow(missing_docs)] // not public API
-// Super Resolution using Efficient Sub-Pixel Convolution
-//
-// This example demonstrates the PixelShuffle layer for image upscaling,
-// implementing the ESPCN architecture from:
-// "Real-Time Single Image and Video Super-Resolution Using an Efficient
-// Sub-Pixel Convolutional Neural Network" (Shi et al., 2016)
-//
-// Since Volta doesn't have image I/O yet, we use synthetic data to demonstrate
-// the architecture and training process.
+//! Super Resolution using Efficient Sub-Pixel Convolution
+//!
+//! This example demonstrates the `PixelShuffle` layer for image upscaling,
+//! implementing the ESPCN architecture from:
+//! "Real-Time Single Image and Video Super-Resolution Using an Efficient
+//! Sub-Pixel Convolutional Neural Network" (Shi et al., 2016)
+//!
+//! Since Volta doesn't have image I/O yet, we use synthetic data to demonstrate
+//! the architecture and training process.
 
 use volta::{
     Adam, Conv2d, Module, PixelShuffle, RawTensor, ReLU, Sequential, manual_seed, mse_loss,

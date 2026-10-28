@@ -1,4 +1,4 @@
-#![allow(missing_docs)] // not public API
+//! Gap-filling tests: `BatchNorm2d` / `Flatten` gradient checks, `Dropout` edge cases, `SGD` momentum arithmetic, and mutable `Storage` access.
 use volta::{Dropout, Flatten};
 use volta::{
     RawTensor, Storage, TensorOps, check_gradients_simple,

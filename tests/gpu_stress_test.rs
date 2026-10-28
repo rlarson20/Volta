@@ -1,4 +1,4 @@
-#![allow(missing_docs)] // not public API
+//! Direct `GpuKernels` checks against fixed expected values, run on `GpuBuffer`s: `Sub`, `Mul`, and `Div` binary ops, and the `ReLU`, `Sqrt`, `Neg`, `Recip`, `Exp2`, `Log2`, `Sin`, and `Cos` unary ops. Only built with the `gpu` feature; each test skips when no GPU is available.
 #[cfg(feature = "gpu")]
 use volta::gpu;
 #[cfg(feature = "gpu")]

@@ -1,4 +1,4 @@
-#![allow(missing_docs)] // not public API
+//! Safety and serialization checks: device handling, the tensor size cap, invalid `Conv2d` parameters, `Sequential` state dicts (stateless layers skipped, each layer called once), `load_state_dict_checked` reporting differences, and broadcast shape errors.
 use std::cell::Cell;
 use std::rc::Rc;
 use volta::io::{StateDict, TensorData, load_state_dict_checked};

@@ -1,10 +1,9 @@
-#![allow(missing_docs, clippy::missing_docs_in_private_items)] // not public API
 //! GPU vs CPU performance comparison benchmarks
 //!
 //! These benchmarks are only available when the `gpu` feature is enabled.
 //! They compare CPU and GPU performance for key operations.
 #![allow(clippy::cast_precision_loss)]
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_main};
 use volta::{Device, RawTensor, Tensor, TensorOps};
 
 #[cfg(feature = "gpu")]
@@ -30,11 +29,13 @@ fn random_tensor_2d(rows: usize, cols: usize) -> Tensor {
 
 // ===== GPU AVAILABILITY CHECK =====
 
+/// Whether a GPU context could be created, so the benches can skip themselves when it could not.
 #[cfg(feature = "gpu")]
 fn is_gpu_enabled() -> bool {
     get_gpu_context().is_some()
 }
 
+/// Always `false`: without the `gpu` feature there is no GPU context to benchmark.
 #[cfg(not(feature = "gpu"))]
 fn is_gpu_enabled() -> bool {
     false
@@ -42,6 +43,7 @@ fn is_gpu_enabled() -> bool {
 
 // ===== MATMUL COMPARISON =====
 
+/// Square `n x n` matmul on CPU vs GPU for `n` in 256..=2048. Skipped when no GPU is available.
 fn bench_matmul_cpu_vs_gpu(c: &mut Criterion) {
     if !is_gpu_enabled() {
         return; // Skip if GPU not available
@@ -158,6 +160,7 @@ fn bench_matmul_cpu_vs_gpu(c: &mut Criterion) {
 
 // ===== BINARY OPERATIONS COMPARISON =====
 
+/// Elementwise `add` and `mul` on CPU vs GPU over 4096, 16384, and 65536 elements. Skipped when no GPU is available.
 fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
     if !is_gpu_enabled() {
         return;
@@ -292,6 +295,7 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
 
 // ===== UNARY OPERATIONS COMPARISON =====
 
+/// Elementwise `exp` and `relu` on CPU vs GPU over 4096, 16384, and 65536 elements. Skipped when no GPU is available.
 fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
     if !is_gpu_enabled() {
         return;
@@ -420,6 +424,7 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
 
 // ===== REDUCTION OPERATIONS COMPARISON =====
 
+/// `sum` and `mean` reductions on CPU vs GPU over 4096, 16384, and 65536 elements. Skipped when no GPU is available.
 fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
     if !is_gpu_enabled() {
         return;
@@ -548,6 +553,7 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
 
 // ===== MEMORY TRANSFER OVERHEAD =====
 
+/// Host-to-device copy cost (`to_device` plus a sync) for 1024 to 262144 `f32` elements, reported as bytes per second. Skipped when no GPU is available.
 fn bench_memory_transfer(c: &mut Criterion) {
     if !is_gpu_enabled() {
         return;
@@ -639,6 +645,7 @@ fn bench_memory_transfer(c: &mut Criterion) {
 
 // ===== GPU BATCH PROCESSING =====
 
+/// Kernel-dispatch overhead on the GPU: `many_small_ops` runs an op over 20 tensors of 256 elements, `single_large_op` runs it once over one 5120-element tensor (the same total work). Uses 10 samples and checks system resources first to avoid exhausting memory. Skipped when no GPU is available.
 #[cfg(feature = "gpu")]
 #[allow(clippy::too_many_lines)]
 fn bench_gpu_batch_processing(c: &mut Criterion) {
@@ -824,19 +831,21 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
     }
 }
 
+/// No-op: without the `gpu` feature there is nothing to benchmark.
 #[cfg(not(feature = "gpu"))]
 fn bench_gpu_batch_processing(_c: &mut Criterion) {
     // No-op when GPU feature is disabled
 }
 
-criterion_group!(
-    benches,
-    bench_gpu_batch_processing, // Lightest: 20 tensors × 256 elements
-    bench_binary_ops_cpu_vs_gpu,
-    bench_unary_ops_cpu_vs_gpu,
-    bench_reduce_ops_cpu_vs_gpu,
-    bench_memory_transfer,
-    bench_matmul_cpu_vs_gpu, // Heaviest: 2048×2048 matrices, run last
-);
+/// Runs the CPU-vs-GPU benchmarks, lightest first and the 2048x2048 matmul last. The GPU groups skip themselves when no GPU is available.
+fn benches() {
+    let mut criterion = Criterion::default().configure_from_args();
+    bench_gpu_batch_processing(&mut criterion); // Lightest: 20 tensors × 256 elements
+    bench_binary_ops_cpu_vs_gpu(&mut criterion);
+    bench_unary_ops_cpu_vs_gpu(&mut criterion);
+    bench_reduce_ops_cpu_vs_gpu(&mut criterion);
+    bench_memory_transfer(&mut criterion);
+    bench_matmul_cpu_vs_gpu(&mut criterion); // Heaviest: 2048×2048 matrices, run last
+}
 
 criterion_main!(benches);

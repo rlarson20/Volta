@@ -1,4 +1,6 @@
-#![allow(missing_docs)] // not public API
+//! Variational autoencoder on MNIST: a `Linear` encoder producing `mu` and `logvar`, reparameterized sampling, and a `Linear` decoder, trained with `SGD` on reconstruction (MSE) plus KL divergence.
+//!
+//! If the MNIST files are missing it falls back to constant synthetic data, which only exercises the code path and does not train a meaningful model.
 use volta::{
     Linear, Module, ProgressBar, RawTensor, SGD, TensorOps, kl_divergence_gaussian,
     load_mnist_images, mse_loss, normalize, randn_like,

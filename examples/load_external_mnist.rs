@@ -1,4 +1,4 @@
-#![allow(missing_docs, clippy::missing_docs_in_private_items)] // not public API
+//! Loads `PyTorch` weights (a `SafeTensors` file) into a Volta `Sequential` through `StateDictMapper`, transposing the `fc1` and `fc2` weights from the `[out, in]` layout `PyTorch` uses, then runs a demo inference.
 use std::path::Path;
 use volta::{
     Linear, Module, RawTensor, ReLU, Sequential,
@@ -104,6 +104,9 @@ fn main() {
     println!("✓ Model ready for inference");
 }
 
+/// Intended to compare Volta's outputs against `PyTorch` reference outputs read from `test_data_path`.
+///
+/// It does not do so yet: it reads the file, skips the JSON parsing (no `serde_json` dependency), and runs `run_demo_inference` instead.
 fn run_validation(model: &Sequential, test_data_path: &str) {
     println!("\nRunning validation against PyTorch outputs...");
 
@@ -128,6 +131,7 @@ fn run_validation(model: &Sequential, test_data_path: &str) {
 
     run_demo_inference(model);
 }
+/// Runs `model` on one synthetic, flattened 28x28 input and prints the output shape and values. It checks that the loaded model runs, not that its outputs are correct.
 #[allow(clippy::cast_precision_loss)]
 fn run_demo_inference(model: &Sequential) {
     println!("Running demo inference...");

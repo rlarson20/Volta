@@ -1,4 +1,4 @@
-#![allow(missing_docs)] // not public API
+//! Time-sequence prediction: an `LSTMCell` (1 input, 32 hidden units) followed by a `Linear` output layer, trained with `SGD` with momentum on sine-wave sequences, then tested on a held-out prediction.
 use volta::{LSTMCell, Module, ProgressBar, RawTensor, SGD};
 
 #[allow(clippy::cast_precision_loss)]

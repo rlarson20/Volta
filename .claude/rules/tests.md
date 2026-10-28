@@ -16,3 +16,4 @@ paths:
 - Examples must not route around broken components. If an example needs a workaround, file the defect in `notes/TODO.md` instead.
 - Run `cargo clippy --all-targets`, not just `--all`, so tests and examples get linted.
 - GPU integration tests are `tests/gpu_*.rs`. CPU/GPU parity tests are `tests/parity_*.rs`.
+- Document tests, examples, and benches like the library: a `//!` crate doc saying what the target covers, and `///` on every item. Never silence `missing_docs` or `clippy::missing_docs_in_private_items` with an `allow`; satisfy the lint. `criterion_group!` (criterion 0.5) generates an undocumented `pub fn`, so write the documented `fn benches()` by hand.

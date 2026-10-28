@@ -1,4 +1,3 @@
-#![allow(missing_docs, clippy::missing_docs_in_private_items)] // not public API
 //! Neural network layer benchmarks
 //!
 //! Benchmarks for high-level neural network components including:
@@ -7,7 +6,7 @@
 //! - `MaxPool2d` layer
 //! - Sequential models (end-to-end forward pass)
 #![allow(clippy::cast_precision_loss)]
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, black_box, criterion_main};
 use volta::{Conv2d, Linear, MaxPool2d, Module, RawTensor, ReLU, Sequential, Tensor, TensorOps};
 
 /// Generate a random tensor of the given size
@@ -32,6 +31,7 @@ fn random_tensor_4d(batch: usize, channels: usize, height: usize, width: usize) 
 
 // ===== LINEAR LAYER =====
 
+/// `Linear` forward pass at MNIST-style (784x128), output (128x10), square (512x512), and rectangular (1024x256) sizes.
 fn bench_linear_forward(c: &mut Criterion) {
     let mut group = c.benchmark_group("linear_forward");
 
@@ -63,6 +63,7 @@ fn bench_linear_forward(c: &mut Criterion) {
     group.finish();
 }
 
+/// `Linear` forward plus backward at 128x64 and 256x128.
 fn bench_linear_backward(c: &mut Criterion) {
     let mut group = c.benchmark_group("linear_backward");
 
@@ -90,6 +91,7 @@ fn bench_linear_backward(c: &mut Criterion) {
 
 // ===== CONV2D LAYER =====
 
+/// `Conv2d` forward pass for 1x1, 3x3, 5x5, and 7x7 kernels, and for small grayscale, small RGB, and medium RGB inputs.
 fn bench_conv2d_forward(c: &mut Criterion) {
     let mut group = c.benchmark_group("conv2d_forward");
 
@@ -142,6 +144,7 @@ fn bench_conv2d_forward(c: &mut Criterion) {
 
 // ===== MAXPOOL2D LAYER =====
 
+/// `MaxPool2d` forward pass with a 2x2 window, an overlapping 3x3 window with stride 2, and a 4x4 window.
 fn bench_maxpool2d(c: &mut Criterion) {
     let mut group = c.benchmark_group("maxpool2d");
 
@@ -168,6 +171,7 @@ fn bench_maxpool2d(c: &mut Criterion) {
 
 // ===== SEQUENTIAL MODEL =====
 
+/// `Sequential` forward pass end to end: a small `MLP`, a medium `MLP`, and a small conv + `ReLU` + pool model.
 fn bench_sequential_forward(c: &mut Criterion) {
     let mut group = c.benchmark_group("sequential_forward");
 
@@ -211,6 +215,7 @@ fn bench_sequential_forward(c: &mut Criterion) {
 
 // ===== ACTIVATION FUNCTIONS =====
 
+/// `ReLU` (1024 and 4096 elements), `sigmoid`, and `tanh` (1024 elements).
 fn bench_activations(c: &mut Criterion) {
     let mut group = c.benchmark_group("activations");
 
@@ -237,14 +242,15 @@ fn bench_activations(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    bench_linear_forward,
-    bench_linear_backward,
-    bench_conv2d_forward,
-    bench_maxpool2d,
-    bench_sequential_forward,
-    bench_activations
-);
+/// Runs the layer benchmarks: `Linear`, `Conv2d`, `MaxPool2d`, `Sequential`, and activations.
+fn benches() {
+    let mut criterion = Criterion::default().configure_from_args();
+    bench_linear_forward(&mut criterion);
+    bench_linear_backward(&mut criterion);
+    bench_conv2d_forward(&mut criterion);
+    bench_maxpool2d(&mut criterion);
+    bench_sequential_forward(&mut criterion);
+    bench_activations(&mut criterion);
+}
 
 criterion_main!(benches);

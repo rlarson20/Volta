@@ -1,4 +1,4 @@
-#![allow(missing_docs)] // not public API
+//! `LayerNorm` demonstration: a 2-D `(B, C)` input, a transformer-style 3-D `(B, T, C)` input, and a gradient-flow check that backprop reaches the input, `gamma`, and `beta`.
 use volta::RawTensor;
 use volta::{LayerNorm, Module, TensorOps};
 

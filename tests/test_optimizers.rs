@@ -1,4 +1,4 @@
-#![allow(missing_docs)] // not public API
+//! `Adam` and `SGD` against hand-computed updates: Adam bias correction, moment accumulation over several steps, and weight decay; SGD without momentum and with weight decay; and convergence of both on a convex problem.
 use volta::nn::{Adam, SGD};
 use volta::{RawTensor, Storage, TensorOps};
 

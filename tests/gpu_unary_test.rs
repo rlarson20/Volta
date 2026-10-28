@@ -1,4 +1,4 @@
-#![allow(missing_docs)] // not public API
+//! GPU autograd for `Recip`, `Exp2`, `Log2`, `Sin`, and `Cos`: the gradient of each op on a GPU tensor is checked against its analytic derivative. Only built with the `gpu` feature; skips when no GPU is available.
 #[test]
 #[cfg(feature = "gpu")]
 #[allow(clippy::too_many_lines)]
