@@ -476,6 +476,15 @@ impl Storage {
 
 Every hidden GPU→CPU sync (today invisible behind `data.iter()`) and every hidden panic (`iter_mut` on GPU storage — the Muon bug, H8) becomes a visible `Result` or an explicit `Cow` at the call site. Grep-ability is the feature: `to_host_f32` in a hot loop is a reviewable smell; `Deref` coercion is not.
 
+### Matmul under views (decide in Phase 3)
+
+**Prevents:** the leading-dimension hazard. Today every buffer is dense row-major, so `matmul_raw` can hardcode `lda = k`, `ldb = n`, `ldc = n`. Once storage carries strides and broadcasts become stride-0 views (this section; Phase 4 for broadcasts), a transposed or sliced view reaching `matmul_raw` computes the wrong product with no error. Pick one before the storage rewrite lands:
+
+- **Contiguous-only:** `matmul` asserts contiguity and materializes otherwise. Simple, and keeps today's `transpose_2d` copies in the backward pass.
+- **Strided:** `MatmulSpec` carries per-operand `(rs, cs)` and passes them to `matrixmultiply::sgemm`, which already takes a row and column stride per operand. That is more general than `lda`: a transpose is swapped strides with no copy, which retires the backward pass's `transpose_2d` copies and the materialized batch broadcasts. Bounds-check `(rows-1)*rs + (cols-1)*cs < len` in the spec. Accelerate's `cblas_sgemm` only takes `lda`, so views that are not a plain row-major sub-tile need a copy on that path.
+
+Either way, `matmul_raw` stops being a safe `pub fn` over raw slices: make it `pub(crate)`, or assert slice lengths against the spec. A strided reference GEMM under `#[cfg(test)]` (§10) is the oracle for both options.
+
 ---
 
 ## 8. Loud-by-default kernels: the indexing policy
@@ -547,6 +556,8 @@ The Part I finding was that tests were _plentiful and well-placed but blind to c
 
    A random-graph FD check would have caught B4 (unequal-rank matmul composes trivially in a random DAG) and keeps catching whatever op ships next with a bad backward, at tolerances the generator controls rather than the author relaxes.
 
+   A matching rule for matmul in particular: parity and gradient tests use a randomly weighted loss (not `.sum()`), asymmetric data, and at least one shape that is non-square, larger than one 16x16 GPU tile, and not a multiple of 16. Pair them with a `#[cfg(test)]` reference GEMM that takes explicit `(rs, cs)` per operand, so the CPU oracle isn't an optimized third-party kernel (conv already has this pattern: direct vs im2col/iGEMM).
+
 3. **trybuild UI tests for the type-system guarantees.** Every pattern in this document that promises "this misuse no longer compiles" — sealed traits (§3.1), `IndexedLayer`/`Sequential` (§3.2), `into_loss` (§2.2) — gets a `tests/compile_fail/*.rs` with an expected error. This is how you _prove_ a prevention instead of hoping: the pattern's value is a compile error, so the test suite must contain that compile error, expected and pinned.
 
 4. **`cargo-mutants` in CI (weekly, not per-PR).** It mutates code and fails if tests still pass — which is precisely the detector for "tests that assert the bug." The LSTM test that enshrines `grad is None` as expected behavior (`test_lstm.rs:257-292`) survives every conventional tooling choice and dies the day a mutant of `slice_gate` is proven _equivalent_ under the suite. That test was green infrastructure for a defect; mutation testing is the only listed tool that flags it.
@@ -561,7 +572,7 @@ Ordered by prevention-per-risk; each phase compiles and ships independently.
 
 | Phase                      | Contents                                                                                                                                                 | Prevents                                               | Size                |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | ------------------- |
-| 3 — traits and storage     | Sealed + split traits w/ trybuild (§3); `DevicePolicy` (§2.1); storage `Arc`/`OnceCell`/no-Deref (§7) and the `RawTensor.shape` → `Shape` flip; indexing policy + `fetch` (§8) | H3/H6/H8, silent fallback, clone economy, silent zeros | ~2 weeks            |
+| 3 — traits and storage     | Sealed + split traits w/ trybuild (§3); `DevicePolicy` (§2.1); storage `Arc`/`OnceCell`/no-Deref (§7), the matmul layout contract (§7), and the `RawTensor.shape` → `Shape` flip; indexing policy + `fetch` (§8) | H3/H6/H8, silent fallback, clone economy, silent zeros | ~2 weeks            |
 | 4 — endgame, optional      | Arena graph (§6); `Backend` trait (§3.5); proptest DAG checks (§10.2) if not already in phase 2                                                          | cycles, `Send`, memory determinism                     | multi-week, do last |
 
 Phases 0–2 (done) retire every prevention target that maps to a Part I blocker.
