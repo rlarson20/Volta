@@ -596,7 +596,8 @@ and it gets cheaper every phase that lands before it.
 - `PadValue` landed in `src/spec.rs` and is the one `pub` type there, because it appears in `pad_with`'s signature (re-exported from the crate root). It has the two named constants and no arbitrary-value constructor. The zero-only `pad` was removed rather than kept as a shorthand, so every caller picks a value. `pad_with` panics and `try_pad_with` returns `Result`, the same pair as `shrink`/`try_shrink` (the sketch has only a `Result`-returning `pad_with`). The GPU kernel gets the value through the spare `padding[1]` uniform slot. This retires H1.
 - `MaxPool2d` rejects padding greater than half the kernel (not in the sketch). With a `-inf` border, a window of pure padding would output `-inf` and send its gradient to index 0.
 - `GradFn` is now the closed enum from §2.5 (DECISIONS.md, "Closed `GradFn` enum"). Each variant wraps the existing per-op struct instead of carrying inline fields, and there is no `Custom` variant because `edge()` is `pub(crate)`. `RawTensor.grad_fn` is `pub(crate)`, and the `*GradFn` structs are no longer exported.
-- Still open: the rest of Phase 2 (`define_ops!` §5.1, `into_loss` §2.2).
+- `define_ops!` (§5.1) landed for the unary and binary families (DECISIONS.md, "`define_ops!` for unary and binary ops"). Differences from the sketch: rows name `ComputePipelines` field idents instead of kernel-name strings (so a missing kernel is a compile error), `cpu_only` is an explicit clause, binary rows are split into `differentiable` / `non_differentiable` sections, and the binary row's backward is per-element with one shared broadcast reduction. Movement ops are not covered. It also added the GPU `erf` kernels the old table named but never had.
+- Still open: `into_loss` §2.2.
 
 ---
 

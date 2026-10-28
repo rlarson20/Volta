@@ -276,6 +276,24 @@ A size silently defaulting to 1 is the same class as `.get(i).unwrap_or(0.0)` (i
 
 **GPU:** the value rides in `MovementParams.padding[1]` as `f32::to_bits`, which was an unused uniform slot, so the `#[repr(C)]` layout and the other movement shaders are unchanged. `pad` in `movement.wgsl` reads it with `bitcast<f32>`. Backward needs nothing: it shrinks the gradient, which never touches the border.
 
+### `define_ops!` for unary and binary ops (ADDENDUM §5.1)
+
+**Decision:** `UnaryOp` and `BinaryOp` are each one table in `src/ops/unary.rs` / `binary.rs`, expanded by `define_ops!` (`src/macros/define_ops.rs`, plain `macro_rules!`). A row generates the enum, `ALL`, the CPU `forward`, the CPU `backward`, and the GPU pipeline lookup. Adding an op is one row, plus a WGSL entry point and a `ComputePipelines` field if it has a kernel.
+
+**Rows name `ComputePipelines` fields, not strings.** The sketch had `("neg", "neg_backward")`. Strings still left `_ => None` / `_ => panic!` arms in `GpuKernels`, which is how Erf named two kernels that didn't exist (forward silently ran on CPU, backward panicked). With field idents, `gpu(neg, neg_backward)` against a missing field is a compile error. `GpuKernels::unary_op`, `unary_backward`, `binary_op`, `binary_backward_a`/`_b`, and `binary_backward_broadcast_safe` take the op enum, a public API change.
+
+**`cpu_only` is explicit.** An op with no kernel says so in its row, and `gpu_pipelines` returns `None`, so the caller takes the CPU path instead of the GPU function panicking. No current op uses it (Erf got real kernels); the binary table has no such clause because every binary op has a forward kernel.
+
+**Binary rows are two sections** (`differentiable { .. }`, `non_differentiable { .. }`) because one repetition can't alternate between two row shapes. Mod and Cmplt having no derivative is now part of the grammar: `is_trivial` is generated from the section, and `BinaryOp::backward` on one panics.
+
+**One generic binary CPU backward.** The row gives the per-element `(∂L/∂a, ∂L/∂b)` at the broadcast shape; `BinaryGradFn` broadcasts both operands, calls the row, and runs `sum_over_broadcast_dims` once per operand. This replaced about 170 lines of per-op copies of that reduction. Cost: Add and Sub now materialise `broadcast_to` copies of their operands, which they used to skip. Accepted ("correctness over speed"). Max ties go to the first operand, pinned by a test.
+
+**GPU backward never returns a partial result.** The old code returned `vec![None, gy]` when only one gradient came back (a FIXME), which freezes a parameter. `gpu_binary_backward` (in `gpu_ops.rs`, with a not-gpu stub, so `binary.rs` has no `cfg(feature = "gpu")`) returns `None` unless every required gradient was computed, logs at `warn`, and the CPU path runs.
+
+**Not covered:**
+- Movement ops keep their per-op structs and hand-written dispatch. They carry real state and different kernels and would need a second grammar.
+- The non-safe `GpuKernels::binary_backward_broadcast` (atomic-add scatter, dead code behind `#[allow(dead_code)]`) was deleted rather than given a row slot; only the race-free two-pass path remains. Its `*_broadcast` pipelines and shader entry points are still in the tree (`notes/TODO.md`).
+
 ## Concurrency and Async
 
 ### Stay synchronous

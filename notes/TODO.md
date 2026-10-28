@@ -78,8 +78,11 @@ Last verified: 2026-10-26.
 - [ ] `Strides` is defined but unused; `RawTensor::compute_strides` is still a free fn returning `Vec<usize>`.
 - [x] Conv specs: `Conv2dSpec`, `ConvTranspose2dSpec`, `Window2dSpec` in `src/spec.rs` replace positional args in Conv2d, ConvTranspose2d, MaxPool2d, and the conv GPU wrappers (§1.3; DECISIONS.md, "Conv-family specs").
 - [x] `MatmulSpec` in `src/spec.rs` (§1.2/§1.3). Retires B4. Covers rank ≥ 2 operands; the vector forms are untouched.
-- [ ] Closed `GradFn` enum instead of `Box<dyn GradFn>` (§2.5).
-- [ ] `define_ops!` macro (§5.1).
+- [x] Closed `GradFn` enum instead of `Box<dyn GradFn>` (§2.5; DECISIONS.md, "Closed `GradFn` enum").
+- [x] `define_ops!` macro (§5.1) for `UnaryOp` and `BinaryOp` (DECISIONS.md, "`define_ops!` for unary and binary ops"). Adds GPU `erf`/`erf_backward` kernels, which were named but never existed.
+- [ ] Movement ops share generated dispatch (§5.1 tail). They keep per-op structs today.
+- [ ] Flaky test: `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels` fails about 3% of runs (4/150 on `fff5397` and on `define_ops!`, so not caused by it; observed max_error 0.105 against tol 2e-2). It draws an unseeded `RawTensor::randn` input and finite-differences with `eps=5e-2`. Seed it (`manual_seed`) and check whether the step is too coarse, rather than loosening the tolerance.
+- [ ] Remove the now-orphaned non-safe broadcast-backward GPU pipelines: `ComputePipelines::{add,sub,mul,div,max}_broadcast` and the matching `*_broadcast` entry points in `src/gpu/shaders/binary_backward.wgsl`. Their only caller, `GpuKernels::binary_backward_broadcast`, was deleted. Run `just validate-shaders` after.
 - [x] `PadValue` (§2.4) in `src/spec.rs`, re-exported from the crate root. `pad` is gone; `pad_with`/`try_pad_with` take a required value. Retires H1.
 - [ ] `into_loss` / `ScalarLoss` (§2.2); switch `assert_trainable!` to it.
 
