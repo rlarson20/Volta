@@ -4,7 +4,7 @@ The plan is `docs/plans/ADDENDUM.md` § Sequencing. Defect evidence is in `docs/
 The full long-form notes (audit transcription plus the preventive-architecture sketches) are in git history: `git show d771013:notes/TODO.md`.
 
 **Status key:** `[x]` = verified fixed (evidence given). `[~]` = partly fixed. `[ ]` = open per the audit (2026-09-08) and not re-verified unless a note says so.
-Last verified: 2026-10-26.
+Last verified: 2026-10-28.
 
 ## Blocking (OPUS §1)
 
@@ -38,8 +38,10 @@ Last verified: 2026-10-26.
 - [ ] Broadcast backward pass 2 is O(targets × out_size).
 - [ ] `check_gradients` doesn't zero pre-existing grads, so reusing a tensor gives false failures.
 - [ ] Conv finite-difference tolerances are loosened (5e-2), and GPU consistency tests use all-ones data.
-- [ ] `test_conv_transpose2d_gradient_multiple_channels` is flaky (about 1 in 15 runs): unseeded random init against a finite-difference tolerance. `test_conv_transpose2d_gradient_5x5` is too: 1 failure in 80 runs on `HEAD` and 1 in 80 after the matmul change (2026-10-26).
-- [ ] `test_direct_conv_gradient_multiple_configs` is flaky too: 4 failures in 80 runs on a clean `HEAD`, 3 in 80 after the spec change (2026-10-26). Same cause: unseeded `randn` against a finite-difference tolerance.
+- [x] `test_conv_transpose2d_gradient_5x5` was flaky (1 in 80 runs). Seeded, with `eps=0.5` (same cause and fix as `..._multiple_channels`, `b6602af`). 0/400 seeds fail; still fails with the analytic gradient scaled by 1.1 (2026-10-28).
+- [x] `test_direct_conv_gradient_multiple_configs` was flaky (4 in 80 runs). Seeded, with `eps=0.5`: 9/400 seeds failed at `5e-2` and 0/400 at `0.5`; still fails with the analytic gradient scaled by 1.1 (2026-10-28).
+- [ ] `linear_tests::backward_gradcheck_input` (`src/lib.rs`) is flaky: 7 failures in 300 runs on `f1c07fe`, 2 in 300 after the Phase 2 close-out (2026-10-28). It checks `x @ w + b` with unseeded `Linear::new` weights through `check_gradients_simple`. Like the conv flakes the function is linear in `x`, but the cause is not investigated. Seed it, then see whether the step is the issue.
+- [ ] CPU-only clippy (`cargo clippy --lib --no-default-features -- -D warnings`) fails with 13 distinct errors on `f1c07fe` and after Phase 2 (2026-10-28): unused GPU-only variables (`conv.rs`, `ops/unary.rs`, `ops/ternary.rs`), `step_gpu_param_simple` never used (`optim/sgd.rs`), and `must_use` / doc-backtick lints in `storage.rs` and `device.rs`. Most are the same missing not-gpu stub pattern fixed for movement. Only the default-feature clippy is a usable gate until then.
 - [ ] Doctests in `embedding.rs` and `pixelshuffle.rs` call the now-private `borrow()` and fail under `cargo test --doc`.
 - [ ] `Sequential::load_state_dict` prefix match is greedy (`"10.weight"` matches `"1."`).
 - [ ] RNG reproducibility holes: the dataloader shuffle is unseeded, and `with_rng` falls back silently under a reentrant borrow.
@@ -47,6 +49,7 @@ Last verified: 2026-10-26.
 - [ ] The dtype system is decorative: every compute path is f32.
 - [ ] `Embedding` implements `Module::forward` as a panic stub (trait split, Phase 3).
 - [ ] Mixed-device binary ops silently produce CPU output (`DevicePolicy`, Phase 3).
+- [ ] **GPU broadcast backward is broken, but unreachable** (moved out of Phase 2; it is a feature, not type work). Verified on `fff5397` (before `define_ops!`) with a 3x1 + 1x4 add: the race-free two-pass path (`binary_backward_broadcast_safe`) panics with a wgpu validation error (pass-1 bind group has 6 bindings; the auto layout keeps only the bindings the entry point uses: 3 for Add, 5 for Mul), and the deleted non-safe path returned wrong gradients silently (`[1,0,0]`/zeros, expected `[4,4,4]`/`[3,3,3,3]`). Nothing reaches it today because GPU forward never broadcasts, so a mismatched-shape op yields a CPU tensor and takes the CPU backward. Fixing it means an explicit bind group layout (or matching bindings per entry point) plus a GPU forward that broadcasts. Repro: `cargo test --lib gpu_binary_backward_broadcast_matches_cpu -- --ignored`. The orphaned non-safe pipelines are gone, so the two-pass path is the only one left to fix.
 
 ## Tests (OPUS §5)
 
@@ -70,30 +73,29 @@ Last verified: 2026-10-26.
 - [ ] Stop exporting diagnostic tooling as public API.
 - [ ] Merge gate: remove `#![allow(missing_docs)]` in `src/lib.rs` before merging into `main`.
 
-## Phase 2 — types for dims and ops (in progress)
+## Phase 2 — types for dims and ops (done)
 
 - [x] `Shape` / `Axis` / `Strides` defined (`f1cc5ea`).
 - [x] `edge()` takes `Shape`; tensor constructors, `expand`, `pad`, `broadcast_to`, and `try_broadcast_shape` validate through `Shape::from_dims`; `Axis` on `sum_dim`/`max_dim`/`mean_dim`/`softmax`/`log_softmax`/`permute` (§1.2; `31e2edd`, `b12efe5`, `567946f`).
-- [ ] Flip `RawTensor.shape` to `Shape` and make `Tensor::shape()` return it. Deferred with the storage work (§7): about 440 kernel reads of the field (DECISIONS.md, "Shape boundary").
-- [ ] `Strides` is defined but unused; `RawTensor::compute_strides` is still a free fn returning `Vec<usize>`.
+- [x] `Strides::from_shape` replaced `RawTensor::compute_strides` at all 21 call sites (`ops/movement.rs`, `ops/binary.rs`, `tensor.rs`); the free fn is gone. Call sites demote with `truncate_rank()`. The new body is a running product, with no `if let Some` skip.
 - [x] Conv specs: `Conv2dSpec`, `ConvTranspose2dSpec`, `Window2dSpec` in `src/spec.rs` replace positional args in Conv2d, ConvTranspose2d, MaxPool2d, and the conv GPU wrappers (§1.3; DECISIONS.md, "Conv-family specs").
 - [x] `MatmulSpec` in `src/spec.rs` (§1.2/§1.3). Retires B4. Covers rank ≥ 2 operands; the vector forms are untouched.
 - [x] Closed `GradFn` enum instead of `Box<dyn GradFn>` (§2.5; DECISIONS.md, "Closed `GradFn` enum").
 - [x] `define_ops!` macro (§5.1) for `UnaryOp` and `BinaryOp` (DECISIONS.md, "`define_ops!` for unary and binary ops"). Adds GPU `erf`/`erf_backward` kernels, which were named but never existed.
-- [ ] Movement ops share generated dispatch (§5.1 tail). They keep per-op structs today.
-- [ ] Flaky test: `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels` fails about 3% of runs (4/150 on `fff5397` and on `define_ops!`, so not caused by it; observed max_error 0.105 against tol 2e-2). It draws an unseeded `RawTensor::randn` input and finite-differences with `eps=5e-2`. Seed it (`manual_seed`) and check whether the step is too coarse, rather than loosening the tolerance.
-- [ ] **GPU broadcast backward is broken, but unreachable.** Verified on `fff5397` (before `define_ops!`) with a 3x1 + 1x4 add: the race-free two-pass path (`binary_backward_broadcast_safe`) panics with a wgpu validation error (pass-1 bind group has 6 bindings; the auto layout keeps only the bindings the entry point uses: 3 for Add, 5 for Mul), and the deleted non-safe path returned wrong gradients silently (`[1,0,0]`/zeros, expected `[4,4,4]`/`[3,3,3,3]`). Nothing reaches it today because GPU forward never broadcasts, so a mismatched-shape op yields a CPU tensor and takes the CPU backward. Fixing it means an explicit bind group layout (or matching bindings per entry point) plus a GPU forward that broadcasts. Repro: `cargo test --lib gpu_binary_backward_broadcast_matches_cpu -- --ignored`.
-- [ ] Remove the now-orphaned non-safe broadcast-backward GPU pipelines: `ComputePipelines::{add,sub,mul,div,max}_broadcast` and the matching `*_broadcast` entry points in `src/gpu/shaders/binary_backward.wgsl`. Their only caller, `GpuKernels::binary_backward_broadcast`, was deleted. Run `just validate-shaders` after.
+- [x] Movement ops share dispatch (§5.1 tail), without a generated table: `expand`, `pad`, `shrink`, and `stride_op` each pick GPU-or-CPU storage and end in one `RawTensor::movement_edge` call, so the recorded `GradFn` can't differ between the paths. A second macro grammar was declined (DECISIONS.md). The five forward `gpu_*` wrappers now have not-gpu stubs, so `movement.rs` has no forward `cfg`; that also cleared 5 CPU-only clippy errors (2026-10-28).
+- [x] Flaky test: `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels` failed about 3% of runs. Fixed in `b6602af`: seeded, and `eps=0.5` (the layer is linear in its input, so the step only affects f32 roundoff; 13/400 seeds failed at 5e-2, 0/400 at 0.5). Tolerance unchanged.
+- [x] Removed the orphaned non-safe broadcast-backward GPU pipelines: `ComputePipelines::{add,sub,mul,div,max}_broadcast`, the matching entry points in `binary_backward.wgsl`, and the helpers and `params` binding only they used. `just validate-shaders` passes; `gpu_binary_backward_same_shape_matches_cpu` and `tests/movement_backward_test.rs` pass on a real adapter (2026-10-28).
 - [x] `PadValue` (§2.4) in `src/spec.rs`, re-exported from the crate root. `pad` is gone; `pad_with`/`try_pad_with` take a required value. Retires H1.
 - [x] `into_loss` / `ScalarLoss` (§2.2). `TensorOps::backward` is gone; `Tensor::into_loss()?.backward()` is the only entry point, and `tests/compile_fail/backward_on_tensor.rs` pins that. `assert_trainable!` and `check_gradients` use it.
-- [ ] Flaky test: `conv::conv2d_tests::test_direct_conv_gradient_multiple_configs` fails about 1 run in 15 (max_error 2.58e-2 against tol 2e-2, config `(2,4,5,1,2)`). Same cause as the ConvTranspose entry above: an unseeded `RawTensor::randn` input and finite differences with `eps=5e-2`. Seed it and check the step size. Found while landing `into_loss`, which doesn't touch its numerics.
-- [ ] `tests/gpu_test.rs` has an unconditional `use volta::gpu;`, so `cargo test --no-default-features --tests` fails to compile it. Gate the import on `feature = "gpu"` like the rest of the file.
+- [x] Flaky test: `conv::conv2d_tests::test_direct_conv_gradient_multiple_configs`. Duplicate of the Medium entry above; fixed there.
+- [x] `tests/gpu_test.rs` had an unconditional `use volta::gpu;`, so `cargo test --no-default-features --tests` failed to compile it. Gated on `feature = "gpu"`; both feature sets compile (2026-10-28).
 
 ## Phase 3 — traits and storage
 
 - [ ] Sealed and split traits with trybuild tests (§3). Retires H6 and the Embedding panic.
 - [ ] `DevicePolicy` (§2.1). Retires the silent GPU→CPU fallback.
 - [ ] Storage: `Arc` / `OnceCell` / no `Deref` (§7). Retires H3 and the clone economy.
+- [ ] Flip `RawTensor.shape` to `Shape` and make `Tensor::shape()` return it. Moved here from Phase 2: it touches about 440 kernel reads of the field, the same sites the storage rewrite rewrites (DECISIONS.md, "Shape boundary").
 - [ ] Indexing policy plus `fetch` (NaN, not zero) (§8). Retires the silent-zero class, including the `broadcast_to` / `sum_over_broadcast_dims` zero-fill that kept B4 silent.
 - [ ] Delete `TensorOps` (§3).
 
