@@ -1,3 +1,4 @@
+#![allow(missing_docs)] // not public API
 use volta::RawTensor;
 use volta::{LayerNorm, Module, TensorOps};
 

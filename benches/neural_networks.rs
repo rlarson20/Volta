@@ -1,3 +1,4 @@
+#![allow(missing_docs, clippy::missing_docs_in_private_items)] // not public API
 //! Neural network layer benchmarks
 //!
 //! Benchmarks for high-level neural network components including:

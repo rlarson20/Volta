@@ -23,7 +23,7 @@ use crate::tensor::{Tensor, TensorOps};
 /// let layer = PixelShuffle::new(2);
 /// let input = RawTensor::randn(&[1, 12, 4, 4]);  // 3 channels * 4
 /// let output = layer.forward(&input);
-/// assert_eq!(output.borrow().shape, vec![1, 3, 8, 8]);
+/// assert_eq!(output.shape(), vec![1, 3, 8, 8]);
 /// ```
 pub struct PixelShuffle {
     upscale_factor: usize,

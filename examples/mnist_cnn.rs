@@ -1,8 +1,9 @@
+#![allow(missing_docs)] // not public API
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 use std::path::Path;
 use volta::{
     Conv2d, DataLoader, Dropout, Flatten, Linear, MaxPool2d, Module, ProgressBar, RawTensor, ReLU,
-    SGD, Sequential, TensorOps, load_mnist_images, load_mnist_labels, to_one_hot,
+    SGD, Sequential, load_mnist_images, load_mnist_labels, to_one_hot,
 };
 
 #[allow(clippy::too_many_lines)]

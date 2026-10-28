@@ -152,7 +152,7 @@ mod tests {
     use super::*;
     use crate::tensor::{TensorOps as _, check_gradients, manual_seed, randn};
 
-    /// Inputs inside each op's domain, away from kinks (ReLU at 0) and poles.
+    /// Inputs inside each op's domain, away from kinks (`ReLU` at 0) and poles.
     fn domain_input(op: UnaryOp) -> Tensor {
         manual_seed(0x0123);
         let raw = randn(&[3, 4]);
@@ -174,8 +174,7 @@ mod tests {
                 | UnaryOp::Erf => v,
             })
             .collect();
-        let x = RawTensor::new(vals, &[3, 4], true);
-        x
+        RawTensor::new(vals, &[3, 4], true)
     }
 
     #[test]
@@ -192,7 +191,7 @@ mod tests {
     fn unary_all_lists_each_variant_once() {
         assert_eq!(UnaryOp::ALL.len(), 13);
         for (i, a) in UnaryOp::ALL.iter().enumerate() {
-            for b in &UnaryOp::ALL[i + 1..] {
+            for b in UnaryOp::ALL.iter().skip(i + 1) {
                 assert_ne!(a, b);
             }
         }

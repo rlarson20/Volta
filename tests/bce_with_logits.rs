@@ -1,3 +1,4 @@
+#![allow(missing_docs)] // not public API
 use volta::{RawTensor, TensorOps, bce_with_logits_loss};
 
 /// Reference: max(x,0) - x*y + ln(1 + exp(-|x|)), evaluated in f64.
@@ -23,7 +24,7 @@ fn test_bce_with_logits_saturated_logits_finite() {
         .map(|(&x, &y)| reference(f64::from(x), f64::from(y)))
         .sum::<f64>()
         / n;
-    let got = f64::from(loss.data()[0]);
+    let got = f64::from(*loss.data().first().expect("scalar loss"));
     assert!(got.is_finite(), "loss not finite: {got}");
     assert!(
         (got - expected).abs() < 1e-3 * expected.max(1.0),
@@ -48,6 +49,12 @@ fn test_bce_with_logits_gradient_at_zero() {
         .expect("scalar loss")
         .backward();
     let grad = logits.grad().expect("grad missing");
-    assert!((grad[0] - 0.25).abs() < 1e-6, "{grad:?}");
-    assert!((grad[1] + 0.25).abs() < 1e-6, "{grad:?}");
+    assert!(
+        (grad.first().expect("grad[0]") - 0.25).abs() < 1e-6,
+        "{grad:?}"
+    );
+    assert!(
+        (grad.get(1).expect("grad[1]") + 0.25).abs() < 1e-6,
+        "{grad:?}"
+    );
 }

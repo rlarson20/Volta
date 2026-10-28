@@ -1,3 +1,4 @@
+#![allow(missing_docs)] // not public API
 use volta::nn::{Adam, SGD};
 use volta::{RawTensor, Storage, TensorOps};
 

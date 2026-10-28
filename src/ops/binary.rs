@@ -354,10 +354,15 @@ mod tests {
             manual_seed(0xB1A5 + seed);
             let a = randn(shape_a);
             let b = randn(shape_b);
-            let av: Vec<f32> = a.data().to_vec();
+            let av: Vec<f32> = a.data().clone();
             let bv: Vec<f32> = match op {
                 BinaryOp::Div => b.data().iter().map(|v| 0.5 + v.abs()).collect(),
-                _ => b.data().to_vec(),
+                BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::Max
+                | BinaryOp::Mod
+                | BinaryOp::Cmplt => b.data().clone(),
             };
             let (a, b) = (
                 RawTensor::new(av, shape_a, true),
@@ -447,7 +452,7 @@ mod tests {
     fn all_lists_each_variant_once() {
         assert_eq!(BinaryOp::ALL.len(), 7);
         for (i, a) in BinaryOp::ALL.iter().enumerate() {
-            for b in &BinaryOp::ALL[i + 1..] {
+            for b in BinaryOp::ALL.iter().skip(i + 1) {
                 assert_ne!(a, b);
             }
         }

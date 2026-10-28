@@ -1,3 +1,4 @@
+#![allow(missing_docs)] // not public API
 use volta::{
     Linear, Module, ProgressBar, RawTensor, SGD, TensorOps, kl_divergence_gaussian,
     load_mnist_images, mse_loss, normalize, randn_like,

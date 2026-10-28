@@ -1,3 +1,5 @@
+#![allow(missing_docs, clippy::missing_docs_in_private_items)]
+// not public API
 // Character-Level Transformer Language Model
 //
 // Validates that Volta's transformer components compose correctly under backprop.

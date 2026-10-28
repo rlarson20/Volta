@@ -10,7 +10,7 @@ Update this section when a phase lands or the merge gate changes. Keep it short.
 
 - **Roadmap:** `docs/plans/ADDENDUM.md` § Sequencing is the only plan. Phases 0–1 are done. Phase 2 (types for dims and ops) is done: `edge()`, tensor construction, and the dim arguments use `Shape`/`Axis`, and `Strides::from_shape` replaced `compute_strides`. `RawTensor.shape` is still a `Vec<usize>` field; flipping it moved to Phase 3 with the storage work. The conv specs, `MatmulSpec`, and `PadValue` (`src/spec.rs`) have landed; B4 and H1 are retired. The closed `GradFn` enum (§2.5) has landed. `define_ops!` (§5.1) has landed for the unary and binary families. `into_loss`/`ScalarLoss` (§2.2) has landed: `TensorOps::backward` is gone and `into_loss()?.backward()` is the only entry point. Movement ops share one `movement_edge` helper. Next: Phase 3 (traits and storage).
 - **Open defects:** IDs B1–B5 and H1–H8 come from `docs/audits/OPUS_5_EVAL_AUDIT.md`. Live status is in `notes/TODO.md`.
-- **Merge gate:** `src/lib.rs` carries a temporary `#![allow(missing_docs)]` (FIXME). `improvements` does not merge into `main` until that line is removed and the docs pass.
+- **Merge gate:** cleared. `src/lib.rs` has no `allow(missing_docs)`, and `clippy --all-targets -D warnings` and `cargo test` pass, so the pre-commit hooks pass on a clean tree. `examples/`, `benches/`, and the `tests/` files that need it carry `#![allow(missing_docs, ...)]` because they are not public API.
 
 ## Invariants
 
@@ -27,9 +27,8 @@ Never violate these. If a task seems to require it, stop and ask.
 ## Commands
 
 - Default features are `gpu` + `accelerate`, so a plain `cargo build` compiles the GPU backend. For CPU-only, add `--no-default-features`.
-- Until the merge gate clears, run functional checks with `RUSTFLAGS="-A missing_docs"`. `just test-all` does this through nextest.
-- Fast loop: `RUSTFLAGS="-A missing_docs" cargo test --no-default-features --lib <name-filter>`.
-- Before committing, run `just ci` (fmt, `clippy --all-targets -D warnings`, test, doc, examples) or `pre-commit run`. Until the merge gate clears, both fail on a clean `HEAD`: clippy and the test hook run with `-D missing-docs`, and `benches/`, `examples/`, and `tests/` have no docs. Verify by hand instead: `cargo fmt --check`, `RUSTFLAGS="-A missing_docs" cargo clippy --lib -- -D warnings`, `just test-all`, and `cargo test --doc --no-default-features` (two doctests, `embedding.rs` and `pixelshuffle.rs`, already fail; see `notes/TODO.md`).
+- Fast loop: `cargo test --no-default-features --lib <name-filter>`.
+- Before committing, run `just ci` (fmt, `clippy --all-targets -D warnings`, test, doc, examples) or `pre-commit run`. Both should pass on a clean `HEAD`; if a hook fails, fix the cause rather than skipping it. CPU-only clippy (`--no-default-features`) still fails; see `notes/TODO.md`.
 - Committing past the hooks: `SKIP=clippy,cargo-test git commit ...` (ask the user first; never `--no-verify`). The `fmt` hook runs `cargo fmt --all` and fails whenever it rewrites a file, so make the tree `cargo fmt --check`-clean first. Stage everything you want and leave nothing unstaged: pre-commit stashes unstaged changes, and that conflicts with its own fixes (also with `git commit -- <paths>`).
 - `cargo test <filter>` matches test *names*. There are no category modules called `core`, `neural`, or similar.
 

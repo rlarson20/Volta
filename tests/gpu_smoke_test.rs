@@ -1,3 +1,4 @@
+#![allow(missing_docs)] // not public API
 #![allow(clippy::similar_names)]
 use volta::Axis;
 #[test]

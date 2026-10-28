@@ -1,3 +1,4 @@
+#![allow(missing_docs)] // not public API
 /// Serialization round-trip tests for `BatchNorm2d`, `LSTMCell`, and `ConvTranspose2d`.
 ///
 /// Each layer is tested with both bincode and safetensors formats.

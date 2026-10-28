@@ -1,3 +1,4 @@
+#![allow(missing_docs)] // not public API
 use volta::{Dropout, Flatten};
 use volta::{
     RawTensor, Storage, TensorOps, check_gradients_simple,

@@ -1,3 +1,4 @@
+#![allow(missing_docs, clippy::missing_docs_in_private_items)] // not public API
 #![allow(clippy::cast_precision_loss)]
 use volta::{
     Conv2d, ConvTranspose2d, Flatten, Linear, Module, ProgressBar, RawTensor, SGD, Tanh, TensorOps,

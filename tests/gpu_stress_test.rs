@@ -1,3 +1,4 @@
+#![allow(missing_docs)] // not public API
 #[cfg(feature = "gpu")]
 use volta::gpu;
 #[cfg(feature = "gpu")]

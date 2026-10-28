@@ -1,4 +1,5 @@
-use volta::{LSTMCell, Module, ProgressBar, RawTensor, SGD, TensorOps};
+#![allow(missing_docs)] // not public API
+use volta::{LSTMCell, Module, ProgressBar, RawTensor, SGD};
 
 #[allow(clippy::cast_precision_loss)]
 fn main() {

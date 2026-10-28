@@ -898,9 +898,11 @@ mod tests {
                 )
                 .unwrap_or_else(|| panic!("{op:?} {shape_a:?}x{shape_b:?}: fell back to CPU"));
 
-                for (name, got, want) in [("x", &grads[0], &cpu_x), ("y", &grads[1], &cpu_y)] {
+                for (name, got, want) in [
+                    ("x", grads.first().and_then(Option::as_ref), &cpu_x),
+                    ("y", grads.get(1).and_then(Option::as_ref), &cpu_y),
+                ] {
                     let got = got
-                        .as_ref()
                         .unwrap_or_else(|| panic!("{op:?}: missing {name} gradient"))
                         .borrow()
                         .data

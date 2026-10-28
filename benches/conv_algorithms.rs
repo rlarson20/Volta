@@ -1,3 +1,4 @@
+#![allow(missing_docs)] // not public API
 //! Convolution algorithm comparison benchmarks
 //!
 //! Compares Direct vs im2col+GEMM convolution algorithms across various scenarios.

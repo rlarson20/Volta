@@ -1,3 +1,4 @@
+#![allow(missing_docs)] // not public API
 #[test]
 #[cfg(feature = "gpu")]
 #[allow(clippy::too_many_lines)]

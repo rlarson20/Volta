@@ -1,3 +1,5 @@
+#![allow(missing_docs, clippy::missing_docs_in_private_items)]
+// not public API
 // Character-Level Language Model using LSTM
 //
 // This example demonstrates:
@@ -218,7 +220,7 @@ fn main() {
     println!("Training data length: {} characters", data.len());
     println!(
         "Sample vocabulary: {:?}\n",
-        &vocab.idx_to_char.get(..10.min(vocab.size())).unwrap_or(&[])
+        vocab.idx_to_char.get(..10.min(vocab.size())).unwrap_or(&[])
     );
 
     // Hyperparameters

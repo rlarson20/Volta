@@ -1,5 +1,5 @@
 //! Basic polynomial regression test
-use volta::{Linear, Module, ProgressBar, RawTensor, SGD, Sequential, TensorOps};
+use volta::{Linear, Module, ProgressBar, RawTensor, SGD, Sequential};
 
 #[allow(clippy::cast_precision_loss)]
 fn main() {

@@ -1,3 +1,4 @@
+#![allow(missing_docs)] // not public API
 #![allow(clippy::cast_precision_loss)]
 #[cfg(feature = "gpu")]
 use volta::Axis;

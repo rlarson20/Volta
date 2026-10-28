@@ -1,3 +1,4 @@
+#![allow(missing_docs, clippy::missing_docs_in_private_items)] // not public API
 //! GPU vs CPU performance comparison benchmarks
 //!
 //! These benchmarks are only available when the `gpu` feature is enabled.

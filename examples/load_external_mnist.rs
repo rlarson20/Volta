@@ -1,3 +1,4 @@
+#![allow(missing_docs, clippy::missing_docs_in_private_items)] // not public API
 use std::path::Path;
 use volta::{
     Linear, Module, RawTensor, ReLU, Sequential,

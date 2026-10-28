@@ -47,7 +47,7 @@ Last verified: 2026-10-28.
 - [ ] Tests that cannot see a transpose (GEMM report §4). `test_batched_matmul` (`lib.rs:665`) uses all-ones inputs. `test_chained_transformations` (`io/mapping.rs:490`) transposes `[1,2,3,4]` as 2x2 and asserts only the shape, and its comment wrongly calls the matrix symmetric. `assert_matmul_parity` (`tests/common/mod.rs`) backprops a plain `.sum()` (so `dC` is all ones and an indexing bug in the GPU backward reads the same value everywhere), and its shapes (`3x4 @ 4x5`, `8x8`) all fit inside one 16x16 tile, so the multi-tile `k` loop and partial-tile edges never run against the CPU. Fix: assert data in the first, asymmetric data in the second, a randomly weighted loss in the third (reuse the `assert_matmul_gradients` pattern), and add a parity shape past one tile and not a multiple of 16 (for example `37x19 @ 19x23`).
 - [ ] No reference matmul exists (GEMM report §5). The CPU oracle is Accelerate or `matrixmultiply` depending on platform, so GPU parity compares against an optimized third-party kernel. Add a `#[cfg(test)]` triple-loop GEMM with explicit `(rs, cs)` per operand, and compare CPU and GPU matmul against it over random non-square shapes. Conv already has this pattern (direct vs im2col/iGEMM).
 - [ ] The `BackwardParams` comments in `gpu/shaders/matmul_backward.wgsl` (lines ~12-16) describe `m` and `k` wrongly for `backward_b` (`grad` is `[M, N]`). The code is correct; fix the comments.
-- [ ] Doctests in `embedding.rs` and `pixelshuffle.rs` call the now-private `borrow()` and fail under `cargo test --doc`.
+- [x] Doctests in `embedding.rs` and `pixelshuffle.rs` called the now-private `borrow()`. They use `shape()` now; `cargo test --doc --no-default-features` passes (2026-10-28).
 - [ ] `Sequential::load_state_dict` prefix match is greedy (`"10.weight"` matches `"1."`).
 - [ ] RNG reproducibility holes: the dataloader shuffle is unseeded, and `with_rng` falls back silently under a reentrant borrow.
 - [x] `src/io/config.rs` was dead pseudocode that no module declared. Deleted (2026-10-28).
@@ -76,7 +76,7 @@ Last verified: 2026-10-28.
 - [x] 16 positional `usize` arguments on GPU kernel wrappers. The eight conv wrappers take a conv spec and the three matmul wrappers take a `MatmulSpec` (Phase 2). No wrapper in `kernels.rs` takes three or more bare `usize`s now.
 - [ ] Move about 5,000 lines of tests out of `lib.rs`.
 - [ ] Stop exporting diagnostic tooling as public API.
-- [ ] Merge gate: remove `#![allow(missing_docs)]` in `src/lib.rs` before merging into `main`.
+- [x] Merge gate: `src/lib.rs` has no `#![allow(missing_docs)]`; `clippy --all-targets -D warnings` and `cargo test` pass with the default features (2026-10-28).
 
 ## Phase 2 — types for dims and ops (done)
 

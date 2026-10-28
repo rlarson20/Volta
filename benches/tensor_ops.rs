@@ -1,3 +1,4 @@
+#![allow(missing_docs, clippy::missing_docs_in_private_items)] // not public API
 //! Core tensor operation benchmarks
 //!
 //! Benchmarks for low-level tensor operations including:

@@ -1,3 +1,4 @@
+#![allow(missing_docs)] // not public API
 // Super Resolution using Efficient Sub-Pixel Convolution
 //
 // This example demonstrates the PixelShuffle layer for image upscaling,
@@ -9,8 +10,7 @@
 // the architecture and training process.
 
 use volta::{
-    Adam, Conv2d, Module, PixelShuffle, RawTensor, ReLU, Sequential, TensorOps, manual_seed,
-    mse_loss,
+    Adam, Conv2d, Module, PixelShuffle, RawTensor, ReLU, Sequential, manual_seed, mse_loss,
 };
 
 fn main() {

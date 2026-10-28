@@ -28,7 +28,7 @@ use rand::Rng;
 /// let embedding = Embedding::new(100, 32);  // 100 vocab, 32-dim embeddings
 /// let indices = vec![5, 12, 7];
 /// let embedded = embedding.forward(&indices);
-/// assert_eq!(embedded.borrow().shape, vec![3, 32]);
+/// assert_eq!(embedded.shape(), vec![3, 32]);
 /// ```
 #[derive(Clone, Debug)]
 pub struct Embedding {

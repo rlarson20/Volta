@@ -7,7 +7,7 @@
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 use std::path::Path;
 use volta::{
-    Adam, BatchNorm1d, DataLoader, LSTMCell, Linear, Module, ProgressBar, RawTensor, TensorOps,
+    Adam, BatchNorm1d, DataLoader, LSTMCell, Linear, Module, ProgressBar, RawTensor,
     load_mnist_images, load_mnist_labels, to_one_hot,
 };
 

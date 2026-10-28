@@ -1,3 +1,4 @@
+#![allow(missing_docs)] // not public API
 use std::cell::Cell;
 use std::rc::Rc;
 use volta::io::{StateDict, TensorData, load_state_dict_checked};

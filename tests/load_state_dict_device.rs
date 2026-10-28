@@ -1,3 +1,4 @@
+#![allow(missing_docs)] // not public API
 use volta::io::{StateDict, TensorData};
 use volta::{Embedding, Linear, Module};
 

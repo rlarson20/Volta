@@ -1,3 +1,4 @@
+#![allow(missing_docs)] // not public API
 use volta::{Device, RawTensor, TensorOps};
 
 #[allow(clippy::similar_names)]

@@ -1,4 +1,4 @@
-use volta::TensorOps;
+#![allow(missing_docs)] // not public API
 use volta::nn::Module;
 use volta::{Adam, Conv2d, Flatten, Linear, MaxPool2d, ReLU, Sequential};
 ///second readme example

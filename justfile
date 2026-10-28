@@ -4,7 +4,7 @@ check:
 	cargo test
 
 test-all:
-	RUSTFLAGS="-A missing_docs" cargo nextest run --no-fail-fast
+	cargo nextest run --no-fail-fast
 
 # ===== CODE HEALTH & ANALYSIS =====
 
