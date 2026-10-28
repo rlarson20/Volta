@@ -292,7 +292,7 @@ A size silently defaulting to 1 is the same class as `.get(i).unwrap_or(0.0)` (i
 
 **Not covered:**
 - Movement ops keep their per-op structs and hand-written dispatch. They carry real state and different kernels and would need a second grammar.
-- The non-safe `GpuKernels::binary_backward_broadcast` (atomic-add scatter, dead code behind `#[allow(dead_code)]`) was deleted rather than given a row slot; only the race-free two-pass path remains. Its `*_broadcast` pipelines and shader entry points are still in the tree (`notes/TODO.md`).
+- The non-safe `GpuKernels::binary_backward_broadcast` (atomic-add scatter, dead code behind `#[allow(dead_code)]`) was deleted rather than given a row slot. It returned wrong gradients silently when checked on the commit before this change, so nothing working was lost. The race-free two-pass path remains but also fails (wgpu bind-group validation error); both are unreachable, since GPU forward never broadcasts (`notes/TODO.md`). Its `*_broadcast` pipelines and shader entry points are still in the tree (`notes/TODO.md`).
 
 ## Concurrency and Async
 
