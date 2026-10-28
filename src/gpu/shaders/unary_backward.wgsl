@@ -117,3 +117,12 @@ fn log2_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
         result[idx] = out_grad[idx] / (x[idx] * 0.6931471805599453); // ln(2)
     }
 }
+
+@compute @workgroup_size(256)
+fn erf_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let idx = global_id.x;
+    if (idx < arrayLength(&out_grad)) {
+        // d erf(x)/dx = 2/sqrt(pi) * exp(-x^2)
+        result[idx] = out_grad[idx] * 1.1283791670955126 * exp(-x[idx] * x[idx]);
+    }
+}

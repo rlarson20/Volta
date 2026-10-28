@@ -7,6 +7,8 @@ use crate::RawTensor;
 #[cfg(feature = "gpu")]
 use crate::gpu::GpuKernels;
 #[cfg(feature = "gpu")]
+use crate::ops::UnaryOp;
+#[cfg(feature = "gpu")]
 use crate::spec::PadValue;
 use crate::storage::Storage;
 #[cfg(feature = "gpu")]
@@ -169,7 +171,7 @@ impl RawTensor {
 
     /// GPU-accelerated unary operation
     #[cfg(feature = "gpu")]
-    pub(crate) fn gpu_unary(input: &Storage, op: &str) -> Option<Storage> {
+    pub(crate) fn gpu_unary(input: &Storage, op: UnaryOp) -> Option<Storage> {
         let buf = input.gpu_buffer()?;
 
         let result = GpuKernels::unary_op(buf, op)?;
@@ -184,7 +186,11 @@ impl RawTensor {
     ///
     /// Computes gradient for unary operations: `grad = out_grad * df/dx`
     #[cfg(feature = "gpu")]
-    pub(crate) fn gpu_unary_backward(out_grad: &Storage, x: &Storage, op: &str) -> Option<Storage> {
+    pub(crate) fn gpu_unary_backward(
+        out_grad: &Storage,
+        x: &Storage,
+        op: UnaryOp,
+    ) -> Option<Storage> {
         let buf_out = out_grad.gpu_buffer()?;
         let buf_x = x.gpu_buffer()?;
 

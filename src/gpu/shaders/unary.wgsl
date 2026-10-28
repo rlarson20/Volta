@@ -99,3 +99,21 @@ fn cos_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
         result[idx] = cos(input[idx]);
     }
 }
+
+// erf via Abramowitz-Stegun 7.1.26 (max abs error ~1.5e-7), odd-symmetric.
+// exp(-x*x) underflows to 0 for large |x|, so the result saturates at +/-1.
+fn erf_approx(x: f32) -> f32 {
+    let a = abs(x);
+    let t = 1.0 / (1.0 + 0.3275911 * a);
+    let poly = ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t;
+    let y = 1.0 - poly * exp(-a * a);
+    return select(y, -y, x < 0.0);
+}
+
+@compute @workgroup_size(256)
+fn erf_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let idx = global_id.x;
+    if (idx < arrayLength(&input)) {
+        result[idx] = erf_approx(input[idx]);
+    }
+}

@@ -10,6 +10,7 @@
     clippy::many_single_char_names
 )]
 use super::{GpuBuffer, get_gpu_context};
+use crate::ops::UnaryOp;
 use crate::spec::PadValue;
 
 /// Parameters for matrix dimensions (used in matmul shader)
@@ -398,28 +399,13 @@ impl GpuKernels {
     }
 
     /// Execute a unary operation
-    /// # Panics
-    /// Unknown unary op
+    ///
+    /// Returns `None` if the op is `cpu_only` (no GPU kernel) or no GPU is available.
     #[must_use]
-    pub fn unary_op(input: &GpuBuffer, op: &str) -> Option<GpuBuffer> {
+    pub fn unary_op(input: &GpuBuffer, op: UnaryOp) -> Option<GpuBuffer> {
         let ctx = get_gpu_context()?;
+        let (pipeline, _) = op.gpu_pipelines(ctx.pipelines())?;
         let result = GpuBuffer::zeros(input.len())?;
-
-        let pipeline = match op {
-            "neg" => &ctx.pipelines().neg,
-            "exp" => &ctx.pipelines().exp,
-            "log" => &ctx.pipelines().log,
-            "relu" => &ctx.pipelines().relu,
-            "sigmoid" => &ctx.pipelines().sigmoid,
-            "tanh" => &ctx.pipelines().tanh,
-            "sqrt" => &ctx.pipelines().sqrt,
-            "recip" => &ctx.pipelines().recip,
-            "exp2" => &ctx.pipelines().exp2,
-            "log2" => &ctx.pipelines().log2,
-            "sin" => &ctx.pipelines().sin,
-            "cos" => &ctx.pipelines().cos,
-            _ => return None, // Unsupported op falls back to CPU
-        };
 
         let bind_group_layout = pipeline.get_bind_group_layout(0);
         let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
@@ -470,14 +456,15 @@ impl GpuKernels {
     /// # Arguments
     /// * `out_grad` - Gradient of the output (upstream gradient)
     /// * `x` - Input tensor from the forward pass
-    /// * `op` - Which operation to perform (`"exp_backward"`, `"relu_backward"`, etc.)
+    /// * `op` - Which operation's derivative to apply
     ///
     /// # Returns
-    /// A new buffer containing the gradient with respect to x
+    /// A new buffer containing the gradient with respect to x, or `None` if the op is
+    /// `cpu_only` or no GPU is available.
     /// # Panics
     /// `out_grad` and `x` size mismatch
     #[must_use]
-    pub fn unary_backward(out_grad: &GpuBuffer, x: &GpuBuffer, op: &str) -> Option<GpuBuffer> {
+    pub fn unary_backward(out_grad: &GpuBuffer, x: &GpuBuffer, op: UnaryOp) -> Option<GpuBuffer> {
         assert_eq!(
             out_grad.len(),
             x.len(),
@@ -485,23 +472,8 @@ impl GpuKernels {
         );
 
         let ctx = get_gpu_context()?;
+        let (_, pipeline) = op.gpu_pipelines(ctx.pipelines())?;
         let result = GpuBuffer::zeros(out_grad.len())?;
-
-        let pipeline = match op {
-            "neg_backward" => &ctx.pipelines().neg_backward,
-            "exp_backward" => &ctx.pipelines().exp_backward,
-            "log_backward" => &ctx.pipelines().log_backward,
-            "relu_backward" => &ctx.pipelines().relu_backward,
-            "sigmoid_backward" => &ctx.pipelines().sigmoid_backward,
-            "tanh_backward" => &ctx.pipelines().tanh_backward,
-            "sqrt_backward" => &ctx.pipelines().sqrt_backward,
-            "recip_backward" => &ctx.pipelines().recip_backward,
-            "exp2_backward" => &ctx.pipelines().exp2_backward,
-            "log2_backward" => &ctx.pipelines().log2_backward,
-            "sin_backward" => &ctx.pipelines().sin_backward,
-            "cos_backward" => &ctx.pipelines().cos_backward,
-            _ => panic!("Unknown unary backward op: {op}"),
-        };
 
         let bind_group_layout = pipeline.get_bind_group_layout(0);
         let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {

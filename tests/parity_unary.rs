@@ -162,7 +162,16 @@ fn relu_parity() {
 
 #[test]
 fn erf_parity() {
-    assert_unary_parity("erf", |t| t.erf(), SHAPE_2D, (-1.5, 1.5), TOL_FWD_GPU);
+    // Backward is checked too: the GPU erf backward kernel used to be missing and
+    // `unary_backward` panicked on it.
+    assert_unary_parity_backward(
+        "erf",
+        |t| t.erf(),
+        SHAPE_2D,
+        (-1.5, 1.5),
+        TOL_FWD_GPU,
+        TOL_BWD_GPU,
+    );
 }
 
 #[test]

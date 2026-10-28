@@ -104,6 +104,7 @@ pub struct ComputePipelines {
     pub log2: wgpu::ComputePipeline,
     pub sin: wgpu::ComputePipeline,
     pub cos: wgpu::ComputePipeline,
+    pub erf: wgpu::ComputePipeline,
 
     // Unary backward operations
     pub neg_backward: wgpu::ComputePipeline,
@@ -118,6 +119,7 @@ pub struct ComputePipelines {
     pub log2_backward: wgpu::ComputePipeline,
     pub sin_backward: wgpu::ComputePipeline,
     pub cos_backward: wgpu::ComputePipeline,
+    pub erf_backward: wgpu::ComputePipeline,
 
     // Binary backward operations (same-shape only, legacy)
     pub add_backward_a: wgpu::ComputePipeline,
@@ -648,6 +650,7 @@ impl GpuContext {
             exp2: create_pipeline(&unary_shader, "exp2_op", "Exp2 Pipeline"),
             log2: create_pipeline(&unary_shader, "log2_op", "Log2 Pipeline"),
             sin: create_pipeline(&unary_shader, "sin_op", "Sin Pipeline"),
+            erf: create_pipeline(&unary_shader, "erf_op", "Erf Pipeline"),
             cos: create_pipeline(&unary_shader, "cos_op", "Cos Pipeline"),
 
             // Unary backward ops
@@ -710,6 +713,11 @@ impl GpuContext {
                 &unary_backward_shader,
                 "cos_backward",
                 "Cos Backward Pipeline",
+            ),
+            erf_backward: create_pipeline(
+                &unary_backward_shader,
+                "erf_backward",
+                "Erf Backward Pipeline",
             ),
 
             // Binary backward ops

@@ -1,4 +1,7 @@
 mod assert_trainable;
+mod define_ops;
+
+pub(crate) use define_ops::define_ops;
 
 /// Seeded `N(0, 1)` input with `requires_grad = true`, for [`assert_trainable!`].
 ///

@@ -16,6 +16,7 @@ pub mod staging_pool;
 pub mod system_monitor;
 
 pub use buffer::GpuBuffer;
+pub(crate) use context::ComputePipelines;
 pub use context::{GpuContext, GpuSyncError};
 pub use early_warning::{EarlyWarningSystem, HealthStatus as EarlyWarningHealthStatus, TrendData};
 pub use kernels::{GpuKernels, MovementParams, OptimizerStepParams};

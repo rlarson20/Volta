@@ -1,5 +1,7 @@
 #[cfg(feature = "gpu")]
 use volta::gpu;
+#[cfg(feature = "gpu")]
+use volta::ops::UnaryOp;
 
 #[cfg(all(test, feature = "gpu"))]
 mod gpu_extended_tests {
@@ -47,23 +49,27 @@ mod gpu_extended_tests {
         let buf = gpu::GpuBuffer::from_slice(&input).unwrap();
 
         // Test ReLU
-        let res = gpu::GpuKernels::unary_op(&buf, "relu").unwrap().to_vec();
+        let res = gpu::GpuKernels::unary_op(&buf, UnaryOp::ReLU)
+            .unwrap()
+            .to_vec();
         assert_eq!(res, vec![0.0, 0.0, 1.0, 4.0]);
 
         // Test Sqrt (using positive inputs)
         let buf_pos = gpu::GpuBuffer::from_slice(&[4.0, 9.0, 16.0]).unwrap();
-        let res_sqrt = gpu::GpuKernels::unary_op(&buf_pos, "sqrt")
+        let res_sqrt = gpu::GpuKernels::unary_op(&buf_pos, UnaryOp::Sqrt)
             .unwrap()
             .to_vec();
         assert_eq!(res_sqrt, vec![2.0, 3.0, 4.0]);
 
         // Test Neg
-        let res_neg = gpu::GpuKernels::unary_op(&buf, "neg").unwrap().to_vec();
+        let res_neg = gpu::GpuKernels::unary_op(&buf, UnaryOp::Neg)
+            .unwrap()
+            .to_vec();
         assert_eq!(res_neg, vec![1.0, -0.0, -1.0, -4.0]);
 
         // Test Recip (using positive inputs to avoid division by zero)
         let buf_recip = gpu::GpuBuffer::from_slice(&[1.0, 2.0, 4.0, 8.0]).unwrap();
-        let res_recip = gpu::GpuKernels::unary_op(&buf_recip, "recip")
+        let res_recip = gpu::GpuKernels::unary_op(&buf_recip, UnaryOp::Recip)
             .unwrap()
             .to_vec();
         for (i, &val) in res_recip.iter().enumerate() {
@@ -76,7 +82,9 @@ mod gpu_extended_tests {
         }
 
         // Test Exp2
-        let res_exp2 = gpu::GpuKernels::unary_op(&buf, "exp2").unwrap().to_vec();
+        let res_exp2 = gpu::GpuKernels::unary_op(&buf, UnaryOp::Exp2)
+            .unwrap()
+            .to_vec();
         for (i, &val) in res_exp2.iter().enumerate() {
             let exp_vals = [-1.0, 0.0, 1.0, 4.0];
             let expected = 2_f32.powf(exp_vals.get(i).copied().unwrap_or(f32::NAN));
@@ -88,7 +96,7 @@ mod gpu_extended_tests {
 
         // Test Log2 (using positive inputs)
         let buf_log2 = gpu::GpuBuffer::from_slice(&[1.0, 2.0, 4.0, 8.0]).unwrap();
-        let res_log2 = gpu::GpuKernels::unary_op(&buf_log2, "log2")
+        let res_log2 = gpu::GpuKernels::unary_op(&buf_log2, UnaryOp::Log2)
             .unwrap()
             .to_vec();
         for (i, &val) in res_log2.iter().enumerate() {
@@ -101,7 +109,9 @@ mod gpu_extended_tests {
         }
 
         // Test Sin
-        let res_sin = gpu::GpuKernels::unary_op(&buf, "sin").unwrap().to_vec();
+        let res_sin = gpu::GpuKernels::unary_op(&buf, UnaryOp::Sin)
+            .unwrap()
+            .to_vec();
         for (i, &val) in res_sin.iter().enumerate() {
             let expected_vals = [-1.0_f32.sin(), 0.0_f32.sin(), 1.0_f32.sin(), 4.0_f32.sin()];
             let expected = expected_vals.get(i).copied().unwrap_or(f32::NAN);
@@ -112,7 +122,9 @@ mod gpu_extended_tests {
         }
 
         // Test Cos
-        let res_cos = gpu::GpuKernels::unary_op(&buf, "cos").unwrap().to_vec();
+        let res_cos = gpu::GpuKernels::unary_op(&buf, UnaryOp::Cos)
+            .unwrap()
+            .to_vec();
         let expected_vals = [0.540_302_3, 1.0, 0.540_302_3, -0.653_643_6]; // cos([-1, 0, 1, 4])
         for (i, &val) in res_cos.iter().enumerate() {
             assert!(
