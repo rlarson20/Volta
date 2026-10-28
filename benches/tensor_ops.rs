@@ -237,15 +237,28 @@ fn bench_ternary_ops(c: &mut Criterion) {
     group.finish();
 }
 
-/// Runs the core tensor-op benchmarks: binary, unary, matmul, reduce, movement, and ternary ops.
-fn benches() {
-    let mut criterion = Criterion::default().configure_from_args();
-    bench_binary_ops(&mut criterion);
-    bench_unary_ops(&mut criterion);
-    bench_matmul(&mut criterion);
-    bench_reduce_ops(&mut criterion);
-    bench_movement_ops(&mut criterion);
-    bench_ternary_ops(&mut criterion);
+// Runs the core tensor-op benchmarks: binary, unary, matmul, reduce, movement, and ternary ops.
+// `criterion_group!` (criterion 0.5) generates an undocumented `pub fn benches`. A lint
+// attribute on the macro call is ignored, so the call lives in a module that carries the
+// `allow`, which keeps the lint active for everything else in this file.
+#[allow(
+    missing_docs,
+    clippy::missing_docs_in_private_items,
+    reason = "`criterion_group!` (criterion 0.5) generates an undocumented `pub fn benches`"
+)]
+mod group {
+    use criterion::criterion_group;
+
+    criterion_group!(
+        benches,
+        super::bench_binary_ops,
+        super::bench_unary_ops,
+        super::bench_matmul,
+        super::bench_reduce_ops,
+        super::bench_movement_ops,
+        super::bench_ternary_ops,
+    );
 }
+use group::benches;
 
 criterion_main!(benches);

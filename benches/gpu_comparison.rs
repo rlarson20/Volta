@@ -837,15 +837,28 @@ fn bench_gpu_batch_processing(_c: &mut Criterion) {
     // No-op when GPU feature is disabled
 }
 
-/// Runs the CPU-vs-GPU benchmarks, lightest first and the 2048x2048 matmul last. The GPU groups skip themselves when no GPU is available.
-fn benches() {
-    let mut criterion = Criterion::default().configure_from_args();
-    bench_gpu_batch_processing(&mut criterion); // Lightest: 20 tensors × 256 elements
-    bench_binary_ops_cpu_vs_gpu(&mut criterion);
-    bench_unary_ops_cpu_vs_gpu(&mut criterion);
-    bench_reduce_ops_cpu_vs_gpu(&mut criterion);
-    bench_memory_transfer(&mut criterion);
-    bench_matmul_cpu_vs_gpu(&mut criterion); // Heaviest: 2048×2048 matrices, run last
+// Runs the CPU-vs-GPU benchmarks, lightest first and the 2048x2048 matmul last. The GPU groups skip themselves when no GPU is available.
+// `criterion_group!` (criterion 0.5) generates an undocumented `pub fn benches`. A lint
+// attribute on the macro call is ignored, so the call lives in a module that carries the
+// `allow`, which keeps the lint active for everything else in this file.
+#[allow(
+    missing_docs,
+    clippy::missing_docs_in_private_items,
+    reason = "`criterion_group!` (criterion 0.5) generates an undocumented `pub fn benches`"
+)]
+mod group {
+    use criterion::criterion_group;
+
+    criterion_group!(
+        benches,
+        super::bench_gpu_batch_processing, // Lightest: 20 tensors × 256 elements
+        super::bench_binary_ops_cpu_vs_gpu,
+        super::bench_unary_ops_cpu_vs_gpu,
+        super::bench_reduce_ops_cpu_vs_gpu,
+        super::bench_memory_transfer,
+        super::bench_matmul_cpu_vs_gpu, // Heaviest: 2048×2048 matrices, run last
+    );
 }
+use group::benches;
 
 criterion_main!(benches);

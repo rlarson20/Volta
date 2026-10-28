@@ -242,15 +242,28 @@ fn bench_activations(c: &mut Criterion) {
     group.finish();
 }
 
-/// Runs the layer benchmarks: `Linear`, `Conv2d`, `MaxPool2d`, `Sequential`, and activations.
-fn benches() {
-    let mut criterion = Criterion::default().configure_from_args();
-    bench_linear_forward(&mut criterion);
-    bench_linear_backward(&mut criterion);
-    bench_conv2d_forward(&mut criterion);
-    bench_maxpool2d(&mut criterion);
-    bench_sequential_forward(&mut criterion);
-    bench_activations(&mut criterion);
+// Runs the layer benchmarks: `Linear`, `Conv2d`, `MaxPool2d`, `Sequential`, and activations.
+// `criterion_group!` (criterion 0.5) generates an undocumented `pub fn benches`. A lint
+// attribute on the macro call is ignored, so the call lives in a module that carries the
+// `allow`, which keeps the lint active for everything else in this file.
+#[allow(
+    missing_docs,
+    clippy::missing_docs_in_private_items,
+    reason = "`criterion_group!` (criterion 0.5) generates an undocumented `pub fn benches`"
+)]
+mod group {
+    use criterion::criterion_group;
+
+    criterion_group!(
+        benches,
+        super::bench_linear_forward,
+        super::bench_linear_backward,
+        super::bench_conv2d_forward,
+        super::bench_maxpool2d,
+        super::bench_sequential_forward,
+        super::bench_activations,
+    );
 }
+use group::benches;
 
 criterion_main!(benches);

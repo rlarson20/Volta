@@ -330,14 +330,27 @@ fn bench_conv_memory_scaling(c: &mut Criterion) {
     group.finish();
 }
 
-/// Runs the convolution algorithm benchmarks: Direct vs im2col+GEMM across algorithm, kernel size, batch size, and spatial size, the auto-selected mode, and memory scaling.
-fn benches() {
-    let mut criterion = Criterion::default().configure_from_args();
-    bench_conv_algorithm_comparison(&mut criterion);
-    bench_conv_kernel_size_comparison(&mut criterion);
-    bench_conv_batch_size_comparison(&mut criterion);
-    bench_conv_spatial_size_comparison(&mut criterion);
-    bench_conv_auto_mode(&mut criterion);
-    bench_conv_memory_scaling(&mut criterion);
+// Runs the convolution algorithm benchmarks: Direct vs im2col+GEMM across algorithm, kernel size, batch size, and spatial size, the auto-selected mode, and memory scaling.
+// `criterion_group!` (criterion 0.5) generates an undocumented `pub fn benches`. A lint
+// attribute on the macro call is ignored, so the call lives in a module that carries the
+// `allow`, which keeps the lint active for everything else in this file.
+#[allow(
+    missing_docs,
+    clippy::missing_docs_in_private_items,
+    reason = "`criterion_group!` (criterion 0.5) generates an undocumented `pub fn benches`"
+)]
+mod group {
+    use criterion::criterion_group;
+
+    criterion_group!(
+        benches,
+        super::bench_conv_algorithm_comparison,
+        super::bench_conv_kernel_size_comparison,
+        super::bench_conv_batch_size_comparison,
+        super::bench_conv_spatial_size_comparison,
+        super::bench_conv_auto_mode,
+        super::bench_conv_memory_scaling,
+    );
 }
+use group::benches;
 criterion_main!(benches);
