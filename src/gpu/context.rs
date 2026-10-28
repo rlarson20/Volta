@@ -146,13 +146,6 @@ pub struct ComputePipelines {
     pub max_backward_a: wgpu::ComputePipeline,
     pub max_backward_b: wgpu::ComputePipeline,
 
-    // Binary backward operations with broadcasting support
-    pub add_broadcast: wgpu::ComputePipeline,
-    pub sub_broadcast: wgpu::ComputePipeline,
-    pub mul_broadcast: wgpu::ComputePipeline,
-    pub div_broadcast: wgpu::ComputePipeline,
-    pub max_broadcast: wgpu::ComputePipeline,
-
     // Binary backward operations with RACE-FREE broadcasting (two-pass)
     pub add_broadcast_pass1: wgpu::ComputePipeline,
     pub add_broadcast_pass2: wgpu::ComputePipeline,
@@ -783,33 +776,6 @@ impl GpuContext {
                 &binary_backward_shader,
                 "max_backward_b",
                 "Max Backward B Pipeline",
-            ),
-
-            // Binary backward with broadcasting support
-            add_broadcast: create_pipeline(
-                &binary_backward_shader,
-                "add_broadcast",
-                "Add Broadcast Pipeline",
-            ),
-            sub_broadcast: create_pipeline(
-                &binary_backward_shader,
-                "sub_broadcast",
-                "Sub Broadcast Pipeline",
-            ),
-            mul_broadcast: create_pipeline(
-                &binary_backward_shader,
-                "mul_broadcast",
-                "Mul Broadcast Pipeline",
-            ),
-            div_broadcast: create_pipeline(
-                &binary_backward_shader,
-                "div_broadcast",
-                "Div Broadcast Pipeline",
-            ),
-            max_broadcast: create_pipeline(
-                &binary_backward_shader,
-                "max_broadcast",
-                "Max Broadcast Pipeline",
             ),
 
             // Binary backward with RACE-FREE broadcasting (two-pass)
