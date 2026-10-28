@@ -50,7 +50,7 @@ Last verified: 2026-10-28.
 - [ ] Doctests in `embedding.rs` and `pixelshuffle.rs` call the now-private `borrow()` and fail under `cargo test --doc`.
 - [ ] `Sequential::load_state_dict` prefix match is greedy (`"10.weight"` matches `"1."`).
 - [ ] RNG reproducibility holes: the dataloader shuffle is unseeded, and `with_rng` falls back silently under a reentrant borrow.
-- [ ] `src/io/config.rs` is dead pseudocode that no module declares. Delete it.
+- [x] `src/io/config.rs` was dead pseudocode that no module declared. Deleted (2026-10-28).
 - [ ] The dtype system is decorative: every compute path is f32.
 - [ ] `Embedding` implements `Module::forward` as a panic stub (trait split, Phase 3).
 - [ ] Mixed-device binary ops silently produce CPU output (`DevicePolicy`, Phase 3).

@@ -9,11 +9,11 @@
 
 struct BackwardParams {
     m: u32,  // For backward_a: rows of grad / rows of dA
-             // For backward_b: rows of A / cols of grad
-    k: u32,  // For backward_a: cols of grad / rows of B
-             // For backward_b: cols of A / rows of grad
-    n: u32,  // For backward_a: cols of B / cols of grad
-             // For backward_b: cols of grad / cols of B
+             // For backward_b: rows of A / rows of grad (the shared dimension)
+    k: u32,  // For backward_a: cols of dA / rows of B
+             // For backward_b: cols of A / rows of dB
+    n: u32,  // For backward_a: cols of grad / cols of B (the shared dimension)
+             // For backward_b: cols of grad / cols of dB
     _padding: u32,
 }
 
