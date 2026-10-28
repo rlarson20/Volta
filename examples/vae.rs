@@ -99,7 +99,7 @@ fn main() {
             total_recon += recon_loss.data().first().copied().unwrap_or(f32::NAN);
             total_kl += kl_loss.data().first().copied().unwrap_or(f32::NAN);
 
-            loss.backward();
+            loss.into_loss().expect("scalar loss").backward();
         }
 
         optimizer.step();

@@ -147,7 +147,7 @@ mod tests {
 
         let y = layer.forward(&x);
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         let grad = x.grad();
         assert!(

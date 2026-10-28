@@ -9,12 +9,8 @@
 /// inputs make tokens/features identical, which zeroes gradients mathematically for
 /// normalization and attention layers (`LayerNorm` gamma, attention Q/K projections).
 ///
-/// Two deliberate departures from the originally-sketched version of this macro:
+/// One deliberate departure from the originally-sketched version of this macro:
 ///
-/// - It called `.into_loss()` on the summed output (ADDENDUM.md §2.2's `ScalarLoss`
-///   typestate). That's Phase 2 work and doesn't exist in this codebase yet, so this
-///   calls `.backward()` directly on the `.sum()` result instead — the same pattern
-///   the manual test this macro replaces already used.
 /// - `forward`/`parameters` are called via UFCS (`<_ as Module>::method(..)`), not
 ///   `.method()`. Some layers (`MultiHeadAttention`, `TransformerBlock`) have an
 ///   inherent `forward` with extra params (causal masking, etc.) alongside
@@ -33,7 +29,9 @@ macro_rules! assert_trainable {
         // gradient for ANY input — a false positive, not a severed graph.
         let weights = $crate::tensor::randn_like(&output);
         let loss = output.elem_mul(&weights).sum();
-        loss.backward();
+        loss.into_loss()
+            .expect("layer output must be differentiable")
+            .backward();
         for (i, p) in <_ as $crate::nn::Module>::parameters(&$layer)
             .iter()
             .enumerate()

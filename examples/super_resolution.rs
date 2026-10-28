@@ -89,7 +89,7 @@ fn main() {
 
         // Backward pass
         optimizer.zero_grad();
-        loss_tensor.backward();
+        loss_tensor.into_loss().expect("scalar loss").backward();
         optimizer.step();
 
         // Print progress

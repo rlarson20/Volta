@@ -71,10 +71,10 @@ fn reshape_backward_parity() {
     let x_gpu = x_cpu.to_device(gpu_device());
 
     let y_cpu = x_cpu.reshape(&[6, 4]);
-    y_cpu.sum().backward();
+    y_cpu.sum().into_loss().expect("scalar loss").backward();
 
     let y_gpu = x_gpu.reshape(&[6, 4]);
-    y_gpu.sum().backward();
+    y_gpu.sum().into_loss().expect("scalar loss").backward();
 
     assert_close(
         "reshape fwd",
@@ -118,10 +118,10 @@ fn permute_backward_parity() {
     let x_gpu = x_cpu.to_device(gpu_device());
 
     let y_cpu = x_cpu.permute(&[Axis(1), Axis(2), Axis(0)]);
-    y_cpu.sum().backward();
+    y_cpu.sum().into_loss().expect("scalar loss").backward();
 
     let y_gpu = x_gpu.permute(&[Axis(1), Axis(2), Axis(0)]);
-    y_gpu.sum().backward();
+    y_gpu.sum().into_loss().expect("scalar loss").backward();
 
     assert_close(
         "permute fwd",
@@ -163,10 +163,10 @@ fn flatten_backward_parity() {
     let x_gpu = x_cpu.to_device(gpu_device());
 
     let y_cpu = x_cpu.reshape(&[2, 12]);
-    y_cpu.sum().backward();
+    y_cpu.sum().into_loss().expect("scalar loss").backward();
 
     let y_gpu = x_gpu.reshape(&[2, 12]);
-    y_gpu.sum().backward();
+    y_gpu.sum().into_loss().expect("scalar loss").backward();
 
     assert_close(
         "flatten fwd",

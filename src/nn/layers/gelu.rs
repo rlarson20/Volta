@@ -234,7 +234,7 @@ mod tests {
         let gelu = GELU::new();
         let x = RawTensor::new(vec![1.0], &[1], true);
         let y = gelu.forward(&x);
-        y.backward();
+        y.into_loss().expect("scalar loss").backward();
 
         // GELU gradient should exist and be non-zero
         let grad = x.grad().expect("Gradient should exist");

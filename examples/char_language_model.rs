@@ -275,7 +275,7 @@ fn main() {
             let loss = forward_and_compute_loss(&model, inputs, targets, vocab.size());
 
             optimizer.zero_grad();
-            loss.backward();
+            loss.clone().into_loss().expect("scalar loss").backward();
             optimizer.step();
 
             epoch_loss += loss.data().first().copied().unwrap_or(f32::NAN);

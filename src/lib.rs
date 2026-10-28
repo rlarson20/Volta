@@ -35,6 +35,7 @@ pub(crate) mod spec;
 pub mod storage;
 
 // Add to re-exports:
+pub use autograd::ScalarLoss;
 pub use dtype::DType;
 pub use error::{Result, VoltaError};
 pub use shape::{Axis, Shape, Strides};
@@ -102,7 +103,7 @@ mod tests {
         let a = RawTensor::new(vec![2.0], &[1], true);
         let b = RawTensor::new(vec![3.0], &[1], true);
         let c = a.add(&b);
-        c.backward();
+        c.into_loss().expect("scalar loss").backward();
 
         assert_eq!(a.grad(), Some(vec![1.0]));
         assert_eq!(b.grad(), Some(vec![1.0]));
@@ -113,7 +114,7 @@ mod tests {
         let a = RawTensor::new(vec![2.0], &[1], true);
         let b = RawTensor::new(vec![3.0], &[1], true);
         let c = a.add(&b);
-        c.backward();
+        c.into_loss().expect("scalar loss").backward();
 
         // Test device handling safety
         let cpu_device = Device::CPU;
@@ -136,7 +137,7 @@ mod tests {
         let a = RawTensor::new(vec![3.0], &[1], true);
         let b = RawTensor::new(vec![4.0], &[1], true);
         let c = a.elem_mul(&b);
-        c.backward();
+        c.into_loss().expect("scalar loss").backward();
 
         assert_eq!(a.grad(), Some(vec![4.0]));
         assert_eq!(b.grad(), Some(vec![3.0]));
@@ -148,7 +149,7 @@ mod tests {
         let b = RawTensor::new(vec![3.0], &[1], true);
         let c = a.add(&b);
         let d = c.elem_mul(&a);
-        d.backward();
+        d.into_loss().expect("scalar loss").backward();
 
         assert_eq!(a.grad(), Some(vec![7.0]));
         assert_eq!(b.grad(), Some(vec![2.0]));
@@ -158,7 +159,7 @@ mod tests {
     fn test_sum_backward() {
         let a = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], true);
         let loss = a.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         assert_eq!(a.grad(), Some(vec![1.0, 1.0, 1.0]));
     }
@@ -169,7 +170,7 @@ mod tests {
         let b = RawTensor::new(vec![0.5, 0.5, 0.5, 0.5], &[2, 2], true);
         let c = a.elem_mul(&b);
         let loss = c.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         assert_eq!(a.grad(), Some(vec![0.5, 0.5, 0.5, 0.5]));
         assert_eq!(b.grad(), Some(vec![1.0, 2.0, 3.0, 4.0]));
@@ -190,7 +191,7 @@ mod unary_tests {
         assert_eq!(y.borrow().data, vec![-2.0, 3.0]);
 
         // Backward: ∂(-x)/∂x = -1
-        y.backward();
+        y.sum().into_loss().expect("scalar loss").backward();
         assert_eq!(x.grad(), Some(vec![-1.0, -1.0]));
     }
 
@@ -199,7 +200,7 @@ mod unary_tests {
         let x = RawTensor::new(vec![4.0], &[1], true);
         let y = x.sqrt(); // y = 2.0
         let z = y.elem_mul(&y); // z = 4.0
-        z.backward();
+        z.into_loss().expect("scalar loss").backward();
 
         // ∂z/∂x = ∂z/∂y * ∂y/∂x = 2y * 1/(2√x) = 2*2 * 1/4 = 1.0
         assert_relative_eq!(
@@ -217,7 +218,7 @@ mod unary_tests {
     fn test_exp2_log2_inverse() {
         let x = RawTensor::new(vec![2.0], &[1], true);
         let y = x.exp2().log2(); // should recover x
-        y.backward();
+        y.clone().into_loss().expect("scalar loss").backward();
 
         assert_relative_eq!(
             y.borrow()
@@ -287,7 +288,7 @@ mod unary_tests {
         // Test gradient: d(erf(x))/dx = 2/sqrt(pi) * exp(-x^2)
         let x = RawTensor::new(vec![1.0], &[1], true);
         let y = x.erf();
-        y.backward();
+        y.into_loss().expect("scalar loss").backward();
 
         // Expected gradient: 2/sqrt(pi) * exp(-1) ≈ 0.4151
         let expected_grad = 2.0 / std::f32::consts::PI.sqrt() * (-1.0_f32).exp();
@@ -312,7 +313,7 @@ mod binary_tests {
         let x = RawTensor::new(vec![6.0], &[1], true);
         let y = RawTensor::new(vec![2.0], &[1], true);
         let z = x.div(&y); // z = 3.0
-        z.backward();
+        z.into_loss().expect("scalar loss").backward();
 
         // ∂(x/y)/∂x = 1/y = 0.5
         assert_eq!(x.grad(), Some(vec![0.5]));
@@ -326,7 +327,7 @@ mod binary_tests {
         let y = RawTensor::new(vec![2.0, 4.0], &[2], true);
         let z = x.max_elem(&y);
         let loss = z.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // max picks [3.0, 4.0], so grads flow to x[0] and y[1]
         assert_eq!(x.grad(), Some(vec![1.0, 0.0]));
@@ -342,7 +343,7 @@ mod reduce_tests {
     fn test_reduce_max_backward() {
         let x = RawTensor::new(vec![1.0, 5.0, 3.0], &[3], true);
         let y = x.max_reduce(); // finds 5.0 at index 1
-        y.backward();
+        y.into_loss().expect("scalar loss").backward();
 
         // Only max element gets gradient
         assert_eq!(x.grad(), Some(vec![0.0, 1.0, 0.0]));
@@ -360,7 +361,7 @@ mod ternary_tests {
         let y = RawTensor::new(vec![3.0], &[1], true);
         let w = RawTensor::new(vec![1.0], &[1], true);
         let z = x.mulacc(&y, &w); // z = 7.0
-        z.backward();
+        z.into_loss().expect("scalar loss").backward();
 
         assert_eq!(x.grad(), Some(vec![3.0])); // ∂z/∂x = y
         assert_eq!(y.grad(), Some(vec![2.0])); // ∂z/∂y = x
@@ -373,7 +374,7 @@ mod ternary_tests {
         let x = RawTensor::new(vec![10.0, 20.0], &[2], true);
         let y = RawTensor::new(vec![30.0, 40.0], &[2], true);
         let z = cond.where_op(&x, &y); // picks [10.0, 40.0]
-        z.backward();
+        z.sum().into_loss().expect("scalar loss").backward();
 
         assert_eq!(x.grad(), Some(vec![1.0, 0.0])); // grad flows where cond=1
         assert_eq!(y.grad(), Some(vec![0.0, 1.0])); // grad flows where cond=0
@@ -387,7 +388,7 @@ mod ternary_tests {
         let false_branch = RawTensor::new(vec![1.0, 2.0, 3.0], &[1, 3], true);
         let out = cond.where_op(&true_branch, &false_branch);
         let loss = out.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // Gradients: first row picks true branch, second row picks false branch
         assert_eq!(true_branch.grad(), Some(vec![1.0, 1.0, 1.0, 0.0, 0.0, 0.0]));
@@ -404,7 +405,7 @@ mod movement_tests {
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], true);
         let y = x.reshape(&[2, 2]);
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // Gradient reshapes back to [4]
         assert_eq!(x.grad(), Some(vec![1.0, 1.0, 1.0, 1.0]));
@@ -415,7 +416,7 @@ mod movement_tests {
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], true);
         let y = x.permute(&[Axis(1), Axis(0)]); // transpose
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // Gradient permutes back
         assert_eq!(x.grad(), Some(vec![1.0, 1.0, 1.0, 1.0]));
@@ -438,7 +439,7 @@ mod misc_tests {
         let out = y.add(&b);
         let loss = out.sum();
 
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // All should have gradients
         assert!(x.grad().is_some());
@@ -453,7 +454,7 @@ mod misc_tests {
     fn test_tensor_zero_grad() {
         let x = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], true);
         let loss = x.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         assert!(x.grad().is_some());
 
@@ -461,7 +462,7 @@ mod misc_tests {
         assert!(x.grad().is_none());
 
         let rewind = x.sum();
-        rewind.backward();
+        rewind.into_loss().expect("scalar loss").backward();
         assert_eq!(x.grad(), Some(vec![1.0, 1.0, 1.0]));
     }
 
@@ -502,7 +503,7 @@ mod misc_tests {
         assert_eq!(y.borrow().shape, vec![2, 3]);
         assert_eq!(y.borrow().data, vec![11.0, 12.0, 13.0, 14.0, 15.0, 16.0]);
 
-        y.backward();
+        y.sum().into_loss().expect("scalar loss").backward();
 
         // x gradient: all ones
         assert_eq!(x.grad(), Some(vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0]));
@@ -520,7 +521,7 @@ mod misc_tests {
         assert_eq!(y.borrow().shape, vec![2, 3]);
         assert_eq!(y.borrow().data, vec![2.0, 6.0, 12.0, 8.0, 15.0, 24.0]);
 
-        y.backward();
+        y.sum().into_loss().expect("scalar loss").backward();
 
         // x gradient: broadcast v
         assert_eq!(x.grad(), Some(vec![2.0, 3.0, 4.0, 2.0, 3.0, 4.0]));
@@ -538,7 +539,7 @@ mod misc_tests {
         assert_eq!(z.borrow().shape, vec![2, 3]);
         assert_eq!(z.borrow().data, vec![11.0, 21.0, 31.0, 12.0, 22.0, 32.0]);
 
-        z.backward();
+        z.sum().into_loss().expect("scalar loss").backward();
 
         // x gradient: sum over columns -> [3.0, 3.0]
         assert_eq!(x.grad(), Some(vec![3.0, 3.0]));
@@ -557,7 +558,7 @@ mod misc_tests {
         assert_eq!(y.borrow().data, vec![1.5, 3.0, 3.5, 5.0, 5.5, 7.0]);
 
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // x gradient: all ones
         assert_eq!(x.grad(), Some(vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0]));
@@ -575,7 +576,7 @@ mod misc_tests {
         assert_eq!(z.borrow().shape, vec![2, 3]);
         assert_eq!(z.borrow().data, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
-        z.backward();
+        z.sum().into_loss().expect("scalar loss").backward();
 
         // x gradient: 1/y broadcast
         assert_eq!(x.grad(), Some(vec![0.5, 0.5, 0.5, 0.5, 0.5, 0.5]));
@@ -598,7 +599,7 @@ mod misc_tests {
         // Row 1: [4,5,6] + 20 = [24,25,26]
         assert_eq!(z.borrow().data, vec![11.0, 12.0, 13.0, 24.0, 25.0, 26.0]);
 
-        z.backward();
+        z.sum().into_loss().expect("scalar loss").backward();
 
         // x gradient: all ones
         assert_eq!(x.grad(), Some(vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0]));
@@ -618,7 +619,7 @@ mod misc_tests {
         // [max(4,2), max(2,3), max(6,4)] = [4,3,6]
         assert_eq!(z.borrow().data, vec![2.0, 5.0, 4.0, 4.0, 3.0, 6.0]);
 
-        z.backward();
+        z.sum().into_loss().expect("scalar loss").backward();
 
         // Gradient flows to max elements
         // x: [0, 1, 0, 1, 0, 1] (x wins at indices 1, 3, 5)
@@ -648,7 +649,7 @@ mod misc_tests {
         let z = y.add(&b); // Broadcasting happens here
         let loss = z.sum();
 
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // All should have gradients
         assert!(x.grad().is_some());
@@ -715,7 +716,7 @@ mod misc_tests {
         );
 
         let loss = c.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // Gradient check
         // C sum is 8 elements * 6.0 = 48.0
@@ -734,7 +735,7 @@ mod misc_tests {
         let z = x.matmul(&v);
         // loss = sum(z) => ∂L/∂z = 1
         let loss = z.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // ∂L/∂X = outer(ones(m), v) = repeat v on each row
         assert_eq!(x.grad(), Some(vec![0.5, -1.0, 0.5, -1.0, 0.5, -1.0]));
@@ -751,7 +752,7 @@ mod misc_tests {
 
         // loss = a · b = 1*4 + 2*5 + 3*6 = 32
         let loss = a.matmul(&b);
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // ∂L/∂a = b
         assert_eq!(a.grad(), Some(vec![4.0, 5.0, 6.0]));
@@ -778,7 +779,7 @@ mod misc_tests {
         assert_eq!(z.borrow().shape, vec![2, 2]);
         assert_eq!(z.borrow().data, vec![4.0, 4.0, 6.0, 6.0]);
 
-        z.backward();
+        z.sum().into_loss().expect("scalar loss").backward();
 
         assert_eq!(x.grad(), Some(vec![1.0, 1.0, 1.0, 1.0]));
         // Sub gradient for y is negative and summed
@@ -1097,7 +1098,7 @@ mod misc_tests {
         let y = x.pad_with(&[(1, 1), (2, 0)], PadValue::NEG_INF);
         // Sum over the interior only (a -inf in the loss would poison it).
         let interior = y.shrink(&[(1, 3), (2, 4)]);
-        interior.sum().backward();
+        interior.sum().into_loss().expect("scalar loss").backward();
         assert_eq!(x.grad().expect("grad"), vec![1.0; 4]);
     }
 
@@ -1161,7 +1162,7 @@ mod misc_tests {
         // Row 1: [4,5,6] + 20 = [24,25,26]
         assert_eq!(z.borrow().data, vec![11.0, 12.0, 13.0, 24.0, 25.0, 26.0]);
 
-        z.backward();
+        z.sum().into_loss().expect("scalar loss").backward();
         assert_eq!(x.grad(), Some(vec![3.0, 3.0])); // sum over last dim
         assert_eq!(y.grad(), Some(vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0]));
     }
@@ -1175,7 +1176,7 @@ mod misc_tests {
 
         assert_eq!(z.borrow().shape, vec![2, 2, 2, 2]);
         let loss = z.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // Bias grad should sum over B,H,W -> [8.0, 8.0]
         assert_eq!(bias.grad(), Some(vec![8.0, 8.0]));
@@ -1202,7 +1203,7 @@ mod misc_tests {
         assert_eq!(y.borrow().shape, vec![1, 2]);
 
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // All layer params should have gradients
         for param in model.parameters() {
@@ -1215,7 +1216,12 @@ mod misc_tests {
         let mut model = Sequential::new(vec![Box::new(Linear::new(2, 3, true))]);
 
         let x = RawTensor::new(vec![1.0, 2.0], &[1, 2], true);
-        model.forward(&x).sum().backward();
+        model
+            .forward(&x)
+            .sum()
+            .into_loss()
+            .expect("scalar loss")
+            .backward();
 
         // Params have grads
         assert!(model.parameters().first().unwrap().grad().is_some());
@@ -1258,7 +1264,7 @@ mod misc_tests {
 
             let pred = model.forward(&x);
             let loss = RawTensor::mse_loss(&pred, &y);
-            loss.backward();
+            loss.clone().into_loss().expect("scalar loss").backward();
             opt.step();
 
             losses.push(
@@ -1298,7 +1304,7 @@ mod misc_tests {
                 opt.zero_grad();
                 let pred = model.forward(&x).reshape(&[4]);
                 let loss = RawTensor::mse_loss(&pred, &y);
-                loss.backward();
+                loss.into_loss().expect("scalar loss").backward();
                 opt.step();
             }
         } else {
@@ -1307,7 +1313,7 @@ mod misc_tests {
                 opt.zero_grad();
                 let pred = model.forward(&x).reshape(&[4]);
                 let loss = RawTensor::mse_loss(&pred, &y);
-                loss.backward();
+                loss.into_loss().expect("scalar loss").backward();
                 opt.step();
             }
         }
@@ -1389,7 +1395,7 @@ mod misc_tests {
                 let pred = model.forward(&batch_x);
                 // Dummy loss
                 let loss = pred.sum();
-                loss.backward();
+                loss.into_loss().expect("scalar loss").backward();
                 opt.step();
             }
 
@@ -1571,7 +1577,7 @@ mod misc_tests {
         // Simple forward pass: sum of output
         let y = ln.forward(&x);
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // Check that gradients exist and are finite
         let x_grad = x.grad();
@@ -1668,7 +1674,7 @@ mod misc_tests {
         assert_eq!(y.borrow().shape, vec![2, 1, 6, 6]);
 
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         let grad = x.grad();
         assert!(
@@ -1732,7 +1738,7 @@ mod misc_tests {
 
         // Sum and backward
         let loss = output.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // Check that weight has gradients
         let grad = embedding.weight.grad();
@@ -1763,7 +1769,7 @@ mod misc_tests {
         let output = embedding.forward(&indices);
 
         let loss = output.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         let grad = embedding.weight.grad().unwrap();
         // Index 2 should have grad of 3.0 per dimension (appears 3 times)
@@ -1997,6 +2003,8 @@ mod edge_case_tests {
             | VoltaError::BroadcastError(..)
             | VoltaError::DeviceError(_)
             | VoltaError::Io(_)
+            | VoltaError::NotScalar { .. }
+            | VoltaError::NoGradRequired
             | VoltaError::OpError(_) => {
                 panic!("Expected InvalidParameter error, got {result:?}")
             }
@@ -2031,6 +2039,8 @@ mod edge_case_tests {
             | VoltaError::BroadcastError(..)
             | VoltaError::DeviceError(_)
             | VoltaError::Io(_)
+            | VoltaError::NotScalar { .. }
+            | VoltaError::NoGradRequired
             | VoltaError::OpError(_) => {
                 panic!("Expected InvalidParameter error, got {result:?}")
             }
@@ -2054,6 +2064,8 @@ mod edge_case_tests {
             | VoltaError::BroadcastError(..)
             | VoltaError::DeviceError(_)
             | VoltaError::Io(_)
+            | VoltaError::NotScalar { .. }
+            | VoltaError::NoGradRequired
             | VoltaError::InvalidParameter(_)
             | VoltaError::OpError(_) => {
                 panic!("Expected DimensionOutOfBounds error, got {result:?}")
@@ -2078,6 +2090,8 @@ mod edge_case_tests {
             | VoltaError::BroadcastError(..)
             | VoltaError::DeviceError(_)
             | VoltaError::Io(_)
+            | VoltaError::NotScalar { .. }
+            | VoltaError::NoGradRequired
             | VoltaError::InvalidParameter(_)
             | VoltaError::OpError(_) => {
                 panic!("Expected DimensionOutOfBounds error, got {result:?}")
@@ -2109,6 +2123,8 @@ mod edge_case_tests {
             | VoltaError::BroadcastError(..)
             | VoltaError::DeviceError(_)
             | VoltaError::Io(_)
+            | VoltaError::NotScalar { .. }
+            | VoltaError::NoGradRequired
             | VoltaError::OpError(_) => {
                 panic!("Expected InvalidParameter error, got {result:?}")
             }
@@ -2139,6 +2155,8 @@ mod edge_case_tests {
             | VoltaError::BroadcastError(..)
             | VoltaError::DeviceError(_)
             | VoltaError::Io(_)
+            | VoltaError::NotScalar { .. }
+            | VoltaError::NoGradRequired
             | VoltaError::OpError(_) => {
                 panic!("Expected InvalidParameter error, got {result:?}")
             }
@@ -2165,6 +2183,8 @@ mod edge_case_tests {
             | VoltaError::BroadcastError(..)
             | VoltaError::DeviceError(_)
             | VoltaError::Io(_)
+            | VoltaError::NotScalar { .. }
+            | VoltaError::NoGradRequired
             | VoltaError::OpError(_) => {
                 panic!("Expected InvalidParameter error, got {result:?}")
             }
@@ -2286,7 +2306,7 @@ mod edge_case_tests {
         let x = RawTensor::new(vec![6.0], &[1], true);
         let y = RawTensor::new(vec![0.0], &[1], true);
         let z = x.div(&y); // z = inf
-        z.backward();
+        z.into_loss().expect("scalar loss").backward();
 
         // x.grad() = 1/0 = inf
         assert!(
@@ -2338,7 +2358,7 @@ mod edge_case_tests {
         // ∂sqrt(x)/∂x = 1/(2*sqrt(x)), which is inf when x=0
         let x = RawTensor::new(vec![0.0], &[1], true);
         let y = x.sqrt();
-        y.backward();
+        y.into_loss().expect("scalar loss").backward();
 
         // Gradient at x=0 is infinite
         assert!(
@@ -2369,7 +2389,7 @@ mod edge_case_tests {
         );
 
         // Backward should compute without panicking
-        y.backward();
+        y.into_loss().expect("scalar loss").backward();
 
         // The gradient formula 1/(2*sqrt(x)) with x=-1 gives NaN
         assert!(
@@ -2438,7 +2458,7 @@ mod edge_case_tests {
         // Test log gradient at zero: ∂log(x)/∂x = 1/x, which is inf at x=0
         let x = RawTensor::new(vec![0.0], &[1], true);
         let y = x.log(); // y = -inf
-        y.backward();
+        y.into_loss().expect("scalar loss").backward();
 
         // Gradient at x=0 is infinite
         assert!(
@@ -2464,7 +2484,7 @@ mod edge_case_tests {
         // Test log2 gradient at zero: ∂log2(x)/∂x = 1/(x*ln(2)), which is inf at x=0
         let x = RawTensor::new(vec![0.0], &[1], true);
         let y = x.log2(); // y = -inf
-        y.backward();
+        y.into_loss().expect("scalar loss").backward();
 
         // Gradient at x=0 is infinite
         assert!(
@@ -2887,7 +2907,7 @@ mod edge_case_tests {
         let x = RawTensor::new(vec![3.0], &[1], true);
         let two = RawTensor::new(vec![2.0], &[1], false);
         let y = x.elem_mul(&two); // y = 3 * 2 = 6
-        y.backward();
+        y.into_loss().expect("scalar loss").backward();
 
         // dy/dx = 2
         assert_eq!(
@@ -2977,7 +2997,7 @@ mod edge_case_tests {
         let vector = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], true);
         let result = scalar.elem_mul(&vector); // [2, 4, 6]
         let sum = result.sum(); // 12
-        sum.backward();
+        sum.into_loss().expect("scalar loss").backward();
 
         // d(loss)/d(scalar) = sum of vector elements = 1+2+3 = 6
         assert_eq!(
@@ -3142,7 +3162,7 @@ mod axis_reduce_tests {
     fn test_sum_dim_backward() {
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], true);
         let y = RawTensor::sum_dim(&x, Axis(1), false); // [6, 15]
-        y.backward();
+        y.sum().into_loss().expect("scalar loss").backward();
 
         // Gradient broadcasts back: each element contributed once
         assert_eq!(x.grad(), Some(vec![1.0, 1.0, 1.0, 1.0, 1.0, 1.0]));
@@ -3161,7 +3181,7 @@ mod axis_reduce_tests {
     fn test_max_dim_backward() {
         let x = RawTensor::new(vec![1.0, 5.0, 3.0, 2.0, 8.0, 4.0], &[2, 3], true);
         let y = RawTensor::max_dim(&x, Axis(1), false);
-        y.backward();
+        y.sum().into_loss().expect("scalar loss").backward();
 
         // Only max elements get gradient
         assert_eq!(x.grad(), Some(vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0]));
@@ -3213,7 +3233,7 @@ mod axis_reduce_tests {
         let targets = RawTensor::new(vec![1.0, 0.0, 0.0, 1.0], &[2, 2], false);
 
         let loss = RawTensor::cross_entropy_loss(&logits, &targets);
-        loss.backward();
+        loss.clone().into_loss().expect("scalar loss").backward();
 
         // Loss should be positive scalar
         assert_eq!(loss.borrow().shape, vec![1]);
@@ -3308,7 +3328,7 @@ mod axis_reduce_tests {
         );
 
         // Check gradient
-        m.sum().backward();
+        m.sum().into_loss().expect("scalar loss").backward();
         // d(mean)/dx = 1/N. Here N=3. Grad should be 1/3 for all elements.
         let grads = x.grad().unwrap();
         for g in grads {
@@ -3593,7 +3613,7 @@ mod gpu_tests {
         assert!(c.borrow().device.is_gpu());
 
         // Backward should compute gradients on GPU
-        c.backward();
+        c.sum().into_loss().expect("scalar loss").backward();
 
         // Gradients should be on GPU
         {
@@ -3615,7 +3635,7 @@ mod gpu_tests {
             true,
         );
         let c_cpu = a_cpu.matmul(&b_cpu);
-        c_cpu.backward();
+        c_cpu.sum().into_loss().expect("scalar loss").backward();
 
         let a_grad_data;
         let b_grad_data;
@@ -3670,7 +3690,7 @@ mod gpu_tests {
         let out = layer.forward(&x);
         let loss = out.sum();
 
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // Check gradients exist and are on GPU
         let params = layer.parameters();
@@ -3701,7 +3721,7 @@ mod gpu_tests {
         assert!(sum_result.borrow().device.is_gpu());
 
         // Backward should compute gradients on GPU
-        sum_result.backward();
+        sum_result.into_loss().expect("scalar loss").backward();
 
         // Gradient should be on GPU and all ones
         let grad_data;
@@ -3735,7 +3755,7 @@ mod gpu_tests {
         assert!(mean_result.borrow().device.is_gpu());
 
         // Backward should compute gradients on GPU
-        mean_result.backward();
+        mean_result.into_loss().expect("scalar loss").backward();
 
         // Gradient should be on GPU and all 1/6
         let grad_data;
@@ -3770,7 +3790,7 @@ mod gpu_tests {
         assert!(max_result.borrow().device.is_gpu());
 
         // Backward should compute gradients on GPU
-        max_result.backward();
+        max_result.into_loss().expect("scalar loss").backward();
 
         // Gradient should be on GPU and only max element (6.0 at index 5) gets grad
         let grad_data;
@@ -3808,12 +3828,12 @@ mod gpu_tests {
         // Test sum
         let x_cpu = RawTensor::new(data.clone(), shape, true);
         let sum_cpu = x_cpu.sum();
-        sum_cpu.backward();
+        sum_cpu.into_loss().expect("scalar loss").backward();
         let sum_grad_cpu = x_cpu.borrow().grad.as_ref().unwrap().to_vec();
 
         let x_gpu = RawTensor::new(data.clone(), shape, true).to_device(gpu_device.clone());
         let sum_gpu = x_gpu.sum();
-        sum_gpu.backward();
+        sum_gpu.into_loss().expect("scalar loss").backward();
         let sum_grad_gpu = x_gpu.borrow().grad.as_ref().unwrap().to_vec();
 
         assert_eq!(sum_grad_cpu.len(), sum_grad_gpu.len());
@@ -3824,12 +3844,12 @@ mod gpu_tests {
         // Test mean
         let x_cpu2 = RawTensor::new(data.clone(), shape, true);
         let mean_cpu = x_cpu2.mean();
-        mean_cpu.backward();
+        mean_cpu.into_loss().expect("scalar loss").backward();
         let mean_grad_cpu = x_cpu2.borrow().grad.as_ref().unwrap().to_vec();
 
         let x_gpu2 = RawTensor::new(data.clone(), shape, true).to_device(gpu_device.clone());
         let mean_gpu = x_gpu2.mean();
-        mean_gpu.backward();
+        mean_gpu.into_loss().expect("scalar loss").backward();
         let mean_grad_gpu = x_gpu2.borrow().grad.as_ref().unwrap().to_vec();
 
         assert_eq!(mean_grad_cpu.len(), mean_grad_gpu.len());
@@ -3840,12 +3860,12 @@ mod gpu_tests {
         // Test max
         let x_cpu3 = RawTensor::new(data.clone(), shape, true);
         let max_cpu = x_cpu3.max_reduce();
-        max_cpu.backward();
+        max_cpu.into_loss().expect("scalar loss").backward();
         let max_grad_cpu = x_cpu3.borrow().grad.as_ref().unwrap().to_vec();
 
         let x_gpu3 = RawTensor::new(data.clone(), shape, true).to_device(gpu_device);
         let max_gpu = x_gpu3.max_reduce();
-        max_gpu.backward();
+        max_gpu.into_loss().expect("scalar loss").backward();
         let max_grad_gpu = x_gpu3.borrow().grad.as_ref().unwrap().to_vec();
 
         assert_eq!(max_grad_cpu.len(), max_grad_gpu.len());
@@ -4106,7 +4126,7 @@ mod gpu_tests {
             .to_device(gpu_device.clone());
 
         let c = a.add(&b);
-        c.backward();
+        c.sum().into_loss().expect("scalar loss").backward();
 
         // Verify gradients exist
         assert!(a.grad().is_some());
@@ -4169,7 +4189,7 @@ mod gpu_tests {
         let b = RawTensor::new(vec![10.0, 20.0, 30.0], &[1, 3], true).to_device(gpu_device.clone());
 
         let c = a.elem_mul(&b);
-        c.backward();
+        c.sum().into_loss().expect("scalar loss").backward();
 
         // Verify gradients exist and are finite
         assert!(a.grad().is_some());
@@ -4206,7 +4226,7 @@ mod gpu_tests {
         .to_device(gpu_device.clone());
 
         let c = a.add(&b);
-        c.backward();
+        c.sum().into_loss().expect("scalar loss").backward();
 
         // a should accumulate gradient from all 1000 positions
         let a_grad = a.grad().unwrap();
@@ -4315,7 +4335,7 @@ mod binary_ops_tests {
         let a = make(&[3], vec![5.0, 1.0, 9.0]);
         let b = make(&[3], vec![2.0, 7.0, 4.0]);
         let z = a.max_elem(&b);
-        z.sum().backward();
+        z.sum().into_loss().expect("scalar loss").backward();
         // a wins at indices 0 and 2.
         assert_eq!(a.grad(), Some(vec![1.0, 0.0, 1.0]));
         assert_eq!(b.grad(), Some(vec![0.0, 1.0, 0.0]));
@@ -4566,7 +4586,7 @@ mod reduce_ops_tests {
     #[test]
     fn sum_backward_is_ones() {
         let x = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], true);
-        x.sum().backward();
+        x.sum().into_loss().expect("scalar loss").backward();
         assert_eq!(x.grad(), Some(vec![1.0, 1.0, 1.0]));
     }
 
@@ -4583,7 +4603,7 @@ mod reduce_ops_tests {
     #[test]
     fn mean_backward_is_uniform() {
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], true);
-        x.mean().backward();
+        x.mean().into_loss().expect("scalar loss").backward();
         // dL/dx_i = 1/N
         let g = x.grad().unwrap();
         for v in g {
@@ -4594,7 +4614,7 @@ mod reduce_ops_tests {
     #[test]
     fn max_reduce_routes_grad_to_argmax() {
         let x = RawTensor::new(vec![1.0, 7.0, 3.0, 2.0], &[4], true);
-        x.max_reduce().backward();
+        x.max_reduce().into_loss().expect("scalar loss").backward();
         assert_eq!(x.grad(), Some(vec![0.0, 1.0, 0.0, 0.0]));
     }
 
@@ -4654,7 +4674,11 @@ mod reduce_ops_tests {
     #[test]
     fn max_dim_routes_grad_to_argmax_per_row() {
         let x = RawTensor::new(vec![1.0, 5.0, 3.0, 9.0, 2.0, 7.0], &[2, 3], true);
-        x.max_dim(Axis(1), true).sum().backward();
+        x.max_dim(Axis(1), true)
+            .sum()
+            .into_loss()
+            .expect("scalar loss")
+            .backward();
         // argmax row 0 -> col 1; row 1 -> col 0
         assert_eq!(x.grad(), Some(vec![0.0, 1.0, 0.0, 1.0, 0.0, 0.0]));
     }

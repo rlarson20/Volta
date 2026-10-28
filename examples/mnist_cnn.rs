@@ -110,7 +110,7 @@ fn main() {
             optimizer.zero_grad();
             let output = model.forward(&batch_x);
             let loss = RawTensor::cross_entropy_loss(&output, &batch_y);
-            loss.backward();
+            loss.clone().into_loss().expect("scalar loss").backward();
             optimizer.step();
 
             epoch_loss += loss.data().first().copied().unwrap_or(0.0);

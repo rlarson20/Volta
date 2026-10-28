@@ -40,7 +40,7 @@ fn main() {
             );
         }
 
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
         optimizer.step();
     }
 

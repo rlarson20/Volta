@@ -48,7 +48,7 @@ fn main() {
         let pred = model.forward(&x);
         let loss = RawTensor::mse_loss(&pred, &y_true);
 
-        loss.backward();
+        loss.clone().into_loss().expect("scalar loss").backward();
         optimizer.step();
 
         progress.update(epoch + 1);

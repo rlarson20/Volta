@@ -150,7 +150,7 @@ fn test_adam_convergence_convex() {
         let target = RawTensor::new(vec![3.0], &[1], false);
         let diff = x.sub(&target);
         let loss = diff.elem_mul(&diff).sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
         opt.step();
     }
 
@@ -233,7 +233,7 @@ fn test_sgd_convergence_convex() {
         let target = RawTensor::new(vec![3.0], &[1], false);
         let diff = x.sub(&target);
         let loss = diff.elem_mul(&diff).sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
         opt.step();
     }
 

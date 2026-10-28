@@ -234,7 +234,7 @@ mod tests {
 
         // Sum and backward
         let loss = output.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // Check that weight has gradients
         let grad = embedding.weight.grad();

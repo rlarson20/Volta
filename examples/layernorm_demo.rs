@@ -64,7 +64,7 @@ fn main() {
     let x3 = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 4], true);
     let y3 = ln3.forward(&x3);
     let loss = y3.sum();
-    loss.backward();
+    loss.into_loss().expect("scalar loss").backward();
 
     println!("Input gradient exists: {}", x3.grad().is_some());
     let params3 = ln3.parameters();

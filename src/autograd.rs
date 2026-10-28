@@ -1,4 +1,5 @@
 use crate::device::Device;
+use crate::error::{Result, VoltaError};
 use crate::nn::layers::conv::{DirectConvGradFn, IGEMMGradFn, Im2colGradFn};
 use crate::nn::layers::conv_transpose::ConvTranspose2dGradFn;
 use crate::nn::layers::embedding::EmbeddingGradFn;
@@ -177,40 +178,33 @@ impl Drop for NoGradGuard {
 // ===== BACKPROPAGATION =====
 
 impl RawTensor {
-    /// Run backpropagation starting from this tensor
+    /// Run backpropagation from a scalar loss.
     ///
-    /// This implements reverse-mode automatic differentiation:
-    /// 1. Initialize this tensor's gradient to 1 (assumes it's a scalar loss)
+    /// Only reachable through [`ScalarLoss::backward`], which has already checked
+    /// that `tensor_ref` has one element and requires grad.
+    ///
+    /// 1. Seed this tensor's gradient with 1 (if not already set)
     /// 2. Traverse the computation graph backwards (topological sort via DFS)
     /// 3. For each node, call its `grad_fn` to compute parent gradients
     /// 4. Accumulate gradients in each parent tensor
-    ///
-    /// Uses a `HashSet` to track visited nodes and avoid recomputation.
-    /// # Panics
-    /// Calling on tensor that doesn't need gradients
-    pub fn backward(tensor_ref: &Tensor) {
+    pub(crate) fn run_backward(tensor_ref: &Tensor) {
         enum Action {
             Visit(Tensor),
             PostVisit(Tensor),
         }
 
-        let tensor = tensor_ref.borrow();
-        assert!(
-            tensor.requires_grad,
-            "Called backward on a tensor that doesn't require grad"
+        // `into_loss` checked this, so it can only fail if another handle called
+        // `set_requires_grad(false)` between `into_loss` and `backward`.
+        debug_assert!(
+            tensor_ref.borrow().requires_grad,
+            "ScalarLoss::backward on a tensor that no longer requires grad"
         );
-        drop(tensor);
         // Initialize gradient if not already set
         {
             let mut tensor = tensor_ref.borrow_mut();
             if tensor.grad.is_none() {
-                let grad_size = if tensor.shape.len() == 1 && tensor.shape.first() == Some(&1) {
-                    1
-                } else {
-                    tensor.data.len()
-                };
                 // Initialize grad on the same device as this tensor's data
-                let base = Storage::cpu(vec![1.0; grad_size]);
+                let base = Storage::cpu(vec![1.0]);
                 let grad_storage = base.to_device(&tensor.device);
                 tensor.grad = Some(grad_storage);
             }
@@ -294,6 +288,64 @@ impl RawTensor {
     }
 }
 
+/// A tensor that has been checked to be a single element that requires grad.
+///
+/// This is the only type with a `backward` method, so backward can't start from a
+/// non-scalar or an untracked tensor. Get one with [`Tensor::into_loss`].
+pub struct ScalarLoss(Tensor);
+
+impl Tensor {
+    /// Check that this tensor is a valid starting point for backward.
+    ///
+    /// # Errors
+    /// [`VoltaError::NotScalar`] if it has more than one element, and
+    /// [`VoltaError::NoGradRequired`] if it isn't tracked by autograd (for example
+    /// it was built under `no_grad()` or from inputs that don't require grad).
+    pub fn into_loss(self) -> Result<ScalarLoss> {
+        let (numel, requires_grad) = {
+            let t = self.borrow();
+            (t.data.len(), t.requires_grad)
+        };
+        if numel != 1 {
+            return Err(VoltaError::NotScalar {
+                shape: self.shape(),
+            });
+        }
+        if !requires_grad {
+            return Err(VoltaError::NoGradRequired);
+        }
+        Ok(ScalarLoss(self))
+    }
+}
+
+impl ScalarLoss {
+    /// Backpropagate from this loss, accumulating into every reachable `grad`.
+    ///
+    /// Calling it again accumulates into the existing gradients.
+    pub fn backward(&self) {
+        RawTensor::run_backward(&self.0);
+    }
+
+    /// The loss value.
+    ///
+    /// # Panics
+    /// Never in practice: `into_loss` guarantees exactly one element.
+    #[must_use]
+    pub fn item(&self) -> f32 {
+        self.0
+            .data()
+            .first()
+            .copied()
+            .expect("ScalarLoss holds exactly one element")
+    }
+
+    /// The underlying tensor, for inspecting the loss or its gradient.
+    #[must_use]
+    pub fn tensor(&self) -> &Tensor {
+        &self.0
+    }
+}
+
 impl RawTensor {
     /// Add a gradient contribution to an existing gradient storage, preferring GPU accumulation.
     pub(crate) fn accumulate_grad(existing: &mut Storage, new_grad: &Storage) {
@@ -320,5 +372,66 @@ impl RawTensor {
             *a += *b;
         }
         *existing = Storage::cpu(accum);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tensor::TensorOps;
+
+    #[test]
+    fn into_loss_rejects_non_scalar() {
+        let t = RawTensor::new(vec![1.0; 6], &[2, 3], true);
+        match t.into_loss() {
+            Err(VoltaError::NotScalar { shape }) => assert_eq!(shape, vec![2, 3]),
+            Err(e) => panic!("wrong error: {e}"),
+            Ok(_) => panic!("non-scalar accepted"),
+        }
+    }
+
+    #[test]
+    fn into_loss_rejects_untracked() {
+        let t = RawTensor::new(vec![1.0], &[1], false);
+        assert!(matches!(t.into_loss(), Err(VoltaError::NoGradRequired)));
+
+        let x = RawTensor::new(vec![2.0], &[1], true);
+        let y = {
+            let _g = no_grad();
+            x.elem_mul(&x)
+        };
+        assert!(matches!(y.into_loss(), Err(VoltaError::NoGradRequired)));
+    }
+
+    #[test]
+    fn into_loss_accepts_any_single_element_shape() {
+        for dims in [&[1][..], &[1, 1][..]] {
+            let x = RawTensor::new(vec![3.0], dims, true);
+            let loss = x.elem_mul(&x).into_loss().expect("single element");
+            assert_eq!(loss.item(), 9.0);
+            loss.backward();
+            assert_eq!(x.grad().expect("grad"), vec![6.0]);
+        }
+    }
+
+    #[test]
+    fn backward_twice_accumulates() {
+        let x = RawTensor::new(vec![3.0], &[1], true);
+        let loss = x.elem_mul(&x).into_loss().expect("scalar");
+        loss.backward();
+        let first = x
+            .grad()
+            .expect("grad")
+            .first()
+            .copied()
+            .expect("one element");
+        loss.backward();
+        let second = x
+            .grad()
+            .expect("grad")
+            .first()
+            .copied()
+            .expect("one element");
+        assert!(second > first, "second backward should add to the first");
     }
 }

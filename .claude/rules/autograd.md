@@ -14,6 +14,7 @@ paths:
 - **Shapes:** `edge` takes a `Shape`. Use `Shape::derived` for dims an op computed from existing tensors (it panics, because an invalid one is an op bug) and `Shape::from_dims` for user-supplied dims (it returns `Err` on a zero dim or more than `MAX_NUMEL` elements). Don't re-implement the zero/size-cap checks. `RawTensor.shape` is still a `Vec<usize>` field (DECISIONS.md, "Shape boundary"); demote with `truncate_rank()` only at the existing boundary sites.
 - **Dims:** reductions, `softmax`, `log_softmax`, and `permute` take `Axis`. Get an axis's size with `Shape::dim`, never `shape.get(i).unwrap_or(&1)` (invariant 5).
 - Don't add new loose `Vec<usize>` shape or `usize` dim parameters to public functions.
+- **Backward** runs only through `Tensor::into_loss()?.backward()` (`ScalarLoss`). Don't add another public entry point or a seeded-gradient variant; reduce with `.sum()` first.
 - `NO_GRAD` is a thread-local, reentrant depth counter (`Cell<u32>`), so `no_grad()` scopes nest. Don't simplify it to a bool.
 - `TensorOps` is slated for deletion (ADDENDUM §3). Keep any method you add to it as a one-line forward; the logic belongs in `src/ops/`.
 - **Every new op needs a numerical gradient check** (`check_gradients`) with random inputs, covering unequal-rank and broadcast cases. B4 (wrong unequal-rank matmul backward) shipped because only equal-rank shapes were tested.

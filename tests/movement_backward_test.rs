@@ -40,8 +40,16 @@ fn test_permute_backward_cpu_vs_gpu() {
     let gpu_permuted = gpu_t.permute(&[Axis(1), Axis(0)]);
 
     // Backward pass
-    cpu_permuted.backward();
-    gpu_permuted.backward();
+    cpu_permuted
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
+    gpu_permuted
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
 
     // Compare gradients
     let cpu_grad = cpu_t.grad_storage().unwrap().to_vec();
@@ -73,8 +81,16 @@ fn test_expand_backward_cpu_vs_gpu() {
     let gpu_expanded = gpu_t.expand(&[2, 3]);
 
     // Backward pass
-    cpu_expanded.backward();
-    gpu_expanded.backward();
+    cpu_expanded
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
+    gpu_expanded
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
 
     // Compare gradients (should sum over broadcast dimension)
     let cpu_grad = cpu_t.grad_storage().unwrap().to_vec();
@@ -113,8 +129,16 @@ fn test_pad_backward_cpu_vs_gpu() {
     let gpu_padded = gpu_t.pad_with(&padding, PadValue::ZERO);
 
     // Backward pass
-    cpu_padded.backward();
-    gpu_padded.backward();
+    cpu_padded
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
+    gpu_padded
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
 
     // Compare gradients (should extract center region)
     let cpu_grad = cpu_t.grad_storage().unwrap().to_vec();
@@ -175,8 +199,16 @@ fn test_shrink_backward_cpu_vs_gpu() {
     let gpu_shrunk = gpu_t.shrink(&ranges);
 
     // Backward pass
-    cpu_shrunk.backward();
-    gpu_shrunk.backward();
+    cpu_shrunk
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
+    gpu_shrunk
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
 
     // Compare gradients (should place gradient in window, zero elsewhere)
     let cpu_grad = cpu_t.grad_storage().unwrap().to_vec();
@@ -209,8 +241,16 @@ fn test_stride_backward_cpu_vs_gpu() {
     let gpu_strided = gpu_t.stride_op(&strides);
 
     // Backward pass
-    cpu_strided.backward();
-    gpu_strided.backward();
+    cpu_strided
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
+    gpu_strided
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
 
     // Compare gradients (should upsample with zeros)
     let cpu_grad = cpu_t.grad_storage().unwrap().to_vec();
@@ -239,7 +279,7 @@ fn test_movement_backward_chain_cpu_vs_gpu() {
     let cpu_out = cpu_t
         .permute(&[Axis(2), Axis(1), Axis(0)])
         .expand(&[3, 2, 2]);
-    cpu_out.backward();
+    cpu_out.sum().into_loss().expect("scalar loss").backward();
     let cpu_grad = cpu_t.grad_storage().unwrap().to_vec();
 
     // GPU path
@@ -247,7 +287,7 @@ fn test_movement_backward_chain_cpu_vs_gpu() {
     let gpu_out = gpu_t
         .permute(&[Axis(2), Axis(1), Axis(0)])
         .expand(&[3, 2, 2]);
-    gpu_out.backward();
+    gpu_out.sum().into_loss().expect("scalar loss").backward();
     let gpu_grad = gpu_t.grad_storage().unwrap().to_vec();
 
     assert!(
@@ -268,12 +308,20 @@ fn test_expand_backward_multiple_dims() {
     let data = vec![1.0, 2.0, 3.0];
     let cpu_t = RawTensor::new(data.clone(), &[1, 1, 3], true);
     let cpu_expanded = cpu_t.expand(&[2, 2, 3]);
-    cpu_expanded.backward();
+    cpu_expanded
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
     let cpu_grad = cpu_t.grad_storage().unwrap().to_vec();
 
     let gpu_t = RawTensor::new(data, &[1, 1, 3], true).to_device(device.clone());
     let gpu_expanded = gpu_t.expand(&[2, 2, 3]);
-    gpu_expanded.backward();
+    gpu_expanded
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
     let gpu_grad = gpu_t.grad_storage().unwrap().to_vec();
 
     assert!(

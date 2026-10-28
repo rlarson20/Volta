@@ -176,7 +176,7 @@ fn main() {
             let d_loss = d_loss_real.add(&d_loss_fake);
             total_d_loss += d_loss.data().first().copied().unwrap_or(f32::NAN);
 
-            d_loss.backward();
+            d_loss.into_loss().expect("scalar loss").backward();
             d_optimizer.step();
 
             // ===== Train Generator =====
@@ -192,7 +192,7 @@ fn main() {
 
             total_g_loss += g_loss.data().first().copied().unwrap_or(f32::NAN);
 
-            g_loss.backward();
+            g_loss.into_loss().expect("scalar loss").backward();
             g_optimizer.step();
         }
 

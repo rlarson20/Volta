@@ -100,9 +100,9 @@ pub fn assert_unary_parity_backward<F>(
     let x_gpu = x_cpu.to_device(gpu_device());
 
     let y_cpu = op(&x_cpu);
-    y_cpu.sum().backward();
+    y_cpu.sum().into_loss().expect("scalar loss").backward();
     let y_gpu = op(&x_gpu);
-    y_gpu.sum().backward();
+    y_gpu.sum().into_loss().expect("scalar loss").backward();
 
     assert_close(
         &format!("{op_name} fwd"),
@@ -156,9 +156,9 @@ pub fn assert_binary_parity_backward<F>(
     let b_gpu = b_cpu.to_device(gpu_device());
 
     let c_cpu = op(&a_cpu, &b_cpu);
-    c_cpu.sum().backward();
+    c_cpu.sum().into_loss().expect("scalar loss").backward();
     let c_gpu = op(&a_gpu, &b_gpu);
-    c_gpu.sum().backward();
+    c_gpu.sum().into_loss().expect("scalar loss").backward();
 
     assert_close(
         &format!("{op_name} fwd"),
@@ -203,9 +203,9 @@ pub fn assert_matmul_parity(a_shape: &[usize], b_shape: &[usize], tol_fwd: f32, 
     let b_gpu = b_cpu.to_device(gpu_device());
 
     let c_cpu = a_cpu.matmul(&b_cpu);
-    c_cpu.sum().backward();
+    c_cpu.sum().into_loss().expect("scalar loss").backward();
     let c_gpu = a_gpu.matmul(&b_gpu);
-    c_gpu.sum().backward();
+    c_gpu.sum().into_loss().expect("scalar loss").backward();
 
     let label = format!("matmul {a_shape:?} @ {b_shape:?}");
     assert_close(

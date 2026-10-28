@@ -29,6 +29,14 @@ pub enum VoltaError {
     #[error("Invalid parameter: {0}")]
     InvalidParameter(String),
 
+    #[error(
+        "Cannot start backward from a non-scalar tensor of shape {shape:?}; reduce it to one element first (e.g. `.sum()`)"
+    )]
+    NotScalar { shape: Vec<usize> },
+
+    #[error("Cannot start backward from a tensor that doesn't require grad")]
+    NoGradRequired,
+
     #[error("Operation failed: {0}")]
     OpError(String),
 }

@@ -215,7 +215,7 @@ mod tests {
         x.borrow_mut().requires_grad = true;
         let y = pool.forward(&x);
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
         assert!(x.grad().is_some());
     }
 
@@ -482,7 +482,7 @@ mod tests {
         let x = RawTensor::new(data, &[1, 1, 4, 4], true);
         let y = pool.forward(&x);
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         let grad = x.grad().unwrap();
         let grad_data = grad.clone();
@@ -547,7 +547,7 @@ mod tests {
 
         let y = pool.forward(&x);
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         let grad = x.grad().unwrap();
         let grad_data = grad.clone();
@@ -580,7 +580,7 @@ mod tests {
         assert_eq!(y.borrow().shape, vec![1, 1, 3, 3]);
 
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         let grad = x.grad().unwrap();
         let grad_data = grad.clone();
@@ -609,7 +609,7 @@ mod tests {
 
         // Gradient should flow correctly
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
         let grad = x.grad().unwrap();
         assert_eq!(grad.clone().first().copied().unwrap(), 1.0);
     }
@@ -627,7 +627,7 @@ mod tests {
 
         // Gradient should flow to the max position only
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
         let grad = x.grad().unwrap();
         let grad_data = grad.clone();
 
@@ -653,7 +653,7 @@ mod tests {
 
         let y = pool.forward(&x);
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         let grad = x.grad().unwrap();
         let grad_data = grad.clone();
@@ -677,7 +677,7 @@ mod tests {
 
         let y = pool.forward(&x);
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         let grad = x.grad().unwrap();
         let grad_data = grad.clone();
@@ -732,7 +732,7 @@ mod tests {
         let x = RawTensor::new(shifted, &[1, 2, 6, 6], true);
         let y = pool.forward(&x);
         assert!(y.data().iter().all(|&v| v < 0.0), "output leaked the pad");
-        y.sum().backward();
+        y.sum().into_loss().expect("scalar loss").backward();
         let grad = x.grad().expect("input should receive a gradient");
         let total: f32 = grad.iter().sum();
         assert_eq!(total, y.data().len() as f32, "one unit per output window");

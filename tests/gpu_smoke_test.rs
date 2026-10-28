@@ -17,7 +17,7 @@ fn test_tensor_gpu_unary_add_binary_smoke() {
     let z = x.add(&y); // may take GPU path
     let w = z.relu(); // may take GPU path
     let loss = w.sum(); // CPU reduce, GPU-aware backward
-    loss.backward();
+    loss.into_loss().expect("scalar loss").backward();
 
     // Gradients should exist and live on GPU
     let grad = x.grad_storage().unwrap();
@@ -44,7 +44,7 @@ fn test_tensor_gpu_sum_output_device_and_grad_on_gpu() {
         "sum() output should remain on the same GPU device as the input"
     );
 
-    loss.backward();
+    loss.into_loss().expect("scalar loss").backward();
 
     let grad_storage = x.grad_storage().expect("Gradient for input missing");
     assert!(
@@ -114,7 +114,7 @@ fn test_tensor_gpu_matmul_backward_consistent_with_cpu() {
     // GPU forward/backward
     let y_gpu = x_gpu.matmul(&w_gpu);
     let loss_gpu = y_gpu.sum();
-    loss_gpu.backward();
+    loss_gpu.into_loss().expect("scalar loss").backward();
 
     let x_gpu_grad = x_gpu.grad_storage().unwrap().to_vec();
     let w_gpu_grad = w_gpu.grad_storage().unwrap().to_vec();
@@ -122,7 +122,7 @@ fn test_tensor_gpu_matmul_backward_consistent_with_cpu() {
     // CPU forward/backward
     let y_cpu = x_cpu.matmul(&w_cpu);
     let loss_cpu = y_cpu.sum();
-    loss_cpu.backward();
+    loss_cpu.into_loss().expect("scalar loss").backward();
 
     let x_cpu_grad = x_cpu.grad().unwrap();
     let w_cpu_grad = w_cpu.grad().unwrap();
@@ -182,8 +182,8 @@ fn test_tensor_gpu_mulacc_matches_cpu_and_grad() {
     }
 
     // Backward: compare gradients w.r.t x.
-    out_cpu.sum().backward();
-    out_gpu.sum().backward();
+    out_cpu.sum().into_loss().expect("scalar loss").backward();
+    out_gpu.sum().into_loss().expect("scalar loss").backward();
 
     let gx_cpu = x_cpu.grad().unwrap();
     let gx_gpu = x_gpu.grad_storage().unwrap().to_vec();
@@ -337,7 +337,7 @@ fn test_tensor_gpu_sum_dim_device_and_grad_on_gpu() {
     assert_eq!(y.shape(), vec![2]);
     assert_eq!(y.data(), vec![3.0, 7.0]);
 
-    y.backward();
+    y.sum().into_loss().expect("scalar loss").backward();
 
     let grad_storage = x.grad_storage().expect("Gradient for input missing");
     assert!(
@@ -371,7 +371,7 @@ fn test_tensor_gpu_max_dim_device_and_grad_on_gpu() {
     assert_eq!(y.shape(), vec![2]);
     assert_eq!(y.data(), vec![5.0, 8.0]);
 
-    y.backward();
+    y.sum().into_loss().expect("scalar loss").backward();
 
     let grad_storage = x.grad_storage().expect("Gradient for input missing");
     assert!(
@@ -398,7 +398,7 @@ fn test_binary_add_backward_simple() {
 
     let z = x.add(&y);
     let loss = z.sum();
-    loss.backward();
+    loss.into_loss().expect("scalar loss").backward();
 
     let x_grad = x.grad().unwrap();
     println!("x_grad: {x_grad:?}");

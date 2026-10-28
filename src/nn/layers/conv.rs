@@ -1925,7 +1925,7 @@ mod conv2d_tests {
 
         let y = conv.forward(&x);
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // Check weight gradient shape
         if let Some(w_grad) = conv.weight.grad() {
@@ -2135,7 +2135,7 @@ mod conv2d_tests {
 
         let y = conv.forward(&x);
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // Check that input has gradients
         assert!(x.grad().is_some(), "Input should have gradients");
@@ -2177,7 +2177,7 @@ mod conv2d_tests {
         // Compute gradients with direct conv
         let y_direct = conv_direct.forward(&x);
         let loss_direct = y_direct.sum();
-        loss_direct.backward();
+        loss_direct.into_loss().expect("scalar loss").backward();
 
         let x_grad_direct = x.grad().clone();
         let w_grad_direct = conv_direct.weight.grad().clone();
@@ -2192,7 +2192,7 @@ mod conv2d_tests {
         // Compute gradients with im2col
         let y_im2col = conv_im2col.forward(&x);
         let loss_im2col = y_im2col.sum();
-        loss_im2col.backward();
+        loss_im2col.into_loss().expect("scalar loss").backward();
 
         let x_grad_im2col = x.grad().clone();
         let w_grad_im2col = conv_im2col.weight.grad().clone();
@@ -2276,7 +2276,7 @@ mod conv2d_tests {
         // Should now use Direct (small input, gradients OK)
         let y = conv.forward(&x);
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // Verify gradients exist
         assert!(x.grad().is_some(), "Input should have gradients");
@@ -2383,11 +2383,11 @@ mod conv2d_tests {
         // Forward and backward
         let y_direct = conv_direct.forward(&x_direct);
         let loss_direct = y_direct.sum();
-        loss_direct.backward();
+        loss_direct.into_loss().expect("scalar loss").backward();
 
         let y_igemm = conv_igemm.forward(&x_igemm);
         let loss_igemm = y_igemm.sum();
-        loss_igemm.backward();
+        loss_igemm.into_loss().expect("scalar loss").backward();
 
         // Compare input gradients
         let grad_direct = x_direct.grad().unwrap();
@@ -2626,7 +2626,7 @@ mod conv2d_gpu_tests {
 
         let y = conv.forward(&x);
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // Check that gradients exist
         assert!(x.grad().is_some(), "Input should have gradients");
@@ -3133,7 +3133,7 @@ mod conv2d_gpu_tests {
 
         let y = conv.forward(&x);
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // Verify all gradients exist
         assert!(x.grad().is_some(), "Input should have gradients");
@@ -3288,7 +3288,7 @@ mod conv2d_gpu_tests {
 
         let y = conv.forward(&x);
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // Gradients should exist (computed on CPU after GPU forward)
         assert!(x.grad().is_some(), "Input should have gradients");
@@ -3370,7 +3370,7 @@ mod conv2d_gpu_tests {
 
         let y_cpu = conv_cpu.forward(&x_cpu);
         let loss_cpu = y_cpu.sum();
-        loss_cpu.backward();
+        loss_cpu.into_loss().expect("scalar loss").backward();
 
         // Create GPU conv with im2col algorithm
         let x_gpu = RawTensor::new(x_data, &[1, 4, 8, 8], true).to_device(device.clone());
@@ -3382,7 +3382,7 @@ mod conv2d_gpu_tests {
 
         let y_gpu = conv_gpu.forward(&x_gpu);
         let loss_gpu = y_gpu.sum();
-        loss_gpu.backward();
+        loss_gpu.into_loss().expect("scalar loss").backward();
 
         // Compare input gradients (this tests col2im)
         let grad_cpu = x_cpu.grad().expect("CPU input should have gradient");
@@ -3430,7 +3430,7 @@ mod conv2d_gpu_tests {
 
         // Backward pass (tests col2im)
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // Verify we got an input gradient
         let grad_input = x_gpu.grad().expect("Input should have gradient");
@@ -3464,7 +3464,7 @@ mod conv2d_gpu_tests {
 
         let y_cpu = conv_cpu.forward(&x_cpu);
         let loss_cpu = y_cpu.sum();
-        loss_cpu.backward();
+        loss_cpu.into_loss().expect("scalar loss").backward();
 
         // GPU version
         let x_gpu = RawTensor::new(x_data, &[1, 3, 16, 16], true).to_device(device.clone());
@@ -3476,7 +3476,7 @@ mod conv2d_gpu_tests {
 
         let y_gpu = conv_gpu.forward(&x_gpu);
         let loss_gpu = y_gpu.sum();
-        loss_gpu.backward();
+        loss_gpu.into_loss().expect("scalar loss").backward();
 
         // Compare gradients (col2im with stride 2)
         let grad_cpu = x_cpu.grad().expect("CPU input should have gradient");

@@ -167,7 +167,7 @@ fn main() {
 
             // Loss and backprop
             let loss = RawTensor::cross_entropy_loss(&logits, &batch_y);
-            loss.backward();
+            loss.clone().into_loss().expect("scalar loss").backward();
             optimizer.step();
 
             epoch_loss += loss.data().first().copied().unwrap_or(f32::NAN);

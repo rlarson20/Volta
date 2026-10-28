@@ -188,7 +188,7 @@ fn main() {
             println!("Epoch {}: loss = {:.6}", epoch, loss.borrow().data.first().copied().unwrap_or(f32::NAN));
         }
 
-        loss.backward();
+        loss.into_loss().expect("loss is scalar").backward();
         optimizer.step();
     }
 
@@ -238,7 +238,7 @@ fn main() {
     optim.zero_grad();
     let output = model.forward(&input);
     let loss = volta::mse_loss(&output, &target);
-    loss.backward();
+    loss.into_loss().expect("loss is scalar").backward();
     optim.step();
 
     println!("Loss: {:?}", loss.borrow().data.first().copied().unwrap_or(f32::NAN));
@@ -315,7 +315,7 @@ fn main() {
     let sum_gpu = c_gpu.sum();          // GPU reduction
 
     // Gradients computed on GPU when possible
-    sum_gpu.backward();
+    sum_gpu.into_loss().expect("loss is scalar").backward();
     println!("Gradient shape: {:?}", a_gpu.borrow().grad.as_ref().unwrap().shape());
 }
 ```

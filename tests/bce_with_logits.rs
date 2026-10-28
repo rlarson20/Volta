@@ -15,7 +15,7 @@ fn test_bce_with_logits_saturated_logits_finite() {
     let logits = RawTensor::new(xs.to_vec(), &[6], true);
     let target = RawTensor::new(ys.to_vec(), &[6], false);
     let loss = bce_with_logits_loss(&logits, &target);
-    loss.backward();
+    loss.clone().into_loss().expect("scalar loss").backward();
 
     let expected: f64 = xs
         .iter()
@@ -43,7 +43,10 @@ fn test_bce_with_logits_saturated_logits_finite() {
 fn test_bce_with_logits_gradient_at_zero() {
     let logits = RawTensor::new(vec![0.0, 0.0], &[2], true);
     let target = RawTensor::new(vec![0.0, 1.0], &[2], false);
-    bce_with_logits_loss(&logits, &target).backward();
+    bce_with_logits_loss(&logits, &target)
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
     let grad = logits.grad().expect("grad missing");
     assert!((grad[0] - 0.25).abs() < 1e-6, "{grad:?}");
     assert!((grad[1] + 0.25).abs() < 1e-6, "{grad:?}");

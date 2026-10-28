@@ -75,7 +75,7 @@ fn main() {
                 let loss = RawTensor::mse_loss(&pred, &target);
 
                 total_loss += loss.data().first().copied().unwrap_or(f32::NAN);
-                loss.backward();
+                loss.into_loss().expect("scalar loss").backward();
 
                 // Update hidden state for next timestep
                 h_state = Some((h_new, c_new));

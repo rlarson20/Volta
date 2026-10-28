@@ -49,7 +49,7 @@ fn main() {
         let loss = mse_loss(&predictions, &y_data);
 
         // Backward pass: compute gradients for all parameters
-        loss.backward();
+        loss.clone().into_loss().expect("scalar loss").backward();
 
         // Update model weights using the computed gradients
         opt.step();

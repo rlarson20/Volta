@@ -294,6 +294,18 @@ A size silently defaulting to 1 is the same class as `.get(i).unwrap_or(0.0)` (i
 - Movement ops keep their per-op structs and hand-written dispatch. They carry real state and different kernels and would need a second grammar.
 - The non-safe `GpuKernels::binary_backward_broadcast` (atomic-add scatter, dead code behind `#[allow(dead_code)]`) was deleted rather than given a row slot. It returned wrong gradients silently when checked on the commit before this change, so nothing working was lost. The race-free two-pass path remains but also fails (wgpu bind-group validation error); both are unreachable, since GPU forward never broadcasts (`notes/TODO.md`). Its `*_broadcast` pipelines and shader entry points are still in the tree (`notes/TODO.md`).
 
+### `into_loss` / `ScalarLoss` (ADDENDUM §2.2)
+
+**Decision:** `Tensor::into_loss(self) -> Result<ScalarLoss>` is the only way to start backward. `ScalarLoss::backward(&self)` is infallible, with no `Result`, because `into_loss` has already checked both conditions: one element (`VoltaError::NotScalar { shape }`) and `requires_grad` (`VoltaError::NoGradRequired`). The engine is `RawTensor::run_backward`, `pub(crate)`.
+
+**`TensorOps::backward` was removed, not deprecated or kept as a forwarding shim.** A forwarder would leave the guarantee at runtime only, so there would be nothing for a trybuild test to pin. With `-D warnings`, a deprecation would have forced every call site to change anyway. `tests/compile_fail/backward_on_tensor.rs` is the first trybuild case and pins the E0599.
+
+**Non-scalar roots migrate with an explicit `.sum()`, not a seeded-backward API.** The old code seeded a non-scalar root with all ones, which is an implicit `.sum()`. `sum`'s backward broadcasts ones, so gradients are identical and no second public entry point is needed. The `[1]` special case in the old seed code computed the same size as the general path, so it was dead and was deleted.
+
+**`into_loss` takes `self`, as the ADDENDUM sketch does.** A call site that uses the tensor afterwards writes `loss.clone().into_loss()`; `Tensor` is an `Rc`, so that is a refcount bump.
+
+**`backward` can be called twice.** It takes `&self` and accumulates, as before. `set_requires_grad(false)` on another handle after `into_loss` is the only way to break the check, and `run_backward` has a `debug_assert!` for it.
+
 ## Concurrency and Async
 
 ### Stay synchronous

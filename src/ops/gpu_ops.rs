@@ -818,7 +818,11 @@ mod tests {
                 // CPU reference: the full graph, backward from an all-ones output grad.
                 let xa = operand(numel(shape_a), 0.37, 0.5, shape_a);
                 let yb = operand(numel(shape_b), 0.53, 0.9, shape_b);
-                RawTensor::binary_op(&xa, &yb, op).backward();
+                RawTensor::binary_op(&xa, &yb, op)
+                    .sum()
+                    .into_loss()
+                    .expect("scalar loss")
+                    .backward();
                 let cpu_x = xa.grad().expect("cpu grad for x");
                 let cpu_y = yb.grad().expect("cpu grad for y");
 

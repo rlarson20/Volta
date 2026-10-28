@@ -270,7 +270,7 @@ fn test_lstm_gradient_flow() {
 
     // Known limitation: slice_gate breaks the autograd graph.
     // backward() may produce None gradients for the input.
-    loss.backward();
+    loss.into_loss().expect("scalar loss").backward();
 
     let grad = x.grad_storage();
     match grad {

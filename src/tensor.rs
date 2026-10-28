@@ -57,7 +57,7 @@ impl Tensor {
         self.inner.borrow_mut()
     }
 
-    /// Pointer identity for the graph-traversal visited-set in `autograd::backward()`.
+    /// Pointer identity for the graph-traversal visited-set in `RawTensor::run_backward`.
     pub(crate) fn as_ptr(&self) -> *const RawTensor {
         self.inner.as_ptr()
     }
@@ -1066,7 +1066,8 @@ impl RawTensor {
     /// # Returns
     /// (`max_error`, `mean_error`, passed)
     /// # Panics
-    /// tensor doesn't have gradient
+    /// If `loss_fn` doesn't return a scalar that requires grad, or `tensor` ends up
+    /// without a gradient
     pub fn check_gradients<F>(
         tensor: &Tensor,
         loss_fn: F,
@@ -1078,7 +1079,9 @@ impl RawTensor {
     {
         // Compute analytical gradient
         Self::zero_grad(tensor);
-        let loss = loss_fn(tensor);
+        let loss = loss_fn(tensor)
+            .into_loss()
+            .expect("loss_fn must return a scalar that requires grad");
         loss.backward();
 
         let analytical_grad = tensor.grad().expect("Tensor must have gradient");
@@ -1242,7 +1245,6 @@ pub trait TensorOps {
     fn transpose(&self) -> Tensor;
 
     //Gradient ops
-    fn backward(&self);
     fn grad(&self) -> Option<Vec<f32>>;
     fn zero_grad(&self);
 
@@ -1366,9 +1368,6 @@ impl TensorOps for Tensor {
         RawTensor::transpose(self)
     }
 
-    fn backward(&self) {
-        RawTensor::backward(self);
-    }
     fn grad(&self) -> Option<Vec<f32>> {
         self.borrow()
             .grad

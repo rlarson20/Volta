@@ -190,7 +190,7 @@ fn train_model(model: &Sequential, opt: &mut Adam, x: &Tensor, y: &Tensor, epoch
             final_loss = loss.data().first().copied().unwrap_or(f32::NAN);
         }
 
-        loss.backward();
+        loss.clone().into_loss().expect("scalar loss").backward();
         opt.step();
 
         if epoch % 20 == 0 {

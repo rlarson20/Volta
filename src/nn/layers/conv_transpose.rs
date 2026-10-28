@@ -665,7 +665,7 @@ mod tests {
 
         let y = conv.forward(&x);
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // Check that input has gradients
         assert!(x.grad().is_some(), "Input should have gradients");
@@ -802,7 +802,7 @@ mod tests {
 
         let y = conv.forward(&x);
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // Check weight gradient shape
         if let Some(w_grad) = conv.weight.grad() {
@@ -856,7 +856,7 @@ mod tests {
 
         let y = conv.forward(&x);
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // Check gradients exist and have correct shapes
         assert!(x.grad().is_some(), "Input should have gradients");

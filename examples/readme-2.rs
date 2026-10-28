@@ -24,7 +24,7 @@ fn main() {
     optim.zero_grad();
     let output = model.forward(&input);
     let loss = volta::mse_loss(&output, &target);
-    loss.backward();
+    loss.clone().into_loss().expect("scalar loss").backward();
     optim.step();
 
     println!(

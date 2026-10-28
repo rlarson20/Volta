@@ -54,7 +54,7 @@ mod gpu_tests {
         let x = RawTensor::new(vec![2.0], &[1], true);
         let x_gpu = x.to_device(Device::GPU("TestDevice".to_string()));
 
-        x_gpu.backward();
+        x_gpu.clone().into_loss().expect("scalar loss").backward();
 
         let grad_storage = x_gpu.grad_storage().expect("Gradient should be set");
         assert!(
@@ -86,7 +86,7 @@ mod gpu_tests {
         let c2 = a.add(&b).to_device(device.clone());
         let loss = c1.add(&c2).to_device(device.clone());
 
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         let grad_storage = a.grad_storage().expect("Gradient for 'a' missing");
         assert!(

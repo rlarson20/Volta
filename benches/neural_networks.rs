@@ -71,7 +71,7 @@ fn bench_linear_backward(c: &mut Criterion) {
         let input = random_tensor_2d(16, 128);
         b.iter(|| {
             let output = layer.forward(&input);
-            output.backward();
+            output.into_loss().expect("scalar loss").backward();
         });
     });
 
@@ -80,7 +80,7 @@ fn bench_linear_backward(c: &mut Criterion) {
         let input = random_tensor_2d(16, 256);
         b.iter(|| {
             let output = layer.forward(&input);
-            output.backward();
+            output.into_loss().expect("scalar loss").backward();
         });
     });
 

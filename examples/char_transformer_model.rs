@@ -224,7 +224,7 @@ fn main() {
             let loss = cross_entropy_loss(&logits, &target_tensor);
 
             optimizer.zero_grad();
-            loss.backward();
+            loss.clone().into_loss().expect("scalar loss").backward();
             optimizer.step();
 
             epoch_loss += loss.data().first().copied().unwrap_or(f32::NAN);

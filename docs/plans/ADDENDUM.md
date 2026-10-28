@@ -597,7 +597,7 @@ and it gets cheaper every phase that lands before it.
 - `MaxPool2d` rejects padding greater than half the kernel (not in the sketch). With a `-inf` border, a window of pure padding would output `-inf` and send its gradient to index 0.
 - `GradFn` is now the closed enum from §2.5 (DECISIONS.md, "Closed `GradFn` enum"). Each variant wraps the existing per-op struct instead of carrying inline fields, and there is no `Custom` variant because `edge()` is `pub(crate)`. `RawTensor.grad_fn` is `pub(crate)`, and the `*GradFn` structs are no longer exported.
 - `define_ops!` (§5.1) landed for the unary and binary families (DECISIONS.md, "`define_ops!` for unary and binary ops"). Differences from the sketch: rows name `ComputePipelines` field idents instead of kernel-name strings (so a missing kernel is a compile error), `cpu_only` is an explicit clause, binary rows are split into `differentiable` / `non_differentiable` sections, and the binary row's backward is per-element with one shared broadcast reduction. Movement ops are not covered. It also added the GPU `erf` kernels the old table named but never had.
-- Still open: `into_loss` §2.2.
+- `into_loss` (§2.2) landed (DECISIONS.md, "`into_loss` / `ScalarLoss`"). The `backward()` panic became two `Result` variants on `into_loss` (`NotScalar`, `NoGradRequired`) rather than a `Result` from `backward`, so `ScalarLoss::backward` is infallible. `assert_trainable!` now goes through it, which closes the deviation noted under Phase 1. Phase 2 is done except the deferred `RawTensor.shape` flip.
 
 ---
 
