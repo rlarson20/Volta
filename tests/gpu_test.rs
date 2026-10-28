@@ -1,6 +1,7 @@
 #![allow(clippy::cast_precision_loss)]
 #[cfg(feature = "gpu")]
 use volta::Axis;
+#[cfg(feature = "gpu")]
 use volta::gpu;
 #[cfg(all(test, feature = "gpu"))]
 mod gpu_tests {

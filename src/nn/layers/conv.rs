@@ -2238,7 +2238,12 @@ mod conv2d_tests {
 
     #[test]
     fn test_direct_conv_gradient_multiple_configs() {
-        // Test direct conv gradients with various configurations
+        // Test direct conv gradients with various configurations.
+        //
+        // Seeded, with `eps = 0.5`, for the reason given in
+        // `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels`: conv is
+        // linear in `x`, so the step only affects f32 roundoff.
+        crate::tensor::manual_seed(0xD1C);
         let configs = vec![
             (2, 4, 3, 1, 0, 6, 6), // No padding
             (2, 4, 3, 1, 1, 6, 6), // With padding
@@ -2255,7 +2260,7 @@ mod conv2d_tests {
             x.borrow_mut().requires_grad = true;
 
             let (max_err, mean_err, passed) =
-                RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 2e-2);
+                RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
 
             assert!(
                 passed,

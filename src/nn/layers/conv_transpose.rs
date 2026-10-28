@@ -755,13 +755,18 @@ mod tests {
 
     #[test]
     fn test_conv_transpose2d_gradient_5x5() {
-        // Test gradient correctness with 5x5 kernel
+        // Test gradient correctness with 5x5 kernel.
+        //
+        // Seeded, with `eps = 0.5`, for the reason given in
+        // `test_conv_transpose2d_gradient_multiple_channels`: the layer is linear in `x`, so
+        // the step only affects f32 roundoff.
+        crate::tensor::manual_seed(0x5B5);
         let conv = ConvTranspose2d::new(2, 4, 5, 1, 2, true);
         let x = RawTensor::randn(&[1, 2, 6, 6]);
         x.borrow_mut().requires_grad = true;
 
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
 
         assert!(
             passed,
