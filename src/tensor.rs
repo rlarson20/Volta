@@ -5,7 +5,7 @@ use crate::ops::binary::BinaryOp;
 use crate::ops::reduce::ReduceOp;
 use crate::ops::ternary::TernaryOp;
 use crate::ops::unary::UnaryOp;
-use crate::shape::{Axis, Shape};
+use crate::shape::{Axis, Shape, Strides};
 use crate::spec::PadValue;
 use crate::{Result, VoltaError};
 use rand::Rng;
@@ -695,8 +695,8 @@ impl SumDimGradFn {
         let size: usize = self.input_shape.iter().product();
         let mut result = vec![0.0; size];
 
-        let _strides = RawTensor::compute_strides(&self.input_shape);
-        let grad_strides = RawTensor::compute_strides(&expanded_shape);
+        let grad_strides = Strides::from_shape(&expanded_shape);
+        let grad_strides = grad_strides.truncate_rank();
 
         #[allow(clippy::needless_range_loop)]
         for i in 0..size {
@@ -718,7 +718,7 @@ impl SumDimGradFn {
 
             let grad_idx: usize = grad_coords
                 .iter()
-                .zip(&grad_strides)
+                .zip(grad_strides)
                 .map(|(c, s)| c * s)
                 .sum();
             if let Some(val) = grad_data.get(grad_idx)
@@ -759,7 +759,8 @@ impl MaxDimGradFn {
         let mut result = vec![0.0; size];
 
         // Only max elements receive gradient
-        let grad_strides = RawTensor::compute_strides(&expanded_shape);
+        let grad_strides = Strides::from_shape(&expanded_shape);
+        let grad_strides = grad_strides.truncate_rank();
 
         for (out_idx, &max_lin_idx) in self.max_indices.iter().enumerate() {
             // Convert output index to coordinates in expanded shape
@@ -774,7 +775,7 @@ impl MaxDimGradFn {
 
             let grad_idx: usize = grad_coords
                 .iter()
-                .zip(&grad_strides)
+                .zip(grad_strides)
                 .map(|(c, s)| c * s)
                 .sum();
             if let Some(val) = grad_data.get(grad_idx)

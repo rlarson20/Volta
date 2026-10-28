@@ -9,7 +9,6 @@ use crate::gpu::GpuKernels;
 use crate::ops::BinaryOp;
 #[cfg(feature = "gpu")]
 use crate::ops::UnaryOp;
-#[cfg(feature = "gpu")]
 use crate::spec::PadValue;
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
@@ -433,6 +432,64 @@ impl RawTensor {
             dtype: crate::dtype::DType::F32,
             cpu_cache: RefCell::new(None),
         })
+    }
+
+    // Without the `gpu` feature there is no GPU storage, so every forward movement wrapper
+    // answers "use the CPU path". They exist so `ops/movement.rs` needs no `cfg` of its own.
+
+    /// Not-gpu stub for `gpu_permute`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_permute(
+        _data: &Storage,
+        _old_shape: &[usize],
+        _new_shape: &[usize],
+        _axes: &[usize],
+    ) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_expand`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_expand(
+        _data: &Storage,
+        _old_shape: &[usize],
+        _new_shape: &[usize],
+    ) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_pad`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_pad(
+        _data: &Storage,
+        _old_shape: &[usize],
+        _new_shape: &[usize],
+        _padding: &[(usize, usize)],
+        _value: PadValue,
+    ) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_shrink`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_shrink(
+        _data: &Storage,
+        _old_shape: &[usize],
+        _new_shape: &[usize],
+        _ranges: &[(usize, usize)],
+    ) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_stride`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_stride(
+        _data: &Storage,
+        _old_shape: &[usize],
+        _new_shape: &[usize],
+        _strides: &[usize],
+    ) -> Option<Storage> {
+        None
     }
 
     /// GPU-accelerated matmul backward operation for gradient with respect to A

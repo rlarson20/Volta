@@ -145,16 +145,21 @@ impl Shape {
 
 impl Strides {
     /// Computes row-major strides for `shape`.
-    fn from_shape(shape: &[usize]) -> Self {
-        let mut strides = vec![1usize; shape.len()];
-        for i in (0..shape.len().saturating_sub(1)).rev() {
-            if let Some(&stride_val) = strides.get(i + 1)
-                && let Some(&shape_val) = shape.get(i + 1)
-                && let Some(slot) = strides.get_mut(i)
-            {
-                *slot = stride_val * shape_val;
-            }
-        }
+    ///
+    /// Each stride is the product of the dimensions to its right, so the last is `1`.
+    /// Takes a slice rather than a [`Shape`] because op code usually holds raw dims.
+    pub(crate) fn from_shape(shape: &[usize]) -> Self {
+        let mut running = 1usize;
+        let mut strides: Vec<usize> = shape
+            .iter()
+            .rev()
+            .map(|&dim| {
+                let stride = running;
+                running *= dim;
+                stride
+            })
+            .collect();
+        strides.reverse();
         Self(strides)
     }
 

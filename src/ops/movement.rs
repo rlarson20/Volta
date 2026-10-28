@@ -1,7 +1,7 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::error::Result;
-use crate::shape::{Axis, Shape};
+use crate::shape::{Axis, Shape, Strides};
 use crate::spec::PadValue;
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
@@ -470,8 +470,8 @@ impl MovementGradFn {
 
                 // CPU fallback: Sum gradient over dimensions that were expanded (broadcast)
                 let mut grad_data = vec![0.0; self.original_shape.iter().product()];
-                let old_strides = RawTensor::compute_strides(&self.original_shape);
-                let _new_strides = RawTensor::compute_strides(new_shape);
+                let old_strides = Strides::from_shape(&self.original_shape);
+                let old_strides = old_strides.truncate_rank();
 
                 for i in 0..out_grad.data.len() {
                     let mut old_idx = 0;
@@ -516,16 +516,18 @@ impl MovementGradFn {
 
                 // CPU fallback: Remove padding from gradient (extract center region)
                 let mut result = vec![0.0; self.original_shape.iter().product()];
-                let old_strides = RawTensor::compute_strides(&self.original_shape);
-                let new_strides = RawTensor::compute_strides(&out_grad.shape);
+                let old_strides = Strides::from_shape(&self.original_shape);
+                let old_strides = old_strides.truncate_rank();
+                let new_strides = Strides::from_shape(&out_grad.shape);
+                let new_strides = new_strides.truncate_rank();
                 let mapper = PadBackwardMapper {
                     padding: padding.clone(),
                 };
                 let ctx = MovementContext::new(
                     &self.original_shape,
                     &out_grad.shape,
-                    &old_strides,
-                    &new_strides,
+                    old_strides,
+                    new_strides,
                 );
 
                 apply_movement_backward(&ctx, &mut result, &out_grad.data, 0, &mapper, 0, 0);
@@ -554,16 +556,18 @@ impl MovementGradFn {
 
                 // CPU fallback: Pad gradient back to original size (inverse of shrink)
                 let mut result = vec![0.0; self.original_shape.iter().product()];
-                let old_strides = RawTensor::compute_strides(&self.original_shape);
-                let new_strides = RawTensor::compute_strides(&out_grad.shape);
+                let old_strides = Strides::from_shape(&self.original_shape);
+                let old_strides = old_strides.truncate_rank();
+                let new_strides = Strides::from_shape(&out_grad.shape);
+                let new_strides = new_strides.truncate_rank();
                 let mapper = ShrinkBackwardMapper {
                     ranges: ranges.clone(),
                 };
                 let ctx = MovementContext::new(
                     &self.original_shape,
                     &out_grad.shape,
-                    &old_strides,
-                    &new_strides,
+                    old_strides,
+                    new_strides,
                 );
 
                 apply_movement_backward(&ctx, &mut result, &out_grad.data, 0, &mapper, 0, 0);
@@ -592,16 +596,18 @@ impl MovementGradFn {
 
                 // CPU fallback: Upsample gradient (inverse of stride/downsampling)
                 let mut result = vec![0.0; self.original_shape.iter().product()];
-                let old_strides_mem = RawTensor::compute_strides(&self.original_shape);
-                let new_strides_mem = RawTensor::compute_strides(&out_grad.shape);
+                let old_strides_mem = Strides::from_shape(&self.original_shape);
+                let old_strides_mem = old_strides_mem.truncate_rank();
+                let new_strides_mem = Strides::from_shape(&out_grad.shape);
+                let new_strides_mem = new_strides_mem.truncate_rank();
                 let mapper = StrideBackwardMapper {
                     strides: strides.clone(),
                 };
                 let ctx = MovementContext::new(
                     &self.original_shape,
                     &out_grad.shape,
-                    &old_strides_mem,
-                    &new_strides_mem,
+                    old_strides_mem,
+                    new_strides_mem,
                 );
 
                 apply_movement_backward(&ctx, &mut result, &out_grad.data, 0, &mapper, 0, 0);
@@ -615,6 +621,27 @@ impl MovementGradFn {
 
 // ===== MOVEMENT OPERATIONS =====
 impl RawTensor {
+    /// The one place a movement op's autograd edge is built.
+    ///
+    /// Every movement op computes its output storage (on the GPU or the CPU), then ends in
+    /// exactly one call here, so the `GradFn` it records can't differ between the two paths.
+    fn movement_edge(
+        self_t: &Tensor,
+        storage: Storage,
+        shape: Shape,
+        device: Device,
+        op: MovementOp,
+        original_shape: Vec<usize>,
+    ) -> Tensor {
+        edge(
+            [self_t.clone()],
+            storage,
+            shape,
+            device,
+            GradFn::Movement(MovementGradFn { op, original_shape }),
+        )
+    }
+
     /// Reshape tensor to new shape (same number of elements)
     /// # Panics
     /// Size mismatch
@@ -630,17 +657,15 @@ impl RawTensor {
         assert_eq!(old_size, new_size, "Cannot reshape: size mismatch");
 
         // Reshape is a view operation - data stays in place, only shape changes.
-        edge(
-            [self_t.clone()],
+        Self::movement_edge(
+            self_t,
             data,
             Shape::derived(new_shape.to_vec()),
             device,
-            GradFn::Movement(MovementGradFn {
-                op: MovementOp::Reshape {
-                    new_shape: new_shape.to_vec(),
-                },
-                original_shape: old_shape,
-            }),
+            MovementOp::Reshape {
+                new_shape: new_shape.to_vec(),
+            },
+            old_shape,
         )
     }
 
@@ -678,7 +703,6 @@ impl RawTensor {
         let new_shape: Vec<usize> = axes.iter().filter_map(|&i| shape.get(i).copied()).collect();
 
         // Try GPU path first if available
-        #[cfg(feature = "gpu")]
         if device.is_gpu()
             && let Some(storage) = Self::gpu_permute(&data, &shape, &new_shape, axes)
         {
@@ -686,7 +710,8 @@ impl RawTensor {
         }
 
         // CPU fallback
-        let old_strides = Self::compute_strides(&shape);
+        let old_strides = Strides::from_shape(&shape);
+        let old_strides = old_strides.truncate_rank();
         let mut new_data = vec![0.0; data.len()];
 
         let cpu_data = data.to_vec();
@@ -702,7 +727,7 @@ impl RawTensor {
                     *slot = coord;
                 }
             }
-            let old_idx = coords_to_index(&old_coords, &old_strides);
+            let old_idx = coords_to_index(&old_coords, old_strides);
             if let Some(&data_val) = cpu_data.get(old_idx) {
                 *val = data_val;
             }
@@ -730,15 +755,13 @@ impl RawTensor {
 
         let (storage, new_shape, device) = Self::permute_impl(self_t, &axes);
 
-        edge(
-            [self_t.clone()],
+        Self::movement_edge(
+            self_t,
             storage,
             Shape::derived(new_shape),
             device,
-            GradFn::Movement(MovementGradFn {
-                op: MovementOp::Permute { axes },
-                original_shape: old_shape,
-            }),
+            MovementOp::Permute { axes },
+            old_shape,
         )
     }
 
@@ -770,64 +793,52 @@ impl RawTensor {
         });
         let new_size = out_shape.numel();
 
-        // Try GPU path first if available
-        #[cfg(feature = "gpu")]
-        if device.is_gpu()
-            && let Some(storage) = Self::gpu_expand(&data, &old_shape, new_shape)
-        {
-            return edge(
-                [self_t.clone()],
-                storage,
-                out_shape,
-                device,
-                GradFn::Movement(MovementGradFn {
-                    op: MovementOp::Expand {
-                        new_shape: new_shape.to_vec(),
-                    },
-                    original_shape: old_shape,
-                }),
-            );
-        }
+        let gpu_storage = if device.is_gpu() {
+            Self::gpu_expand(&data, &old_shape, new_shape)
+        } else {
+            None
+        };
+        let (storage, out_device) = if let Some(storage) = gpu_storage {
+            (storage, device)
+        } else {
+            let mut result = vec![0.0; new_size];
+            let cpu_data = data.to_vec();
 
-        // CPU fallback
-        let mut result = vec![0.0; new_size];
-        let cpu_data = data.to_vec();
+            // Broadcast by repeating values
+            let old_strides = Strides::from_shape(&old_shape);
+            let old_strides = old_strides.truncate_rank();
 
-        // Broadcast by repeating values
-        let old_strides = Self::compute_strides(&old_shape);
-        let _new_strides = Self::compute_strides(new_shape);
-
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..new_size {
-            let mut old_idx = 0;
-            let mut rem = i;
-            for j in (0..new_shape.len()).rev() {
-                let dim_size = new_shape.get(j).copied().unwrap_or(1);
-                let coord = rem % dim_size;
-                rem /= dim_size;
-                if old_shape.get(j).copied().unwrap_or(1) != 1 {
-                    let stride = old_strides.get(j).copied().unwrap_or(1);
-                    old_idx += coord * stride;
+            #[allow(clippy::needless_range_loop)]
+            for i in 0..new_size {
+                let mut old_idx = 0;
+                let mut rem = i;
+                for j in (0..new_shape.len()).rev() {
+                    let dim_size = new_shape.get(j).copied().unwrap_or(1);
+                    let coord = rem % dim_size;
+                    rem /= dim_size;
+                    if old_shape.get(j).copied().unwrap_or(1) != 1 {
+                        let stride = old_strides.get(j).copied().unwrap_or(1);
+                        old_idx += coord * stride;
+                    }
+                }
+                if let Some(&src_val) = cpu_data.get(old_idx)
+                    && let Some(slot) = result.get_mut(i)
+                {
+                    *slot = src_val;
                 }
             }
-            if let Some(&src_val) = cpu_data.get(old_idx)
-                && let Some(slot) = result.get_mut(i)
-            {
-                *slot = src_val;
-            }
-        }
+            (Storage::cpu(result), Device::CPU)
+        };
 
-        edge(
-            [self_t.clone()],
-            Storage::cpu(result),
+        Self::movement_edge(
+            self_t,
+            storage,
             out_shape,
-            Device::CPU,
-            GradFn::Movement(MovementGradFn {
-                op: MovementOp::Expand {
-                    new_shape: new_shape.to_vec(),
-                },
-                original_shape: old_shape,
-            }),
+            out_device,
+            MovementOp::Expand {
+                new_shape: new_shape.to_vec(),
+            },
+            old_shape,
         )
     }
 
@@ -879,50 +890,41 @@ impl RawTensor {
         let out_shape = Shape::from_dims(new_shape.clone())?;
         let new_size = out_shape.numel();
 
-        // Try GPU path first if available
-        #[cfg(feature = "gpu")]
-        if device.is_gpu()
-            && let Some(storage) = Self::gpu_pad(&data, &old_shape, &new_shape, padding, value)
-        {
-            return Ok(edge(
-                [self_t.clone()],
-                storage,
-                out_shape,
-                device,
-                GradFn::Movement(MovementGradFn {
-                    op: MovementOp::Pad {
-                        padding: padding.to_vec(),
-                    },
-                    original_shape: old_shape,
-                }),
-            ));
-        }
-
-        // CPU fallback. `PadMapper` only writes the interior, so the fill is the border.
-        let mut result = vec![value.get(); new_size];
-        let cpu_data = data.to_vec();
-
-        // Copy old data into padded positions
-        let old_strides = Self::compute_strides(&old_shape);
-        let new_strides = Self::compute_strides(&new_shape);
-        let mapper = PadMapper {
-            padding: padding.to_vec(),
+        let gpu_storage = if device.is_gpu() {
+            Self::gpu_pad(&data, &old_shape, &new_shape, padding, value)
+        } else {
+            None
         };
-        let ctx = MovementContext::new(&old_shape, &new_shape, &old_strides, &new_strides);
+        let (storage, out_device) = if let Some(storage) = gpu_storage {
+            (storage, device)
+        } else {
+            // CPU fallback. `PadMapper` only writes the interior, so the fill is the border.
+            let mut result = vec![value.get(); new_size];
+            let cpu_data = data.to_vec();
 
-        apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
+            // Copy old data into padded positions
+            let old_strides = Strides::from_shape(&old_shape);
+            let old_strides = old_strides.truncate_rank();
+            let new_strides = Strides::from_shape(&new_shape);
+            let new_strides = new_strides.truncate_rank();
+            let mapper = PadMapper {
+                padding: padding.to_vec(),
+            };
+            let ctx = MovementContext::new(&old_shape, &new_shape, old_strides, new_strides);
 
-        Ok(edge(
-            [self_t.clone()],
-            Storage::cpu(result),
+            apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
+            (Storage::cpu(result), Device::CPU)
+        };
+
+        Ok(Self::movement_edge(
+            self_t,
+            storage,
             out_shape,
-            Device::CPU,
-            GradFn::Movement(MovementGradFn {
-                op: MovementOp::Pad {
-                    padding: padding.to_vec(),
-                },
-                original_shape: old_shape,
-            }),
+            out_device,
+            MovementOp::Pad {
+                padding: padding.to_vec(),
+            },
+            old_shape,
         ))
     }
 
@@ -1028,50 +1030,40 @@ impl RawTensor {
 
         let new_shape: Vec<usize> = ranges.iter().map(|(start, end)| end - start).collect();
 
-        // Try GPU path first if available
-        #[cfg(feature = "gpu")]
-        if device.is_gpu()
-            && let Some(storage) = Self::gpu_shrink(&data, &old_shape, &new_shape, ranges)
-        {
-            return Ok(edge(
-                [self_t.clone()],
-                storage,
-                Shape::derived(new_shape),
-                device,
-                GradFn::Movement(MovementGradFn {
-                    op: MovementOp::Shrink {
-                        ranges: ranges.to_vec(),
-                    },
-                    original_shape: old_shape,
-                }),
-            ));
-        }
-
-        // CPU fallback
-        let new_size: usize = new_shape.iter().product();
-        let mut result = vec![0.0; new_size];
-        let cpu_data = data.to_vec();
-
-        let old_strides = Self::compute_strides(&old_shape);
-        let new_strides = Self::compute_strides(&new_shape);
-        let mapper = ShrinkMapper {
-            ranges: ranges.to_vec(),
+        let gpu_storage = if device.is_gpu() {
+            Self::gpu_shrink(&data, &old_shape, &new_shape, ranges)
+        } else {
+            None
         };
-        let ctx = MovementContext::new(&old_shape, &new_shape, &old_strides, &new_strides);
+        let (storage, out_device) = if let Some(storage) = gpu_storage {
+            (storage, device)
+        } else {
+            let new_size: usize = new_shape.iter().product();
+            let mut result = vec![0.0; new_size];
+            let cpu_data = data.to_vec();
 
-        apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
+            let old_strides = Strides::from_shape(&old_shape);
+            let old_strides = old_strides.truncate_rank();
+            let new_strides = Strides::from_shape(&new_shape);
+            let new_strides = new_strides.truncate_rank();
+            let mapper = ShrinkMapper {
+                ranges: ranges.to_vec(),
+            };
+            let ctx = MovementContext::new(&old_shape, &new_shape, old_strides, new_strides);
 
-        Ok(edge(
-            [self_t.clone()],
-            Storage::cpu(result),
+            apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
+            (Storage::cpu(result), Device::CPU)
+        };
+
+        Ok(Self::movement_edge(
+            self_t,
+            storage,
             Shape::derived(new_shape),
-            Device::CPU,
-            GradFn::Movement(MovementGradFn {
-                op: MovementOp::Shrink {
-                    ranges: ranges.to_vec(),
-                },
-                original_shape: old_shape,
-            }),
+            out_device,
+            MovementOp::Shrink {
+                ranges: ranges.to_vec(),
+            },
+            old_shape,
         ))
     }
 
@@ -1099,68 +1091,41 @@ impl RawTensor {
             .map(|(d, s)| d.div_ceil(*s))
             .collect();
 
-        // Try GPU path first if available
-        #[cfg(feature = "gpu")]
-        if device.is_gpu()
-            && let Some(storage) = Self::gpu_stride(&data, &old_shape, &new_shape, strides)
-        {
-            return edge(
-                [self_t.clone()],
-                storage,
-                Shape::derived(new_shape),
-                device,
-                GradFn::Movement(MovementGradFn {
-                    op: MovementOp::Stride {
-                        strides: strides.to_vec(),
-                    },
-                    original_shape: old_shape,
-                }),
-            );
-        }
-
-        // CPU fallback
-        let new_size: usize = new_shape.iter().product();
-        let mut result = vec![0.0; new_size];
-        let cpu_data = data.to_vec();
-
-        let old_strides_mem = Self::compute_strides(&old_shape);
-        let new_strides_mem = Self::compute_strides(&new_shape);
-        let mapper = StrideMapper {
-            strides: strides.to_vec(),
+        let gpu_storage = if device.is_gpu() {
+            Self::gpu_stride(&data, &old_shape, &new_shape, strides)
+        } else {
+            None
         };
-        let ctx = MovementContext::new(&old_shape, &new_shape, &old_strides_mem, &new_strides_mem);
+        let (storage, out_device) = if let Some(storage) = gpu_storage {
+            (storage, device)
+        } else {
+            let new_size: usize = new_shape.iter().product();
+            let mut result = vec![0.0; new_size];
+            let cpu_data = data.to_vec();
 
-        apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
+            let old_strides_mem = Strides::from_shape(&old_shape);
+            let old_strides_mem = old_strides_mem.truncate_rank();
+            let new_strides_mem = Strides::from_shape(&new_shape);
+            let new_strides_mem = new_strides_mem.truncate_rank();
+            let mapper = StrideMapper {
+                strides: strides.to_vec(),
+            };
+            let ctx =
+                MovementContext::new(&old_shape, &new_shape, old_strides_mem, new_strides_mem);
 
-        edge(
-            [self_t.clone()],
-            Storage::cpu(result),
+            apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
+            (Storage::cpu(result), Device::CPU)
+        };
+
+        Self::movement_edge(
+            self_t,
+            storage,
             Shape::derived(new_shape),
-            Device::CPU,
-            GradFn::Movement(MovementGradFn {
-                op: MovementOp::Stride {
-                    strides: strides.to_vec(),
-                },
-                original_shape: old_shape,
-            }),
+            out_device,
+            MovementOp::Stride {
+                strides: strides.to_vec(),
+            },
+            old_shape,
         )
-    }
-
-    /// Compute memory strides for row-major layout
-    ///
-    /// For shape [3, 4, 5], strides are [20, 5, 1]
-    /// This tells us how many elements to skip to move one step in each dimension.
-    #[must_use]
-    pub fn compute_strides(shape: &[usize]) -> Vec<usize> {
-        let mut strides = vec![1; shape.len()];
-        for i in (0..shape.len().saturating_sub(1)).rev() {
-            if let Some(&stride_val) = strides.get(i + 1)
-                && let Some(&shape_val) = shape.get(i + 1)
-                && let Some(slot) = strides.get_mut(i)
-            {
-                *slot = stride_val * shape_val;
-            }
-        }
-        strides
     }
 }

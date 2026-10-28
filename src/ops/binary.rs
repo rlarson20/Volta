@@ -1,7 +1,7 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::macros::define_ops;
-use crate::shape::Shape;
+use crate::shape::{Shape, Strides};
 use crate::storage::Storage;
 use crate::{RawTensor, Result, Tensor, VoltaError};
 
@@ -174,8 +174,10 @@ impl RawTensor {
         if let Some(dest) = padded_from.get_mut(offset..) {
             dest.copy_from_slice(from_shape);
         }
-        let from_strides_padded = Self::compute_strides(&padded_from);
-        let to_strides = Self::compute_strides(to_shape);
+        let from_strides_padded = Strides::from_shape(&padded_from);
+        let from_strides_padded = from_strides_padded.truncate_rank();
+        let to_strides = Strides::from_shape(to_shape);
+        let to_strides = to_strides.truncate_rank();
 
         // For each output position, compute corresponding input position
         #[allow(clippy::needless_range_loop)]
@@ -242,8 +244,10 @@ impl RawTensor {
             return grad.to_vec();
         }
         let mut result = vec![0.0; target_shape.iter().product()];
-        let target_strides = Self::compute_strides(target_shape);
-        let grad_strides = Self::compute_strides(grad_shape);
+        let target_strides = Strides::from_shape(target_shape);
+        let target_strides = target_strides.truncate_rank();
+        let grad_strides = Strides::from_shape(grad_shape);
+        let grad_strides = grad_strides.truncate_rank();
 
         // For each gradient element, sum into appropriate result position
         for (i, &grad_val) in grad.iter().enumerate() {
