@@ -38,7 +38,7 @@ mod gpu_tests {
         let a = gpu::GpuBuffer::from_slice(&[1.0, 2.0, 3.0, 4.0]).unwrap();
         let b = gpu::GpuBuffer::from_slice(&[5.0, 6.0, 7.0, 8.0]).unwrap();
 
-        let c = gpu::GpuKernels::binary_op(&a, &b, "add").unwrap();
+        let c = gpu::GpuKernels::binary_op(&a, &b, volta::ops::BinaryOp::Add).unwrap();
         let result = c.to_vec();
 
         assert_eq!(result, vec![6.0, 8.0, 10.0, 12.0]);

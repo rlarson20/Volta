@@ -10,7 +10,7 @@
     clippy::many_single_char_names
 )]
 use super::{GpuBuffer, get_gpu_context};
-use crate::ops::UnaryOp;
+use crate::ops::{BinaryOp, UnaryOp};
 use crate::spec::PadValue;
 
 /// Parameters for matrix dimensions (used in matmul shader)
@@ -322,30 +322,21 @@ impl GpuKernels {
     /// # Arguments
     /// * `a` - First input buffer
     /// * `b` - Second input buffer (must be same size as a)
-    /// * `op` - Which operation to perform ("add", "sub", "mul", "div")
+    /// * `op` - Which operation to perform
     ///
     /// # Returns
     /// A new buffer containing the result
     /// # Panics
     /// Mismatched buffer sizes
     #[must_use]
-    pub fn binary_op(a: &GpuBuffer, b: &GpuBuffer, op: &str) -> Option<GpuBuffer> {
+    pub fn binary_op(a: &GpuBuffer, b: &GpuBuffer, op: BinaryOp) -> Option<GpuBuffer> {
         assert_eq!(a.len(), b.len(), "Buffer sizes must match for binary ops");
 
         let ctx = get_gpu_context()?;
         let result = GpuBuffer::zeros(a.len())?;
 
         // Select the appropriate pipeline
-        let pipeline = match op {
-            "add" => &ctx.pipelines().add,
-            "sub" => &ctx.pipelines().sub,
-            "mul" => &ctx.pipelines().mul,
-            "div" => &ctx.pipelines().div,
-            "max" => &ctx.pipelines().max,
-            "mod" => &ctx.pipelines().mod_op,
-            "cmplt" => &ctx.pipelines().cmplt,
-            _ => panic!("Unknown binary op: {op}"),
-        };
+        let pipeline = op.gpu_forward(ctx.pipelines());
 
         // Create bind group - this connects our buffers to the shader
         let bind_group_layout = pipeline.get_bind_group_layout(0);
@@ -527,7 +518,7 @@ impl GpuKernels {
     /// * `out_grad` - Gradient of the output (upstream gradient)
     /// * `a` - First input from forward pass
     /// * `b` - Second input from forward pass (needed for mul/div/max)
-    /// * `op` - Which operation (`"add_backward_a"`, `"mul_backward_a"`, etc.)
+    /// * `op` - Which operation; returns `None` if it is non-differentiable
     ///
     /// # Returns
     /// A new buffer containing the gradient with respect to a
@@ -538,7 +529,7 @@ impl GpuKernels {
         out_grad: &GpuBuffer,
         a: &GpuBuffer,
         b: &GpuBuffer,
-        op: &str,
+        op: BinaryOp,
     ) -> Option<GpuBuffer> {
         assert_eq!(
             out_grad.len(),
@@ -554,14 +545,7 @@ impl GpuKernels {
         let ctx = get_gpu_context()?;
         let result = GpuBuffer::zeros(out_grad.len())?;
 
-        let pipeline = match op {
-            "add_backward_a" => &ctx.pipelines().add_backward_a,
-            "sub_backward_a" => &ctx.pipelines().sub_backward_a,
-            "mul_backward_a" => &ctx.pipelines().mul_backward_a,
-            "div_backward_a" => &ctx.pipelines().div_backward_a,
-            "max_backward_a" => &ctx.pipelines().max_backward_a,
-            _ => panic!("Unknown binary backward op for a: {op}"),
-        };
+        let pipeline = op.gpu_backward(ctx.pipelines())?.a;
 
         let bind_group_layout = pipeline.get_bind_group_layout(0);
         let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
@@ -619,7 +603,7 @@ impl GpuKernels {
     /// * `out_grad` - Gradient of the output (upstream gradient)
     /// * `a` - First input from forward pass (needed for mul/div/max)
     /// * `b` - Second input from forward pass
-    /// * `op` - Which operation (`"add_backward_b"`, `"mul_backward_b"`, etc.)
+    /// * `op` - Which operation; returns `None` if it is non-differentiable
     ///
     /// # Returns
     /// A new buffer containing the gradient with respect to b
@@ -630,7 +614,7 @@ impl GpuKernels {
         out_grad: &GpuBuffer,
         a: &GpuBuffer,
         b: &GpuBuffer,
-        op: &str,
+        op: BinaryOp,
     ) -> Option<GpuBuffer> {
         assert_eq!(
             out_grad.len(),
@@ -646,14 +630,7 @@ impl GpuKernels {
         let ctx = get_gpu_context()?;
         let result = GpuBuffer::zeros(out_grad.len())?;
 
-        let pipeline = match op {
-            "add_backward_b" => &ctx.pipelines().add_backward_b,
-            "sub_backward_b" => &ctx.pipelines().sub_backward_b,
-            "mul_backward_b" => &ctx.pipelines().mul_backward_b,
-            "div_backward_b" => &ctx.pipelines().div_backward_b,
-            "max_backward_b" => &ctx.pipelines().max_backward_b,
-            _ => panic!("Unknown binary backward op for b: {op}"),
-        };
+        let pipeline = op.gpu_backward(ctx.pipelines())?.b;
 
         let bind_group_layout = pipeline.get_bind_group_layout(0);
         let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
@@ -705,158 +682,6 @@ impl GpuKernels {
         Some(result)
     }
 
-    /// Execute a binary backward operation with broadcasting support
-    ///
-    /// This computes gradients for both inputs simultaneously, handling broadcasting
-    /// by reducing gradients over broadcasted dimensions.
-    ///
-    /// # Arguments
-    /// * `out_grad` - Gradient of the output (upstream gradient)
-    /// * `a` - First input from forward pass
-    /// * `b` - Second input from forward pass
-    /// * `op` - Which operation ("add", "sub", "mul", "div", "max")
-    /// * `out_shape` - Shape of the output tensor
-    /// * `a_shape` - Shape of the first input tensor
-    /// * `b_shape` - Shape of the second input tensor
-    ///
-    /// # Returns
-    /// A tuple of (gradient wrt a, gradient wrt b)
-    /// # Panics
-    /// Unknown binary backward op
-    #[must_use]
-    pub fn binary_backward_broadcast(
-        out_grad: &GpuBuffer,
-        a: &GpuBuffer,
-        b: &GpuBuffer,
-        op: &str,
-        out_shape: &[usize],
-        a_shape: &[usize],
-        b_shape: &[usize],
-    ) -> Option<(GpuBuffer, GpuBuffer)> {
-        let ctx = get_gpu_context()?;
-
-        // Create unified result buffer (concatenated a_grad and b_grad)
-        // The shader uses atomic adds, so we need to zero-initialize
-        let result_grad = GpuBuffer::zeros(a.len() + b.len())?;
-
-        // Prepare shape parameters (pad to 4D)
-        let mut out_shape_padded = [1u32; 4];
-        let mut a_shape_padded = [1u32; 4];
-        let mut b_shape_padded = [1u32; 4];
-
-        let out_rank = out_shape.len() as u32;
-        let a_rank = a_shape.len() as u32;
-        let b_rank = b_shape.len() as u32;
-
-        // Pad shapes to match (align to right for NumPy-style broadcasting)
-        let out_offset = 4usize.saturating_sub(out_shape.len());
-        let a_offset = 4usize.saturating_sub(a_shape.len());
-        let b_offset = 4usize.saturating_sub(b_shape.len());
-
-        for (i, &dim) in out_shape.iter().enumerate() {
-            let idx = out_offset + i;
-            if let Some(slot) = out_shape_padded.get_mut(idx) {
-                *slot = dim as u32;
-            }
-        }
-        for (i, &dim) in a_shape.iter().enumerate() {
-            let idx = a_offset + i;
-            if let Some(slot) = a_shape_padded.get_mut(idx) {
-                *slot = dim as u32;
-            }
-        }
-        for (i, &dim) in b_shape.iter().enumerate() {
-            let idx = b_offset + i;
-            if let Some(slot) = b_shape_padded.get_mut(idx) {
-                *slot = dim as u32;
-            }
-        }
-
-        let params = BinaryBackwardParams {
-            out_shape: out_shape_padded,
-            a_shape: a_shape_padded,
-            b_shape: b_shape_padded,
-            out_rank,
-            a_rank,
-            b_rank,
-            _padding: 0,
-        };
-
-        let params_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Binary Backward Broadcast Params"),
-                contents: bytemuck::bytes_of(&params),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-
-        let pipeline = match op {
-            "add" => &ctx.pipelines().add_broadcast,
-            "sub" => &ctx.pipelines().sub_broadcast,
-            "mul" => &ctx.pipelines().mul_broadcast,
-            "div" => &ctx.pipelines().div_broadcast,
-            "max" => &ctx.pipelines().max_broadcast,
-            _ => panic!("Unknown binary backward op: {op}"),
-        };
-
-        let bind_group_layout = pipeline.get_bind_group_layout(0);
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Binary Backward Broadcast Bind Group"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: out_grad.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: a.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: b.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: result_grad.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Binary Backward Broadcast Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Binary Backward Broadcast Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            let workgroup_count = (out_grad.len() as u32).div_ceil(256);
-            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
-        }
-
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
-        // Split the concatenated result into two separate buffers
-        let a_grad = result_grad.copy_region(0, a.len())?;
-        let b_grad = result_grad.copy_region(a.len(), b.len())?;
-
-        Some((a_grad, b_grad))
-    }
-
     /// Execute a binary backward operation with RACE-FREE broadcasting support
     ///
     /// This uses a two-pass algorithm to avoid race conditions in gradient reduction:
@@ -867,21 +692,19 @@ impl GpuKernels {
     /// * `out_grad` - Gradient of the output (upstream gradient)
     /// * `a` - First input from forward pass
     /// * `b` - Second input from forward pass
-    /// * `op` - Which operation ("add", "sub", "mul", "div", "max")
+    /// * `op` - Which operation; returns `None` if it is non-differentiable
     /// * `out_shape` - Shape of the output tensor
     /// * `a_shape` - Shape of the first input tensor
     /// * `b_shape` - Shape of the second input tensor
     ///
     /// # Returns
     /// A tuple of (gradient wrt a, gradient wrt b)
-    /// # Panics
-    /// Unknown binary backward op
     #[must_use]
     pub fn binary_backward_broadcast_safe(
         out_grad: &GpuBuffer,
         a: &GpuBuffer,
         b: &GpuBuffer,
-        op: &str,
+        op: BinaryOp,
         out_shape: &[usize],
         a_shape: &[usize],
         b_shape: &[usize],
@@ -892,7 +715,7 @@ impl GpuKernels {
         // For add/sub: 3 floats per output (idx_a, idx_b, val)
         // For mul/div: 3 floats per output (idx_a, idx_b, val) - values read in pass2
         // For max: 5 floats per output (idx_a, idx_b, val, a_val, b_val)
-        let temp_size = if op == "max" {
+        let temp_size = if op == BinaryOp::Max {
             out_grad.len() * 5
         } else {
             out_grad.len() * 3
@@ -954,29 +777,8 @@ impl GpuKernels {
             });
 
         // Select pipelines for both passes
-        let (pass1_pipeline, pass2_pipeline) = match op {
-            "add" => (
-                &ctx.pipelines().add_broadcast_pass1,
-                &ctx.pipelines().add_broadcast_pass2,
-            ),
-            "sub" => (
-                &ctx.pipelines().sub_broadcast_pass1,
-                &ctx.pipelines().sub_broadcast_pass2,
-            ),
-            "mul" => (
-                &ctx.pipelines().mul_broadcast_pass1,
-                &ctx.pipelines().mul_broadcast_pass2,
-            ),
-            "div" => (
-                &ctx.pipelines().div_broadcast_pass1,
-                &ctx.pipelines().div_broadcast_pass2,
-            ),
-            "max" => (
-                &ctx.pipelines().max_broadcast_pass1,
-                &ctx.pipelines().max_broadcast_pass2,
-            ),
-            _ => panic!("Unknown binary backward op: {op}"),
-        };
+        let backward = op.gpu_backward(ctx.pipelines())?;
+        let (pass1_pipeline, pass2_pipeline) = (backward.pass1, backward.pass2);
 
         // ============ PASS 1: Scatter ============
         let pass1_bind_group_layout = pass1_pipeline.get_bind_group_layout(0);

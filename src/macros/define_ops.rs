@@ -24,6 +24,35 @@
 ///   `None` for it and the caller runs the CPU path.
 ///
 /// There is no default: leaving the backward or the kernel clause off doesn't parse.
+///
+/// # Binary rows
+///
+/// Two sections, so "has no derivative" is part of the grammar instead of a flag:
+///
+/// ```ignore
+/// define_ops! {
+///     binary BinaryOp {
+///         differentiable {
+///             /// x + y
+///             Add => |a, b| a + b, |g, _a, _b| (g, g),
+///                 gpu(add, add_backward_a, add_backward_b,
+///                     add_broadcast_pass1, add_broadcast_pass2);
+///         }
+///         non_differentiable {
+///             /// x % y
+///             Mod => |a, b| a % b, gpu(mod_op);
+///         }
+///     }
+/// }
+/// ```
+///
+/// - The backward returns the per-element pair `(∂L/∂a, ∂L/∂b)` *before* any reduction
+///   over broadcast dimensions; the caller does that reduction once for every op.
+/// - `gpu(fwd, bwd_a, bwd_b, pass1, pass2)` names the forward, same-shape backward, and
+///   two-pass broadcast-backward `ComputePipelines` fields. `gpu(fwd)` is the forward
+///   only.
+/// - `is_trivial` is true exactly for the `non_differentiable` rows, and their
+///   `backward` panics (`edge()` never attaches a trivial grad fn, so it can't run).
 macro_rules! define_ops {
     (
         $(#[$emeta:meta])*
@@ -82,6 +111,123 @@ macro_rules! define_ops {
                     $(Self::$variant => $crate::macros::define_ops!(
                         @unary_pipes p; $kind $(($($pipe),*))?
                     ),)*
+                }
+            }
+        }
+    };
+
+    (
+        $(#[$emeta:meta])*
+        binary $name:ident {
+            differentiable {
+                $(
+                    $(#[$dmeta:meta])*
+                    $dvariant:ident => |$da:ident, $db:ident| $dfwd:expr,
+                        |$dg:ident, $dga:ident, $dgb:ident| $dbwd:expr,
+                        gpu($dfp:ident, $dpa:ident, $dpb:ident, $dp1:ident, $dp2:ident);
+                )*
+            }
+            non_differentiable {
+                $(
+                    $(#[$nmeta:meta])*
+                    $nvariant:ident => |$na:ident, $nb:ident| $nfwd:expr, gpu($nfp:ident);
+                )*
+            }
+        }
+    ) => {
+        $(#[$emeta])*
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum $name {
+            $(
+                $(#[$dmeta])*
+                $dvariant,
+            )*
+            $(
+                $(#[$nmeta])*
+                $nvariant,
+            )*
+        }
+
+        impl $name {
+            /// Every variant, generated from the same table as the enum.
+            pub const ALL: &'static [Self] = &[
+                $(Self::$dvariant,)*
+                $(Self::$nvariant,)*
+            ];
+
+            /// Apply the op to one pair of elements.
+            #[must_use]
+            pub fn forward(self, lhs: f32, rhs: f32) -> f32 {
+                match self {
+                    $(Self::$dvariant => {
+                        let $da = lhs;
+                        let $db = rhs;
+                        $dfwd
+                    })*
+                    $(Self::$nvariant => {
+                        let $na = lhs;
+                        let $nb = rhs;
+                        $nfwd
+                    })*
+                }
+            }
+
+            /// Per-element `(∂L/∂lhs, ∂L/∂rhs)` given the upstream gradient.
+            ///
+            /// # Panics
+            /// On a non-differentiable op. `edge()` never attaches a grad fn for one.
+            #[must_use]
+            pub fn backward(self, out_grad: f32, lhs: f32, rhs: f32) -> (f32, f32) {
+                match self {
+                    $(Self::$dvariant => {
+                        let $dg = out_grad;
+                        let $dga = lhs;
+                        let $dgb = rhs;
+                        $dbwd
+                    })*
+                    $(Self::$nvariant)|* => {
+                        unreachable!("{self:?} is non-differentiable and has no backward")
+                    }
+                }
+            }
+
+            /// Whether the op has no derivative (so `edge()` attaches no grad fn).
+            #[must_use]
+            pub const fn is_trivial(self) -> bool {
+                match self {
+                    $(Self::$dvariant)|* => false,
+                    $(Self::$nvariant)|* => true,
+                }
+            }
+
+            /// The forward GPU pipeline. Every binary op has one.
+            #[cfg(feature = "gpu")]
+            #[must_use]
+            pub(crate) fn gpu_forward(
+                self,
+                p: &$crate::gpu::ComputePipelines,
+            ) -> &::wgpu::ComputePipeline {
+                match self {
+                    $(Self::$dvariant => &p.$dfp,)*
+                    $(Self::$nvariant => &p.$nfp,)*
+                }
+            }
+
+            /// The backward GPU pipelines, or `None` for a non-differentiable op.
+            #[cfg(feature = "gpu")]
+            #[must_use]
+            pub(crate) fn gpu_backward<'p>(
+                self,
+                p: &'p $crate::gpu::ComputePipelines,
+            ) -> Option<$crate::gpu::BinaryBackwardPipelines<'p>> {
+                match self {
+                    $(Self::$dvariant => Some($crate::gpu::BinaryBackwardPipelines {
+                        a: &p.$dpa,
+                        b: &p.$dpb,
+                        pass1: &p.$dp1,
+                        pass2: &p.$dp2,
+                    }),)*
+                    $(Self::$nvariant)|* => None,
                 }
             }
         }

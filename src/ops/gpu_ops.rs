@@ -3,27 +3,29 @@
 //! This module provides GPU implementations of tensor operations.
 //! These are called automatically when tensors are on GPU storage.
 
-use crate::RawTensor;
+use crate::device::Device;
 #[cfg(feature = "gpu")]
 use crate::gpu::GpuKernels;
+use crate::ops::BinaryOp;
 #[cfg(feature = "gpu")]
 use crate::ops::UnaryOp;
 #[cfg(feature = "gpu")]
 use crate::spec::PadValue;
 use crate::storage::Storage;
+use crate::{RawTensor, Tensor};
 #[cfg(feature = "gpu")]
 use std::cell::RefCell;
 #[cfg(feature = "gpu")]
 use std::sync::Arc;
 
 impl RawTensor {
-    /// GPU-accelerated element-wise addition
+    /// GPU-accelerated element-wise binary op (same shape; no broadcasting)
     #[cfg(feature = "gpu")]
-    pub(crate) fn gpu_add(a: &Storage, b: &Storage) -> Option<Storage> {
+    pub(crate) fn gpu_binary(a: &Storage, b: &Storage, op: BinaryOp) -> Option<Storage> {
         let buf_a = a.gpu_buffer()?;
         let buf_b = b.gpu_buffer()?;
 
-        let result = GpuKernels::binary_op(buf_a, buf_b, "add")?;
+        let result = GpuKernels::binary_op(buf_a, buf_b, op)?;
 
         // Return GPU storage without eager CPU transfer.
         // CPU access requires explicit to_vec() call.
@@ -34,88 +36,16 @@ impl RawTensor {
         })
     }
 
-    /// GPU-accelerated element-wise subtraction
+    /// GPU-accelerated element-wise addition
     #[cfg(feature = "gpu")]
-    pub(crate) fn gpu_sub(a: &Storage, b: &Storage) -> Option<Storage> {
-        let buf_a = a.gpu_buffer()?;
-        let buf_b = b.gpu_buffer()?;
-
-        let result = GpuKernels::binary_op(buf_a, buf_b, "sub")?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+    pub(crate) fn gpu_add(a: &Storage, b: &Storage) -> Option<Storage> {
+        Self::gpu_binary(a, b, BinaryOp::Add)
     }
 
     /// GPU-accelerated element-wise multiplication
     #[cfg(feature = "gpu")]
     pub(crate) fn gpu_mul(a: &Storage, b: &Storage) -> Option<Storage> {
-        let buf_a = a.gpu_buffer()?;
-        let buf_b = b.gpu_buffer()?;
-
-        let result = GpuKernels::binary_op(buf_a, buf_b, "mul")?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
-    }
-
-    /// GPU-accelerated element-wise division
-    #[cfg(feature = "gpu")]
-    pub(crate) fn gpu_div(a: &Storage, b: &Storage) -> Option<Storage> {
-        let buf_a = a.gpu_buffer()?;
-        let buf_b = b.gpu_buffer()?;
-
-        let result = GpuKernels::binary_op(buf_a, buf_b, "div")?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
-    }
-
-    /// GPU-accelerated element-wise maximum
-    #[cfg(feature = "gpu")]
-    pub(crate) fn gpu_max(a: &Storage, b: &Storage) -> Option<Storage> {
-        let buf_a = a.gpu_buffer()?;
-        let buf_b = b.gpu_buffer()?;
-
-        let result = GpuKernels::binary_op(buf_a, buf_b, "max")?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
-    }
-
-    /// GPU-accelerated element-wise modulo
-    #[cfg(feature = "gpu")]
-    pub(crate) fn gpu_mod(a: &Storage, b: &Storage) -> Option<Storage> {
-        let buf_a = a.gpu_buffer()?;
-        let buf_b = b.gpu_buffer()?;
-
-        let result = GpuKernels::binary_op(buf_a, buf_b, "mod")?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
-    }
-
-    /// GPU-accelerated element-wise less-than comparison
-    #[cfg(feature = "gpu")]
-    pub(crate) fn gpu_cmplt(a: &Storage, b: &Storage) -> Option<Storage> {
-        let buf_a = a.gpu_buffer()?;
-        let buf_b = b.gpu_buffer()?;
-
-        let result = GpuKernels::binary_op(buf_a, buf_b, "cmplt")?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Self::gpu_binary(a, b, BinaryOp::Mul)
     }
 
     /// GPU-accelerated sum reduction - returns the scalar sum
@@ -210,7 +140,7 @@ impl RawTensor {
         out_grad: &Storage,
         a: &Storage,
         b: &Storage,
-        op: &str,
+        op: BinaryOp,
     ) -> Option<Storage> {
         let buf_out = out_grad.gpu_buffer()?;
         let buf_a = a.gpu_buffer()?;
@@ -232,7 +162,7 @@ impl RawTensor {
         out_grad: &Storage,
         a: &Storage,
         b: &Storage,
-        op: &str,
+        op: BinaryOp,
     ) -> Option<Storage> {
         let buf_out = out_grad.gpu_buffer()?;
         let buf_a = a.gpu_buffer()?;
@@ -246,46 +176,6 @@ impl RawTensor {
         })
     }
 
-    /// GPU-accelerated binary backward operation with broadcasting support
-    ///
-    /// Computes gradients for both inputs simultaneously, handling broadcasting
-    /// by reducing gradients over broadcasted dimensions.
-    ///
-    /// # Returns
-    /// A tuple of (gradient wrt a, gradient wrt b)
-    #[cfg(feature = "gpu")]
-    #[allow(dead_code)] // Keep as fallback, safe version is now used
-    pub(crate) fn gpu_binary_backward_broadcast(
-        out_grad: &Storage,
-        a: &Storage,
-        b: &Storage,
-        op: &str,
-        out_shape: &[usize],
-        a_shape: &[usize],
-        b_shape: &[usize],
-    ) -> Option<(Storage, Storage)> {
-        let buf_out = out_grad.gpu_buffer()?;
-        let buf_a = a.gpu_buffer()?;
-        let buf_b = b.gpu_buffer()?;
-
-        let (a_grad, b_grad) = GpuKernels::binary_backward_broadcast(
-            buf_out, buf_a, buf_b, op, out_shape, a_shape, b_shape,
-        )?;
-
-        Some((
-            Storage::Gpu {
-                buffer: Arc::new(a_grad),
-                dtype: crate::dtype::DType::F32,
-                cpu_cache: RefCell::new(None),
-            },
-            Storage::Gpu {
-                buffer: Arc::new(b_grad),
-                dtype: crate::dtype::DType::F32,
-                cpu_cache: RefCell::new(None),
-            },
-        ))
-    }
-
     /// GPU-accelerated binary backward with RACE-FREE broadcasting support
     ///
     /// This uses a two-pass algorithm to avoid race conditions in gradient reduction.
@@ -297,7 +187,7 @@ impl RawTensor {
         out_grad: &Storage,
         a: &Storage,
         b: &Storage,
-        op: &str,
+        op: BinaryOp,
         out_shape: &[usize],
         a_shape: &[usize],
         b_shape: &[usize],
@@ -322,6 +212,142 @@ impl RawTensor {
                 cpu_cache: RefCell::new(None),
             },
         ))
+    }
+
+    /// Run a binary op on the GPU when both inputs sit on the same GPU with equal shapes.
+    ///
+    /// Returns `(shape, storage, device)`, or `None` to fall back to the CPU path. The GPU
+    /// forward kernels don't broadcast, so differing shapes also return `None`.
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_binary_forward(
+        self_t: &Tensor,
+        other: &Tensor,
+        op: BinaryOp,
+    ) -> Option<(Vec<usize>, Storage, Device)> {
+        let (shape_a, device_a, storage_a) = {
+            let a = self_t.borrow();
+            (a.shape.clone(), a.device.clone(), a.data.clone())
+        };
+        let (shape_b, device_b, storage_b) = {
+            let b = other.borrow();
+            (b.shape.clone(), b.device.clone(), b.data.clone())
+        };
+
+        if !device_a.is_gpu() || !device_b.is_gpu() || device_a != device_b {
+            return None;
+        }
+        if shape_a != shape_b {
+            return None;
+        }
+
+        let storage = Self::gpu_binary(&storage_a, &storage_b, op)?;
+        Some((shape_a, storage, device_a))
+    }
+
+    /// Not-gpu stub: the CPU path always runs.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_binary_forward(
+        _self_t: &Tensor,
+        _other: &Tensor,
+        _op: BinaryOp,
+    ) -> Option<(Vec<usize>, Storage, Device)> {
+        None
+    }
+
+    /// GPU backward for a binary op, one gradient per parent.
+    ///
+    /// `None` means "use the CPU path": the tensors aren't all on a GPU, or a *required*
+    /// gradient couldn't be computed. A partial result is never returned, since a `None`
+    /// gradient for a parameter that needs one silently freezes it.
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_binary_backward(
+        op: BinaryOp,
+        out_grad: &Self,
+        x: &Self,
+        y: &Self,
+    ) -> Option<Vec<Option<Tensor>>> {
+        if !(out_grad.device.is_gpu() && x.device.is_gpu() && y.device.is_gpu()) {
+            return None;
+        }
+        let grads = if out_grad.shape == x.shape && out_grad.shape == y.shape {
+            Self::gpu_binary_backward_same_shape(op, out_grad, x, y)
+        } else {
+            Self::gpu_binary_backward_broadcast_shapes(op, out_grad, x, y)
+        };
+        if grads.is_none() {
+            log::warn!("GPU backward for {op:?} failed; falling back to CPU");
+        }
+        grads
+    }
+
+    /// Not-gpu stub: the CPU path always runs.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_binary_backward(
+        _op: BinaryOp,
+        _out_grad: &Self,
+        _x: &Self,
+        _y: &Self,
+    ) -> Option<Vec<Option<Tensor>>> {
+        None
+    }
+
+    /// Same-shape binary backward: one kernel per input that needs a gradient.
+    #[cfg(feature = "gpu")]
+    fn gpu_binary_backward_same_shape(
+        op: BinaryOp,
+        out_grad: &Self,
+        x: &Self,
+        y: &Self,
+    ) -> Option<Vec<Option<Tensor>>> {
+        let gx = if x.requires_grad {
+            let storage = Self::gpu_binary_backward_a(&out_grad.data, &x.data, &y.data, op)?;
+            Some(Self::new_with_storage(
+                storage,
+                &x.shape,
+                x.device.clone(),
+                false,
+            ))
+        } else {
+            None
+        };
+        let gy = if y.requires_grad {
+            let storage = Self::gpu_binary_backward_b(&out_grad.data, &x.data, &y.data, op)?;
+            Some(Self::new_with_storage(
+                storage,
+                &y.shape,
+                y.device.clone(),
+                false,
+            ))
+        } else {
+            None
+        };
+        Some(vec![gx, gy])
+    }
+
+    /// Broadcasting binary backward via the race-free two-pass kernels.
+    #[cfg(feature = "gpu")]
+    fn gpu_binary_backward_broadcast_shapes(
+        op: BinaryOp,
+        out_grad: &Self,
+        x: &Self,
+        y: &Self,
+    ) -> Option<Vec<Option<Tensor>>> {
+        let (grad_a, grad_b) = Self::gpu_binary_backward_broadcast_safe(
+            &out_grad.data,
+            &x.data,
+            &y.data,
+            op,
+            &out_grad.shape,
+            &x.shape,
+            &y.shape,
+        )?;
+        let gx = x
+            .requires_grad
+            .then(|| Self::new_with_storage(grad_a, &x.shape, x.device.clone(), false));
+        let gy = y
+            .requires_grad
+            .then(|| Self::new_with_storage(grad_b, &y.shape, y.device.clone(), false));
+        Some(vec![gx, gy])
     }
 
     /// GPU-accelerated permute operation

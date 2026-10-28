@@ -77,6 +77,19 @@ pub struct GpuContext {
     consecutive_timeouts: AtomicU32,
 }
 
+/// The backward pipelines of one differentiable binary op, looked up from its
+/// `define_ops!` row.
+pub(crate) struct BinaryBackwardPipelines<'p> {
+    /// Same-shape gradient wrt the first input.
+    pub a: &'p wgpu::ComputePipeline,
+    /// Same-shape gradient wrt the second input.
+    pub b: &'p wgpu::ComputePipeline,
+    /// Broadcast backward, scatter pass.
+    pub pass1: &'p wgpu::ComputePipeline,
+    /// Broadcast backward, reduce pass.
+    pub pass2: &'p wgpu::ComputePipeline,
+}
+
 /// Collection of pre-compiled compute pipelines
 ///
 /// Compiling shaders is expensive, so we do it once at initialization
