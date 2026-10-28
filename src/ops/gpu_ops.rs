@@ -772,6 +772,7 @@ mod tests {
     use super::*;
     use crate::gpu::is_gpu_available;
     use crate::storage::Storage;
+    use crate::tensor::{Tensor, TensorOps as _};
 
     #[test]
     fn gpu_add_returns_gpu_storage_without_eager_transfer() {
@@ -791,5 +792,83 @@ mod tests {
         // cpu_cache is NOT eagerly populated (lazy transfer).
         // to_vec() fetches from GPU buffer when cache is None.
         assert_eq!(out.to_vec(), vec![6.0, 8.0, 10.0, 12.0]);
+    }
+
+    /// Deterministic, non-constant, tie-free operands (`x_i = .37i + .5`, `y_j = .53j + .9`
+    /// never coincide for i < 12, so Max has no ties) and positive, so Div is well-defined.
+    fn operand(len: usize, scale: f32, offset: f32, shape: &[usize]) -> Tensor {
+        let data = (0..len).map(|i| i as f32 * scale + offset).collect();
+        RawTensor::new(data, shape, true)
+    }
+
+    /// Assert `gpu_binary_backward` returns `Some` (not a silent CPU fallback) for each
+    /// shape pair, and agrees with the CPU backward.
+    fn assert_gpu_backward_matches_cpu(cases: &[(&[usize], &[usize])]) {
+        let Some(gpu) = Device::gpu() else {
+            return;
+        };
+        if !is_gpu_available() {
+            return;
+        }
+        for op in BinaryOp::ALL.iter().copied().filter(|op| !op.is_trivial()) {
+            for &(shape_a, shape_b) in cases {
+                let numel = |s: &[usize]| s.iter().product::<usize>();
+                let out_shape = RawTensor::broadcast_shape(shape_a, shape_b);
+
+                // CPU reference: the full graph, backward from an all-ones output grad.
+                let xa = operand(numel(shape_a), 0.37, 0.5, shape_a);
+                let yb = operand(numel(shape_b), 0.53, 0.9, shape_b);
+                RawTensor::binary_op(&xa, &yb, op).backward();
+                let cpu_x = xa.grad().expect("cpu grad for x");
+                let cpu_y = yb.grad().expect("cpu grad for y");
+
+                // GPU: call the backward directly so a fallback shows up as `None`.
+                let gx =
+                    RawTensor::to_device(&operand(numel(shape_a), 0.37, 0.5, shape_a), gpu.clone());
+                let gy =
+                    RawTensor::to_device(&operand(numel(shape_b), 0.53, 0.9, shape_b), gpu.clone());
+                let ones = RawTensor::new(vec![1.0; numel(&out_shape)], &out_shape, false);
+                let out_grad = RawTensor::to_device(&ones, gpu.clone());
+                let grads = RawTensor::gpu_binary_backward(
+                    op,
+                    &out_grad.borrow(),
+                    &gx.borrow(),
+                    &gy.borrow(),
+                )
+                .unwrap_or_else(|| panic!("{op:?} {shape_a:?}x{shape_b:?}: fell back to CPU"));
+
+                for (name, got, want) in [("x", &grads[0], &cpu_x), ("y", &grads[1], &cpu_y)] {
+                    let got = got
+                        .as_ref()
+                        .unwrap_or_else(|| panic!("{op:?}: missing {name} gradient"))
+                        .borrow()
+                        .data
+                        .to_vec();
+                    assert_eq!(got.len(), want.len(), "{op:?} {name} length");
+                    for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+                        assert!(
+                            (g - w).abs() <= 1e-3 * w.abs().max(1.0),
+                            "{op:?} {shape_a:?}x{shape_b:?} d{name}[{i}]: gpu={g} cpu={w}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn gpu_binary_backward_same_shape_matches_cpu() {
+        assert_gpu_backward_matches_cpu(&[(&[2, 3], &[2, 3]), (&[4, 2, 3], &[4, 2, 3])]);
+    }
+
+    #[test]
+    #[ignore = "GPU broadcast backward (notes/TODO.md): the two-pass pass-1 bind group has 6 \
+                bindings but wgpu's auto layout keeps only those the entry point uses (3 for Add)"]
+    fn gpu_binary_backward_broadcast_matches_cpu() {
+        assert_gpu_backward_matches_cpu(&[
+            (&[3, 1], &[1, 4]),
+            (&[2, 3], &[3]),
+            (&[4, 2, 3], &[2, 1]),
+        ]);
     }
 }

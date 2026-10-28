@@ -771,13 +771,21 @@ mod tests {
 
     #[test]
     fn test_conv_transpose2d_gradient_multiple_channels() {
-        // Test gradient correctness with multiple channels
+        // Test gradient correctness with multiple channels.
+        //
+        // Seeded because the unseeded version failed ~3% of runs. The cause was the step,
+        // not the layer: the layer is linear in `x`, so the central difference has no
+        // truncation error and its only error is f32 roundoff in the loss, which shrinks
+        // as `eps` grows. At `eps = 5e-2`, a random input whose smallest gradient entry
+        // sat just above `check_gradients`' 1e-3 absolute/relative switch put that
+        // roundoff over `tol` (13 of 400 seeds); at 0.5, none of the same 400 do.
+        crate::tensor::manual_seed(0xC7);
         let conv = ConvTranspose2d::new(4, 8, 3, 1, 1, true);
         let x = RawTensor::randn(&[1, 4, 6, 6]);
         x.borrow_mut().requires_grad = true;
 
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
 
         assert!(
             passed,
