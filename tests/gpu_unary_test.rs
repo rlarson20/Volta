@@ -24,11 +24,11 @@ fn test_new_unary_ops_gpu_autograd() {
         let actual_grad = x.grad_storage().unwrap().to_vec();
         for (i, &actual) in actual_grad.iter().enumerate() {
             assert!(
-                (actual - expected_grad.get(i).copied().unwrap_or(f32::NAN)).abs() < 1e-5,
+                (actual - expected_grad.get(i).copied().expect("index in range")).abs() < 1e-5,
                 "Recip grad failed at index {}: got {}, expected {}",
                 i,
                 actual,
-                expected_grad.get(i).copied().unwrap_or(f32::NAN)
+                expected_grad.get(i).copied().expect("index in range")
             );
         }
     }
@@ -46,11 +46,11 @@ fn test_new_unary_ops_gpu_autograd() {
         let actual_grad = x.grad_storage().unwrap().to_vec();
         for (i, &actual) in actual_grad.iter().enumerate() {
             assert!(
-                (actual - expected_grad.get(i).copied().unwrap_or(f32::NAN)).abs() < 1e-4,
+                (actual - expected_grad.get(i).copied().expect("index in range")).abs() < 1e-4,
                 "Exp2 grad failed at index {}: got {}, expected {}",
                 i,
                 actual,
-                expected_grad.get(i).copied().unwrap_or(f32::NAN)
+                expected_grad.get(i).copied().expect("index in range")
             );
         }
     }
@@ -69,11 +69,11 @@ fn test_new_unary_ops_gpu_autograd() {
         let actual_grad = x_log2.grad_storage().unwrap().to_vec();
         for (i, &actual) in actual_grad.iter().enumerate() {
             assert!(
-                (actual - expected_grad.get(i).copied().unwrap_or(f32::NAN)).abs() < 1e-5,
+                (actual - expected_grad.get(i).copied().expect("index in range")).abs() < 1e-5,
                 "Log2 grad failed at index {}: got {}, expected {}",
                 i,
                 actual,
-                expected_grad.get(i).copied().unwrap_or(f32::NAN)
+                expected_grad.get(i).copied().expect("index in range")
             );
         }
     }
@@ -90,11 +90,11 @@ fn test_new_unary_ops_gpu_autograd() {
         let actual_grad = x.grad_storage().unwrap().to_vec();
         for (i, &actual) in actual_grad.iter().enumerate() {
             assert!(
-                (actual - expected_grad.get(i).copied().unwrap_or(f32::NAN)).abs() < 1e-5,
+                (actual - expected_grad.get(i).copied().expect("index in range")).abs() < 1e-5,
                 "Sin grad failed at index {}: got {}, expected {}",
                 i,
                 actual,
-                expected_grad.get(i).copied().unwrap_or(f32::NAN)
+                expected_grad.get(i).copied().expect("index in range")
             );
         }
     }
@@ -111,11 +111,11 @@ fn test_new_unary_ops_gpu_autograd() {
         let actual_grad = x.grad_storage().unwrap().to_vec();
         for (i, &actual) in actual_grad.iter().enumerate() {
             assert!(
-                (actual - expected_grad.get(i).copied().unwrap_or(f32::NAN)).abs() < 1e-5,
+                (actual - expected_grad.get(i).copied().expect("index in range")).abs() < 1e-5,
                 "Cos grad failed at index {}: got {}, expected {}",
                 i,
                 actual,
-                expected_grad.get(i).copied().unwrap_or(f32::NAN)
+                expected_grad.get(i).copied().expect("index in range")
             );
         }
     }

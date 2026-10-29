@@ -55,7 +55,7 @@ fn main() {
         opt.step();
 
         if epoch % 20 == 0 {
-            let loss_val = loss.data().first().copied().unwrap_or(f32::NAN);
+            let loss_val = loss.data().first().copied().expect("index in range");
             println!("Epoch {epoch:>3}: Loss = {loss_val:.6}");
         }
     }
@@ -71,13 +71,13 @@ fn main() {
 
     for i in 0..4 {
         let x_data_ref = x_data_slice.get(i * 2..(i * 2) + 2);
-        let y_val = y_data_slice.get(i).copied().unwrap_or(f32::NAN);
-        let pred_val = final_slice.get(i).copied().unwrap_or(f32::NAN);
+        let y_val = y_data_slice.get(i).copied().expect("index in range");
+        let pred_val = final_slice.get(i).copied().expect("index in range");
         if let Some(input_slice) = x_data_ref {
             println!(
                 "Input: [{:.0}, {:.0}] -> Target: {:.0}, Predicted: {:.4}",
-                input_slice.first().copied().unwrap_or(f32::NAN),
-                input_slice.get(1).copied().unwrap_or(f32::NAN),
+                input_slice.first().copied().expect("index in range"),
+                input_slice.get(1).copied().expect("index in range"),
                 y_val,
                 pred_val
             );

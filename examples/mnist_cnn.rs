@@ -116,7 +116,7 @@ fn main() {
             loss.clone().into_loss().expect("scalar loss").backward();
             optimizer.step();
 
-            epoch_loss += loss.data().first().copied().unwrap_or(0.0);
+            epoch_loss += loss.data().first().copied().expect("index in range");
             num_batches += 1;
             progress.update(num_batches);
         }
@@ -143,14 +143,20 @@ fn main() {
         for i in 0..batch_size {
             let pred_class = (0..10)
                 .max_by(|&a, &b| {
-                    let val_a = pred_data.get(i * 10 + a).copied().unwrap_or(f32::NAN);
-                    let val_b = pred_data.get(i * 10 + b).copied().unwrap_or(f32::NAN);
+                    let val_a = pred_data.get(i * 10 + a).copied().expect("index in range");
+                    let val_b = pred_data.get(i * 10 + b).copied().expect("index in range");
                     val_a.partial_cmp(&val_b).unwrap()
                 })
                 .unwrap();
 
             let true_class = (0..10)
-                .position(|j| target_data.get(i * 10 + j).copied().unwrap_or(0.0) > 0.5)
+                .position(|j| {
+                    target_data
+                        .get(i * 10 + j)
+                        .copied()
+                        .expect("index in range")
+                        > 0.5
+                })
                 .unwrap();
 
             if pred_class == true_class {

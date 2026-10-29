@@ -277,7 +277,7 @@ mod gpu_stress_tests {
                 assert_eq!(data.len(), 1024, "Tensor {i} data length mismatch");
 
                 // Verify data integrity (values should be i * 0.01 for indices)
-                let first_val = data.first().copied().unwrap_or(f32::NAN);
+                let first_val = data.first().copied().expect("index in range");
                 assert!((0.0..=1.0).contains(&first_val), "Data sanity check failed");
             }
 

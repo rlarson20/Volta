@@ -184,10 +184,10 @@ fn train_model(model: &Sequential, opt: &mut Adam, x: &Tensor, y: &Tensor, epoch
         let loss = mse_loss(&predictions, y);
 
         if epoch == 0 {
-            initial_loss = loss.data().first().copied().unwrap_or(f32::NAN);
+            initial_loss = loss.data().first().copied().expect("index in range");
         }
         if epoch == epochs - 1 {
-            final_loss = loss.data().first().copied().unwrap_or(f32::NAN);
+            final_loss = loss.data().first().copied().expect("index in range");
         }
 
         loss.clone().into_loss().expect("scalar loss").backward();
@@ -197,7 +197,7 @@ fn train_model(model: &Sequential, opt: &mut Adam, x: &Tensor, y: &Tensor, epoch
             println!(
                 "  Epoch {:>3}: Loss = {:.6}",
                 epoch,
-                loss.data().first().copied().unwrap_or(f32::NAN)
+                loss.data().first().copied().expect("index in range")
             );
         }
     }
@@ -213,10 +213,10 @@ fn train_model(model: &Sequential, opt: &mut Adam, x: &Tensor, y: &Tensor, epoch
     for i in 0..4 {
         println!(
             "    Input: [{:.0}, {:.0}] -> Target: {:.0}, Predicted: {:.4}",
-            x_data.get(i * 2).copied().unwrap_or(f32::NAN),
-            x_data.get(i * 2 + 1).copied().unwrap_or(f32::NAN),
-            y_data.get(i).copied().unwrap_or(f32::NAN),
-            pred_data.get(i).copied().unwrap_or(f32::NAN)
+            x_data.get(i * 2).copied().expect("index in range"),
+            x_data.get(i * 2 + 1).copied().expect("index in range"),
+            y_data.get(i).copied().expect("index in range"),
+            pred_data.get(i).copied().expect("index in range")
         );
     }
 }

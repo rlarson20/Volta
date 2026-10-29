@@ -84,7 +84,7 @@ fn main() {
 
         // Compute MSE loss
         let loss_tensor = mse_loss(&output, &high_res);
-        let loss_value = loss_tensor.data().first().copied().unwrap_or(f32::NAN);
+        let loss_value = loss_tensor.data().first().copied().expect("index in range");
 
         // Backward pass
         optimizer.zero_grad();
@@ -145,7 +145,7 @@ fn generate_synthetic_data(
                 let lr_y = y / scale;
                 let lr_x = x / scale;
                 let lr_idx = b * low_res_size * low_res_size + lr_y * low_res_size + lr_x;
-                let base_value = lr_data.get(lr_idx).copied().unwrap_or(0.0);
+                let base_value = lr_data.get(lr_idx).copied().expect("index in range");
 
                 // Add some high-frequency detail using a deterministic pattern
                 // This simulates texture/edges that should be learned

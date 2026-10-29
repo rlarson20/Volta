@@ -56,14 +56,14 @@ fn test_sgd_momentum_logic() {
     // v = 0.9*0 - lr*grad = -0.1*0.1 = -0.01
     // w = 1.0 + (-0.01) = 0.99
     opt.step();
-    let val1 = t.data().first().copied().unwrap_or(f32::NAN);
+    let val1 = t.data().first().copied().expect("index in range");
     assert!((val1 - 0.99).abs() < 1e-6);
 
     // Step 2:
     // v = 0.9*(-0.01) - 0.1*0.1 = -0.009 - 0.01 = -0.019
     // w = 0.99 + (-0.019) = 0.971
     opt.step();
-    let val2 = t.data().first().copied().unwrap_or(f32::NAN);
+    let val2 = t.data().first().copied().expect("index in range");
     assert!((val2 - 0.971).abs() < 1e-6);
 }
 
@@ -74,12 +74,9 @@ fn test_storage_mut_access() {
     let mut s = Storage::cpu(vec![1.0, 2.0, 3.0]);
 
     // Check successful mutation
-    if let Some(slice) = s.as_mut_slice()
-        && let Some(slot) = slice.get_mut(0)
-    {
-        *slot = 10.0;
-    }
-    assert_eq!(s.as_slice().first().copied().unwrap_or_default(), 10.0);
+    let slice = s.as_mut_slice().expect("CPU storage has a mutable slice");
+    *slice.get_mut(0).expect("index in range") = 10.0;
+    assert_eq!(s.as_slice().first().copied().expect("index in range"), 10.0);
 
     // Check iterator access
     for val in &mut s {

@@ -4,7 +4,7 @@ use volta::{RawTensor, Storage, TensorOps};
 
 /// Helper: read the first (scalar) value from a tensor.
 fn scalar(t: &volta::Tensor) -> f32 {
-    t.data().first().copied().unwrap_or(f32::NAN)
+    t.data().first().copied().expect("index in range")
 }
 
 // ---------------------------------------------------------------------------

@@ -98,9 +98,9 @@ fn main() {
             let kl_loss = kl_divergence_gaussian(&mu, &logvar);
             let loss = recon_loss.add(&kl_loss);
 
-            total_loss += loss.data().first().copied().unwrap_or(f32::NAN);
-            total_recon += recon_loss.data().first().copied().unwrap_or(f32::NAN);
-            total_kl += kl_loss.data().first().copied().unwrap_or(f32::NAN);
+            total_loss += loss.data().first().copied().expect("index in range");
+            total_recon += recon_loss.data().first().copied().expect("index in range");
+            total_kl += kl_loss.data().first().copied().expect("index in range");
 
             loss.into_loss().expect("scalar loss").backward();
         }

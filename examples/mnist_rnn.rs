@@ -32,9 +32,11 @@ fn extract_timestep(batch: &volta::Tensor, t: usize) -> volta::Tensor {
     for b in 0..batch_size {
         let start = b * seq_len * features + t * features;
         let end = start + features;
-        if let Some(slice) = batch_data.get(start..end) {
-            data.extend_from_slice(slice);
-        }
+        data.extend_from_slice(
+            batch_data
+                .get(start..end)
+                .expect("timestep slice lies within the batch"),
+        );
     }
 
     RawTensor::new(data, &[batch_size, features], false)
@@ -170,7 +172,7 @@ fn main() {
             loss.clone().into_loss().expect("scalar loss").backward();
             optimizer.step();
 
-            epoch_loss += loss.data().first().copied().unwrap_or(f32::NAN);
+            epoch_loss += loss.data().first().copied().expect("index in range");
             num_batches += 1;
             progress.update(num_batches);
         }
@@ -217,14 +219,20 @@ fn main() {
                     pred_data
                         .get(i * 10 + a)
                         .copied()
-                        .unwrap_or(f32::NAN)
-                        .partial_cmp(&pred_data.get(i * 10 + b).copied().unwrap_or(f32::NAN))
+                        .expect("index in range")
+                        .partial_cmp(&pred_data.get(i * 10 + b).copied().expect("index in range"))
                         .unwrap()
                 })
                 .unwrap();
 
             let true_class = (0..10)
-                .position(|j| target_data.get(i * 10 + j).copied().unwrap_or(f32::NAN) > 0.5)
+                .position(|j| {
+                    target_data
+                        .get(i * 10 + j)
+                        .copied()
+                        .expect("index in range")
+                        > 0.5
+                })
                 .unwrap();
 
             if pred_class == true_class {

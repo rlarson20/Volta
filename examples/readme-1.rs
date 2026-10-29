@@ -36,7 +36,7 @@ fn main() {
             println!(
                 "Epoch {}: loss = {:.6}",
                 epoch,
-                loss.data().first().copied().unwrap_or(f32::NAN)
+                loss.data().first().copied().expect("index in range")
             );
         }
 

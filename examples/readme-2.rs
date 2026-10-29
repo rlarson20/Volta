@@ -28,6 +28,6 @@ fn main() {
 
     println!(
         "Loss: {:?}",
-        loss.data().first().copied().unwrap_or(f32::NAN)
+        loss.data().first().copied().expect("index in range")
     );
 }

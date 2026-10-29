@@ -54,7 +54,7 @@ fn main() {
         progress.update(epoch + 1);
 
         if epoch % 100 == 99 {
-            let loss_val = loss.data().first().copied().unwrap_or(f32::NAN);
+            let loss_val = loss.data().first().copied().expect("index in range");
             println!(" Loss = {loss_val:.6}");
         }
     }
@@ -65,7 +65,7 @@ fn main() {
     println!("\n=== Training Complete ===");
     println!(
         "Final Loss: {:.6}",
-        final_loss.data().first().copied().unwrap_or(f32::NAN)
+        final_loss.data().first().copied().expect("index in range")
     );
 
     // Show a few predictions
@@ -74,11 +74,11 @@ fn main() {
     for i in (0..num_samples).step_by(20) {
         println!(
             "  x={:6.2}: pred={:6.3}, true={:6.3}, error={:6.3}",
-            x_data.get(i).copied().unwrap_or(f32::NAN),
-            pred_data.get(i).copied().unwrap_or(f32::NAN),
-            y_data.get(i).copied().unwrap_or(f32::NAN),
-            (pred_data.get(i).copied().unwrap_or(f32::NAN)
-                - y_data.get(i).copied().unwrap_or(f32::NAN))
+            x_data.get(i).copied().expect("index in range"),
+            pred_data.get(i).copied().expect("index in range"),
+            y_data.get(i).copied().expect("index in range"),
+            (pred_data.get(i).copied().expect("index in range")
+                - y_data.get(i).copied().expect("index in range"))
             .abs()
         );
     }

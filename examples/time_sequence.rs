@@ -55,8 +55,8 @@ fn main() {
             // Process each timestep in the sequence
             for t in 0..sequence_length {
                 let idx = seq_idx * sequence_length + t;
-                let input_val = all_inputs.get(idx).copied().unwrap_or(f32::NAN);
-                let target_val = all_targets.get(idx).copied().unwrap_or(f32::NAN);
+                let input_val = all_inputs.get(idx).copied().expect("index in range");
+                let target_val = all_targets.get(idx).copied().expect("index in range");
 
                 // Create input tensor [1, 1] (batch=1, features=1)
                 let input = RawTensor::new(vec![input_val], &[1, 1], false);
@@ -75,7 +75,7 @@ fn main() {
                 let target = RawTensor::new(vec![target_val], &[1, 1], false);
                 let loss = RawTensor::mse_loss(&pred, &target);
 
-                total_loss += loss.data().first().copied().unwrap_or(f32::NAN);
+                total_loss += loss.data().first().copied().expect("index in range");
                 loss.into_loss().expect("scalar loss").backward();
 
                 // Update hidden state for next timestep
@@ -114,7 +114,7 @@ fn main() {
         };
 
         let pred = output_layer.forward(&h_new);
-        let pred_val = pred.data().first().copied().unwrap_or(f32::NAN);
+        let pred_val = pred.data().first().copied().expect("index in range");
 
         if t % 5 == 0 {
             println!(
