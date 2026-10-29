@@ -409,13 +409,14 @@ Before, `fetch(&s.data, i)`, `zip(&data)`, and `data.iter()` coerced silently, s
 
 A backward pass hands its parent's shape on by value: `RawTensor::from_shape(data, x.shape.clone(), false)` (new, `pub(crate)`), and `new_with_storage`/`try_new_with_storage` now take a `Shape`. `GradFn` fields that store a tensor's shape (`input_shape`, `original_shape`, `true_shape`/`false_shape`) are `Shape`s. User-supplied targets (`MovementOp::Reshape/Expand { new_shape }`, `LayerNorm::normalized_shape`) stay `Vec`, because they are inputs, not a tensor's shape.
 
-**Where `truncate_rank()` remains:** 64 calls outside `shape.rs` (was 8; `Strides::truncate_rank` not counted). Each one sits at one of four kinds of boundary:
+**Where `truncate_rank()` remains:** 64 calls outside `shape.rs` (was 8; `Strides::truncate_rank` not counted). Each one sits at one of three kinds of boundary:
 1. Raw index-math helpers that really are slice code: `broadcast_to`, `sum_over_broadcast_dims`, `transpose_2d`, `MovementContext`, and the GPU wrappers' parameter packing. Most of the 64 are here; `movement.rs` alone has 24.
 2. Public `&[usize]` APIs called internally: `broadcast_shape`, `reshape`, `ones`/`zeros`/`randn`.
 3. Serialization and error payloads: `TensorData.shape`, `ShapeDataMismatch`, and `load_weight`'s comparison.
-4. `Tensor::shape()`, until it returns `Shape` (PR 3 of the flip).
 
-The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at every read. It didn't come true: about 440 implicit raw reads became about 64 named demotions, and everything else is an accessor. A new `truncate_rank()` belongs only at one of these four boundaries.
+The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at every read. It didn't come true: about 440 implicit raw reads became about 64 named demotions, and everything else is an accessor. A new `truncate_rank()` belongs only at one of these three boundaries.
+
+**Public accessor:** `Tensor::shape()` returns `Shape` (it returned `Vec<usize>`). Outside the crate, a dim is read with `shape.dim(Axis(i))` (a `Result`), and `truncate_rank()` is the explicit escape to a slice, for example to destructure `let &[b, s, f] = shape.truncate_rank() else { .. }`. `dim_at`, `fixed`, and the other new accessors stay `pub(crate)` until an outside use needs them. In-repo the change touched three examples and nothing in `tests/`, because the `PartialEq` impls below keep `assert_eq!(t.shape(), vec![..])` compiling. Inside the crate, `Shape::derived(x.shape())` round trips (conv, conv-transpose, maxpool specs) collapse to `x.shape()`.
 
 **Comparison:** `Shape` implements `PartialEq` with `[usize]`, `[usize; N]`, and `Vec<usize>` (both directions for `Vec`). Equality hands no slice to a shape-blind API, so it isn't a demotion, and `assert_eq!(t.shape, vec![2, 3])` keeps reading naturally.
 

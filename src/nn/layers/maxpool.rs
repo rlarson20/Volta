@@ -49,13 +49,8 @@ impl MaxPool2d {
     }
 
     fn pool_forward(&self, x: &Tensor) -> Tensor {
-        let spec = Window2dSpec::new(
-            &Shape::derived(x.shape()),
-            self.kernel,
-            self.stride,
-            self.padding,
-        )
-        .unwrap_or_else(|e| panic!("{e}"));
+        let spec = Window2dSpec::new(&x.shape(), self.kernel, self.stride, self.padding)
+            .unwrap_or_else(|e| panic!("{e}"));
         let Window2dSpec {
             batch,
             channels,

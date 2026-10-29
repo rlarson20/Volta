@@ -84,9 +84,8 @@ impl Tensor {
     /// correctness depends on who can *see* a shape, only on who can overwrite the
     /// fields that encode graph structure. Safe to expose without qualification.
     #[must_use]
-    pub fn shape(&self) -> Vec<usize> {
-        // PR 3 of the Shape flip returns `Shape` here.
-        self.inner.borrow().shape.truncate_rank().to_vec()
+    pub fn shape(&self) -> Shape {
+        self.inner.borrow().shape.clone()
     }
 
     /// Overwrite this tensor's values from a state-dict entry (H7).

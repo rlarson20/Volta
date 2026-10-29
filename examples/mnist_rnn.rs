@@ -16,7 +16,7 @@ use volta::{
 /// Output shape: [batch, features]
 fn extract_timestep(batch: &volta::Tensor, t: usize) -> volta::Tensor {
     let shape = batch.shape();
-    let &[batch_size, seq_len, features] = shape.as_slice() else {
+    let &[batch_size, seq_len, features] = shape.truncate_rank() else {
         panic!("extract_timestep expects [batch, seq_len, features], got {shape:?}");
     };
 
@@ -144,7 +144,7 @@ fn main() {
 
             // Process sequence through LSTM
             // batch_x shape: [batch, 28, 28]
-            let batch = batch_x.shape().first().copied().expect("batch dim");
+            let batch = batch_x.shape().dim(volta::Axis(0)).expect("batch dim");
             let mut state = lstm.initial_state(batch);
 
             for t in 0..seq_len {
@@ -185,7 +185,7 @@ fn main() {
 
     for (test_x, test_y) in &mut dataloader {
         // Process sequence through LSTM
-        let batch = test_x.shape().first().copied().expect("batch dim");
+        let batch = test_x.shape().dim(volta::Axis(0)).expect("batch dim");
         let mut state = lstm.initial_state(batch);
 
         for t in 0..seq_len {
@@ -199,9 +199,9 @@ fn main() {
 
         let pred_data = logits.data();
         let target_data = test_y.data();
-        let batch_size = *test_y
+        let batch_size = test_y
             .shape()
-            .first()
+            .dim(volta::Axis(0))
             .expect("test labels have a batch dim");
 
         for i in 0..batch_size {

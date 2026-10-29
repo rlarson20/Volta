@@ -1388,13 +1388,8 @@ impl Conv2d {
     /// # Panics
     /// Input needs to be 4D
     pub fn forward(&self, x: &Tensor) -> Tensor {
-        let spec = Conv2dSpec::new(
-            &Shape::derived(x.shape()),
-            &Shape::derived(self.weight.shape()),
-            self.stride,
-            self.padding,
-        )
-        .unwrap_or_else(|e| panic!("{e}"));
+        let spec = Conv2dSpec::new(&x.shape(), &self.weight.shape(), self.stride, self.padding)
+            .unwrap_or_else(|e| panic!("{e}"));
 
         // Algorithm selection
         // Note: All algorithms now support gradients!
