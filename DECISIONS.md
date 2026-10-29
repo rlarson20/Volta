@@ -424,6 +424,14 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 
 **Fallout:** `axis_size` (a `&[usize]` → `Shape::from_dims` → `dim` round trip) is gone; reductions call `shape.dim(axis)`.
 
+### `Sequential` layer names can't collide (ADDENDUM §10)
+
+**Decision:** `SequentialBuilder::build()` panics on a layer name that is used twice, is a decimal number, or contains `.`. Each one made two layers write the same `state_dict` keys, so saving silently kept one layer's weights: two `"fc"` layers gave two keys for four parameters, a layer named `"1"` collided with the unnamed layer at index 1, and `"a.b"` collided with layer `"b"` nested in `"a"`. A clash is a programmer error, so it panics in `build()`, where it is local to the mistake and the signature stays the same; `build() -> Result` would break every builder caller and pre-empt the H4 error-regime decision. `build()` is the only constructor that takes names (`Sequential::new` takes none).
+
+**Not a bug:** the audit's greedy prefix (`"10.weight"` matching `"1."`) does not reproduce. The prefix includes the dot. `test_state_dict_round_trip_past_ten_layers` pins it.
+
+**Departure from §10:** no `insta`. The defects are key collisions, which `assert_eq!` on a short key list catches just as well (`test_state_dict_keys`), without a dev-dependency and the `cargo-insta` review step. Revisit if snapshot coverage grows to many layers' key sets.
+
 ## Concurrency and Async
 
 ### Stay synchronous

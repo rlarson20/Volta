@@ -53,7 +53,7 @@ Last verified: 2026-10-29.
 - [ ] No reference matmul exists (GEMM report §5). The CPU oracle is Accelerate or `matrixmultiply` depending on platform, so GPU parity compares against an optimized third-party kernel. Add a `#[cfg(test)]` triple-loop GEMM with explicit `(rs, cs)` per operand, and compare CPU and GPU matmul against it over random non-square shapes. Conv already has this pattern (direct vs im2col/iGEMM).
 - [ ] The `BackwardParams` comments in `gpu/shaders/matmul_backward.wgsl` (lines ~12-16) describe `m` and `k` wrongly for `backward_b` (`grad` is `[M, N]`). The code is correct; fix the comments.
 - [x] Doctests in `embedding.rs` and `pixelshuffle.rs` called the now-private `borrow()`. They use `shape()` now; `cargo test --doc --no-default-features` passes (2026-10-28).
-- [ ] `Sequential::load_state_dict` prefix match is greedy (`"10.weight"` matches `"1."`).
+- [x] `Sequential` state-dict keys collided. The reported greedy prefix (`"10.weight"` matching `"1."`) does not reproduce, since the prefix includes the dot. The real defect was layer names: a duplicate name, a numeric name, or a dotted name made two layers share keys, silently dropping one layer's weights on save. `SequentialBuilder::build()` rejects all three (DECISIONS.md, "`Sequential` layer names can't collide"). Tests: `sequential_builder::tests::test_state_dict_round_trip_past_ten_layers`, `test_state_dict_keys`, and three `test_builder_rejects_*` (2026-10-29).
 - [ ] RNG reproducibility holes: the dataloader shuffle is unseeded, and `with_rng` falls back silently under a reentrant borrow.
 - [x] `src/io/config.rs` was dead pseudocode that no module declared. Deleted (2026-10-28).
 - [ ] The dtype system is decorative: every compute path is f32.
