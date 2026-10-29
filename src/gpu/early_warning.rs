@@ -254,6 +254,7 @@ fn calculate_trend(values: &[f64]) -> TrendDirection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::fetch;
 
     #[test]
     fn test_ews_creation() {
@@ -330,8 +331,8 @@ mod tests {
 
         let trends = ews.trends();
         assert_eq!(trends.memory_samples.len(), 2);
-        assert_eq!(*trends.memory_samples.first().expect("index in range"), 100);
-        assert_eq!(*trends.memory_samples.get(1).expect("index in range"), 200);
+        assert_eq!(fetch(&trends.memory_samples, 0), 100);
+        assert_eq!(fetch(&trends.memory_samples, 1), 200);
     }
 
     #[test]

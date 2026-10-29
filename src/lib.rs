@@ -4249,6 +4249,7 @@ mod gpu_tests {
 #[cfg(test)]
 mod binary_ops_tests {
     use super::*;
+    use crate::index::fetch;
 
     fn make(shape: &[usize], data: Vec<f32>) -> Tensor {
         RawTensor::new(data, shape, true)
@@ -4309,9 +4310,9 @@ mod binary_ops_tests {
         let b = make(&[3], vec![2.0, 3.0, 4.0]);
         let c = a.div(&b);
         let out = c.borrow().data.to_vec();
-        assert!((out.first().copied().expect("index in range") - 5.0).abs() < 1e-6);
-        assert!((out.get(1).copied().expect("index in range") - 3.0).abs() < 1e-6);
-        assert!((out.get(2).copied().expect("index in range") - 0.25).abs() < 1e-6);
+        assert!((fetch(&out, 0) - 5.0).abs() < 1e-6);
+        assert!((fetch(&out, 1) - 3.0).abs() < 1e-6);
+        assert!((fetch(&out, 2) - 0.25).abs() < 1e-6);
     }
 
     #[test]
@@ -4348,9 +4349,9 @@ mod binary_ops_tests {
         let b = RawTensor::new(vec![3.0, 3.0, 3.0], &[3], false);
         let c = a.modulo(&b);
         let out = c.borrow().data.to_vec();
-        assert!((out.first().copied().expect("index in range") - 1.0).abs() < 1e-6);
-        assert!((out.get(1).copied().expect("index in range") - 2.0).abs() < 1e-6);
-        assert!((out.get(2).copied().expect("index in range") - 0.0).abs() < 1e-6);
+        assert!((fetch(&out, 0) - 1.0).abs() < 1e-6);
+        assert!((fetch(&out, 1) - 2.0).abs() < 1e-6);
+        assert!((fetch(&out, 2) - 0.0).abs() < 1e-6);
     }
 
     #[test]
@@ -4376,6 +4377,7 @@ mod binary_ops_tests {
 #[cfg(test)]
 mod unary_ops_tests {
     use super::*;
+    use crate::index::fetch;
     use approx::assert_relative_eq;
 
     fn shaped(data: Vec<f32>) -> Tensor {
@@ -4395,190 +4397,86 @@ mod unary_ops_tests {
     fn recip_forward() {
         let x = shaped(vec![1.0, 2.0, 4.0]);
         let out = x.recip().borrow().data.to_vec();
-        assert_relative_eq!(
-            out.first().copied().expect("index in range"),
-            1.0,
-            epsilon = 1e-6
-        );
-        assert_relative_eq!(
-            out.get(1).copied().expect("index in range"),
-            0.5,
-            epsilon = 1e-6
-        );
-        assert_relative_eq!(
-            out.get(2).copied().expect("index in range"),
-            0.25,
-            epsilon = 1e-6
-        );
+        assert_relative_eq!(fetch(&out, 0), 1.0, epsilon = 1e-6);
+        assert_relative_eq!(fetch(&out, 1), 0.5, epsilon = 1e-6);
+        assert_relative_eq!(fetch(&out, 2), 0.25, epsilon = 1e-6);
     }
 
     #[test]
     fn sqrt_forward() {
         let x = shaped(vec![1.0, 4.0, 9.0]);
         let out = x.sqrt().borrow().data.to_vec();
-        assert_relative_eq!(
-            out.first().copied().expect("index in range"),
-            1.0,
-            epsilon = 1e-6
-        );
-        assert_relative_eq!(
-            out.get(1).copied().expect("index in range"),
-            2.0,
-            epsilon = 1e-6
-        );
-        assert_relative_eq!(
-            out.get(2).copied().expect("index in range"),
-            3.0,
-            epsilon = 1e-6
-        );
+        assert_relative_eq!(fetch(&out, 0), 1.0, epsilon = 1e-6);
+        assert_relative_eq!(fetch(&out, 1), 2.0, epsilon = 1e-6);
+        assert_relative_eq!(fetch(&out, 2), 3.0, epsilon = 1e-6);
     }
 
     #[test]
     fn exp_forward() {
         let x = shaped(vec![0.0, 1.0]);
         let out = x.exp().borrow().data.to_vec();
-        assert_relative_eq!(
-            out.first().copied().expect("index in range"),
-            1.0,
-            epsilon = 1e-6
-        );
-        assert_relative_eq!(
-            out.get(1).copied().expect("index in range"),
-            std::f32::consts::E,
-            epsilon = 1e-5
-        );
+        assert_relative_eq!(fetch(&out, 0), 1.0, epsilon = 1e-6);
+        assert_relative_eq!(fetch(&out, 1), std::f32::consts::E, epsilon = 1e-5);
     }
 
     #[test]
     fn log_forward() {
         let x = shaped(vec![1.0, std::f32::consts::E]);
         let out = x.log().borrow().data.to_vec();
-        assert_relative_eq!(
-            out.first().copied().expect("index in range"),
-            0.0,
-            epsilon = 1e-6
-        );
-        assert_relative_eq!(
-            out.get(1).copied().expect("index in range"),
-            1.0,
-            epsilon = 1e-5
-        );
+        assert_relative_eq!(fetch(&out, 0), 0.0, epsilon = 1e-6);
+        assert_relative_eq!(fetch(&out, 1), 1.0, epsilon = 1e-5);
     }
 
     #[test]
     fn exp2_forward() {
         let x = shaped(vec![0.0, 1.0, 3.0]);
         let out = x.exp2().borrow().data.to_vec();
-        assert_relative_eq!(
-            out.first().copied().expect("index in range"),
-            1.0,
-            epsilon = 1e-6
-        );
-        assert_relative_eq!(
-            out.get(1).copied().expect("index in range"),
-            2.0,
-            epsilon = 1e-6
-        );
-        assert_relative_eq!(
-            out.get(2).copied().expect("index in range"),
-            8.0,
-            epsilon = 1e-5
-        );
+        assert_relative_eq!(fetch(&out, 0), 1.0, epsilon = 1e-6);
+        assert_relative_eq!(fetch(&out, 1), 2.0, epsilon = 1e-6);
+        assert_relative_eq!(fetch(&out, 2), 8.0, epsilon = 1e-5);
     }
 
     #[test]
     fn log2_forward() {
         let x = shaped(vec![1.0, 2.0, 8.0]);
         let out = x.log2().borrow().data.to_vec();
-        assert_relative_eq!(
-            out.first().copied().expect("index in range"),
-            0.0,
-            epsilon = 1e-6
-        );
-        assert_relative_eq!(
-            out.get(1).copied().expect("index in range"),
-            1.0,
-            epsilon = 1e-6
-        );
-        assert_relative_eq!(
-            out.get(2).copied().expect("index in range"),
-            3.0,
-            epsilon = 1e-5
-        );
+        assert_relative_eq!(fetch(&out, 0), 0.0, epsilon = 1e-6);
+        assert_relative_eq!(fetch(&out, 1), 1.0, epsilon = 1e-6);
+        assert_relative_eq!(fetch(&out, 2), 3.0, epsilon = 1e-5);
     }
 
     #[test]
     fn sin_forward() {
         let x = shaped(vec![0.0, std::f32::consts::FRAC_PI_2]);
         let out = x.sin().borrow().data.to_vec();
-        assert_relative_eq!(
-            out.first().copied().expect("index in range"),
-            0.0,
-            epsilon = 1e-6
-        );
-        assert_relative_eq!(
-            out.get(1).copied().expect("index in range"),
-            1.0,
-            epsilon = 1e-6
-        );
+        assert_relative_eq!(fetch(&out, 0), 0.0, epsilon = 1e-6);
+        assert_relative_eq!(fetch(&out, 1), 1.0, epsilon = 1e-6);
     }
 
     #[test]
     fn cos_forward() {
         let x = shaped(vec![0.0, std::f32::consts::PI]);
         let out = x.cos().borrow().data.to_vec();
-        assert_relative_eq!(
-            out.first().copied().expect("index in range"),
-            1.0,
-            epsilon = 1e-6
-        );
-        assert_relative_eq!(
-            out.get(1).copied().expect("index in range"),
-            -1.0,
-            epsilon = 1e-5
-        );
+        assert_relative_eq!(fetch(&out, 0), 1.0, epsilon = 1e-6);
+        assert_relative_eq!(fetch(&out, 1), -1.0, epsilon = 1e-5);
     }
 
     #[test]
     fn tanh_forward() {
         let x = shaped(vec![0.0, 100.0, -100.0]);
         let out = x.tanh().borrow().data.to_vec();
-        assert_relative_eq!(
-            out.first().copied().expect("index in range"),
-            0.0,
-            epsilon = 1e-6
-        );
-        assert_relative_eq!(
-            out.get(1).copied().expect("index in range"),
-            1.0,
-            epsilon = 1e-6
-        );
-        assert_relative_eq!(
-            out.get(2).copied().expect("index in range"),
-            -1.0,
-            epsilon = 1e-6
-        );
+        assert_relative_eq!(fetch(&out, 0), 0.0, epsilon = 1e-6);
+        assert_relative_eq!(fetch(&out, 1), 1.0, epsilon = 1e-6);
+        assert_relative_eq!(fetch(&out, 2), -1.0, epsilon = 1e-6);
     }
 
     #[test]
     fn sigmoid_forward() {
         let x = shaped(vec![0.0, 100.0, -100.0]);
         let out = x.sigmoid().borrow().data.to_vec();
-        assert_relative_eq!(
-            out.first().copied().expect("index in range"),
-            0.5,
-            epsilon = 1e-6
-        );
-        assert_relative_eq!(
-            out.get(1).copied().expect("index in range"),
-            1.0,
-            epsilon = 1e-6
-        );
-        assert_relative_eq!(
-            out.get(2).copied().expect("index in range"),
-            0.0,
-            epsilon = 1e-6
-        );
+        assert_relative_eq!(fetch(&out, 0), 0.5, epsilon = 1e-6);
+        assert_relative_eq!(fetch(&out, 1), 1.0, epsilon = 1e-6);
+        assert_relative_eq!(fetch(&out, 2), 0.0, epsilon = 1e-6);
     }
 
     #[test]
@@ -4672,6 +4570,7 @@ mod unary_ops_tests {
 #[cfg(test)]
 mod reduce_ops_tests {
     use super::*;
+    use crate::index::fetch;
     use approx::assert_relative_eq;
 
     #[test]
@@ -4743,16 +4642,8 @@ mod reduce_ops_tests {
         let m = x.mean_dim(Axis(1), true);
         assert_eq!(m.borrow().shape, vec![2, 1]);
         let out = m.borrow().data.to_vec();
-        assert_relative_eq!(
-            out.first().copied().expect("index in range"),
-            2.0,
-            epsilon = 1e-6
-        );
-        assert_relative_eq!(
-            out.get(1).copied().expect("index in range"),
-            5.0,
-            epsilon = 1e-6
-        );
+        assert_relative_eq!(fetch(&out, 0), 2.0, epsilon = 1e-6);
+        assert_relative_eq!(fetch(&out, 1), 5.0, epsilon = 1e-6);
     }
 
     #[test]
@@ -5000,6 +4891,7 @@ mod linear_tests {
 #[cfg(test)]
 mod activation_tests {
     use super::*;
+    use crate::index::fetch;
 
     #[test]
     fn relu_layer_forward_matches_op() {
@@ -5025,9 +4917,9 @@ mod activation_tests {
         let x = RawTensor::new(vec![0.0, 100.0, -100.0], &[3], true);
         let y = <Sigmoid as Module>::forward(&layer, &x);
         let out = y.borrow().data.to_vec();
-        assert!((out.first().copied().expect("index in range") - 0.5).abs() < 1e-6);
-        assert!((out.get(1).copied().expect("index in range") - 1.0).abs() < 1e-6);
-        assert!(out.get(2).copied().expect("index in range").abs() < 1e-6);
+        assert!((fetch(&out, 0) - 0.5).abs() < 1e-6);
+        assert!((fetch(&out, 1) - 1.0).abs() < 1e-6);
+        assert!(fetch(&out, 2).abs() < 1e-6);
     }
 
     #[test]
@@ -5045,9 +4937,9 @@ mod activation_tests {
         let x = RawTensor::new(vec![0.0, 100.0, -100.0], &[3], true);
         let y = <Tanh as Module>::forward(&layer, &x);
         let out = y.borrow().data.to_vec();
-        assert!(out.first().copied().expect("index in range").abs() < 1e-6);
-        assert!((out.get(1).copied().expect("index in range") - 1.0).abs() < 1e-6);
-        assert!((out.get(2).copied().expect("index in range") + 1.0).abs() < 1e-6);
+        assert!(fetch(&out, 0).abs() < 1e-6);
+        assert!((fetch(&out, 1) - 1.0).abs() < 1e-6);
+        assert!((fetch(&out, 2) + 1.0).abs() < 1e-6);
     }
 
     #[test]
@@ -5127,6 +5019,7 @@ mod dropout_tests {
 #[cfg(test)]
 mod batchnorm_tests {
     use super::*;
+    use crate::index::fetch;
     use approx::assert_relative_eq;
 
     fn running_stats(state: &io::StateDict) -> (Vec<f32>, Vec<f32>) {
@@ -5165,9 +5058,7 @@ mod batchnorm_tests {
         let y = <BatchNorm1d as Module>::forward(&layer, &x);
         let out = y.borrow().data.to_vec();
         // Output mean per column should be ~0 and stddev ~1 (gamma=1, beta=0).
-        let col0: Vec<f32> = (0..4)
-            .map(|i| out.get(i * 2).copied().expect("index in range"))
-            .collect();
+        let col0: Vec<f32> = (0..4).map(|i| fetch(&out, i * 2)).collect();
         let mean0: f32 = col0.iter().sum::<f32>() / 4.0;
         let var0: f32 = col0.iter().map(|v| (v - mean0).powi(2)).sum::<f32>() / 4.0;
         assert_relative_eq!(mean0, 0.0, epsilon = 1e-5);
@@ -5196,21 +5087,9 @@ mod batchnorm_tests {
         // Running mean should have moved toward batch mean for each feature.
         // Batch means: col0 = 2.5, col1 = 13, col2 = -2.0
         // With momentum=0.1: rm = 0.9*0 + 0.1*batch_mean
-        assert_relative_eq!(
-            rm1.first().copied().expect("index in range"),
-            0.25,
-            epsilon = 1e-4
-        );
-        assert_relative_eq!(
-            rm1.get(1).copied().expect("index in range"),
-            1.3,
-            epsilon = 1e-4
-        );
-        assert_relative_eq!(
-            rm1.get(2).copied().expect("index in range"),
-            -0.2,
-            epsilon = 1e-4
-        );
+        assert_relative_eq!(fetch(&rm1, 0), 0.25, epsilon = 1e-4);
+        assert_relative_eq!(fetch(&rm1, 1), 1.3, epsilon = 1e-4);
+        assert_relative_eq!(fetch(&rm1, 2), -0.2, epsilon = 1e-4);
         // Variance updates should differ from the initial 1.0 for at least one feature.
         let any_var_changed = rv1.iter().any(|v| (v - 1.0).abs() > 1e-3);
         assert!(
@@ -5311,16 +5190,8 @@ mod batchnorm_tests {
 
         let (rm1, _rv1) = running_stats(&<BatchNorm2d as Module>::state_dict(&layer));
         // momentum=0.1: rm = 0.9*0 + 0.1*[1, 5] = [0.1, 0.5]
-        assert_relative_eq!(
-            rm1.first().copied().expect("index in range"),
-            0.1,
-            epsilon = 1e-5
-        );
-        assert_relative_eq!(
-            rm1.get(1).copied().expect("index in range"),
-            0.5,
-            epsilon = 1e-5
-        );
+        assert_relative_eq!(fetch(&rm1, 0), 0.1, epsilon = 1e-5);
+        assert_relative_eq!(fetch(&rm1, 1), 0.5, epsilon = 1e-5);
     }
 
     #[test]

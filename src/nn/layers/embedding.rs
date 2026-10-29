@@ -207,18 +207,12 @@ mod tests {
 
         // Check that the first embedding matches the first row of weight
         for i in 0..4 {
-            assert_eq!(
-                output_data.get(i).copied().expect("index in range"),
-                weight_data.get(i).copied().expect("index in range")
-            );
+            assert_eq!(fetch(output_data, i), fetch(weight_data, i));
         }
 
         // Check that the second embedding (index 5) matches row 5 of weight
         for i in 0..4 {
-            assert_eq!(
-                output_data.get(4 + i).copied().expect("index in range"),
-                weight_data.get(5 * 4 + i).copied().expect("index in range")
-            );
+            assert_eq!(fetch(output_data, 4 + i), fetch(weight_data, 5 * 4 + i));
         }
     }
 
@@ -241,7 +235,7 @@ mod tests {
         // Each embedding contributes 1.0 per dimension (from sum)
         // So index 2 should have grad of 2.0 per dimension
         for d in 0..4 {
-            let grad_at_idx2 = grad_data.get(2 * 4 + d).copied().expect("index in range");
+            let grad_at_idx2 = fetch(&grad_data, 2 * 4 + d);
             assert!(
                 (grad_at_idx2 - 2.0).abs() < 1e-5,
                 "Expected grad ~2.0 for repeated index, got {grad_at_idx2}"
@@ -250,7 +244,7 @@ mod tests {
 
         // Indices 7 should have grad of 1.0 per dimension
         for d in 0..4 {
-            let grad_at_idx7 = grad_data.get(7 * 4 + d).copied().expect("index in range");
+            let grad_at_idx7 = fetch(&grad_data, 7 * 4 + d);
             assert!(
                 (grad_at_idx7 - 1.0).abs() < 1e-5,
                 "Expected grad ~1.0 for single index, got {grad_at_idx7}"
