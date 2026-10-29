@@ -4,7 +4,6 @@
 *.txt
 
 .bacon-locations
-responses/context.md
 
 *.bin
 # Data files

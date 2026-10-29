@@ -84,6 +84,10 @@ Last verified: 2026-10-29.
 - [ ] Stop exporting diagnostic tooling as public API.
 - [ ] Merge gate: remove `#![allow(missing_docs, clippy::missing_docs_in_private_items)]` in `src/lib.rs` before merging into `main`. About 688 library items are undocumented (2026-10-28 count: `gpu/kernels.rs` 140, `tensor.rs` 91, `gpu/context.rs` 83, `spec.rs` 56, `ops/movement.rs` 26, the rest spread over 40 files). `examples/`, `benches/`, and `tests/` are done.
 
+- [ ] Pedantic lint backlog (2026-10-29). `bacon`'s `pedantic` job no longer allows `cast_possible_wrap`, `cast_sign_loss`, `cast_possible_truncation`, `cast_precision_loss`, `needless_pass_by_value`, or `redundant_closure_for_method_calls`; it used to hide them behind "TEMP IMP TO FIX". The crate-wide casts were never enabled under `cargo clippy`, so the old `#[allow]`s for them were removed as no-ops. Decide per lint whether to enable it in `Cargo.toml` and fix the sites, or to leave it off for good.
+- [ ] Root `CONTRIBUTING.md` and `DEVELOPMENT.md` are unchecked-box stubs, and `DEVELOPMENT.md` shares its name with `dev-docs/DEVELOPMENT.md`. Fill them in or delete the stubs.
+- [ ] Consider `cargo-deny` (`deny.toml`) in place of the weekly `cargo audit` workflow: it adds license and duplicate-version checks.
+
 ## Phase 2 — types for dims and ops (done)
 
 - [x] `Shape` / `Axis` / `Strides` defined (`f1cc5ea`).

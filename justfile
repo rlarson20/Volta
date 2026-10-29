@@ -1,8 +1,3 @@
-check:
-	cargo check
-	cargo build
-	cargo test
-
 test-all:
 	cargo nextest run --no-fail-fast
 
@@ -50,7 +45,7 @@ validate-shaders:
 
 # Run only GPU integration tests
 test-gpu:
-	cargo test --features gpu --test 'gpu_*' -- --nocapture
+	cargo test --test 'gpu_*' -- --nocapture
 
 # Run all tests without GPU/Accelerate features
 test-cpu:
@@ -80,40 +75,43 @@ deps-tree:
 outdated:
 	cargo outdated --root-deps-only
 
-# Nuke all build artifacts and temporary files
+# Nuke all build artifacts and mutation-testing output
 clean:
 	cargo clean
-	-rm mutants.out/
-	-rm *.txt responses/context.md
-	@echo "Cleaned target, mutants output, and temporary text files."
+	-rm -rf mutants.out
+	@echo "Cleaned target and mutants output."
 
 # ===== AGGREGATE WORKFLOWS =====
 
-# Fast CI-like pipeline (fmt -> lint -> test -> docs -> examples)
+# Clippy over every target; the single definition of the lint gate (pre-commit calls this too)
+lint:
+	cargo clippy --all-targets -- -D warnings
+
 # Fail on silent numeric fallbacks (`unwrap_or(0.0)`, `if let Some(slot) = v.get_mut(i)`)
 check-fallbacks:
 	./scripts/check-fallbacks.sh
 
+# CI-like pipeline (fmt -> fallbacks -> lint -> test -> docs -> examples)
 ci:
 	cargo fmt --check
 	just check-fallbacks
-	cargo clippy --all-targets -- -D warnings
+	just lint
 	cargo test
 	cargo doc --no-deps
 	cargo build --examples
 	@echo "CI check passed!"
 
 # Comprehensive pre-release checklist
-pre-release: ci validate-shaders dead-deps coverage-summary examples-check
+pre-release: ci validate-shaders dead-deps coverage-summary
 	@echo "Pre-release checks complete."
 
 
 # ===== BENCHMARKING =====
 # Run all benchmarks
-bench: # NOT FOR USE, RUNS THE GPU_COMPARISON
+# Run the CPU benchmarks (gpu_comparison is slow and needs a GPU: use `just bench-gpu`)
+bench:
 	cargo bench --bench tensor_ops --
 	cargo bench --bench neural_networks --
-	cargo bench --bench gpu_comparison --
 	cargo bench --bench conv_algorithms --
 
 # Run convolution algorithm comparison benchmarks
@@ -146,122 +144,13 @@ bench-gpu:
 bench-save:
 	cargo bench --bench tensor_ops -- --save-baseline main
 	cargo bench --bench neural_networks -- --save-baseline main
-	cargo bench --bench gpu_comparison -- --save-baseline main
 	cargo bench --bench conv_algorithms -- --save-baseline main
 
-# Compare against saved baseline (DO NOT USE, RUNNING)
+# Compare against baseline saved by `just bench-save`
 bench-compare:
 	cargo bench --bench tensor_ops -- --baseline main
 	cargo bench --bench neural_networks -- --baseline main
-	cargo bench --bench gpu_comparison -- --baseline main
 	cargo bench --bench conv_algorithms -- --baseline main
 
 bench-report:
 	open './target/criterion/report/index.html'
-
-# ===== LLM ASSISTED DEV =====
-
-ask-gpu model:
-	@echo "Cleaning!"
-	-rm err.txt tests.txt
-	-rm responses/context.md
-	@echo "Asking!"
-	-cargo build &> err.txt
-	-cargo test &> tests.txt
-	files-to-prompt Cargo.toml src/ tests/ err.txt tests.txt responses/claude-on-gpu-integration.md responses/status-report.md README.md > responses/context.md
-	cat responses/context.md | llm --model "openrouter/{{model}}" --system "`cat sys-prompts/gpu-sys-prompt.md`" -o reasoning_effort high > responses/gpu-recommendations.md
-	nvim responses/gpu-recommendations.md
-
-ask-codex:
-	@echo "Cleaning!"
-	-rm err.txt tests.txt
-	-rm responses/context.md
-	@echo "Asking!"
-	-cargo build &> err.txt
-	-cargo test &> tests.txt
-	files-to-prompt Cargo.toml src/ tests/ err.txt tests.txt  responses/status-report.md README.md > responses/context.md
-	cat responses/context.md | llm --model "openrouter/openai/gpt-5.1-codex" --system "`cat sys-prompts/sys-prompt.md`" -o reasoning_effort high > responses/recommendations.md
-	@echo "Finished!"
-
-ask-codex-mini:
-	@echo "Cleaning!"
-	-rm err.txt tests.txt
-	-rm responses/context.md
-	@echo "Asking!"
-	-cargo build &> err.txt
-	-cargo test &> tests.txt
-	files-to-prompt Cargo.toml src/ tests/ err.txt tests.txt  responses/status-report.md README.md > responses/context.md
-	cat responses/context.md | llm --model "openrouter/openai/gpt-5.1-codex-mini" --system "`cat sys-prompts/sys-prompt.md`" -o reasoning_effort high > responses/recommendations.md
-	@echo "Finished!"
-
-
-ask-readme model:
-	@echo "Cleaning!"
-	-rm err.txt tests.txt
-	-rm responses/context.md
-	@echo "Asking!"
-	-cargo build &> err.txt
-	-cargo test &> tests.txt
-	files-to-prompt Cargo.toml src/ tests/ err.txt tests.txt responses/status-report.md README.md > responses/context.md
-	cat responses/context.md | llm --model "openrouter/{{model}}" --system "`cat sys-prompts/readme-sys-prompt.md`" > responses/updates-to-readme.md
-	@echo "Finished!"
-
-
-ask-custom model prompt filename:
-	@echo "Cleaning!"
-	-rm err.txt tests.txt
-	-rm responses/context.md
-	@echo "Asking!"
-	-cargo build &> err.txt
-	-cargo test &> tests.txt
-	files-to-prompt Cargo.toml src/ tests/ err.txt tests.txt responses/status-report.md README.md > responses/context.md
-	cat responses/context.md | llm --model "openrouter/{{model}}" --system "{{prompt}}" > responses/{{filename}}.md
-	@echo "Finished!"
-
-
-ask-err-file model file:
-	@echo "Cleaning!"
-	-rm err.txt tests.txt
-	-rm responses/context.md
-	-rm err-recommendations.md
-	@echo "Asking!"
-	-cargo build &> err.txt
-	-cargo test &> tests.txt
-	files-to-prompt Cargo.toml src/{{file}} tests/ err.txt tests.txt responses/status-report.md README.md > responses/context.md
-	cat responses/context.md | llm --model "openrouter/{{model}}" --system "`cat sys-prompts/err-sys-prompt.md`" > responses/err-recommendations.md
-	@echo "Finished!"
-
-ask-err model:
-	@echo "Cleaning!"
-	-rm err.txt tests.txt
-	-rm responses/context.md
-	-rm responses/err-recommendations.md
-	@echo "Asking!"
-	-cargo build &> err.txt
-	-cargo test &> tests.txt
-	files-to-prompt Cargo.toml src/ tests/ err.txt tests.txt responses/status-report.md README.md > responses/context.md
-	cat responses/context.md | llm --model "openrouter/{{model}}" --system "`cat sys-prompts/err-sys-prompt.md`" > responses/err-recommendations.md
-	@echo "Finished!"
-
-
-ask-status model:
-	@echo "Cleaning!"
-	-rm err.txt tests.txt
-	-rm responses/context.md
-	@echo "Asking!"
-	-cargo build &> err.txt
-	-cargo test &> tests.txt
-	files-to-prompt Cargo.toml src/ tests/ err.txt tests.txt  responses/status-report.md README.md > responses/context.md
-	cat responses/context.md | llm --model "openrouter/{{model}}" --system "`cat sys-prompts/status-sys-prompt.md`" > responses/status-report.md
-	@echo "Finished!"
-
-ask model:
-	@echo "Cleaning!"
-	-rm err.txt tests.txt
-	-rm responses/context.md
-	@echo "Asking!"
-	-cargo build &> err.txt
-	-cargo test &> tests.txt
-	files-to-prompt Cargo.toml src/ tests/ err.txt tests.txt  responses/status-report.md README.md > responses/context.md
-	cat responses/context.md | llm --model "openrouter/{{model}}" --system "`cat sys-prompts/sys-prompt.md`" > responses/recommendations.md
-	@echo "Finished!"
