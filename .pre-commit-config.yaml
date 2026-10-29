@@ -3,22 +3,19 @@ repos:
     rev: v1.0
     hooks:
       - id: fmt
-      - id: cargo-check
-      - id: clippy
-        args:
-          [
-            "--all-targets",
-            "--",
-            "-A",
-            "clippy::needless_range_loop",
-            "-A",
-            "clippy::too_many_arguments",
-            "-D",
-            "warnings",
-          ]
 
+  # Local hooks re-run on .rs and on the .toml files that carry lint config
+  # (Cargo.toml, clippy.toml, rustfmt.toml). Lint flags live in the justfile and
+  # Cargo.toml so this hook cannot drift from `just ci`.
   - repo: local
     hooks:
+      - id: clippy
+        name: clippy
+        entry: just lint
+        language: system
+        files: '\.(rs|toml)$'
+        pass_filenames: false
+
       - id: check-fallbacks
         name: check silent fallbacks
         entry: ./scripts/check-fallbacks.sh
@@ -30,7 +27,7 @@ repos:
         name: cargo test
         entry: cargo test
         language: system
-        types: [rust]
+        files: '\.(rs|toml)$'
         pass_filenames: false
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
