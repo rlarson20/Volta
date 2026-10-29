@@ -19,6 +19,13 @@ repos:
 
   - repo: local
     hooks:
+      - id: check-fallbacks
+        name: check silent fallbacks
+        entry: ./scripts/check-fallbacks.sh
+        language: system
+        types: [rust]
+        pass_filenames: false
+
       - id: cargo-test
         name: cargo test
         entry: cargo test

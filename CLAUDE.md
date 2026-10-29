@@ -8,7 +8,7 @@ Area-specific rules live in `.claude/rules/` and load automatically when you rea
 
 Update this section when a phase lands or the merge gate changes. Keep it short.
 
-- **Roadmap:** `docs/plans/ADDENDUM.md` § Sequencing is the only plan. Phases 0–1 are done. Phase 2 (types for dims and ops) is done: `edge()`, tensor construction, and the dim arguments use `Shape`/`Axis`, and `Strides::from_shape` replaced `compute_strides`. `RawTensor.shape` is still a `Vec<usize>` field; flipping it moved to Phase 3 with the storage work. The conv specs, `MatmulSpec`, and `PadValue` (`src/spec.rs`) have landed; B4 and H1 are retired. The closed `GradFn` enum (§2.5) has landed. `define_ops!` (§5.1) has landed for the unary and binary families. `into_loss`/`ScalarLoss` (§2.2) has landed: `TensorOps::backward` is gone and `into_loss()?.backward()` is the only entry point. Movement ops share one `movement_edge` helper. Next: Phase 3 (traits and storage).
+- **Roadmap:** `docs/plans/ADDENDUM.md` § Sequencing is the only plan. Phases 0–1 are done. Phase 2 (types for dims and ops) is done: `edge()`, tensor construction, and the dim arguments use `Shape`/`Axis`, and `Strides::from_shape` replaced `compute_strides`. `RawTensor.shape` is still a `Vec<usize>` field; flipping it moved to Phase 3 with the storage work. The conv specs, `MatmulSpec`, and `PadValue` (`src/spec.rs`) have landed; B4 and H1 are retired. The closed `GradFn` enum (§2.5) has landed. `define_ops!` (§5.1) has landed for the unary and binary families. `into_loss`/`ScalarLoss` (§2.2) has landed: `TensorOps::backward` is gone and `into_loss()?.backward()` is the only entry point. Movement ops share one `movement_edge` helper. The indexing policy (§8) has landed as `crate::index::{fetch, slot, span}` (panic, not NaN: DECISIONS.md, "Indexing policy"). It found and fixed a batch > 1 offset bug in all three CPU iGEMM kernels. Next: the rest of Phase 3 (traits and storage).
 - **Open defects:** IDs B1–B5 and H1–H8 come from `docs/audits/OPUS_5_EVAL_AUDIT.md`. Live status is in `notes/TODO.md`.
 - **Merge gate:** not cleared. `src/lib.rs` still carries a temporary `#![allow(.., clippy::missing_docs_in_private_items, missing_docs)]` (FIXME); removing it exposes about 688 undocumented library items (most in `gpu/kernels.rs`, `tensor.rs`, `gpu/context.rs`, `spec.rs`). `examples/`, `benches/`, and `tests/` are fully documented with no allow. `improvements` does not merge into `main` until the `lib.rs` allow is removed and the docs pass.
 
@@ -20,7 +20,7 @@ Never violate these. If a task seems to require it, stop and ask.
 2. A `borrow_mut()` outside `src/autograd.rs` and `src/ops/` means `Tensor` is missing a method. Add the method instead.
 3. Only `accumulate_grad` and `set_grad` write `grad`.
 4. Library code never prints: use `log::` (lint-enforced).
-5. Numeric code fails loudly. Never use `.get(i).unwrap_or(0.0)`, and never write an `if let Some` that silently skips a write (ADDENDUM §8). Silent zeros are how wrong gradients pass tests.
+5. Numeric code fails loudly (ADDENDUM §8). Library code reads and writes through `crate::index::{fetch, slot, span}`, which panic on an out-of-bounds index in every profile; tests, examples, and benches use `.expect(..)`. Never use `.get(i).unwrap_or(0.0)`, and never write an `if let Some` that silently skips a read or write. A zero that means padding gets an explicit coordinate check. Silent zeros are how wrong gradients pass tests. `just check-fallbacks` (in `just ci` and pre-commit) enforces it; opt out per line with `// index-ok: <reason>`.
 6. Never write a test that asserts a known bug's behavior. Use `#[ignore = "<defect ID>: <why>"]` instead.
 7. Don't overclaim. A layer or feature is "working" only when a test exercises its gradients with non-degenerate inputs.
 
@@ -40,6 +40,7 @@ The shell is zsh on macOS, and a Claude Code hook rewrites commands through `rtk
 - Quote globs (`--include='*.rs'`); zsh errors on unmatched ones. A bare `===` is also an error in zsh (`=` expansion), so don't use it as a separator in `echo`.
 - BSD `sed`: `sed -i '2i text'` fails. Use the Edit tool or a short `python3` script.
 - Don't chain a `VAR=...` assignment and its use across `&&` where an earlier command can fail; the next command runs with `VAR` unset (this happened with a scratchpad path). Set it inside the same command.
+- `rtk` filters `cargo` output and can drop compiler error bodies (you get only `could not compile`). Use `rtk proxy cargo ...` to see the real error.
 - Format single files with `rustfmt --edition 2024 <file>`. `cargo fmt` rewrites unrelated, already-dirty files.
 - For a mechanical signature change that touches many call sites, change the signature and wrap the spans from `cargo check --message-format=json` (E0308 spans) with a script instead of hand-editing each site.
 

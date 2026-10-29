@@ -12,6 +12,7 @@ paths:
 - `MultiHeadAttention` and `TransformerBlock` have an inherent `forward(x, mask, …)` alongside `Module::forward`. In generic code, call the trait version through UFCS: `<_ as Module>::forward(&layer, &x)`.
 - `load_state_dict` must validate numel and preserve the destination's device (H7). Never replace `data` with `Storage::cpu(..)`.
 - Layout is NCHW, following PyTorch conventions.
+- Kernel and backward indexing goes through `crate::index::{fetch, slot, span}` (panic on out of bounds). A flat output index is `b * stride + <within-sample offset>`: don't add `b` to a decoded `s_idx` that already contains it (the iGEMM batch bug). Test kernels with batch > 1 and a random weighted loss.
 - **Known open defects** (don't treat passing tests as proof they work):
   - LSTMCell severs the graph at the gate slice (B2).
   - PositionalEncoding rebuilds its output from raw data (B3). It has no `assert_trainable!` test yet.

@@ -90,8 +90,13 @@ clean:
 # ===== AGGREGATE WORKFLOWS =====
 
 # Fast CI-like pipeline (fmt -> lint -> test -> docs -> examples)
+# Fail on silent numeric fallbacks (`unwrap_or(0.0)`, `if let Some(slot) = v.get_mut(i)`)
+check-fallbacks:
+	./scripts/check-fallbacks.sh
+
 ci:
 	cargo fmt --check
+	just check-fallbacks
 	cargo clippy --all-targets -- -D warnings
 	cargo test
 	cargo doc --no-deps
