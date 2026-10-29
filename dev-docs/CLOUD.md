@@ -47,11 +47,11 @@ Work that a Linux CPU can verify, and that reviews as a PR. Current candidates f
 
 ## Stacked PRs
 
-Open PRs form chains rooted at `improvements`: each PR's base is the branch of the PR below it. A session adds its PR to the top of a chain instead of waiting for the chain to merge.
+Open PRs form one linear stack on `improvements`, used like a sequence of commits: each PR's base is the branch of the PR below it, and only the bottom one targets `improvements`. There are no parallel branches, so no two open PRs can conflict.
 
-- **Pick the base.** List the open PRs and follow the chains up from `improvements`. Branch from the tip of the longest chain and open the PR against that tip's branch. Branch from `improvements` only when no PR is open, or when the user asks for an independent PR. If two chains are equally long, ask which one to extend.
+- **Pick the base.** List the open PRs and follow the stack up from `improvements`. Branch from the top PR's branch and open the PR against it. Branch from `improvements` only when no PR is open.
+- **One stack only.** Never open a second PR against `improvements` while one is open, even for an unrelated task. If you find more than one open PR based on `improvements`, stop and ask which is the stack before branching.
 - **Say where it sits.** Start the PR description with "Stacked on #N" and the merge order down to `improvements`, as in #10. A series on one topic also numbers its titles ("(2/3)").
-- **Merge bottom-up** with a merge commit, not squash or rebase: the branches above still carry the lower PR's original commits. After a PR merges, retarget the PR above it to `improvements` (GitHub does it automatically only when the merged branch is deleted).
-- **Change a lower PR, then propagate.** Push the fix to the lower branch, then merge that branch into each branch above it, bottom-up, and push. This is a merge, never a rebase, because force-push is ruled out above.
-- **Conflicts across the stack** are resolved at the lowest branch where they appear, then propagated upward the same way.
+- **Merge bottom-up** with a merge commit, not squash or rebase: the branches above carry the lower PR's original commits, and a rewritten copy of them is the one way a linear stack can still conflict. After a PR merges, retarget the PR above it to `improvements` (GitHub does it automatically only when the merged branch is deleted).
+- **Fix forward by default.** A follow-up to a lower PR goes in a new PR on top. Change a lower PR only when its own review asks for it; then push to that branch and merge it into each branch above it, bottom-up. Merge, never rebase, since force-push is ruled out above.
 - Each PR still holds one task. Stacking orders reviews; it does not widen a PR.
