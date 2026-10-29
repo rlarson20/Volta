@@ -221,6 +221,7 @@ mod unary_tests {
         assert_relative_eq!(
             y.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist"),
@@ -247,6 +248,7 @@ mod unary_tests {
         assert_relative_eq!(
             y.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist"),
@@ -260,6 +262,7 @@ mod unary_tests {
         assert_relative_eq!(
             y.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist"),
@@ -273,6 +276,7 @@ mod unary_tests {
         assert_relative_eq!(
             y.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist"),
@@ -670,6 +674,7 @@ mod misc_tests {
         assert_eq!(
             z.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist"),
@@ -678,6 +683,7 @@ mod misc_tests {
         assert_eq!(
             z.borrow()
                 .data
+                .to_host_f32()
                 .get(7)
                 .copied()
                 .expect("tensor data should exist"),
@@ -709,6 +715,7 @@ mod misc_tests {
         assert_eq!(
             c.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist"),
@@ -1249,7 +1256,14 @@ mod misc_tests {
         // Initialize deliberately far from solution (w=0)
         let layer = Linear::new(1, 1, false);
         // Force weight to 0.0
-        *layer.weight.borrow_mut().data.first_mut().unwrap() = 0.0;
+        *layer
+            .weight
+            .borrow_mut()
+            .data
+            .as_host_f32_mut()
+            .expect("test weight is CPU F32")
+            .first_mut()
+            .unwrap() = 0.0;
 
         let model = Sequential::new(vec![Box::new(layer)]);
 
@@ -1269,6 +1283,7 @@ mod misc_tests {
             losses.push(
                 loss.borrow()
                     .data
+                    .to_host_f32()
                     .first()
                     .copied()
                     .expect("tensor data should exist"),
@@ -1322,6 +1337,7 @@ mod misc_tests {
         RawTensor::mse_loss(&pred, &y)
             .borrow()
             .data
+            .to_host_f32()
             .first()
             .copied()
             .expect("tensor data should exist")
@@ -1474,8 +1490,9 @@ mod misc_tests {
         let train_data = &y_train.borrow().data;
         let test_data = &y_test.borrow().data;
         let differs = train_data
+            .to_host_f32()
             .iter()
-            .zip(test_data.iter())
+            .zip(test_data.to_host_f32().iter())
             .any(|(a, b)| (a - b).abs() > 1e-5);
         assert!(differs, "Train and test outputs should differ");
     }
@@ -1524,7 +1541,7 @@ mod misc_tests {
         let y = ln.forward(&x);
 
         // Check each sample has mean≈0 and std≈1
-        let y_data = &y.borrow().data;
+        let y_data = y.data();
         for i in 0..8 {
             let start = i * 16;
             let end = start + 16;
@@ -1717,7 +1734,7 @@ mod misc_tests {
 
         // Verify the transformation preserved all values (just check sum as a sanity check)
         let input_sum: f32 = (1..=16).map(|x| x as f32).sum();
-        let output_sum: f32 = out_data.iter().sum();
+        let output_sum: f32 = out_data.to_host_f32().iter().sum();
         assert!((input_sum - output_sum).abs() < 1e-5);
     }
 
@@ -2242,7 +2259,7 @@ mod edge_case_tests {
         let z = x.div(&y);
 
         // All results should be +inf
-        for &val in &z.borrow().data {
+        for &val in z.borrow().data.to_host_f32().iter() {
             assert!(val.is_infinite(), "Expected infinity, got {val}");
             assert!(
                 val.is_sign_positive(),
@@ -2259,7 +2276,7 @@ mod edge_case_tests {
         let z = x.div(&y);
 
         // All results should be -inf
-        for &val in &z.borrow().data {
+        for &val in z.borrow().data.to_host_f32().iter() {
             assert!(val.is_infinite(), "Expected infinity, got {val}");
             assert!(
                 val.is_sign_negative(),
@@ -2276,7 +2293,7 @@ mod edge_case_tests {
         let z = x.div(&y);
 
         // All results should be NaN
-        for &val in &z.borrow().data {
+        for &val in z.borrow().data.to_host_f32().iter() {
             assert!(val.is_nan(), "Expected NaN, got {val}");
         }
     }
@@ -2289,7 +2306,7 @@ mod edge_case_tests {
         let z = x.div(&y);
 
         // All results should be -inf
-        for &val in &z.borrow().data {
+        for &val in z.borrow().data.to_host_f32().iter() {
             assert!(val.is_infinite(), "Expected infinity, got {val}");
             assert!(
                 val.is_sign_negative(),
@@ -2335,7 +2352,7 @@ mod edge_case_tests {
         let y = x.sqrt();
 
         // All results should be NaN
-        for &val in &y.borrow().data {
+        for &val in y.borrow().data.to_host_f32().iter() {
             assert!(val.is_nan(), "sqrt of negative should be NaN, got {val}");
         }
     }
@@ -2346,7 +2363,7 @@ mod edge_case_tests {
         let x = RawTensor::new(vec![0.0, 0.0, 0.0], &[3], false);
         let y = x.sqrt();
 
-        for &val in &y.borrow().data {
+        for &val in y.borrow().data.to_host_f32().iter() {
             assert_eq!(val, 0.0, "sqrt(0) should be 0, got {val}");
         }
     }
@@ -2381,6 +2398,7 @@ mod edge_case_tests {
         assert!(
             y.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should not be empty")
@@ -2409,7 +2427,7 @@ mod edge_case_tests {
         let y = x.log();
 
         // All results should be -inf
-        for &val in &y.borrow().data {
+        for &val in y.borrow().data.to_host_f32().iter() {
             assert!(val.is_infinite(), "log(0) should be infinite, got {val}");
             assert!(val.is_sign_negative(), "log(0) should be -inf, got {val}");
         }
@@ -2422,7 +2440,7 @@ mod edge_case_tests {
         let y = x.log();
 
         // All results should be NaN
-        for &val in &y.borrow().data {
+        for &val in y.borrow().data.to_host_f32().iter() {
             assert!(val.is_nan(), "log of negative should be NaN, got {val}");
         }
     }
@@ -2434,7 +2452,7 @@ mod edge_case_tests {
         let y = x.log2();
 
         // All results should be -inf
-        for &val in &y.borrow().data {
+        for &val in y.borrow().data.to_host_f32().iter() {
             assert!(val.is_infinite(), "log2(0) should be infinite, got {val}");
             assert!(val.is_sign_negative(), "log2(0) should be -inf, got {val}");
         }
@@ -2447,7 +2465,7 @@ mod edge_case_tests {
         let y = x.log2();
 
         // All results should be NaN
-        for &val in &y.borrow().data {
+        for &val in y.borrow().data.to_host_f32().iter() {
             assert!(val.is_nan(), "log2 of negative should be NaN, got {val}");
         }
     }
@@ -2516,6 +2534,7 @@ mod edge_case_tests {
         assert_eq!(
             z.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should not be empty"),
@@ -2524,6 +2543,7 @@ mod edge_case_tests {
         assert!(
             z.borrow()
                 .data
+                .to_host_f32()
                 .get(1)
                 .copied()
                 .expect("tensor should have element at index 1")
@@ -2532,6 +2552,7 @@ mod edge_case_tests {
         assert_eq!(
             z.borrow()
                 .data
+                .to_host_f32()
                 .get(2)
                 .copied()
                 .expect("tensor should have element at index 2"),
@@ -2550,6 +2571,7 @@ mod edge_case_tests {
         assert_eq!(
             z.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should not be empty"),
@@ -2558,6 +2580,7 @@ mod edge_case_tests {
         assert!(
             z.borrow()
                 .data
+                .to_host_f32()
                 .get(1)
                 .copied()
                 .expect("tensor should have element at index 1")
@@ -2566,6 +2589,7 @@ mod edge_case_tests {
         assert_eq!(
             z.borrow()
                 .data
+                .to_host_f32()
                 .get(2)
                 .copied()
                 .expect("tensor should have element at index 2"),
@@ -2583,6 +2607,7 @@ mod edge_case_tests {
         assert_eq!(
             z.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist"),
@@ -2591,6 +2616,7 @@ mod edge_case_tests {
         assert!(
             z.borrow()
                 .data
+                .to_host_f32()
                 .get(1)
                 .copied()
                 .expect("tensor data should exist")
@@ -2599,6 +2625,7 @@ mod edge_case_tests {
         assert!(
             z.borrow()
                 .data
+                .to_host_f32()
                 .get(2)
                 .copied()
                 .expect("tensor data should exist")
@@ -2616,6 +2643,7 @@ mod edge_case_tests {
         assert_eq!(
             z.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist"),
@@ -2624,6 +2652,7 @@ mod edge_case_tests {
         assert!(
             z.borrow()
                 .data
+                .to_host_f32()
                 .get(1)
                 .copied()
                 .expect("tensor data should exist")
@@ -2632,6 +2661,7 @@ mod edge_case_tests {
         assert!(
             z.borrow()
                 .data
+                .to_host_f32()
                 .get(2)
                 .copied()
                 .expect("tensor data should exist")
@@ -2648,6 +2678,7 @@ mod edge_case_tests {
         assert!(
             y.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist")
@@ -2656,6 +2687,7 @@ mod edge_case_tests {
         assert!(
             y.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist")
@@ -2672,6 +2704,7 @@ mod edge_case_tests {
         assert!(
             y.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist")
@@ -2680,6 +2713,7 @@ mod edge_case_tests {
         assert!(
             y.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist")
@@ -2696,6 +2730,7 @@ mod edge_case_tests {
         assert!(
             y.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist")
@@ -2704,6 +2739,7 @@ mod edge_case_tests {
         assert!(
             y.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist")
@@ -2720,6 +2756,7 @@ mod edge_case_tests {
         assert!(
             y.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist")
@@ -2728,6 +2765,7 @@ mod edge_case_tests {
         assert_eq!(
             y.borrow()
                 .data
+                .to_host_f32()
                 .get(1)
                 .copied()
                 .expect("tensor data should exist"),
@@ -2745,6 +2783,7 @@ mod edge_case_tests {
         assert!(
             z.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist")
@@ -2763,6 +2802,7 @@ mod edge_case_tests {
         assert!(
             w.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist")
@@ -2771,6 +2811,7 @@ mod edge_case_tests {
         assert_eq!(
             w.borrow()
                 .data
+                .to_host_f32()
                 .get(1)
                 .copied()
                 .expect("tensor data should exist"),
@@ -2779,6 +2820,7 @@ mod edge_case_tests {
         assert!(
             w.borrow()
                 .data
+                .to_host_f32()
                 .get(2)
                 .copied()
                 .expect("tensor data should exist")
@@ -2799,6 +2841,7 @@ mod edge_case_tests {
         assert_eq!(
             z.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist"),
@@ -2817,6 +2860,7 @@ mod edge_case_tests {
         assert_eq!(
             z.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist"),
@@ -2834,6 +2878,7 @@ mod edge_case_tests {
         assert_eq!(
             s.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist"),
@@ -2851,6 +2896,7 @@ mod edge_case_tests {
         assert_eq!(
             m.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist"),
@@ -2868,6 +2914,7 @@ mod edge_case_tests {
         assert_eq!(
             m.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist"),
@@ -2885,6 +2932,7 @@ mod edge_case_tests {
         assert_eq!(
             y.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist"),
@@ -2930,6 +2978,7 @@ mod edge_case_tests {
         assert_eq!(
             z.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist"),
@@ -2947,6 +2996,7 @@ mod edge_case_tests {
         assert_eq!(
             y.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist"),
@@ -3126,6 +3176,7 @@ mod edge_case_tests {
         assert_eq!(
             z.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist"),
@@ -3209,9 +3260,9 @@ mod axis_reduce_tests {
         let y = RawTensor::softmax(&x, Axis(1));
 
         // Each row should sum to 1.0
-        let data = y.borrow();
-        let row0_sum: f32 = data.data.get(0..3).unwrap().iter().sum();
-        let row1_sum: f32 = data.data.get(3..6).unwrap().iter().sum();
+        let data = y.data();
+        let row0_sum: f32 = data.get(0..3).unwrap().iter().sum();
+        let row1_sum: f32 = data.get(3..6).unwrap().iter().sum();
 
         approx::assert_relative_eq!(row0_sum, 1.0, epsilon = 1e-6);
         approx::assert_relative_eq!(row1_sum, 1.0, epsilon = 1e-6);
@@ -3239,6 +3290,7 @@ mod axis_reduce_tests {
         assert!(
             loss.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist")
@@ -3257,7 +3309,7 @@ mod axis_reduce_tests {
         dropout.train(true);
         let y = dropout.forward(&x);
         let y_data = &y.borrow().data;
-        let num_zeros = y_data.iter().filter(|&&v| v == 0.0).count();
+        let num_zeros = y_data.to_host_f32().iter().filter(|&&v| v == 0.0).count();
 
         // Statistical check (allow some variance)
         assert!(
@@ -3266,13 +3318,13 @@ mod axis_reduce_tests {
         );
 
         // Check scaling: non-zeros should be 2.0
-        let non_zeros_correct = y_data.iter().all(|&v| v == 0.0 || v == 2.0);
+        let non_zeros_correct = y_data.to_host_f32().iter().all(|&v| v == 0.0 || v == 2.0);
         assert!(non_zeros_correct, "Dropout scaling incorrect");
 
         // Eval mode: identity
         dropout.eval();
         let y_eval = dropout.forward(&x);
-        let eval_correct = y_eval.borrow().data.iter().all(|&v| v == 1.0);
+        let eval_correct = y_eval.borrow().data.to_host_f32().iter().all(|&v| v == 1.0);
         assert!(eval_correct, "Dropout eval mode should be identity");
     }
 
@@ -3289,6 +3341,7 @@ mod axis_reduce_tests {
         let new_val = w
             .borrow()
             .data
+            .to_host_f32()
             .first()
             .copied()
             .expect("tensor data should exist");
@@ -3308,6 +3361,7 @@ mod axis_reduce_tests {
         assert!(
             (m.borrow()
                 .data
+                .to_host_f32()
                 .first()
                 .copied()
                 .expect("tensor data should exist")
@@ -3318,6 +3372,7 @@ mod axis_reduce_tests {
         assert!(
             (m.borrow()
                 .data
+                .to_host_f32()
                 .get(1)
                 .copied()
                 .expect("tensor data should exist")

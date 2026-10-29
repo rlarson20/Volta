@@ -124,7 +124,7 @@ impl Muon {
 
                 // Update buffer
                 let velocity = self.velocity.get_mut(i).unwrap();
-                for (v, &g) in velocity.iter_mut().zip(grad.iter()) {
+                for (v, &g) in velocity.iter_mut().zip(grad.to_host_f32().iter()) {
                     *v = self.momentum.mul_add(*v, g);
                 }
 
@@ -135,7 +135,7 @@ impl Muon {
                     // Here we approximate the update target
                     velocity
                         .iter()
-                        .zip(grad.iter())
+                        .zip(grad.to_host_f32().iter())
                         .map(|(v, g)| self.momentum * v + g)
                         .collect::<Vec<f32>>()
                 } else {
@@ -148,7 +148,13 @@ impl Muon {
                 }
 
                 // Apply to weights: w -= lr * update
-                for (w, u) in p.data.iter_mut().zip(update.iter()) {
+                for (w, u) in p
+                    .data
+                    .as_host_f32_mut()
+                    .expect("Muon update: CPU F32 parameter (H8: GPU params are unsupported)")
+                    .iter_mut()
+                    .zip(update.iter())
+                {
                     *w -= self.lr * u * 0.1; // Scaling factor often needed for Muon stability vs Adam
                 }
             }
@@ -179,7 +185,7 @@ mod tests {
         assert_ne!(data_before, data_after);
 
         // Verify Newton-Schulz didn't explode values (regularization property)
-        for v in &data_after {
+        for v in data_after.to_host_f32().iter() {
             assert!(v.abs() < 2.0);
         }
     }

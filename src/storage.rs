@@ -13,11 +13,9 @@ use bytemuck::{cast_slice, cast_slice_mut};
 use half::{bf16, f16};
 use std::sync::Arc;
 
+use std::borrow::Cow;
 #[cfg(feature = "gpu")]
 use std::cell::RefCell;
-use std::ops::{
-    Index, IndexMut, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo, RangeToInclusive,
-};
 
 /// Storage backend for tensor data
 ///
@@ -27,7 +25,7 @@ pub enum Storage {
     /// CPU storage - data lives in main memory as raw bytes.
     ///
     /// The bytes are shared: `clone` bumps a refcount instead of copying. Every write
-    /// goes through `as_f32_slice_mut`, which copies first if the buffer is shared
+    /// goes through `as_host_f32_mut`, which copies first if the buffer is shared
     /// (copy-on-write), so a write to one storage is never visible through another.
     Cpu { data: Arc<[u8]>, dtype: DType },
 
@@ -136,7 +134,7 @@ impl Storage {
     /// Create new GPU storage from f32 data (falls back to CPU if GPU unavailable)
     ///
     /// The CPU cache is initialized lazily - data is only copied back from GPU
-    /// when accessed via `as_f32_slice()` or similar methods. This avoids
+    /// when read via `to_host_f32()` or similar methods. This avoids
     /// duplicating data in CPU memory unnecessarily.
     #[cfg(feature = "gpu")]
     #[must_use]
@@ -197,18 +195,19 @@ impl Storage {
         }
     }
 
-    // ========== F32 Access (Backward Compatible) ==========
+    // ========== F32 Host Access ==========
+    //
+    // There is no `Deref`/`Index` on `Storage` (DECISIONS.md, "No `Deref` on `Storage`"):
+    // every host read or write is spelled at the call site, so a GPU sync or a
+    // GPU-storage panic is visible where it happens.
 
-    /// Get data as f32 slice (fallible). Returns error if dtype is not F32.
+    /// Borrow CPU F32 data. No transfer: GPU storage is an error, not a sync.
     ///
     /// # Errors
     ///
-    /// Returns `VoltaError::DTypeMismatch` if storage dtype is not F32
-    ///
-    /// # Panics
-    ///
-    /// Panics if GPU cache cannot be accessed (internal invariant violation)
-    pub fn try_as_f32_slice(&self) -> Result<&[f32], VoltaError> {
+    /// `DeviceError` if the storage is on the GPU (use [`Self::to_host_f32`]), and
+    /// `DTypeMismatch` if the dtype is not F32.
+    pub fn as_host_f32(&self) -> Result<&[f32], VoltaError> {
         match self {
             Self::Cpu { data, dtype } => {
                 if *dtype != DType::F32 {
@@ -220,17 +219,72 @@ impl Storage {
                 Ok(cast_slice(data))
             }
             #[cfg(feature = "gpu")]
-            Self::Gpu {
-                buffer,
-                dtype,
-                cpu_cache,
-            } => {
+            Self::Gpu { .. } => Err(VoltaError::DeviceError(
+                "as_host_f32 on GPU storage; use to_host_f32 for an explicit transfer".to_string(),
+            )),
+        }
+    }
+
+    /// Host view of the data as f32: the explicit, greppable host transfer.
+    ///
+    /// CPU F32 storage is borrowed with no copy. GPU storage syncs to the host on first
+    /// read and borrows the cached copy. Other dtypes are converted into an owned `Vec`.
+    pub fn to_host_f32(&self) -> Cow<'_, [f32]> {
+        match self.dtype() {
+            DType::F32 => Cow::Borrowed(self.f32_host_slice()),
+            DType::F64
+            | DType::F16
+            | DType::BF16
+            | DType::I32
+            | DType::I64
+            | DType::U8
+            | DType::Bool => Cow::Owned(self.to_f32_vec()),
+        }
+    }
+
+    /// Mutable CPU F32 data, copy-on-write.
+    ///
+    /// This is the one host write path. If another storage shares the buffer, it is
+    /// copied first, so the write never shows through a clone; a unique owner writes in
+    /// place.
+    ///
+    /// # Errors
+    ///
+    /// `DeviceError` if the storage is on the GPU, and `DTypeMismatch` if the dtype is
+    /// not F32.
+    pub fn as_host_f32_mut(&mut self) -> Result<&mut [f32], VoltaError> {
+        match self {
+            Self::Cpu { data, dtype } => {
                 if *dtype != DType::F32 {
                     return Err(VoltaError::DTypeMismatch {
                         expected: DType::F32,
                         actual: *dtype,
                     });
                 }
+                Ok(cast_slice_mut(Arc::make_mut(data)))
+            }
+            #[cfg(feature = "gpu")]
+            Self::Gpu { .. } => Err(VoltaError::DeviceError(
+                "as_host_f32_mut on GPU storage; GPU storage has no host write path".to_string(),
+            )),
+        }
+    }
+
+    /// F32 data on the host, syncing GPU storage through the host cache.
+    ///
+    /// # Panics
+    ///
+    /// If the dtype is not F32. Callers check the dtype first.
+    fn f32_host_slice(&self) -> &[f32] {
+        match self {
+            Self::Cpu { .. } => self.as_host_f32().expect("f32_host_slice: dtype checked"),
+            #[cfg(feature = "gpu")]
+            Self::Gpu {
+                buffer,
+                dtype,
+                cpu_cache,
+            } => {
+                assert_eq!(*dtype, DType::F32, "GPU storage is f32-only");
                 // Ensure cache is populated (lazy transfer from GPU)
                 {
                     let mut cache = cpu_cache.borrow_mut();
@@ -249,47 +303,10 @@ impl Storage {
                 // 4. We cast bytes to &[f32] using cast_slice
                 unsafe {
                     let bytes = (*cpu_cache.as_ptr()).as_ref().unwrap().as_slice();
-                    Ok(cast_slice(bytes))
+                    cast_slice(bytes)
                 }
             }
         }
-    }
-
-    /// Get data as f32 slice. Only valid if dtype is F32.
-    /// Panics if dtype is not F32.
-    /// # Panics
-    /// Wrong storage datatype
-    pub fn as_f32_slice(&self) -> &[f32] {
-        self.try_as_f32_slice().expect("Storage dtype is not F32")
-    }
-
-    /// Get data as mutable f32 slice. Only valid if dtype is F32 and on the CPU.
-    ///
-    /// This is the one CPU write path. If another storage shares the buffer, it is copied
-    /// first, so the write never shows through a clone; a unique owner writes in place.
-    pub fn as_f32_slice_mut(&mut self) -> Option<&mut [f32]> {
-        match self {
-            Self::Cpu { data, dtype } => {
-                if *dtype == DType::F32 {
-                    // Copy-on-write: copies only if another storage shares the buffer.
-                    Some(cast_slice_mut(Arc::make_mut(data)))
-                } else {
-                    None
-                }
-            }
-            #[cfg(feature = "gpu")]
-            Self::Gpu { .. } => None,
-        }
-    }
-
-    /// Backward compatible: get data as slice (assumes F32)
-    pub fn as_slice(&self) -> &[f32] {
-        self.as_f32_slice()
-    }
-
-    /// Backward compatible: get data as mutable slice (assumes F32)
-    pub fn as_mut_slice(&mut self) -> Option<&mut [f32]> {
-        self.as_f32_slice_mut()
     }
 
     // ========== Other Dtype Access ==========
@@ -315,7 +332,7 @@ impl Storage {
                         *cache = Some(bytes);
                     }
                 }
-                // SAFETY: Similar to as_f32_slice(), cache is populated and stable
+                // SAFETY: Similar to f32_host_slice(), cache is populated and stable
                 unsafe {
                     let bytes = (*cpu_cache.as_ptr()).as_ref().unwrap().as_slice();
                     Some(cast_slice(bytes))
@@ -346,7 +363,7 @@ impl Storage {
                         *cache = Some(bytes);
                     }
                 }
-                // SAFETY: Similar to as_f32_slice(), cache is populated and stable
+                // SAFETY: Similar to f32_host_slice(), cache is populated and stable
                 unsafe {
                     let bytes = (*cpu_cache.as_ptr()).as_ref().unwrap().as_slice();
                     Some(cast_slice(bytes))
@@ -377,7 +394,7 @@ impl Storage {
                         *cache = Some(bytes);
                     }
                 }
-                // SAFETY: Similar to as_f32_slice(), cache is populated and stable
+                // SAFETY: Similar to f32_host_slice(), cache is populated and stable
                 unsafe {
                     let bytes = (*cpu_cache.as_ptr()).as_ref().unwrap().as_slice();
                     Some(cast_slice(bytes))
@@ -416,7 +433,7 @@ impl Storage {
                         *cache = Some(bytes);
                     }
                 }
-                // SAFETY: Similar to as_f32_slice(), cache is populated and stable
+                // SAFETY: Similar to f32_host_slice(), cache is populated and stable
                 unsafe {
                     (*cpu_cache.as_ptr()).as_deref().ok_or_else(|| {
                         VoltaError::DeviceError("CPU cache not populated".to_string())
@@ -433,7 +450,7 @@ impl Storage {
     ///`as_f64_slice` can panic
     pub fn to_f32_vec(&self) -> Vec<f32> {
         match self.dtype() {
-            DType::F32 => self.as_f32_slice().to_vec(),
+            DType::F32 => self.f32_host_slice().to_vec(),
             DType::F64 => self
                 .as_f64_slice()
                 .unwrap()
@@ -622,7 +639,7 @@ impl Storage {
     ///
     /// ```ignore
     /// let storage = Storage::gpu(vec![1.0, 2.0, 3.0]);
-    /// let _ = storage.as_f32_slice(); // Populates CPU cache
+    /// let _ = storage.to_host_f32(); // Populates CPU cache
     /// storage.invalidate_cpu_cache(); // Releases CPU copy
     /// ```
     #[cfg(feature = "gpu")]
@@ -630,154 +647,6 @@ impl Storage {
         if let Self::Gpu { cpu_cache, .. } = self {
             cpu_cache.borrow_mut().take();
         }
-    }
-}
-
-// ========== Iterator Support (F32 only for backward compat) ==========
-
-impl Storage {
-    pub fn iter(&self) -> std::slice::Iter<'_, f32> {
-        self.as_f32_slice().iter()
-    }
-
-    /// # Panics
-    /// wrong data type
-    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, f32> {
-        self.as_f32_slice_mut()
-            .expect("Mutable iteration requires F32 CPU storage")
-            .iter_mut()
-    }
-}
-
-// ========== Deref implementations (F32 only for backward compat) ==========
-
-impl std::ops::Deref for Storage {
-    type Target = [f32];
-    fn deref(&self) -> &Self::Target {
-        self.as_f32_slice()
-    }
-}
-
-impl std::ops::DerefMut for Storage {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.as_f32_slice_mut()
-            .expect("Mutable deref requires F32 CPU storage")
-    }
-}
-
-// ========== Index implementations (F32 only for backward compat) ==========
-
-impl Index<usize> for Storage {
-    type Output = f32;
-    fn index(&self, index: usize) -> &Self::Output {
-        self.as_f32_slice()
-            .get(index)
-            .expect("Index out of bounds in Storage")
-    }
-}
-
-impl IndexMut<usize> for Storage {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        self.as_f32_slice_mut()
-            .expect("Mutable access requires F32 CPU storage")
-            .get_mut(index)
-            .expect("Index out of bounds in Storage")
-    }
-}
-
-impl Index<Range<usize>> for Storage {
-    type Output = [f32];
-    fn index(&self, range: Range<usize>) -> &Self::Output {
-        let slice = self.as_f32_slice();
-        assert!(
-            !(range.start > range.end || range.end > slice.len()),
-            "Index range out of bounds in Storage: {range:?}"
-        );
-        slice.get(range).expect("Range bounds check failed")
-    }
-}
-
-impl Index<RangeFrom<usize>> for Storage {
-    type Output = [f32];
-    fn index(&self, range: RangeFrom<usize>) -> &Self::Output {
-        let slice = self.as_f32_slice();
-        assert!(
-            range.start <= slice.len(),
-            "Index range out of bounds in Storage: {}..",
-            range.start
-        );
-        slice.get(range).expect("RangeFrom bounds check failed")
-    }
-}
-
-impl Index<RangeTo<usize>> for Storage {
-    type Output = [f32];
-    fn index(&self, range: RangeTo<usize>) -> &Self::Output {
-        let slice = self.as_f32_slice();
-        if range.end > slice.len() {
-            assert!(
-                range.end <= slice.len(),
-                "Index range out of bounds in Storage: ..{}",
-                range.end
-            );
-        }
-        slice.get(range).expect("RangeTo bounds check failed")
-    }
-}
-
-impl Index<RangeToInclusive<usize>> for Storage {
-    type Output = [f32];
-    fn index(&self, range: RangeToInclusive<usize>) -> &Self::Output {
-        let slice = self.as_f32_slice();
-        assert!(
-            range.end < slice.len(),
-            "Index range out of bounds in Storage: ..={}",
-            range.end
-        );
-        slice
-            .get(range)
-            .expect("RangeToInclusive bounds check failed")
-    }
-}
-
-impl Index<RangeInclusive<usize>> for Storage {
-    type Output = [f32];
-    fn index(&self, range: RangeInclusive<usize>) -> &Self::Output {
-        let slice = self.as_f32_slice();
-        let start = *range.start();
-        let end = *range.end();
-        assert!(
-            !(start > end || end >= slice.len()),
-            "Index range out of bounds in Storage: {range:?}"
-        );
-        slice
-            .get(range)
-            .expect("RangeInclusive bounds check failed")
-    }
-}
-
-impl Index<RangeFull> for Storage {
-    type Output = [f32];
-    fn index(&self, _range: RangeFull) -> &Self::Output {
-        self.as_f32_slice()
-    }
-}
-
-impl<'a> IntoIterator for &'a Storage {
-    type Item = &'a f32;
-    type IntoIter = std::slice::Iter<'a, f32>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.as_f32_slice().iter()
-    }
-}
-
-impl<'a> IntoIterator for &'a mut Storage {
-    type Item = &'a mut f32;
-    type IntoIter = std::slice::IterMut<'a, f32>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.as_f32_slice_mut()
-            .expect("Mutable iteration requires F32 CPU storage")
-            .iter_mut()
     }
 }
 
@@ -797,7 +666,7 @@ impl PartialEq<Vec<f32>> for Storage {
         if self.dtype() != DType::F32 {
             return false;
         }
-        self.as_f32_slice() == other.as_slice()
+        *self.to_host_f32() == **other
     }
 }
 
@@ -838,9 +707,10 @@ mod tests {
 
         assert_eq!(storage.dtype(), DType::F32);
         assert_eq!(storage.len(), 4);
-        assert_eq!(storage.as_f32_slice(), &data);
-        assert_eq!(fetch(&storage, 0), 1.0);
-        assert_eq!(fetch(&storage, 3), 4.0);
+        assert_eq!(storage.as_host_f32().expect("cpu f32"), &data[..]);
+        let host = storage.as_host_f32().expect("cpu f32");
+        assert_eq!(fetch(host, 0), 1.0);
+        assert_eq!(fetch(host, 3), 4.0);
     }
 
     #[test]
@@ -886,7 +756,7 @@ mod tests {
         let storage = Storage::from_bytes(bytes, DType::F32);
         assert_eq!(storage.dtype(), DType::F32);
         assert_eq!(storage.len(), 4);
-        assert_eq!(storage.as_f32_slice(), &data);
+        assert_eq!(storage.as_host_f32().expect("cpu f32"), &data[..]);
     }
 
     #[test]
@@ -900,9 +770,9 @@ mod tests {
     fn cpu_write_after_clone_copies() {
         let a = Storage::cpu(vec![1.0, 2.0, 3.0]);
         let mut b = a.clone();
-        *crate::index::slot(b.as_f32_slice_mut().expect("f32 cpu storage"), 1) = 9.0;
-        assert_eq!(a.as_f32_slice(), &[1.0, 2.0, 3.0]);
-        assert_eq!(b.as_f32_slice(), &[1.0, 9.0, 3.0]);
+        *crate::index::slot(b.as_host_f32_mut().expect("f32 cpu storage"), 1) = 9.0;
+        assert_eq!(a.as_host_f32().expect("cpu f32"), &[1.0, 2.0, 3.0]);
+        assert_eq!(b.as_host_f32().expect("cpu f32"), &[1.0, 9.0, 3.0]);
         assert_ne!(a.as_bytes().as_ptr(), b.as_bytes().as_ptr());
     }
 
@@ -910,8 +780,63 @@ mod tests {
     fn cpu_unique_write_is_in_place() {
         let mut a = Storage::cpu(vec![1.0, 2.0, 3.0]);
         let before = a.as_bytes().as_ptr();
-        *crate::index::slot(a.as_f32_slice_mut().expect("f32 cpu storage"), 0) = 5.0;
+        *crate::index::slot(a.as_host_f32_mut().expect("f32 cpu storage"), 0) = 5.0;
         assert_eq!(a.as_bytes().as_ptr(), before);
-        assert_eq!(fetch(&a, 0), 5.0);
+        assert_eq!(fetch(a.as_host_f32().expect("cpu f32"), 0), 5.0);
+    }
+
+    #[test]
+    fn as_host_f32_rejects_non_f32() {
+        let s = Storage::cpu_f16(vec![f16::from_f32(1.0)]);
+        assert!(matches!(
+            s.as_host_f32(),
+            Err(VoltaError::DTypeMismatch {
+                expected: DType::F32,
+                actual: DType::F16,
+            })
+        ));
+    }
+
+    #[test]
+    fn to_host_f32_borrows_cpu_f32() {
+        let s = Storage::cpu(vec![1.0, 2.0]);
+        let host = s.to_host_f32();
+        assert!(matches!(host, Cow::Borrowed(_)));
+        assert_eq!(host.as_ptr().cast::<u8>(), s.as_bytes().as_ptr());
+    }
+
+    #[test]
+    fn to_host_f32_converts_f16() {
+        let s = Storage::cpu_f16(vec![f16::from_f32(1.5), f16::from_f32(-2.0)]);
+        let host = s.to_host_f32();
+        assert!(matches!(host, Cow::Owned(_)));
+        assert_eq!(&*host, &[1.5, -2.0]);
+    }
+
+    #[test]
+    fn as_host_f32_mut_rejects_non_f32() {
+        let mut s = Storage::cpu_f16(vec![f16::from_f32(1.0)]);
+        assert!(matches!(
+            s.as_host_f32_mut(),
+            Err(VoltaError::DTypeMismatch { .. })
+        ));
+    }
+
+    /// GPU storage has no borrowed host view without an explicit transfer.
+    /// Skips without an adapter, so it is not verified in CPU-only CI.
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn as_host_f32_rejects_gpu() {
+        if !crate::gpu::is_gpu_available() {
+            return;
+        }
+        let mut s = Storage::gpu(vec![1.0, 2.0]);
+        assert!(s.is_gpu());
+        assert!(matches!(s.as_host_f32(), Err(VoltaError::DeviceError(_))));
+        assert!(matches!(
+            s.as_host_f32_mut(),
+            Err(VoltaError::DeviceError(_))
+        ));
+        assert_eq!(&*s.to_host_f32(), &[1.0, 2.0]);
     }
 }

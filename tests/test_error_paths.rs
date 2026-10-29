@@ -81,7 +81,7 @@ fn test_io_error() {
 fn test_dtype_mismatch() {
     // Create F16 storage (2 bytes per element, 4 bytes = 2 elements)
     let storage = Storage::try_from_bytes(vec![0u8; 4], DType::F16).unwrap();
-    let result = storage.try_as_f32_slice();
+    let result = storage.as_host_f32();
     assert!(result.is_err());
     assert!(matches!(
         result.unwrap_err(),

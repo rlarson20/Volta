@@ -23,7 +23,7 @@ Last verified: 2026-10-29.
 - [ ] **H5** GPU broadcast backward silently truncates rank > 4. The param packing in `binary_backward_broadcast_safe` now panics on rank > 4 instead; the other GPU wrappers still truncate by design with `.take(4)`.
 - [x] **H6** TransformerBlock was decorative (parameterless `SimpleAttention`). It holds a real `MultiHeadAttention` now, `causal` is passed through, and `attention.*` state loads (DECISIONS.md, "Split layer traits").
 - [x] **H7** `load_state_dict` demoted GPU tensors to CPU. Every layer now goes through `Tensor::load_weight`, which checks shape (and numel) and keeps the destination's device. Evidence: `tests/load_state_dict_device.rs`, plus `tensor::load_weight_tests` on GPU. `load_state_dict_checked` now reports shape mismatches and skips them instead of loading them (2026-10-26).
-- [ ] **H8** Muon is a toy and panics on GPU params.
+- [ ] **H8** Muon is a toy and panics on GPU params. The panic is now an explicit `expect` at Muon's weight update (`as_host_f32_mut`), not a hidden `iter_mut`.
 
 ## Medium (OPUS §3)
 
@@ -109,7 +109,7 @@ Last verified: 2026-10-29.
 
 - [x] Split traits `Module`/`Layer`/`IndexedLayer`/`RecurrentLayer` with trybuild tests (§3.1, §3.2). `IndexedLayer` and `RecurrentLayer` are sealed; `Module` and `Layer` stay open (DECISIONS.md, "Split layer traits"). Retires H6 and the Embedding panic. `LSTMCell::forward_step` is replaced by `RecurrentLayer::step`. `pkg/README.md` and `minigrad-react/src/wasm/README.md` are copies of the old README and still show `Module::forward`.
 - [ ] `DevicePolicy` (§2.1). Retires the silent GPU→CPU fallback.
-- [~] Storage: `Arc` / `OnceCell` / no `Deref` (§7). CPU `Arc<[u8]>` copy-on-write is done (DECISIONS.md). The `OnceCell` GPU cache (H3) and the `Deref` removal are still open. Retires H3 and the clone economy. Matmul operand reads must materialize contiguous (DECISIONS.md, "Matmul layout: contiguous-only").
+- [~] Storage: `Arc` / `OnceCell` / no `Deref` (§7). CPU `Arc<[u8]>` copy-on-write and the `Deref` removal are done (DECISIONS.md, "No `Deref` on `Storage`"). The `OnceCell` GPU cache (H3) is still open; `to_host_f32` borrows the old unsafe cache until it lands. Retires H3 and the clone economy. Matmul operand reads must materialize contiguous (DECISIONS.md, "Matmul layout: contiguous-only").
 - [ ] Flip `RawTensor.shape` to `Shape` and make `Tensor::shape()` return it. Moved here from Phase 2: it touches about 440 kernel reads of the field, the same sites the storage rewrite rewrites (DECISIONS.md, "Shape boundary").
 - [x] Indexing policy (§8): `crate::index::{fetch, slot, span}` panic on out of bounds in every profile (not NaN: DECISIONS.md, "Indexing policy"). All `unwrap_or(0.0)` and the positional `if let Some` reads and writes of f32 data are converted (library via the helpers, tests, examples, and benches via `.expect`), including `broadcast_to` / `sum_over_broadcast_dims`. `just check-fallbacks` (in `just ci` and pre-commit) keeps it that way. It also made `to_one_hot` and the GPU broadcast-backward param packing reject out-of-range input loudly. The integer shape defaults are a follow-up (Medium).
 - [x] Delete `TensorOps` (§3.4). The methods are inherent on `Tensor` (DECISIONS.md, "Delete `TensorOps`"). `pkg/README.md` and `minigrad-react/src/wasm/README.md` are separate copies of the old README and still mention it.

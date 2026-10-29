@@ -35,8 +35,9 @@ impl MulAccGradFn {
         let grad_x = if x_val.requires_grad {
             let data = out_grad
                 .data
+                .to_host_f32()
                 .iter()
-                .zip(&y_val.data)
+                .zip(y_val.data.to_host_f32().iter())
                 .map(|(&g, &y)| g * y)
                 .collect();
             Some(RawTensor::new(data, &out_grad.shape, false))
@@ -47,8 +48,9 @@ impl MulAccGradFn {
         let grad_y = if y_val.requires_grad {
             let data = out_grad
                 .data
+                .to_host_f32()
                 .iter()
-                .zip(&x_val.data)
+                .zip(x_val.data.to_host_f32().iter())
                 .map(|(&g, &x)| g * x)
                 .collect();
             Some(RawTensor::new(data, &out_grad.shape, false))
@@ -101,7 +103,13 @@ impl WhereGradFn {
         let mut grad_true = None;
         if needs_true {
             let mut data = vec![0.0; out_grad.data.len()];
-            for (i, (&g, &c)) in out_grad.data.iter().zip(&self.condition).enumerate() {
+            for (i, (&g, &c)) in out_grad
+                .data
+                .to_host_f32()
+                .iter()
+                .zip(&self.condition)
+                .enumerate()
+            {
                 if c != 0.0 {
                     *slot(&mut data, i) = g;
                 }
@@ -118,7 +126,13 @@ impl WhereGradFn {
         let mut grad_false = None;
         if needs_false {
             let mut data = vec![0.0; out_grad.data.len()];
-            for (i, (&g, &c)) in out_grad.data.iter().zip(&self.condition).enumerate() {
+            for (i, (&g, &c)) in out_grad
+                .data
+                .to_host_f32()
+                .iter()
+                .zip(&self.condition)
+                .enumerate()
+            {
                 if c == 0.0 {
                     *slot(&mut data, i) = g;
                 }
@@ -188,9 +202,10 @@ impl RawTensor {
 
                 // CPU fallback.
                 let result_data = data_x
+                    .to_host_f32()
                     .iter()
-                    .zip(&data_y)
-                    .zip(&data_z)
+                    .zip(data_y.to_host_f32().iter())
+                    .zip(data_z.to_host_f32().iter())
                     .map(|((a, b), c)| a * b + c)
                     .collect::<Vec<_>>();
                 edge(
@@ -219,9 +234,10 @@ impl RawTensor {
                 let tmp_shape = Self::broadcast_shape(&cond_shape, &true_shape);
                 let out_shape = Self::broadcast_shape(&tmp_shape, &false_shape);
 
-                let cond_bc = Self::broadcast_to(&cond_data, &cond_shape, &out_shape);
-                let true_bc = Self::broadcast_to(&true_data, &true_shape, &out_shape);
-                let false_bc = Self::broadcast_to(&false_data, &false_shape, &out_shape);
+                let cond_bc = Self::broadcast_to(&cond_data.to_host_f32(), &cond_shape, &out_shape);
+                let true_bc = Self::broadcast_to(&true_data.to_host_f32(), &true_shape, &out_shape);
+                let false_bc =
+                    Self::broadcast_to(&false_data.to_host_f32(), &false_shape, &out_shape);
 
                 let result_data = cond_bc
                     .iter()

@@ -89,7 +89,7 @@ Facts on the ground: `gpu` is a default feature (contradicting docs); GPU tests 
 1. **Make `gpu` opt-in again** (`default = []`, or at most `["accelerate"]` guarded to macOS docs). This matches the README, shrinks default builds enormously (wgpu is a heavy dependency tree), and stops shipping the riskiest code to every consumer.
 2. **Get an actual GPU into CI** via a software adapter (Mesa `lavapipe`/`llvmpipe` works with wgpu on Linux runners) so the parity tests execute rather than skip. Until then, the honest status for GPU is "unverified in CI."
 3. **Replace silent `Option`-fallback with a single choke point**: one `dispatch(op) -> Result<Storage, GpuError>` that either logs-and-falls-back _consistently_ (including moving results back to the right device) or errors. Today each op hand-rolls its own fallback and three of them got it wrong (§2).
-4. **Remove `Deref`/`Index` from `Storage`.** They panic on non-f32 (contradicting the defensive philosophy), hide device transfers, and encourage exactly the CPU-touching patterns that make the GPU path pointless. An explicit `.as_f32_slice()` at least shows up in code review; `&data[i]` doesn't.
+4. **(Done: DECISIONS.md, "No `Deref` on `Storage`".)** **Remove `Deref`/`Index` from `Storage`.** They panic on non-f32 (contradicting the defensive philosophy), hide device transfers, and encourage exactly the CPU-touching patterns that make the GPU path pointless. An explicit `.as_f32_slice()` at least shows up in code review; `&data[i]` doesn't.
 
 ### 3.3 Documentation and repo hygiene drift
 

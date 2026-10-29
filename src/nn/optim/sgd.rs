@@ -198,7 +198,12 @@ impl SGD {
         // Apply weight decay to gradient
         let mut active_grad = grad;
         if self.weight_decay != 0.0 {
-            for (g, theta) in active_grad.iter_mut().zip(p.data.iter()) {
+            for (g, theta) in active_grad
+                .as_host_f32_mut()
+                .expect("SGD weight decay: CPU F32 gradient")
+                .iter_mut()
+                .zip(p.data.to_host_f32().iter())
+            {
                 *g += self.weight_decay * *theta;
             }
         }
@@ -208,18 +213,18 @@ impl SGD {
             let vel_slice = self
                 .velocity
                 .get_mut(i)
-                .and_then(|v| v.as_mut_slice())
+                .and_then(|v| v.as_host_f32_mut().ok())
                 .expect("Velocity should be CPU storage");
 
             // Update velocity: v = momentum·v - lr·grad
-            for (v, &g) in vel_slice.iter_mut().zip(active_grad.iter()) {
+            for (v, &g) in vel_slice.iter_mut().zip(active_grad.to_host_f32().iter()) {
                 *v = self.momentum.mul_add(*v, -(self.lr * g));
             }
 
             // Update parameters: θ = θ + v
             let p_data = p
                 .data
-                .as_mut_slice()
+                .as_host_f32_mut()
                 .expect("Parameter should be CPU storage");
             for (d, &v) in p_data.iter_mut().zip(vel_slice.iter()) {
                 *d += v;
@@ -228,9 +233,9 @@ impl SGD {
             // Simple SGD: θ = θ - lr·grad
             let p_data = p
                 .data
-                .as_mut_slice()
+                .as_host_f32_mut()
                 .expect("Parameter should be CPU storage");
-            for (d, &g) in p_data.iter_mut().zip(active_grad.iter()) {
+            for (d, &g) in p_data.iter_mut().zip(active_grad.to_host_f32().iter()) {
                 *d -= self.lr * g;
             }
         }

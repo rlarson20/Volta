@@ -69,17 +69,15 @@ fn test_sgd_momentum_logic() {
 
 #[test]
 fn test_storage_mut_access() {
-    // Coverage gap: Storage::as_mut_slice failure/success paths
+    // Coverage gap: Storage::as_host_f32_mut success path
     let mut s = Storage::cpu(vec![1.0, 2.0, 3.0]);
 
-    // Check successful mutation
-    let slice = s.as_mut_slice().expect("CPU storage has a mutable slice");
+    let slice = s
+        .as_host_f32_mut()
+        .expect("CPU storage has a mutable slice");
     slice[0] = 10.0;
-    assert_eq!(s.as_slice()[0], 10.0);
-
-    // Check iterator access
-    for val in &mut s {
+    for val in slice.iter_mut() {
         *val += 1.0;
     }
-    assert_eq!(s.as_slice(), &[11.0, 3.0, 4.0]);
+    assert_eq!(s.as_host_f32().expect("CPU F32 storage"), &[11.0, 3.0, 4.0]);
 }

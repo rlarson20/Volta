@@ -101,39 +101,23 @@ mod tests {
         // Test gelu(0) = 0
         let x = RawTensor::new(vec![0.0], &[1], false);
         let y = gelu.forward(&x);
-        assert_relative_eq!(
-            y.borrow().data.first().copied().unwrap(),
-            0.0,
-            epsilon = 1e-6
-        );
+        assert_relative_eq!(y.item(), 0.0, epsilon = 1e-6);
 
         // Test gelu(1) ≈ 0.8413
         let x = RawTensor::new(vec![1.0], &[1], false);
         let y = gelu.forward(&x);
-        assert_relative_eq!(
-            y.borrow().data.first().copied().unwrap(),
-            0.8413,
-            epsilon = 1e-4
-        );
+        assert_relative_eq!(y.item(), 0.8413, epsilon = 1e-4);
 
         // Test gelu(-1) ≈ -0.1588
         let x = RawTensor::new(vec![-1.0], &[1], false);
         let y = gelu.forward(&x);
-        assert_relative_eq!(
-            y.borrow().data.first().copied().unwrap(),
-            -0.1587,
-            epsilon = 1e-3
-        );
+        assert_relative_eq!(y.item(), -0.1587, epsilon = 1e-3);
 
         // Test gelu(0.56484) ≈ 0.4032
         // This is a test point where the tanh approximation would fail
         let x = RawTensor::new(vec![0.56484], &[1], false);
         let y = gelu.forward(&x);
-        assert_relative_eq!(
-            y.borrow().data.first().copied().unwrap(),
-            0.4032,
-            epsilon = 1e-4
-        );
+        assert_relative_eq!(y.item(), 0.4032, epsilon = 1e-4);
     }
 
     #[test]
@@ -168,7 +152,7 @@ mod tests {
 
         // GELU should preserve sign for negative inputs (unlike ReLU)
         // and be close to zero for small negative values
-        let data = y.borrow().data.clone();
+        let data = y.data();
         assert!(
             *data.first().unwrap() < -0.04,
             "gelu(-2.0) should be significantly negative"
@@ -222,11 +206,7 @@ mod tests {
         // Should not panic and behavior should be the same
         let x = RawTensor::new(vec![1.0], &[1], false);
         let y = gelu.forward(&x);
-        assert_relative_eq!(
-            y.borrow().data.first().copied().unwrap(),
-            0.8413,
-            epsilon = 1e-4
-        );
+        assert_relative_eq!(y.item(), 0.8413, epsilon = 1e-4);
     }
 
     #[test]

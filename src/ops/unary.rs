@@ -94,8 +94,9 @@ impl UnaryGradFn {
         // the `UnaryOp` table.
         let grad_data: Vec<f32> = out_grad
             .data
+            .to_host_f32()
             .iter()
-            .zip(&x.data)
+            .zip(x.data.to_host_f32().iter())
             .map(|(&g, &x)| self.op.backward(g, x))
             .collect();
         vec![Some(RawTensor::new(grad_data, &x.shape, false))]
