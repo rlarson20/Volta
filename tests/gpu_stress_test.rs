@@ -73,9 +73,10 @@ mod gpu_extended_tests {
         let res_recip = gpu::GpuKernels::unary_op(&buf_recip, UnaryOp::Recip)
             .unwrap()
             .to_vec();
-        for (i, &val) in res_recip.iter().enumerate() {
-            let expected_vals = [1.0, 2.0, 4.0, 8.0];
-            let expected = 1.0 / expected_vals.get(i).copied().expect("index in range");
+        let recip_inputs = [1.0, 2.0, 4.0, 8.0];
+        assert_eq!(res_recip.len(), recip_inputs.len());
+        for (i, (&val, &input)) in res_recip.iter().zip(&recip_inputs).enumerate() {
+            let expected = 1.0 / input;
             assert!(
                 (val - expected).abs() < 1e-5,
                 "Recip failed at index {i}: got {val}, expected {expected}"
@@ -86,9 +87,10 @@ mod gpu_extended_tests {
         let res_exp2 = gpu::GpuKernels::unary_op(&buf, UnaryOp::Exp2)
             .unwrap()
             .to_vec();
-        for (i, &val) in res_exp2.iter().enumerate() {
-            let exp_vals = [-1.0, 0.0, 1.0, 4.0];
-            let expected = 2_f32.powf(exp_vals.get(i).copied().expect("index in range"));
+        let exp_vals = [-1.0, 0.0, 1.0, 4.0];
+        assert_eq!(res_exp2.len(), exp_vals.len());
+        for (i, (&val, &exponent)) in res_exp2.iter().zip(&exp_vals).enumerate() {
+            let expected = 2_f32.powf(exponent);
             assert!(
                 (val - expected).abs() < 1e-4,
                 "Exp2 failed at index {i}: got {val}, expected {expected}"
@@ -100,9 +102,9 @@ mod gpu_extended_tests {
         let res_log2 = gpu::GpuKernels::unary_op(&buf_log2, UnaryOp::Log2)
             .unwrap()
             .to_vec();
-        for (i, &val) in res_log2.iter().enumerate() {
-            let expected_vals = [0.0, 1.0, 2.0, 3.0];
-            let expected = expected_vals.get(i).copied().expect("index in range");
+        let expected_vals = [0.0, 1.0, 2.0, 3.0];
+        assert_eq!(res_log2.len(), expected_vals.len());
+        for (i, (&val, &expected)) in res_log2.iter().zip(&expected_vals).enumerate() {
             assert!(
                 (val - expected).abs() < 1e-5,
                 "Log2 failed at index {i}: got {val}, expected {expected}"
@@ -113,9 +115,9 @@ mod gpu_extended_tests {
         let res_sin = gpu::GpuKernels::unary_op(&buf, UnaryOp::Sin)
             .unwrap()
             .to_vec();
-        for (i, &val) in res_sin.iter().enumerate() {
-            let expected_vals = [-1.0_f32.sin(), 0.0_f32.sin(), 1.0_f32.sin(), 4.0_f32.sin()];
-            let expected = expected_vals.get(i).copied().expect("index in range");
+        let expected_vals = [-1.0_f32.sin(), 0.0_f32.sin(), 1.0_f32.sin(), 4.0_f32.sin()];
+        assert_eq!(res_sin.len(), expected_vals.len());
+        for (i, (&val, &expected)) in res_sin.iter().zip(&expected_vals).enumerate() {
             assert!(
                 (val - expected).abs() < 1e-5,
                 "Sin failed at index {i}: got {val}, expected {expected}"
@@ -127,13 +129,11 @@ mod gpu_extended_tests {
             .unwrap()
             .to_vec();
         let expected_vals = [0.540_302_3, 1.0, 0.540_302_3, -0.653_643_6]; // cos([-1, 0, 1, 4])
-        for (i, &val) in res_cos.iter().enumerate() {
+        assert_eq!(res_cos.len(), expected_vals.len());
+        for (i, (&val, &expected)) in res_cos.iter().zip(&expected_vals).enumerate() {
             assert!(
-                (val - expected_vals.get(i).copied().expect("index in range")).abs() < 1e-5,
-                "Cos failed at index {}: got {}, expected {}",
-                i,
-                val,
-                expected_vals.get(i).copied().expect("index in range")
+                (val - expected).abs() < 1e-5,
+                "Cos failed at index {i}: got {val}, expected {expected}"
             );
         }
     }

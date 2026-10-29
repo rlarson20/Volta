@@ -4,7 +4,7 @@
 #   2. `if let Some(x) = v.get(i)` / `.get_mut(i)` / `.get(a..b)` on a positional index, which skips
 #      the read or write when `i` is out of bounds.
 # Use `crate::index::{fetch, slot, span}` in library code and `src/` unit tests, or
-# `Tensor::item()` / `.expect("..")` in tests, examples, and benches. A line may opt out with `// index-ok: <reason>`.
+# `Tensor::item()` / `v[i]` / zip in `tests/`, and `.expect("..")` in examples and benches. A line may opt out with `// index-ok: <reason>`.
 # Not caught: the multi-line `if let Some(&v) = x.get(i) { v } else { 0.0 }` form and
 # integer `unwrap_or(1)` shape defaults (tracked in notes/TODO.md).
 set -euo pipefail

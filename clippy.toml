@@ -1,0 +1,3 @@
+# Tests index with `v[i]` so an out-of-bounds read panics with the length and index.
+# This covers `#[test]` fns and `#[cfg(test)]` modules, not helpers outside them or examples.
+allow-indexing-slicing-in-tests = true

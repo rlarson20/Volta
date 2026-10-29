@@ -22,13 +22,11 @@ fn test_new_unary_ops_gpu_autograd() {
     {
         let expected_grad = [-1.0 / 4.0, -1.0 / 16.0]; // d(1/x)/dx = -1/x^2
         let actual_grad = x.grad_storage().unwrap().to_vec();
-        for (i, &actual) in actual_grad.iter().enumerate() {
+        assert_eq!(actual_grad.len(), expected_grad.len());
+        for (i, (&actual, &expected)) in actual_grad.iter().zip(&expected_grad).enumerate() {
             assert!(
-                (actual - expected_grad.get(i).copied().expect("index in range")).abs() < 1e-5,
-                "Recip grad failed at index {}: got {}, expected {}",
-                i,
-                actual,
-                expected_grad.get(i).copied().expect("index in range")
+                (actual - expected).abs() < 1e-5,
+                "Recip grad failed at index {i}: got {actual}, expected {expected}"
             );
         }
     }
@@ -44,13 +42,11 @@ fn test_new_unary_ops_gpu_autograd() {
         let ln2 = std::f32::consts::LN_2;
         let expected_grad = [2_f32.powf(2.0) * ln2, 2_f32.powf(4.0) * ln2]; // d(2^x)/dx = 2^x * ln(2)
         let actual_grad = x.grad_storage().unwrap().to_vec();
-        for (i, &actual) in actual_grad.iter().enumerate() {
+        assert_eq!(actual_grad.len(), expected_grad.len());
+        for (i, (&actual, &expected)) in actual_grad.iter().zip(&expected_grad).enumerate() {
             assert!(
-                (actual - expected_grad.get(i).copied().expect("index in range")).abs() < 1e-4,
-                "Exp2 grad failed at index {}: got {}, expected {}",
-                i,
-                actual,
-                expected_grad.get(i).copied().expect("index in range")
+                (actual - expected).abs() < 1e-4,
+                "Exp2 grad failed at index {i}: got {actual}, expected {expected}"
             );
         }
     }
@@ -67,13 +63,11 @@ fn test_new_unary_ops_gpu_autograd() {
         let ln2 = std::f32::consts::LN_2;
         let expected_grad = [1.0 / (1.0 * ln2), 1.0 / (2.0 * ln2)]; // d(log2(x))/dx = 1/(x*ln(2))
         let actual_grad = x_log2.grad_storage().unwrap().to_vec();
-        for (i, &actual) in actual_grad.iter().enumerate() {
+        assert_eq!(actual_grad.len(), expected_grad.len());
+        for (i, (&actual, &expected)) in actual_grad.iter().zip(&expected_grad).enumerate() {
             assert!(
-                (actual - expected_grad.get(i).copied().expect("index in range")).abs() < 1e-5,
-                "Log2 grad failed at index {}: got {}, expected {}",
-                i,
-                actual,
-                expected_grad.get(i).copied().expect("index in range")
+                (actual - expected).abs() < 1e-5,
+                "Log2 grad failed at index {i}: got {actual}, expected {expected}"
             );
         }
     }
@@ -88,13 +82,11 @@ fn test_new_unary_ops_gpu_autograd() {
     {
         let expected_grad = [2.0_f32.cos(), 4.0_f32.cos()]; // d(sin(x))/dx = cos(x)
         let actual_grad = x.grad_storage().unwrap().to_vec();
-        for (i, &actual) in actual_grad.iter().enumerate() {
+        assert_eq!(actual_grad.len(), expected_grad.len());
+        for (i, (&actual, &expected)) in actual_grad.iter().zip(&expected_grad).enumerate() {
             assert!(
-                (actual - expected_grad.get(i).copied().expect("index in range")).abs() < 1e-5,
-                "Sin grad failed at index {}: got {}, expected {}",
-                i,
-                actual,
-                expected_grad.get(i).copied().expect("index in range")
+                (actual - expected).abs() < 1e-5,
+                "Sin grad failed at index {i}: got {actual}, expected {expected}"
             );
         }
     }
@@ -109,13 +101,11 @@ fn test_new_unary_ops_gpu_autograd() {
     {
         let expected_grad = [-2.0_f32.sin(), -4.0_f32.sin()]; // d(cos(x))/dx = -sin(x)
         let actual_grad = x.grad_storage().unwrap().to_vec();
-        for (i, &actual) in actual_grad.iter().enumerate() {
+        assert_eq!(actual_grad.len(), expected_grad.len());
+        for (i, (&actual, &expected)) in actual_grad.iter().zip(&expected_grad).enumerate() {
             assert!(
-                (actual - expected_grad.get(i).copied().expect("index in range")).abs() < 1e-5,
-                "Cos grad failed at index {}: got {}, expected {}",
-                i,
-                actual,
-                expected_grad.get(i).copied().expect("index in range")
+                (actual - expected).abs() < 1e-5,
+                "Cos grad failed at index {i}: got {actual}, expected {expected}"
             );
         }
     }

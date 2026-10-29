@@ -75,8 +75,8 @@ fn test_storage_mut_access() {
 
     // Check successful mutation
     let slice = s.as_mut_slice().expect("CPU storage has a mutable slice");
-    *slice.get_mut(0).expect("index in range") = 10.0;
-    assert_eq!(s.as_slice().first().copied().expect("index in range"), 10.0);
+    slice[0] = 10.0;
+    assert_eq!(s.as_slice()[0], 10.0);
 
     // Check iterator access
     for val in &mut s {
