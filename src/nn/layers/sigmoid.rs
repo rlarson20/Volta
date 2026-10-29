@@ -1,14 +1,10 @@
 use crate::io::StateDict;
-use crate::nn::Module;
+use crate::nn::{Layer, Module};
 use crate::tensor::Tensor;
 
 pub struct Sigmoid;
 
 impl Module for Sigmoid {
-    fn forward(&self, x: &Tensor) -> Tensor {
-        x.sigmoid()
-    }
-
     fn parameters(&self) -> Vec<Tensor> {
         vec![] // No learnable params
     }
@@ -19,5 +15,11 @@ impl Module for Sigmoid {
 
     fn load_state_dict(&mut self, _state: &StateDict) {
         // Stateless
+    }
+}
+
+impl Layer for Sigmoid {
+    fn forward(&self, x: &Tensor) -> Tensor {
+        x.sigmoid()
     }
 }

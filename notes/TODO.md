@@ -21,7 +21,7 @@ Last verified: 2026-10-29.
 - [~] **H3** Unsafe GPU cache accessors. `invalidate_cpu_cache` now takes `&mut self` (`991a8b7`). The `unsafe` slice accessors and the f64/f16/bf16 GPU reinterpretation remain. Fixed by `OnceCell` storage (Phase 3).
 - [ ] **H4** The library panics on ordinary data. Panic-vs-`Result` policy is undecided (see Rust/errors).
 - [ ] **H5** GPU broadcast backward silently truncates rank > 4. The param packing in `binary_backward_broadcast_safe` now panics on rank > 4 instead; the other GPU wrappers still truncate by design with `.take(4)`.
-- [ ] **H6** TransformerBlock is decorative: parameterless `SimpleAttention`. Trait split §3.2 (Phase 3).
+- [x] **H6** TransformerBlock was decorative (parameterless `SimpleAttention`). It holds a real `MultiHeadAttention` now, `causal` is passed through, and `attention.*` state loads (DECISIONS.md, "Split layer traits").
 - [x] **H7** `load_state_dict` demoted GPU tensors to CPU. Every layer now goes through `Tensor::load_weight`, which checks shape (and numel) and keeps the destination's device. Evidence: `tests/load_state_dict_device.rs`, plus `tensor::load_weight_tests` on GPU. `load_state_dict_checked` now reports shape mismatches and skips them instead of loading them (2026-10-26).
 - [ ] **H8** Muon is a toy and panics on GPU params.
 
@@ -55,7 +55,7 @@ Last verified: 2026-10-29.
 - [ ] RNG reproducibility holes: the dataloader shuffle is unseeded, and `with_rng` falls back silently under a reentrant borrow.
 - [x] `src/io/config.rs` was dead pseudocode that no module declared. Deleted (2026-10-28).
 - [ ] The dtype system is decorative: every compute path is f32.
-- [ ] `Embedding` implements `Module::forward` as a panic stub (trait split, Phase 3).
+- [x] `Embedding` implemented `Module::forward` as a panic stub. It is an `IndexedLayer` now and cannot go in a `Sequential` (compile-fail test).
 - [ ] Mixed-device binary ops silently produce CPU output (`DevicePolicy`, Phase 3).
 - [ ] **GPU broadcast backward is broken, but unreachable** (moved out of Phase 2; it is a feature, not type work). Verified on `fff5397` (before `define_ops!`) with a 3x1 + 1x4 add: the race-free two-pass path (`binary_backward_broadcast_safe`) panics with a wgpu validation error (pass-1 bind group has 6 bindings; the auto layout keeps only the bindings the entry point uses: 3 for Add, 5 for Mul), and the deleted non-safe path returned wrong gradients silently (`[1,0,0]`/zeros, expected `[4,4,4]`/`[3,3,3,3]`). Nothing reaches it today because GPU forward never broadcasts, so a mismatched-shape op yields a CPU tensor and takes the CPU backward. Fixing it means an explicit bind group layout (or matching bindings per entry point) plus a GPU forward that broadcasts. Repro: `cargo test --lib gpu_binary_backward_broadcast_matches_cpu -- --ignored`. The orphaned non-safe pipelines are gone, so the two-pass path is the only one left to fix.
 
@@ -107,7 +107,7 @@ Last verified: 2026-10-29.
 
 ## Phase 3 — traits and storage
 
-- [ ] Sealed and split traits with trybuild tests (§3). Retires H6 and the Embedding panic.
+- [x] Split traits `Module`/`Layer`/`IndexedLayer`/`RecurrentLayer` with trybuild tests (§3.1, §3.2). `IndexedLayer` and `RecurrentLayer` are sealed; `Module` and `Layer` stay open (DECISIONS.md, "Split layer traits"). Retires H6 and the Embedding panic. `LSTMCell::forward_step` is replaced by `RecurrentLayer::step`. `pkg/README.md` and `minigrad-react/src/wasm/README.md` are copies of the old README and still show `Module::forward`.
 - [ ] `DevicePolicy` (§2.1). Retires the silent GPU→CPU fallback.
 - [ ] Storage: `Arc` / `OnceCell` / no `Deref` (§7). Retires H3 and the clone economy. Matmul operand reads must materialize contiguous (DECISIONS.md, "Matmul layout: contiguous-only").
 - [ ] Flip `RawTensor.shape` to `Shape` and make `Tensor::shape()` return it. Moved here from Phase 2: it touches about 440 kernel reads of the field, the same sites the storage rewrite rewrites (DECISIONS.md, "Shape boundary").

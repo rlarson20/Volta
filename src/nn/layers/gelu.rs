@@ -1,5 +1,5 @@
 use crate::io::StateDict;
-use crate::nn::Module;
+use crate::nn::{Layer, Module};
 use crate::tensor::{RawTensor, Tensor};
 
 /// Gaussian Error Linear Unit (GELU) activation function.
@@ -23,7 +23,7 @@ use crate::tensor::{RawTensor, Tensor};
 /// # Example
 /// ```
 /// # use volta::GELU;
-/// # use volta::Module;
+/// # use volta::Layer;
 /// # use volta::RawTensor;
 /// let gelu = GELU::new();
 /// let x = RawTensor::new(vec![1.0, -1.0, 0.0], &[3], false);
@@ -47,15 +47,6 @@ impl Default for GELU {
 }
 
 impl Module for GELU {
-    fn forward(&self, x: &Tensor) -> Tensor {
-        // gelu(x) = 0.5 * x * (1 + erf(x / sqrt(2)))
-        let sqrt2 = RawTensor::new(vec![(2.0_f32).sqrt()], &[1], false);
-        let one = RawTensor::new(vec![1.0], &[1], false);
-        let half = RawTensor::new(vec![0.5], &[1], false);
-
-        x.div(&sqrt2).erf().add(&one).elem_mul(x).elem_mul(&half)
-    }
-
     fn parameters(&self) -> Vec<Tensor> {
         vec![] // No learnable parameters
     }
@@ -70,6 +61,17 @@ impl Module for GELU {
 
     fn train(&mut self, _mode: bool) {
         // Stateless, no training/eval behavior difference
+    }
+}
+
+impl Layer for GELU {
+    fn forward(&self, x: &Tensor) -> Tensor {
+        // gelu(x) = 0.5 * x * (1 + erf(x / sqrt(2)))
+        let sqrt2 = RawTensor::new(vec![(2.0_f32).sqrt()], &[1], false);
+        let one = RawTensor::new(vec![1.0], &[1], false);
+        let half = RawTensor::new(vec![0.5], &[1], false);
+
+        x.div(&sqrt2).erf().add(&one).elem_mul(x).elem_mul(&half)
     }
 }
 

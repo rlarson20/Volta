@@ -9,10 +9,6 @@ struct CountingModule {
 }
 
 impl Module for CountingModule {
-    fn forward(&self, x: &Tensor) -> Tensor {
-        x.clone()
-    }
-
     fn parameters(&self) -> Vec<Tensor> {
         vec![]
     }
@@ -31,6 +27,12 @@ impl Module for CountingModule {
     }
 
     fn load_state_dict(&mut self, _state: &StateDict) {}
+}
+
+impl Layer for CountingModule {
+    fn forward(&self, x: &Tensor) -> Tensor {
+        x.clone()
+    }
 }
 
 #[test]

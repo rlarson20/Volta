@@ -1,6 +1,6 @@
 use crate::index::span;
 use crate::io::{StateDict, TensorData};
-use crate::nn::Module;
+use crate::nn::{Module, RecurrentLayer, SealedLayer};
 use crate::tensor::{RawTensor, Tensor};
 
 /// LSTM Cell - processes one timestep at a time
@@ -58,67 +58,6 @@ impl LSTMCell {
         }
     }
 
-    /// Forward pass for a single timestep
-    ///
-    /// # Arguments
-    /// * `input` - Input tensor of shape `[batch, input_size]`
-    /// * `state` - Optional tuple of (h, c) where h and c are `[batch, hidden_size]`
-    ///
-    /// # Returns
-    /// Tuple of `(h_next, c_next)` both of shape `[batch, hidden_size]`
-    #[must_use]
-    pub fn forward_step(
-        &self,
-        input: &Tensor,
-        state: Option<(&Tensor, &Tensor)>,
-    ) -> (Tensor, Tensor) {
-        let batch_size = input.borrow().shape.first().copied().unwrap_or(1);
-
-        // Initialize hidden and cell states if not provided
-        let (h, c) = if let Some((h, c)) = state {
-            (h.clone(), c.clone())
-        } else {
-            let h = RawTensor::zeros(&[batch_size, self.hidden_size]);
-            let c = RawTensor::zeros(&[batch_size, self.hidden_size]);
-            (h, c)
-        };
-
-        // Compute gates: input @ weight_ih + h @ weight_hh + bias
-        let gates = input.matmul(&self.weight_ih.transpose());
-        let gates = gates.add(&h.matmul(&self.weight_hh.transpose()));
-
-        let gates = if let Some(ref b_ih) = self.bias_ih {
-            let gates = gates.add(b_ih);
-            if let Some(ref b_hh) = self.bias_hh {
-                gates.add(b_hh)
-            } else {
-                gates
-            }
-        } else {
-            gates
-        };
-
-        // Split gates into i, f, g, o (each is [batch, hidden_size])
-        let i_gate = self.slice_gate(&gates, 0); // input gate
-        let f_gate = self.slice_gate(&gates, 1); // forget gate
-        let g_gate = self.slice_gate(&gates, 2); // cell gate
-        let o_gate = self.slice_gate(&gates, 3); // output gate
-
-        // Apply activations
-        let i = i_gate.sigmoid();
-        let f = f_gate.sigmoid();
-        let g = g_gate.tanh();
-        let o = o_gate.sigmoid();
-
-        // Update cell state: c_next = f * c + i * g
-        let c_next = f.elem_mul(&c).add(&i.elem_mul(&g));
-
-        // Update hidden state: h_next = o * tanh(c_next)
-        let h_next = o.elem_mul(&c_next.tanh());
-
-        (h_next, c_next)
-    }
-
     /// Helper to extract a gate from the combined gates tensor
     fn slice_gate(&self, gates: &Tensor, gate_idx: usize) -> Tensor {
         let start = gate_idx * self.hidden_size;
@@ -143,13 +82,55 @@ impl LSTMCell {
     }
 }
 
-impl Module for LSTMCell {
-    fn forward(&self, x: &Tensor) -> Tensor {
-        // For Module trait, just return hidden state
-        let (h, _c) = self.forward_step(x, None);
-        h
+impl SealedLayer for LSTMCell {}
+
+impl RecurrentLayer for LSTMCell {
+    /// `(h, c)`, each `[batch, hidden_size]`.
+    type State = (Tensor, Tensor);
+
+    fn initial_state(&self, batch: usize) -> Self::State {
+        (
+            RawTensor::zeros(&[batch, self.hidden_size]),
+            RawTensor::zeros(&[batch, self.hidden_size]),
+        )
     }
 
+    /// One timestep. `x` is `[batch, input_size]`; `state` holds `(h, c)` and is overwritten with
+    /// `(h_next, c_next)`. Returns `h_next`.
+    fn step(&self, x: &Tensor, state: &mut Self::State) -> Tensor {
+        let (h, c) = (&state.0, &state.1);
+
+        // Compute gates: x @ weight_ih + h @ weight_hh + bias
+        let gates = x.matmul(&self.weight_ih.transpose());
+        let gates = gates.add(&h.matmul(&self.weight_hh.transpose()));
+
+        let gates = if let Some(ref b_ih) = self.bias_ih {
+            let gates = gates.add(b_ih);
+            if let Some(ref b_hh) = self.bias_hh {
+                gates.add(b_hh)
+            } else {
+                gates
+            }
+        } else {
+            gates
+        };
+
+        // Split gates into i, f, g, o (each is [batch, hidden_size])
+        let i = self.slice_gate(&gates, 0).sigmoid();
+        let f = self.slice_gate(&gates, 1).sigmoid();
+        let g = self.slice_gate(&gates, 2).tanh();
+        let o = self.slice_gate(&gates, 3).sigmoid();
+
+        // c_next = f * c + i * g;  h_next = o * tanh(c_next)
+        let c_next = f.elem_mul(c).add(&i.elem_mul(&g));
+        let h_next = o.elem_mul(&c_next.tanh());
+
+        *state = (h_next.clone(), c_next);
+        h_next
+    }
+}
+
+impl Module for LSTMCell {
     fn parameters(&self) -> Vec<Tensor> {
         let mut params = vec![self.weight_ih.clone(), self.weight_hh.clone()];
         if let Some(ref b_ih) = self.bias_ih {
@@ -206,10 +187,32 @@ impl Module for LSTMCell {
 mod tests {
     use super::*;
 
+    /// One step from zero state, so `assert_trainable!` (which needs `Layer`) can drive the cell.
+    struct OneStep(LSTMCell);
+
+    impl Module for OneStep {
+        fn parameters(&self) -> Vec<Tensor> {
+            self.0.parameters()
+        }
+        fn state_dict(&self) -> StateDict {
+            self.0.state_dict()
+        }
+        fn load_state_dict(&mut self, state: &StateDict) {
+            self.0.load_state_dict(state);
+        }
+    }
+
+    impl crate::nn::Layer for OneStep {
+        fn forward(&self, x: &Tensor) -> Tensor {
+            let batch = x.shape().first().copied().expect("batch dim");
+            self.0.step(x, &mut self.0.initial_state(batch))
+        }
+    }
+
     #[test]
     #[ignore = "B2: slice_gate copies gate data into a fresh RawTensor, severing the graph; remove when fixed"]
     fn test_lstmcell_assert_trainable() {
-        let cell = LSTMCell::new(4, 8, true);
+        let cell = OneStep(LSTMCell::new(4, 8, true));
         let x = crate::macros::trainable_input(&[2, 4]);
         crate::assert_trainable!(cell, x);
     }

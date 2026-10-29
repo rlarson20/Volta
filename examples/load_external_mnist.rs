@@ -1,7 +1,7 @@
 //! Loads `PyTorch` weights (a `SafeTensors` file) into a Volta `Sequential` through `StateDictMapper`, transposing the `fc1` and `fc2` weights from the `[out, in]` layout `PyTorch` uses, then runs a demo inference.
 use std::path::Path;
 use volta::{
-    Linear, Module, RawTensor, ReLU, Sequential,
+    Layer, Linear, Module, RawTensor, ReLU, Sequential,
     io::{load_safetensors, mapping::StateDictMapper},
 };
 

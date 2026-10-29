@@ -1,5 +1,5 @@
 use crate::io::StateDict;
-use crate::nn::{GELU, Linear, Module};
+use crate::nn::{GELU, Layer, Linear, Module};
 use crate::tensor::Tensor;
 
 /// Feed-Forward Network (FFN) layer for transformer blocks
@@ -98,10 +98,6 @@ impl FeedForward {
 }
 
 impl Module for FeedForward {
-    fn forward(&self, x: &Tensor) -> Tensor {
-        self.forward(x)
-    }
-
     fn parameters(&self) -> Vec<Tensor> {
         let mut params = vec![];
         params.extend(self.expand.parameters());
@@ -154,6 +150,12 @@ impl Module for FeedForward {
     fn train(&mut self, _mode: bool) {
         // FFN has different behavior in train/eval mode (dropout)
         // For now, this is a no-op since dropout is not fully implemented
+    }
+}
+
+impl Layer for FeedForward {
+    fn forward(&self, x: &Tensor) -> Tensor {
+        self.forward(x)
     }
 }
 

@@ -9,7 +9,7 @@
 //! the architecture and training process.
 
 use volta::{
-    Adam, Conv2d, Module, PixelShuffle, RawTensor, ReLU, Sequential, manual_seed, mse_loss,
+    Adam, Conv2d, Layer, Module, PixelShuffle, RawTensor, ReLU, Sequential, manual_seed, mse_loss,
 };
 
 fn main() {

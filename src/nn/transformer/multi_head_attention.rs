@@ -1,5 +1,5 @@
 use crate::io::StateDict;
-use crate::nn::{LayerNorm, Linear, Module};
+use crate::nn::{Layer, LayerNorm, Linear, Module};
 use crate::shape::Axis;
 use crate::tensor::{RawTensor, Tensor};
 
@@ -229,10 +229,6 @@ impl MultiHeadAttention {
 }
 
 impl Module for MultiHeadAttention {
-    fn forward(&self, x: &Tensor) -> Tensor {
-        self.forward(x, false, None)
-    }
-
     fn parameters(&self) -> Vec<Tensor> {
         let mut params = vec![];
 
@@ -323,6 +319,12 @@ impl Module for MultiHeadAttention {
     fn train(&mut self, _mode: bool) {
         // Notify Linear layers if they have dropout behavior
         // (currently Linear doesn't have dropout, but this is for future compatibility)
+    }
+}
+
+impl Layer for MultiHeadAttention {
+    fn forward(&self, x: &Tensor) -> Tensor {
+        self.forward(x, false, None)
     }
 }
 

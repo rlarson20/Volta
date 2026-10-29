@@ -1,5 +1,5 @@
 use crate::io::{StateDict, TensorData};
-use crate::nn::Module;
+use crate::nn::{Layer, Module};
 use crate::shape::Axis;
 use crate::tensor::{RawTensor, Tensor};
 
@@ -73,6 +73,34 @@ impl LayerNorm {
 }
 
 impl Module for LayerNorm {
+    fn parameters(&self) -> Vec<Tensor> {
+        vec![self.gamma.clone(), self.beta.clone()]
+    }
+
+    fn state_dict(&self) -> StateDict {
+        let mut state = StateDict::new();
+        state.insert("gamma".to_string(), TensorData::from_tensor(&self.gamma));
+        state.insert("beta".to_string(), TensorData::from_tensor(&self.beta));
+        state
+    }
+
+    fn load_state_dict(&mut self, state: &StateDict) {
+        let params = [("gamma", &self.gamma), ("beta", &self.beta)];
+
+        for (key, tensor) in params {
+            if let Some(t) = state.get(key) {
+                tensor.load_weight(key, t);
+            }
+        }
+    }
+
+    fn train(&mut self, _mode: bool) {
+        // LayerNorm has the same behavior in train and eval mode
+        // (no running statistics, unlike BatchNorm)
+    }
+}
+
+impl Layer for LayerNorm {
     fn forward(&self, x: &Tensor) -> Tensor {
         let input_shape = x.borrow().shape.clone();
         let input_rank = input_shape.len();
@@ -130,32 +158,6 @@ impl Module for LayerNorm {
 
         // Reshape back to original shape
         out.reshape(&input_shape)
-    }
-
-    fn parameters(&self) -> Vec<Tensor> {
-        vec![self.gamma.clone(), self.beta.clone()]
-    }
-
-    fn state_dict(&self) -> StateDict {
-        let mut state = StateDict::new();
-        state.insert("gamma".to_string(), TensorData::from_tensor(&self.gamma));
-        state.insert("beta".to_string(), TensorData::from_tensor(&self.beta));
-        state
-    }
-
-    fn load_state_dict(&mut self, state: &StateDict) {
-        let params = [("gamma", &self.gamma), ("beta", &self.beta)];
-
-        for (key, tensor) in params {
-            if let Some(t) = state.get(key) {
-                tensor.load_weight(key, t);
-            }
-        }
-    }
-
-    fn train(&mut self, _mode: bool) {
-        // LayerNorm has the same behavior in train and eval mode
-        // (no running statistics, unlike BatchNorm)
     }
 }
 

@@ -2,7 +2,7 @@
 //!
 //! Images are normalized to `[-1, 1]` to match the generator's `Tanh` output.
 use volta::{
-    Conv2d, ConvTranspose2d, Flatten, Linear, Module, ProgressBar, RawTensor, SGD, Tanh,
+    Conv2d, ConvTranspose2d, Flatten, Layer, Linear, Module, ProgressBar, RawTensor, SGD, Tanh,
     bce_with_logits_loss, load_mnist_images, normalize, randn,
 };
 

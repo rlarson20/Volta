@@ -1,6 +1,6 @@
-//! `LSTMCell`: output shapes, zero-state initialization, gate math against known weights, state propagation across steps, forget-gate dominance, gradient flow, the no-bias variant, and `Module::forward`.
+//! `LSTMCell`: output shapes, zero-state initialization, gate math against known weights, state propagation across steps, forget-gate dominance, gradient flow, the no-bias variant, and `RecurrentLayer::step`.
 use volta::io::{StateDict, TensorData};
-use volta::nn::{LSTMCell, Module};
+use volta::nn::{LSTMCell, Module, RecurrentLayer};
 use volta::tensor::RawTensor;
 
 // LSTMCell::new(4, 3, true), input [2,4], no initial state -> h,c shapes = [2,3]
@@ -9,7 +9,9 @@ fn test_lstm_output_shapes() {
     let lstm = LSTMCell::new(4, 3, true);
     let x = RawTensor::new(vec![1.0; 8], &[2, 4], false);
 
-    let (h, c) = lstm.forward_step(&x, None);
+    let mut state = lstm.initial_state(2);
+    let h = lstm.step(&x, &mut state);
+    let c = state.1.clone();
 
     assert_eq!(
         h.shape(),
@@ -23,17 +25,19 @@ fn test_lstm_output_shapes() {
     );
 }
 
-// forward_step(x, None) should produce the same result as
-// forward_step(x, Some(zeros, zeros))
+// step from `initial_state` should produce the same result as
+// step from an explicit (zeros, zeros) state
 #[test]
 fn test_lstm_zero_state_init() {
     let lstm = LSTMCell::new(3, 2, true);
     let x = RawTensor::new(vec![0.5, -0.3, 0.7, 1.0, 0.2, -0.5], &[2, 3], false);
 
-    let (h_none, c_none) = lstm.forward_step(&x, None);
-    let h0 = RawTensor::zeros(&[2, 2]);
-    let c0 = RawTensor::zeros(&[2, 2]);
-    let (h_zero, c_zero) = lstm.forward_step(&x, Some((&h0, &c0)));
+    let mut state_none = lstm.initial_state(2);
+    let h_none = lstm.step(&x, &mut state_none);
+    let c_none = state_none.1.clone();
+    let mut state_zero = (RawTensor::zeros(&[2, 2]), RawTensor::zeros(&[2, 2]));
+    let h_zero = lstm.step(&x, &mut state_zero);
+    let c_zero = state_zero.1.clone();
 
     let h_none_data = h_none.data();
     let h_zero_data = h_zero.data();
@@ -104,7 +108,9 @@ fn test_lstm_gate_math_known_weights() {
     lstm.load_state_dict(&state);
 
     let x = RawTensor::new(vec![2.0], &[1, 1], false);
-    let (h, c) = lstm.forward_step(&x, None);
+    let mut state = lstm.initial_state(1);
+    let h = lstm.step(&x, &mut state);
+    let c = state.1.clone();
 
     // Manual computation: gates all = 2.0 (x=2, w=1, h=0, bias=0)
     let sig2 = 1.0_f64 / (1.0 + (-2.0_f64).exp()); // sigmoid(2)
@@ -141,17 +147,21 @@ fn test_lstm_state_propagation() {
     let x3 = RawTensor::new(vec![-0.5, 0.3, 0.1], &[1, 3], false);
 
     // Step 1: no initial state
-    let (h1, c1) = lstm.forward_step(&x1, None);
+    let mut state = lstm.initial_state(1);
+    let h1 = lstm.step(&x1, &mut state);
+    let c1 = state.1.clone();
     assert_eq!(h1.shape(), vec![1, 4]);
     assert_eq!(c1.shape(), vec![1, 4]);
 
     // Step 2: feed forward state
-    let (h2, c2) = lstm.forward_step(&x2, Some((&h1, &c1)));
+    let h2 = lstm.step(&x2, &mut state);
+    let c2 = state.1.clone();
     assert_eq!(h2.shape(), vec![1, 4]);
     assert_eq!(c2.shape(), vec![1, 4]);
 
     // Step 3: feed forward again
-    let (h3, c3) = lstm.forward_step(&x3, Some((&h2, &c2)));
+    let h3 = lstm.step(&x3, &mut state);
+    let c3 = state.1.clone();
     assert_eq!(h3.shape(), vec![1, 4]);
     assert_eq!(c3.shape(), vec![1, 4]);
 
@@ -241,7 +251,9 @@ fn test_lstm_forget_gate_dominance() {
     let c_init = RawTensor::new(vec![3.0, -2.0], &[1, hidden], false);
     let h_init = RawTensor::zeros(&[1, hidden]);
 
-    let (_h_next, c_next) = lstm.forward_step(&x, Some((&h_init, &c_init)));
+    let mut state = (h_init, c_init.clone());
+    let _ = lstm.step(&x, &mut state);
+    let c_next = state.1.clone();
 
     let c_init_data = c_init.data();
     let c_next_data = c_next.data();
@@ -255,7 +267,7 @@ fn test_lstm_forget_gate_dominance() {
     }
 }
 
-// Test that gradients flow through forward_step.
+// Test that gradients flow through step.
 //
 // Known limitation: `slice_gate()` in lstm.rs copies raw floats into new
 // `RawTensor::new()` calls, which breaks the autograd graph. If this test
@@ -266,7 +278,8 @@ fn test_lstm_gradient_flow() {
     let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
     x.set_requires_grad(true);
 
-    let (h, _c) = lstm.forward_step(&x, None);
+    let mut state = lstm.initial_state(2);
+    let h = lstm.step(&x, &mut state);
     let loss = h.sum();
 
     // Known limitation: slice_gate breaks the autograd graph.
@@ -325,7 +338,9 @@ fn test_lstm_no_bias() {
 
     // Forward should produce valid output
     let x = RawTensor::new(vec![1.0, -1.0, 0.5, 0.5], &[2, 2], false);
-    let (h, c) = lstm.forward_step(&x, None);
+    let mut state = lstm.initial_state(2);
+    let h = lstm.step(&x, &mut state);
+    let c = state.1.clone();
 
     assert_eq!(h.shape(), vec![2, 2]);
     assert_eq!(c.shape(), vec![2, 2]);
@@ -339,18 +354,18 @@ fn test_lstm_no_bias() {
     }
 }
 
-// lstm.forward(&x) (Module trait) returns hidden state with correct shape.
+// step returns the hidden state with correct shape.
 #[test]
-fn test_lstm_module_forward() {
+fn test_lstm_step_output() {
     let lstm = LSTMCell::new(5, 3, true);
     let x = RawTensor::new(vec![0.1; 10], &[2, 5], false);
 
-    let h = lstm.forward(&x);
+    let h = lstm.step(&x, &mut lstm.initial_state(2));
 
     assert_eq!(
         h.shape(),
         vec![2, 3],
-        "Module::forward should return h with shape [batch, hidden]"
+        "step should return h with shape [batch, hidden]"
     );
 
     // Values should be finite and bounded by tanh

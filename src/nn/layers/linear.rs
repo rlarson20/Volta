@@ -1,6 +1,6 @@
 use crate::device::Device;
 use crate::io::{StateDict, TensorData};
-use crate::nn::Module;
+use crate::nn::{Layer, Module};
 use crate::tensor::{RawTensor, Tensor};
 
 /// Fully-connected (dense/linear) layer
@@ -12,9 +12,6 @@ pub struct Linear {
     pub bias: Option<Tensor>,
 }
 impl Module for Linear {
-    fn forward(&self, x: &Tensor) -> Tensor {
-        self.forward(x)
-    }
     fn parameters(&self) -> Vec<Tensor> {
         let mut params = vec![self.weight.clone()];
         if let Some(ref bias) = self.bias {
@@ -40,6 +37,12 @@ impl Module for Linear {
         if let (Some(b), Some(bias_tensor)) = (state.get("bias"), self.bias.as_ref()) {
             bias_tensor.load_weight("bias", b);
         }
+    }
+}
+
+impl Layer for Linear {
+    fn forward(&self, x: &Tensor) -> Tensor {
+        self.forward(x)
     }
 }
 impl Linear {

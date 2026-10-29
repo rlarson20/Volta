@@ -1,5 +1,5 @@
 use crate::io::StateDict;
-use crate::nn::Module;
+use crate::nn::{Layer, Module};
 use crate::tensor::Tensor;
 
 /// Flattens the input tensor into a 2D tensor (`batch_size`, `remaining_features`).
@@ -23,6 +23,20 @@ impl Default for Flatten {
 }
 
 impl Module for Flatten {
+    fn parameters(&self) -> Vec<Tensor> {
+        vec![]
+    }
+
+    fn state_dict(&self) -> StateDict {
+        StateDict::new()
+    }
+
+    fn load_state_dict(&mut self, _state: &StateDict) {
+        // Stateless
+    }
+}
+
+impl Layer for Flatten {
     fn forward(&self, x: &Tensor) -> Tensor {
         let shape = x.borrow().shape.clone();
         if shape.len() < 2 {
@@ -34,18 +48,6 @@ impl Module for Flatten {
         let flattened_size: usize = shape.get(1..).map_or(1, |s| s.iter().product());
 
         x.reshape(&[batch_size, flattened_size])
-    }
-
-    fn parameters(&self) -> Vec<Tensor> {
-        vec![]
-    }
-
-    fn state_dict(&self) -> StateDict {
-        StateDict::new()
-    }
-
-    fn load_state_dict(&mut self, _state: &StateDict) {
-        // Stateless
     }
 }
 

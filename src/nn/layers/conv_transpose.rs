@@ -2,7 +2,7 @@ use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::index::{fetch, slot};
 use crate::io::{StateDict, TensorData};
-use crate::nn::Module;
+use crate::nn::{Layer, Module};
 use crate::shape::Axis;
 use crate::shape::Shape;
 use crate::spec::ConvTranspose2dSpec;
@@ -303,6 +303,37 @@ impl ConvTranspose2dGradFn {
 }
 
 impl Module for ConvTranspose2d {
+    fn parameters(&self) -> Vec<Tensor> {
+        let mut params = vec![self.weight.clone()];
+        if let Some(ref b) = self.bias {
+            params.push(b.clone());
+        }
+        params
+    }
+
+    fn state_dict(&self) -> StateDict {
+        let mut state = StateDict::new();
+        state.insert("weight".to_string(), TensorData::from_tensor(&self.weight));
+        if let Some(ref b) = self.bias {
+            state.insert("bias".to_string(), TensorData::from_tensor(b));
+        }
+        state
+    }
+
+    fn load_state_dict(&mut self, state: &StateDict) {
+        if let Some(w) = state.get("weight") {
+            self.weight.load_weight("weight", w);
+        }
+        if let Some(b) = state.get("bias")
+            && self.bias.is_some()
+        {
+            let bias_tensor = self.bias.as_ref().unwrap();
+            bias_tensor.load_weight("bias", b);
+        }
+    }
+}
+
+impl Layer for ConvTranspose2d {
     fn forward(&self, x: &Tensor) -> Tensor {
         let spec = ConvTranspose2dSpec::new(
             &Shape::derived(x.shape()),
@@ -374,35 +405,6 @@ impl Module for ConvTranspose2d {
                 has_bias,
             }),
         )
-    }
-
-    fn parameters(&self) -> Vec<Tensor> {
-        let mut params = vec![self.weight.clone()];
-        if let Some(ref b) = self.bias {
-            params.push(b.clone());
-        }
-        params
-    }
-
-    fn state_dict(&self) -> StateDict {
-        let mut state = StateDict::new();
-        state.insert("weight".to_string(), TensorData::from_tensor(&self.weight));
-        if let Some(ref b) = self.bias {
-            state.insert("bias".to_string(), TensorData::from_tensor(b));
-        }
-        state
-    }
-
-    fn load_state_dict(&mut self, state: &StateDict) {
-        if let Some(w) = state.get("weight") {
-            self.weight.load_weight("weight", w);
-        }
-        if let Some(b) = state.get("bias")
-            && self.bias.is_some()
-        {
-            let bias_tensor = self.bias.as_ref().unwrap();
-            bias_tensor.load_weight("bias", b);
-        }
     }
 }
 

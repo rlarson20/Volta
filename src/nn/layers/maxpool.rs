@@ -2,7 +2,7 @@ use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::index::{fetch, slot};
 use crate::io::StateDict;
-use crate::nn::Module;
+use crate::nn::{Layer, Module};
 use crate::shape::Shape;
 use crate::spec::{PadValue, Window2dSpec};
 use crate::storage::Storage;
@@ -137,10 +137,6 @@ impl MaxPool2d {
 }
 
 impl Module for MaxPool2d {
-    fn forward(&self, x: &Tensor) -> Tensor {
-        self.pool_forward(x)
-    }
-
     fn parameters(&self) -> Vec<Tensor> {
         vec![]
     }
@@ -150,6 +146,12 @@ impl Module for MaxPool2d {
 
     fn load_state_dict(&mut self, _state: &StateDict) {
         // Stateless
+    }
+}
+
+impl Layer for MaxPool2d {
+    fn forward(&self, x: &Tensor) -> Tensor {
+        self.pool_forward(x)
     }
 }
 
@@ -170,7 +172,7 @@ impl MaxPool2dGradFn {
 #[cfg(test)]
 mod tests {
     use super::MaxPool2d;
-    use crate::nn::Module;
+    use crate::nn::Layer;
     use crate::tensor::RawTensor;
 
     // ==================== Basic Existing Tests ====================

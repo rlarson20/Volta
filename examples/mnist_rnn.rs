@@ -6,8 +6,8 @@
 //! state is used for classification.
 use std::path::Path;
 use volta::{
-    Adam, BatchNorm1d, DataLoader, LSTMCell, Linear, Module, ProgressBar, RawTensor,
-    load_mnist_images, load_mnist_labels, to_one_hot,
+    Adam, BatchNorm1d, DataLoader, LSTMCell, Layer, Linear, Module, ProgressBar, RawTensor,
+    RecurrentLayer, load_mnist_images, load_mnist_labels, to_one_hot,
 };
 
 /// Extract a single timestep from a batched sequence tensor.
@@ -144,22 +144,17 @@ fn main() {
 
             // Process sequence through LSTM
             // batch_x shape: [batch, 28, 28]
-            let mut h_state: Option<(volta::Tensor, volta::Tensor)> = None;
+            let batch = batch_x.shape().first().copied().expect("batch dim");
+            let mut state = lstm.initial_state(batch);
 
             for t in 0..seq_len {
                 // Extract timestep t: [batch, 28]
                 let x_t = extract_timestep(&batch_x, t);
-
-                let (h_new, c_new) = match &h_state {
-                    Some((h, c)) => lstm.forward_step(&x_t, Some((h, c))),
-                    None => lstm.forward_step(&x_t, None),
-                };
-
-                h_state = Some((h_new, c_new));
+                let _ = lstm.step(&x_t, &mut state);
             }
 
             // Use final hidden state for classification
-            let (h_final, _) = h_state.unwrap();
+            let (h_final, _) = state;
 
             // BatchNorm + Classification
             let h_norm = bn.forward(&h_final);
@@ -190,20 +185,15 @@ fn main() {
 
     for (test_x, test_y) in &mut dataloader {
         // Process sequence through LSTM
-        let mut h_state: Option<(volta::Tensor, volta::Tensor)> = None;
+        let batch = test_x.shape().first().copied().expect("batch dim");
+        let mut state = lstm.initial_state(batch);
 
         for t in 0..seq_len {
             let x_t = extract_timestep(&test_x, t);
-
-            let (h_new, c_new) = match &h_state {
-                Some((h, c)) => lstm.forward_step(&x_t, Some((h, c))),
-                None => lstm.forward_step(&x_t, None),
-            };
-
-            h_state = Some((h_new, c_new));
+            let _ = lstm.step(&x_t, &mut state);
         }
 
-        let (h_final, _) = h_state.unwrap();
+        let (h_final, _) = state;
         let h_norm = bn.forward(&h_final);
         let logits = classifier.forward(&h_norm);
 

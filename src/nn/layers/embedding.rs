@@ -2,7 +2,7 @@ use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::index::{fetch, slot, span};
 use crate::io::StateDict;
-use crate::nn::Module;
+use crate::nn::{IndexedLayer, Module, SealedLayer};
 use crate::shape::Shape;
 use crate::storage::Storage;
 use crate::tensor::{RawTensor, Tensor, with_rng};
@@ -24,11 +24,11 @@ use rand::Rng;
 ///
 /// # Examples
 /// ```
-/// use volta::{RawTensor, Embedding, nn::Module};
+/// use volta::{Embedding, nn::IndexedLayer};
 ///
 /// let embedding = Embedding::new(100, 32);  // 100 vocab, 32-dim embeddings
 /// let indices = vec![5, 12, 7];
-/// let embedded = embedding.forward(&indices);
+/// let embedded = embedding.forward_indices(&indices);
 /// assert_eq!(embedded.shape(), vec![3, 32]);
 /// ```
 #[derive(Clone, Debug)]
@@ -66,7 +66,11 @@ impl Embedding {
             dim: embedding_dim,
         }
     }
+}
 
+impl SealedLayer for Embedding {}
+
+impl IndexedLayer for Embedding {
     /// Forward pass: lookup embeddings for given indices
     ///
     /// # Arguments
@@ -77,8 +81,7 @@ impl Embedding {
     ///
     /// # Panics
     /// Panics if any index is >= `vocab_size`
-    #[must_use]
-    pub fn forward(&self, indices: &[usize]) -> Tensor {
+    fn forward_indices(&self, indices: &[usize]) -> Tensor {
         assert!(!indices.is_empty(), "indices cannot be empty");
 
         let weight_borrowed = self.weight.borrow();
@@ -118,14 +121,6 @@ impl Embedding {
 }
 
 impl Module for Embedding {
-    fn forward(&self, _x: &Tensor) -> Tensor {
-        // For compatibility with Module trait, we can't use indices directly
-        // This is a workaround - in practice, use the Embedding::forward method directly
-        panic!(
-            "Embedding layer should be called with Embedding::forward(&indices), not Module::forward"
-        );
-    }
-
     fn parameters(&self) -> Vec<Tensor> {
         vec![self.weight.clone()]
     }
@@ -190,7 +185,7 @@ mod tests {
     fn test_embedding_forward_shape() {
         let embedding = Embedding::new(100, 32);
         let indices = vec![5, 12, 7, 99];
-        let output = embedding.forward(&indices);
+        let output = embedding.forward_indices(&indices);
 
         assert_eq!(output.borrow().shape, vec![4, 32]);
     }
@@ -199,7 +194,7 @@ mod tests {
     fn test_embedding_values() {
         let embedding = Embedding::new(10, 4);
         let indices = vec![0, 5, 9];
-        let output = embedding.forward(&indices);
+        let output = embedding.forward_indices(&indices);
 
         let weight_data = &embedding.weight.borrow().data;
         let output_data = &output.borrow().data;
@@ -219,7 +214,7 @@ mod tests {
     fn test_embedding_backward_flow() {
         let embedding = Embedding::new(10, 4);
         let indices = vec![2, 7, 2]; // Note: repeated index 2
-        let output = embedding.forward(&indices);
+        let output = embedding.forward_indices(&indices);
 
         // Sum and backward
         let loss = output.sum();
@@ -256,7 +251,7 @@ mod tests {
     fn test_embedding_invalid_index() {
         let embedding = Embedding::new(10, 4);
         let indices = vec![5, 15]; // 15 is out of bounds
-        let _ = embedding.forward(&indices);
+        let _ = embedding.forward_indices(&indices);
     }
 
     #[test]

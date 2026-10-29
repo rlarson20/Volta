@@ -1,8 +1,8 @@
 use crate::Device;
 use crate::index::fetch;
 use crate::io::StateDict;
-use crate::nn::Module;
 use crate::nn::layers::embedding::Embedding;
+use crate::nn::{IndexedLayer, Module};
 use crate::tensor::{RawTensor, Tensor};
 
 /// Positional encoding type
@@ -176,7 +176,7 @@ impl PositionalEncoding {
                 // Create position indices [0, 1, ..., seq_len-1]
                 let positions: Vec<usize> = (0..seq_len).collect();
                 // Look up learned embeddings: [seq_len, embed_dim]
-                let pos_emb = emb.forward(&positions);
+                let pos_emb = emb.forward_indices(&positions);
 
                 // Add to each batch element
                 let mut result_data = Vec::with_capacity(batch_size * seq_len * embed_dim);

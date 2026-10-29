@@ -3,8 +3,8 @@
 //! If the MNIST files under `data/mnist` are missing it falls back to synthetic data and prints how to download the real set.
 use std::path::Path;
 use volta::{
-    Conv2d, DataLoader, Dropout, Flatten, Linear, MaxPool2d, Module, ProgressBar, RawTensor, ReLU,
-    SGD, Sequential, load_mnist_images, load_mnist_labels, to_one_hot,
+    Conv2d, DataLoader, Dropout, Flatten, Layer, Linear, MaxPool2d, Module, ProgressBar, RawTensor,
+    ReLU, SGD, Sequential, load_mnist_images, load_mnist_labels, to_one_hot,
 };
 
 fn main() {

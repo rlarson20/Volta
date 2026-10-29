@@ -7,7 +7,7 @@
 //! - Full training loop staying on GPU
 //! - Performance comparison with CPU training
 use std::time::Instant;
-use volta::{Adam, Device, Linear, Module, RawTensor, ReLU, Sequential, Tensor, mse_loss};
+use volta::{Adam, Device, Layer, Linear, Module, RawTensor, ReLU, Sequential, Tensor, mse_loss};
 
 fn main() {
     println!("=== Volta GPU Training Example ===\n");

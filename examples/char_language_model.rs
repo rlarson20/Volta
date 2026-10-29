@@ -8,7 +8,10 @@
 //! The model predicts the next character in a sequence, learning patterns
 //! from a small text corpus.
 use std::collections::HashMap;
-use volta::{Adam, Dropout, Embedding, LSTMCell, Linear, Module, RawTensor, manual_seed};
+use volta::{
+    Adam, Dropout, Embedding, IndexedLayer, LSTMCell, Layer, Linear, Module, RawTensor,
+    RecurrentLayer, manual_seed,
+};
 
 /// Vocabulary for character-level language modeling
 struct CharVocab {
@@ -104,19 +107,17 @@ fn forward_and_compute_loss(
     targets: &[usize],
     vocab_size: usize,
 ) -> volta::Tensor {
-    let mut h_state: Option<(volta::Tensor, volta::Tensor)> = None;
+    let mut state = model.lstm.initial_state(1);
     let mut all_logits = Vec::new();
     let mut all_targets = Vec::new();
 
     for (&input_idx, &target_idx) in inputs.iter().zip(targets) {
         // Embedding lookup
-        let emb = model.embedding.forward(&[input_idx]);
+        let emb = model.embedding.forward_indices(&[input_idx]);
         let emb_drop = model.dropout.forward(&emb);
 
         // LSTM step
-        let (h_new, c_new) = model
-            .lstm
-            .forward_step(&emb_drop, h_state.as_ref().map(|(h, c)| (h, c)));
+        let h_new = model.lstm.step(&emb_drop, &mut state);
 
         // Decode
         let h_drop = model.dropout.forward(&h_new);
@@ -124,8 +125,6 @@ fn forward_and_compute_loss(
 
         all_logits.push(logits);
         all_targets.push(target_idx);
-
-        h_state = Some((h_new, c_new));
     }
 
     // Compute loss by accumulating cross-entropy for each timestep
@@ -163,16 +162,13 @@ fn generate(
     model.train_mode(false); // Disable dropout for generation
 
     let mut result = seed.to_string();
-    let mut h_state: Option<(volta::Tensor, volta::Tensor)> = None;
+    let mut state = model.lstm.initial_state(1);
 
     // Prime with seed text
     for c in seed.chars() {
         if let Some(&idx) = vocab.char_to_idx.get(&c) {
-            let emb = model.embedding.forward(&[idx]);
-            let (h_new, c_new) = model
-                .lstm
-                .forward_step(&emb, h_state.as_ref().map(|(h, c)| (h, c)));
-            h_state = Some((h_new, c_new));
+            let emb = model.embedding.forward_indices(&[idx]);
+            let _ = model.lstm.step(&emb, &mut state);
         }
     }
 
@@ -180,10 +176,8 @@ fn generate(
     let mut current_idx = vocab.encode_char(seed.chars().last().unwrap_or('a'));
 
     for _ in 0..length {
-        let emb = model.embedding.forward(&[current_idx]);
-        let (h_new, c_new) = model
-            .lstm
-            .forward_step(&emb, h_state.as_ref().map(|(h, c)| (h, c)));
+        let emb = model.embedding.forward_indices(&[current_idx]);
+        let h_new = model.lstm.step(&emb, &mut state);
         let logits = model.decoder.forward(&h_new);
 
         // Apply temperature and sample
@@ -202,7 +196,6 @@ fn generate(
 
         current_idx = max_idx;
         result.push(vocab.decode_char(current_idx));
-        h_state = Some((h_new, c_new));
     }
 
     model.train_mode(true); // Re-enable dropout

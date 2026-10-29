@@ -11,16 +11,16 @@
 ///
 /// One deliberate departure from the originally-sketched version of this macro:
 ///
-/// - `forward`/`parameters` are called via UFCS (`<_ as Module>::method(..)`), not
+/// - `forward`/`parameters` are called via UFCS (`<_ as Layer>::forward(..)`, `<_ as Module>::parameters(..)`), not
 ///   `.method()`. Some layers (`MultiHeadAttention`, `TransformerBlock`) have an
 ///   inherent `forward` with extra params (causal masking, etc.) alongside
-///   `Module::forward`. Inherent methods always win over trait methods in
+///   `Layer::forward`. Inherent methods always win over trait methods in
 ///   `.method()` resolution regardless of arity, so plain `$layer.forward(&$input)`
 ///   would resolve to the wrong one and fail to compile for those layers.
 #[macro_export]
 macro_rules! assert_trainable {
     ($layer:expr, $input:expr) => {{
-        let output = <_ as $crate::nn::Module>::forward(&$layer, &$input);
+        let output = <_ as $crate::nn::Layer>::forward(&$layer, &$input);
         // Randomly weighted sum, not plain `.sum()`: under a plain sum, normalized
         // activations sum to zero, so e.g. BatchNorm's gamma gets an exactly-zero
         // gradient for ANY input — a false positive, not a severed graph.

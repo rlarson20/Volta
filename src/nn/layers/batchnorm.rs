@@ -1,6 +1,6 @@
 use crate::index::{fetch, slot};
 use crate::io::{StateDict, TensorData};
-use crate::nn::Module;
+use crate::nn::{Layer, Module};
 use crate::shape::Axis;
 use crate::tensor::{RawTensor, Tensor};
 
@@ -49,6 +49,47 @@ impl BatchNorm2d {
 }
 
 impl Module for BatchNorm2d {
+    fn parameters(&self) -> Vec<Tensor> {
+        vec![self.gamma.clone(), self.beta.clone()]
+    }
+
+    fn train(&mut self, mode: bool) {
+        self.training = mode;
+    }
+
+    fn state_dict(&self) -> StateDict {
+        let mut state = StateDict::new();
+        state.insert("gamma".to_string(), TensorData::from_tensor(&self.gamma));
+        state.insert("beta".to_string(), TensorData::from_tensor(&self.beta));
+        state.insert(
+            "running_mean".to_string(),
+            TensorData::from_tensor(&self.running_mean),
+        );
+        state.insert(
+            "running_var".to_string(),
+            TensorData::from_tensor(&self.running_var),
+        );
+        state
+    }
+
+    fn load_state_dict(&mut self, state: &StateDict) {
+        // Create a list of tuples mapping the string key to the specific tensor
+        let params = [
+            ("gamma", &self.gamma),
+            ("beta", &self.beta),
+            ("running_mean", &self.running_mean),
+            ("running_var", &self.running_var),
+        ];
+
+        for (key, tensor) in params {
+            if let Some(t) = state.get(key) {
+                tensor.load_weight(key, t);
+            }
+        }
+    }
+}
+
+impl Layer for BatchNorm2d {
     fn forward(&self, x: &Tensor) -> Tensor {
         let x_borrow = x.borrow();
         assert_eq!(
@@ -141,45 +182,6 @@ impl Module for BatchNorm2d {
         let out_perm = out_flat.reshape(&[self.num_features, b, h, w]);
         out_perm.permute(&[Axis(1), Axis(0), Axis(2), Axis(3)])
     }
-
-    fn parameters(&self) -> Vec<Tensor> {
-        vec![self.gamma.clone(), self.beta.clone()]
-    }
-
-    fn train(&mut self, mode: bool) {
-        self.training = mode;
-    }
-
-    fn state_dict(&self) -> StateDict {
-        let mut state = StateDict::new();
-        state.insert("gamma".to_string(), TensorData::from_tensor(&self.gamma));
-        state.insert("beta".to_string(), TensorData::from_tensor(&self.beta));
-        state.insert(
-            "running_mean".to_string(),
-            TensorData::from_tensor(&self.running_mean),
-        );
-        state.insert(
-            "running_var".to_string(),
-            TensorData::from_tensor(&self.running_var),
-        );
-        state
-    }
-
-    fn load_state_dict(&mut self, state: &StateDict) {
-        // Create a list of tuples mapping the string key to the specific tensor
-        let params = [
-            ("gamma", &self.gamma),
-            ("beta", &self.beta),
-            ("running_mean", &self.running_mean),
-            ("running_var", &self.running_var),
-        ];
-
-        for (key, tensor) in params {
-            if let Some(t) = state.get(key) {
-                tensor.load_weight(key, t);
-            }
-        }
-    }
 }
 
 /// Batch Normalization for 2D inputs (B, C).
@@ -230,6 +232,46 @@ impl BatchNorm1d {
 }
 
 impl Module for BatchNorm1d {
+    fn parameters(&self) -> Vec<Tensor> {
+        vec![self.gamma.clone(), self.beta.clone()]
+    }
+
+    fn train(&mut self, mode: bool) {
+        self.training = mode;
+    }
+
+    fn state_dict(&self) -> StateDict {
+        let mut state = StateDict::new();
+        state.insert("gamma".to_string(), TensorData::from_tensor(&self.gamma));
+        state.insert("beta".to_string(), TensorData::from_tensor(&self.beta));
+        state.insert(
+            "running_mean".to_string(),
+            TensorData::from_tensor(&self.running_mean),
+        );
+        state.insert(
+            "running_var".to_string(),
+            TensorData::from_tensor(&self.running_var),
+        );
+        state
+    }
+
+    fn load_state_dict(&mut self, state: &StateDict) {
+        let params = [
+            ("gamma", &self.gamma),
+            ("beta", &self.beta),
+            ("running_mean", &self.running_mean),
+            ("running_var", &self.running_var),
+        ];
+
+        for (key, tensor) in params {
+            if let Some(t) = state.get(key) {
+                tensor.load_weight(key, t);
+            }
+        }
+    }
+}
+
+impl Layer for BatchNorm1d {
     fn forward(&self, x: &Tensor) -> Tensor {
         let x_borrow = x.borrow();
         assert_eq!(
@@ -294,43 +336,5 @@ impl Module for BatchNorm1d {
         let beta_r = self.beta.reshape(&[1, self.num_features]);
 
         x_norm.elem_mul(&gamma_r).add(&beta_r)
-    }
-
-    fn parameters(&self) -> Vec<Tensor> {
-        vec![self.gamma.clone(), self.beta.clone()]
-    }
-
-    fn train(&mut self, mode: bool) {
-        self.training = mode;
-    }
-
-    fn state_dict(&self) -> StateDict {
-        let mut state = StateDict::new();
-        state.insert("gamma".to_string(), TensorData::from_tensor(&self.gamma));
-        state.insert("beta".to_string(), TensorData::from_tensor(&self.beta));
-        state.insert(
-            "running_mean".to_string(),
-            TensorData::from_tensor(&self.running_mean),
-        );
-        state.insert(
-            "running_var".to_string(),
-            TensorData::from_tensor(&self.running_var),
-        );
-        state
-    }
-
-    fn load_state_dict(&mut self, state: &StateDict) {
-        let params = [
-            ("gamma", &self.gamma),
-            ("beta", &self.beta),
-            ("running_mean", &self.running_mean),
-            ("running_var", &self.running_var),
-        ];
-
-        for (key, tensor) in params {
-            if let Some(t) = state.get(key) {
-                tensor.load_weight(key, t);
-            }
-        }
     }
 }

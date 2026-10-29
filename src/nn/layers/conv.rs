@@ -3,7 +3,7 @@ use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::index::{fetch, slot};
 use crate::io::{StateDict, TensorData};
-use crate::nn::Module;
+use crate::nn::{Layer, Module};
 use crate::shape::Axis;
 use crate::shape::Shape;
 use crate::spec::{Conv2dSpec, PadValue, Window2dSpec};
@@ -1471,9 +1471,6 @@ impl Conv2d {
 }
 
 impl Module for Conv2d {
-    fn forward(&self, x: &Tensor) -> Tensor {
-        self.forward(x)
-    }
     fn parameters(&self) -> Vec<Tensor> {
         let mut p = vec![self.weight.clone()];
         if let Some(ref b) = self.bias {
@@ -1499,6 +1496,12 @@ impl Module for Conv2d {
         if let (Some(b), Some(bias_tensor)) = (state.get("bias"), self.bias.as_ref()) {
             bias_tensor.load_weight("bias", b);
         }
+    }
+}
+
+impl Layer for Conv2d {
+    fn forward(&self, x: &Tensor) -> Tensor {
+        self.forward(x)
     }
 }
 

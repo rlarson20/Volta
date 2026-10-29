@@ -6,7 +6,7 @@
 //! - `MaxPool2d` layer
 //! - Sequential models (end-to-end forward pass)
 use criterion::{Criterion, black_box, criterion_main};
-use volta::{Conv2d, Linear, MaxPool2d, Module, RawTensor, ReLU, Sequential, Tensor};
+use volta::{Conv2d, Layer, Linear, MaxPool2d, RawTensor, ReLU, Sequential, Tensor};
 
 /// Generate a random tensor of the given size
 fn random_tensor(size: usize) -> Tensor {

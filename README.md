@@ -153,7 +153,7 @@ Here's how to define a simple Multi-Layer Perceptron (MLP) with named layers, tr
 ```rust
 use volta::{
     Adam, Sequential, io,
-    nn::{Linear, Module, ReLU},
+    nn::{Layer, Linear, Module, ReLU},
     tensor::{RawTensor, mse_loss},
 };
 
@@ -213,7 +213,7 @@ The following utilizes the current API to define a training-ready CNN.
 
 ```rust
 use volta::{Sequential, Conv2d, MaxPool2d, Flatten, Linear, ReLU, Adam};
-use volta::nn::Module;
+use volta::nn::{Layer, Module};
 
 fn main() {
     // 1. Define Model
@@ -250,7 +250,7 @@ Volta can load weights from PyTorch, HuggingFace, and other frameworks using Saf
 
 ```rust
 use volta::{
-    Linear, Module, ReLU, Sequential,
+    Layer, Linear, Module, ReLU, Sequential,
     io::{load_safetensors, mapping::StateDictMapper},
 };
 
@@ -325,7 +325,9 @@ The library is designed around a few core concepts:
 
 - **`Tensor`**: The central data structure, an `Rc<RefCell<RawTensor>>`, which holds data, shape, gradient information, and device location. Supports multiple data types (f32, f16, bf16, f64, i32, i64, u8, bool).
 - **Tensor methods**: `Tensor` has inherent methods for all operations (e.g., `tensor.add(&other)`, `tensor.matmul(&weights)`); there is no trait to import.
-- **`nn::Module`**: A trait for building neural network layers and composing them into larger models. Provides `forward()`, `parameters()`, `state_dict()`, `load_state_dict()`, and `to_device()` methods.
+- **`nn::Module`**: The base trait for anything with learnable parameters. Provides `parameters()`, `state_dict()`, `load_state_dict()`, `zero_grad()`, `to_device()`, and `train()`/`eval()`.
+- **`nn::Layer`**: A `Module` that maps one tensor to one tensor with `forward()`. Only `Layer`s can go in a `Sequential`. Implement it to write your own layer.
+- **`nn::IndexedLayer`** (`Embedding`) and **`nn::RecurrentLayer`** (`LSTMCell`): sealed traits for layers whose input is integer indices or that carry state between steps (`forward_indices`, `initial_state`/`step`).
 - **`Sequential::builder()`**: Builder pattern for composing layers with named parameters for robust serialization. Supports both `add_named()` for human-readable state dict keys and `add_unnamed()` for activation layers.
 - **Optimizers (`Adam`, `SGD`, `Muon`)**: Structures that take a list of model parameters and update their weights based on computed gradients during `step()`.
 - **`Device`**: Abstraction for CPU/GPU compute. Tensors can be moved between devices with `to_device()`, and operations automatically dispatch to GPU kernels when available.

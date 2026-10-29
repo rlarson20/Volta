@@ -1,0 +1,30 @@
+error[E0277]: the trait bound `Outsider: nn::sealed::SealedLayer` is not satisfied
+  --> tests/compile_fail/seal_indexed_layer.rs:17:23
+   |
+17 | impl IndexedLayer for Outsider {
+   |                       ^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `nn::sealed::SealedLayer` is not implemented for `Outsider`
+  --> tests/compile_fail/seal_indexed_layer.rs:4:1
+   |
+ 4 | struct Outsider;
+   | ^^^^^^^^^^^^^^^
+help: the following other types implement trait `nn::sealed::SealedLayer`
+  --> src/nn/layers/lstm.rs
+   |
+   | impl SealedLayer for LSTMCell {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `LSTMCell`
+   |
+  ::: src/nn/layers/embedding.rs
+   |
+   | impl SealedLayer for Embedding {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Embedding`
+note: required by a bound in `IndexedLayer`
+  --> src/nn/mod.rs
+   |
+   | pub trait IndexedLayer: Module + SealedLayer {
+   |                                  ^^^^^^^^^^^ required by this bound in `IndexedLayer`
+   = note: `IndexedLayer` is a "sealed trait", because to implement it you also need to implement `volta::nn::sealed::SealedLayer`, which is not accessible; this is usually done to force you to use one of the provided types that already implement it
+   = help: the following types implement the trait:
+             volta::Embedding
+             volta::LSTMCell

@@ -17,8 +17,21 @@ pub use transformer::{
     ScaledDotProductAttention, TransformerBlock, causal_mask,
 };
 
+/// Private supertrait that keeps [`IndexedLayer`] and [`RecurrentLayer`] implementable only inside
+/// this crate. `Module` and [`Layer`] stay open so users can write custom layers.
+mod sealed {
+    /// Marker for the sealed layer traits.
+    pub trait SealedLayer {}
+}
+
+pub(crate) use sealed::SealedLayer;
+
+/// Anything that owns learnable parameters and can be saved, loaded, and moved between devices.
+///
+/// This is the base of the layer traits. It has no `forward`, because the input contract differs
+/// by kind of layer: see [`Layer`] (one tensor in, one out), [`IndexedLayer`] (integer indices in),
+/// and [`RecurrentLayer`] (input plus carried state).
 pub trait Module {
-    fn forward(&self, x: &Tensor) -> Tensor;
     fn parameters(&self) -> Vec<Tensor>;
 
     // State dict methods
@@ -101,4 +114,28 @@ pub trait Module {
     fn eval(&mut self) {
         self.train(false);
     }
+}
+
+/// A layer that maps one tensor to one tensor. Only `Layer`s can go in a [`Sequential`].
+pub trait Layer: Module {
+    /// Run the layer on `x`.
+    fn forward(&self, x: &Tensor) -> Tensor;
+}
+
+/// A layer whose input is integer indices, such as [`Embedding`]. It is not a [`Layer`], so it
+/// cannot be placed in a [`Sequential`]. Sealed: only this crate implements it.
+pub trait IndexedLayer: Module + SealedLayer {
+    /// Look up the output rows for `indices`.
+    fn forward_indices(&self, indices: &[usize]) -> Tensor;
+}
+
+/// A layer that carries state between steps, such as [`LSTMCell`]. Sealed: only this crate
+/// implements it.
+pub trait RecurrentLayer: Module + SealedLayer {
+    /// State carried from one step to the next.
+    type State;
+    /// Zero state for a batch of `batch` sequences.
+    fn initial_state(&self, batch: usize) -> Self::State;
+    /// Advance one step: update `state` in place and return the step output.
+    fn step(&self, x: &Tensor, state: &mut Self::State) -> Tensor;
 }

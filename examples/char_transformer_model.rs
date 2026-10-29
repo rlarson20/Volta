@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use volta::{
     Adam, Embedding, LayerNorm, RawTensor,
     nn::{
-        Module,
+        IndexedLayer, Layer, Module,
         transformer::{FeedForward, MultiHeadAttention},
     },
     tensor::cross_entropy_loss,
@@ -153,7 +153,7 @@ impl TinyTransformerLM {
         let seq_len = indices.len();
 
         // Embed: [seq_len, embed_dim]
-        let emb = self.embedding.forward(indices);
+        let emb = self.embedding.forward_indices(indices);
 
         // PosEnc: sinusoidal, added manually (not tracked, fine for inference quality)
         let emb = self.add_positional_encoding(emb, seq_len);

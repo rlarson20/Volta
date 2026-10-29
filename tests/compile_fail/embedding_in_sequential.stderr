@@ -1,0 +1,17 @@
+error[E0277]: the trait bound `Embedding: Layer` is not satisfied
+ --> tests/compile_fail/embedding_in_sequential.rs:5:34
+  |
+5 |     let _ = Sequential::new(vec![Box::new(Embedding::new(4, 2))]);
+  |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Layer` is not implemented for `Embedding`
+  |
+  = help: the following other types implement trait `Layer`:
+            BatchNorm1d
+            BatchNorm2d
+            Conv2d
+            ConvTranspose2d
+            Dropout
+            FeedForward
+            GELU
+            LayerNorm
+          and $N others
+  = note: required for the cast from `Box<Embedding>` to `Box<dyn Layer>`

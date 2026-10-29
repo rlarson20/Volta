@@ -1,5 +1,5 @@
 //! Time-sequence prediction: an `LSTMCell` (1 input, 32 hidden units) followed by a `Linear` output layer, trained with `SGD` with momentum on sine-wave sequences, then tested on a held-out prediction.
-use volta::{LSTMCell, Module, ProgressBar, RawTensor, SGD};
+use volta::{LSTMCell, Module, ProgressBar, RawTensor, RecurrentLayer, SGD};
 
 fn main() {
     println!("=== Time Sequence Prediction with LSTM ===\n");
@@ -49,7 +49,7 @@ fn main() {
 
         // Process each sequence
         for seq_idx in 0..num_sequences {
-            let mut h_state = None;
+            let mut state = lstm.initial_state(1);
 
             // Process each timestep in the sequence
             for t in 0..sequence_length {
@@ -61,11 +61,7 @@ fn main() {
                 let input = RawTensor::new(vec![input_val], &[1, 1], false);
 
                 // LSTM forward
-                let (h_new, c_new) = if let Some((ref h, ref c)) = h_state {
-                    lstm.forward_step(&input, Some((h, c)))
-                } else {
-                    lstm.forward_step(&input, None)
-                };
+                let h_new = lstm.step(&input, &mut state);
 
                 // Output layer
                 let pred = output_layer.forward(&h_new);
@@ -76,9 +72,6 @@ fn main() {
 
                 total_loss += loss.item();
                 loss.into_loss().expect("scalar loss").backward();
-
-                // Update hidden state for next timestep
-                h_state = Some((h_new, c_new));
             }
         }
 
@@ -98,7 +91,7 @@ fn main() {
     let test_start = 5.0;
     let test_length = 20;
 
-    let mut h_state = None;
+    let mut state = lstm.initial_state(1);
     for t in 0..test_length {
         let x = test_start + (t as f32) * 0.1;
         let true_current = x.sin();
@@ -106,11 +99,7 @@ fn main() {
 
         let input = RawTensor::new(vec![true_current], &[1, 1], false);
 
-        let (h_new, c_new) = if let Some((ref h, ref c)) = h_state {
-            lstm.forward_step(&input, Some((h, c)))
-        } else {
-            lstm.forward_step(&input, None)
-        };
+        let h_new = lstm.step(&input, &mut state);
 
         let pred = output_layer.forward(&h_new);
         let pred_val = pred.item();
@@ -125,7 +114,5 @@ fn main() {
                 (pred_val - true_next).abs()
             );
         }
-
-        h_state = Some((h_new, c_new));
     }
 }

@@ -1,7 +1,6 @@
 use crate::io::StateDict;
-use crate::nn::{FeedForward, LayerNorm, Module};
+use crate::nn::{FeedForward, Layer, LayerNorm, Module, MultiHeadAttention};
 use crate::tensor::Tensor;
-use std::rc::Rc;
 
 /// Transformer Block (Pre-LN architecture)
 ///
@@ -31,7 +30,7 @@ pub struct TransformerBlock {
     // First layer norm (before attention)
     norm1: LayerNorm,
     // Multi-head attention
-    attention: Rc<dyn Module>, // Using Rc to avoid circular dependency with MHA
+    attention: MultiHeadAttention,
     // Second layer norm (before FFN)
     norm2: LayerNorm,
     // Feed-forward network
@@ -62,7 +61,7 @@ impl TransformerBlock {
             norm1: LayerNorm::new(vec![embed_dim]),
             // Note: We'll use a simple attention wrapper for now
             // In a real implementation, this would be MultiHeadAttention
-            attention: Rc::new(SimpleAttention::new(embed_dim, num_heads)),
+            attention: MultiHeadAttention::new(embed_dim, num_heads, dropout),
             norm2: LayerNorm::new(vec![embed_dim]),
             ffn: FeedForward::new(embed_dim, expansion_factor, dropout),
             dropout,
@@ -81,11 +80,11 @@ impl TransformerBlock {
     /// # Returns
     /// Output tensor of shape [batch, `seq_len`, `embed_dim`]
     #[must_use]
-    pub fn forward(&self, x: &Tensor, _causal: bool) -> Tensor {
+    pub fn forward(&self, x: &Tensor, causal: bool) -> Tensor {
         // Pre-LN Architecture:
         // 1. LN → Attention → Add
         let x_norm1 = self.norm1.forward(x);
-        let attn_out = self.attention.forward(&x_norm1);
+        let attn_out = self.attention.forward(&x_norm1, causal, None);
         let x = x.add(&attn_out);
 
         // 2. LN → FFN → Add
@@ -102,10 +101,6 @@ impl TransformerBlock {
 }
 
 impl Module for TransformerBlock {
-    fn forward(&self, x: &Tensor) -> Tensor {
-        self.forward(x, false)
-    }
-
     fn parameters(&self) -> Vec<Tensor> {
         let mut params = vec![];
 
@@ -184,56 +179,29 @@ impl Module for TransformerBlock {
             self.ffn.load_state_dict(&ffn_state);
         }
 
-        // Note: attention uses Rc<dyn Module> and Module::load_state_dict requires &mut self,
-        // so we cannot call load_state_dict on the trait object through Rc.
-        // When TransformerBlock is upgraded to use MultiHeadAttention directly,
-        // attention state loading will work through the concrete type.
-    }
-
-    fn train(&mut self, _mode: bool) {
-        // Notify sub-layers
-    }
-}
-
-// Simple attention wrapper for testing
-// In production, this would use MultiHeadAttention
-struct SimpleAttention {
-    #[allow(dead_code)]
-    embed_dim: usize,
-    #[allow(dead_code)]
-    num_heads: usize,
-}
-
-impl SimpleAttention {
-    fn new(embed_dim: usize, num_heads: usize) -> Self {
-        Self {
-            embed_dim,
-            num_heads,
+        // Load attention
+        let mut attn_state = StateDict::new();
+        for (key, value) in state {
+            if let Some(sub_key) = key.strip_prefix("attention.") {
+                attn_state.insert(sub_key.to_string(), value.clone());
+            }
+        }
+        if !attn_state.is_empty() {
+            self.attention.load_state_dict(&attn_state);
         }
     }
+
+    fn train(&mut self, mode: bool) {
+        self.norm1.train(mode);
+        self.norm2.train(mode);
+        self.ffn.train(mode);
+        self.attention.train(mode);
+    }
 }
 
-impl Module for SimpleAttention {
+impl Layer for TransformerBlock {
     fn forward(&self, x: &Tensor) -> Tensor {
-        // For now, just return the input (identity)
-        // This is a placeholder for the actual attention mechanism
-        x.clone()
-    }
-
-    fn parameters(&self) -> Vec<Tensor> {
-        vec![]
-    }
-
-    fn state_dict(&self) -> StateDict {
-        StateDict::new()
-    }
-
-    fn load_state_dict(&mut self, _state: &StateDict) {
-        // No parameters to load
-    }
-
-    fn train(&mut self, _mode: bool) {
-        // No training mode difference
+        self.forward(x, false)
     }
 }
 
@@ -296,5 +264,51 @@ mod tests {
         let block = TransformerBlock::new(16, 2, 2, 0.0);
         let x = crate::macros::trainable_input(&[2, 3, 16]);
         crate::assert_trainable!(block, x);
+    }
+
+    #[test]
+    fn test_block_state_dict_includes_attention() {
+        let block = TransformerBlock::new(16, 2, 2, 0.0);
+        let state = block.state_dict();
+        assert!(
+            state.keys().any(|k| k.starts_with("attention.q_proj.")),
+            "attention keys missing: {:?}",
+            state.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_block_attention_state_dict_roundtrip() {
+        let src = TransformerBlock::new(16, 2, 2, 0.0);
+        let mut dst = TransformerBlock::new(16, 2, 2, 0.0);
+        let x = crate::macros::trainable_input(&[2, 3, 16]);
+
+        let before = dst.forward(&x, false).data();
+        dst.load_state_dict(&src.state_dict());
+        let after = dst.forward(&x, false).data();
+        let expected = src.forward(&x, false).data();
+
+        assert_eq!(after.len(), expected.len());
+        assert_ne!(before, after, "loading should change the output");
+        for (a, e) in after.iter().zip(expected.iter()) {
+            assert!((a - e).abs() < 1e-5, "loaded block differs: {a} vs {e}");
+        }
+    }
+
+    #[test]
+    fn test_block_causal_changes_output() {
+        let block = TransformerBlock::new(16, 2, 2, 0.0);
+        let x = crate::macros::trainable_input(&[1, 4, 16]);
+
+        let open = block.forward(&x, false).data();
+        let causal = block.forward(&x, true).data();
+
+        assert_eq!(open.len(), causal.len());
+        assert!(
+            open.iter()
+                .zip(causal.iter())
+                .any(|(a, b)| (a - b).abs() > 1e-6),
+            "causal masking had no effect, so attention is not being applied"
+        );
     }
 }

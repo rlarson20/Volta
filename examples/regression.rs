@@ -1,5 +1,5 @@
 //! Basic polynomial regression test
-use volta::{Linear, Module, ProgressBar, RawTensor, SGD, Sequential};
+use volta::{Layer, Linear, Module, ProgressBar, RawTensor, SGD, Sequential};
 
 fn main() {
     println!("=== Polynomial Regression Example ===\n");

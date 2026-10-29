@@ -1,5 +1,5 @@
 use crate::io::StateDict;
-use crate::nn::Module;
+use crate::nn::{Layer, Module};
 use crate::shape::Axis;
 use crate::tensor::Tensor;
 
@@ -18,7 +18,7 @@ use crate::tensor::Tensor;
 ///
 /// # Examples
 /// ```
-/// use volta::{RawTensor, PixelShuffle, nn::Module};
+/// use volta::{RawTensor, PixelShuffle, nn::Layer};
 ///
 /// let layer = PixelShuffle::new(2);
 /// let input = RawTensor::randn(&[1, 12, 4, 4]);  // 3 channels * 4
@@ -48,6 +48,22 @@ impl PixelShuffle {
 }
 
 impl Module for PixelShuffle {
+    fn parameters(&self) -> Vec<Tensor> {
+        // PixelShuffle has no learnable parameters
+        vec![]
+    }
+
+    fn state_dict(&self) -> StateDict {
+        // No parameters to save
+        StateDict::new()
+    }
+
+    fn load_state_dict(&mut self, _state: &StateDict) {
+        // No parameters to load
+    }
+}
+
+impl Layer for PixelShuffle {
     fn forward(&self, x: &Tensor) -> Tensor {
         let x_ref = x.borrow();
         let shape = &x_ref.shape;
@@ -85,20 +101,6 @@ impl Module for PixelShuffle {
 
         // Step 3: Reshape (B, C, H, r, W, r) → (B, C, H*r, W*r)
         x_permuted.reshape(&[batch_size, out_channels, height * r, width * r])
-    }
-
-    fn parameters(&self) -> Vec<Tensor> {
-        // PixelShuffle has no learnable parameters
-        vec![]
-    }
-
-    fn state_dict(&self) -> StateDict {
-        // No parameters to save
-        StateDict::new()
-    }
-
-    fn load_state_dict(&mut self, _state: &StateDict) {
-        // No parameters to load
     }
 }
 

@@ -342,6 +342,18 @@ Choke points for whoever lands views: the operand reads in `RawTensor::matmul` (
 
 **What changed at call sites:** `#[must_use]` is new. It flagged 15 places that discarded a result, all `#[should_panic]` tests and bench loops, now `let _ =` or `black_box(..)`. `use_self` also applies, so signatures say `Self`. The trybuild case `backward_on_tensor` still pins E0599; it used to import `TensorOps` to prove the trait method was gone, and an inherent `backward` would now be found without an import, so the import is no longer needed.
 
+### Split layer traits; `Module` and `Layer` stay open (ADDENDUM §3.1, §3.2)
+
+**Decision:** `Module` is the base trait (parameters, state dict, `zero_grad`, `to_device`, `train`/`eval`) and has no `forward`. `Layer: Module` adds `forward(&Tensor) -> Tensor`, and `Sequential` holds `Box<dyn Layer>`. `IndexedLayer: Module` (`Embedding::forward_indices(&[usize])`) and `RecurrentLayer: Module` (`LSTMCell`: `initial_state`, `step(x, &mut state) -> h`) are separate. Putting an `Embedding` in a `Sequential` is now a compile error (`tests/compile_fail/embedding_in_sequential.rs`), not a runtime panic.
+
+**Departure from §3.1:** only `IndexedLayer` and `RecurrentLayer` are sealed. `Module` and `Layer` are open. There is no `GradFn::Custom` and `edge()` is `pub(crate)`, so a user-written `impl Layer` that composes built-in layers is the one extension path the library has, and it is how PyTorch users build models. Sealing it would also have broken `tests/improvements_test.rs` (`CountingModule`), which is outside code and now doubles as the proof that the open traits stay open. The cost is that we can't add a required method to `Module` or `Layer` without a breaking change; provided methods are still free. The two sealed traits have no outside use case, and sealing them lets `State` and the step signature change within 0.x. Trybuild cases `seal_indexed_layer` and `seal_recurrent_layer` pin the seal. The marker is named `SealedLayer`, not `Sealed`: with the `gpu` feature a dependency (`unicode_width`) has its own private `Sealed`, and rustc adds a "similarly named trait" note that made the pinned `.stderr` differ by feature set.
+
+**LSTM:** `forward_step(x, Option<(&h, &c)>) -> (h, c)` was deleted rather than kept beside `step`. `State = (Tensor, Tensor)` carries `c`, which `Module::forward` used to drop. `step` still goes through `slice_gate`, so B2 (the severed graph) is untouched and its `assert_trainable!` test stays `#[ignore]`d, driven through a test-only one-step `Layer` wrapper.
+
+**H6:** `TransformerBlock` holds a real `MultiHeadAttention`; `SimpleAttention` and the `Rc<dyn Module>` are gone. `causal` reaches the attention, and `load_state_dict` now loads the `attention.*` keys (it silently skipped them before). Tests: `test_block_causal_changes_output`, `test_block_attention_state_dict_roundtrip`, and the existing `assert_trainable!` now covers the attention projections.
+
+**Not done:** `load_state_dict` still returns `()`, and the `*Layer` traits don't yet cover attention (`forward(x, causal, mask)` stays inherent on `MultiHeadAttention`).
+
 ## Concurrency and Async
 
 ### Stay synchronous

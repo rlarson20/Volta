@@ -61,9 +61,9 @@ pub use device::Device;
 pub use nn::layers::Dropout;
 pub use nn::layers::flatten::Flatten;
 pub use nn::{
-    Adam, BatchNorm1d, BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, Embedding, GELU, LSTMCell,
-    LayerNorm, Linear, MaxPool2d, Module, PixelShuffle, ReLU, SGD, Sequential, SequentialBuilder,
-    Sigmoid, Tanh,
+    Adam, BatchNorm1d, BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, Embedding, GELU,
+    IndexedLayer, LSTMCell, Layer, LayerNorm, Linear, MaxPool2d, Module, PixelShuffle, ReLU,
+    RecurrentLayer, SGD, Sequential, SequentialBuilder, Sigmoid, Tanh,
 };
 pub use tensor::{RawTensor, Tensor};
 
@@ -1725,7 +1725,7 @@ mod misc_tests {
     fn test_embedding_forward_shape() {
         let embedding = Embedding::new(100, 32);
         let indices = vec![5, 12, 7, 99];
-        let output = embedding.forward(&indices);
+        let output = embedding.forward_indices(&indices);
         assert_eq!(output.borrow().shape, vec![4, 32]);
     }
 
@@ -1733,7 +1733,7 @@ mod misc_tests {
     fn test_embedding_backward_flow() {
         let embedding = Embedding::new(50, 16);
         let indices = vec![3, 10, 3]; // Note: repeated index 3
-        let output = embedding.forward(&indices);
+        let output = embedding.forward_indices(&indices);
 
         // Sum and backward
         let loss = output.sum();
@@ -1765,7 +1765,7 @@ mod misc_tests {
     fn test_embedding_gradient_accumulation() {
         let embedding = Embedding::new(10, 4);
         let indices = vec![2, 5, 2, 2]; // Index 2 appears 3 times
-        let output = embedding.forward(&indices);
+        let output = embedding.forward_indices(&indices);
 
         let loss = output.sum();
         loss.into_loss().expect("scalar loss").backward();
@@ -3346,7 +3346,7 @@ mod axis_reduce_tests {
     #[test]
     fn test_external_model_loading_integration() {
         use crate::io::{TensorData, load_state_dict, mapping::StateDictMapper, save_state_dict};
-        use crate::nn::{Linear, Module, ReLU, Sequential};
+        use crate::nn::{Layer, Linear, Module, ReLU, Sequential};
         use std::collections::BTreeMap;
 
         // Simulate a PyTorch model with 2 linear layers
@@ -4894,7 +4894,7 @@ mod activation_tests {
     fn relu_layer_forward_matches_op() {
         let layer = ReLU;
         let x = RawTensor::new(vec![-1.0, 0.0, 2.0, -3.0], &[4], true);
-        let y = <ReLU as Module>::forward(&layer, &x);
+        let y = <ReLU as Layer>::forward(&layer, &x);
         assert_eq!(y.borrow().data.to_vec(), vec![0.0, 0.0, 2.0, 0.0]);
         assert!(layer.parameters().is_empty());
     }
@@ -4904,7 +4904,7 @@ mod activation_tests {
         let layer = ReLU;
         let x = RawTensor::new(vec![-1.5, -0.5, 0.5, 1.5], &[4], true);
         assert!(RawTensor::check_gradients_simple(&x, |t| {
-            <ReLU as Module>::forward(&layer, t).sum()
+            <ReLU as Layer>::forward(&layer, t).sum()
         }));
     }
 
@@ -4912,7 +4912,7 @@ mod activation_tests {
     fn sigmoid_layer_forward_matches_op() {
         let layer = Sigmoid;
         let x = RawTensor::new(vec![0.0, 100.0, -100.0], &[3], true);
-        let y = <Sigmoid as Module>::forward(&layer, &x);
+        let y = <Sigmoid as Layer>::forward(&layer, &x);
         let out = y.borrow().data.to_vec();
         assert!((fetch(&out, 0) - 0.5).abs() < 1e-6);
         assert!((fetch(&out, 1) - 1.0).abs() < 1e-6);
@@ -4924,7 +4924,7 @@ mod activation_tests {
         let layer = Sigmoid;
         let x = RawTensor::new(vec![-1.0, 0.0, 1.0], &[3], true);
         assert!(RawTensor::check_gradients_simple(&x, |t| {
-            <Sigmoid as Module>::forward(&layer, t).sum()
+            <Sigmoid as Layer>::forward(&layer, t).sum()
         }));
     }
 
@@ -4932,7 +4932,7 @@ mod activation_tests {
     fn tanh_layer_forward_matches_op() {
         let layer = Tanh;
         let x = RawTensor::new(vec![0.0, 100.0, -100.0], &[3], true);
-        let y = <Tanh as Module>::forward(&layer, &x);
+        let y = <Tanh as Layer>::forward(&layer, &x);
         let out = y.borrow().data.to_vec();
         assert!(fetch(&out, 0).abs() < 1e-6);
         assert!((fetch(&out, 1) - 1.0).abs() < 1e-6);
@@ -4944,7 +4944,7 @@ mod activation_tests {
         let layer = Tanh;
         let x = RawTensor::new(vec![-1.0, 0.0, 1.0], &[3], true);
         assert!(RawTensor::check_gradients_simple(&x, |t| {
-            <Tanh as Module>::forward(&layer, t).sum()
+            <Tanh as Layer>::forward(&layer, t).sum()
         }));
     }
 }
@@ -4957,7 +4957,7 @@ mod dropout_tests {
     fn p_zero_is_identity() {
         let layer = Dropout::new(0.0);
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], true);
-        let y = <Dropout as Module>::forward(&layer, &x);
+        let y = <Dropout as Layer>::forward(&layer, &x);
         assert_eq!(y.borrow().data.to_vec(), vec![1.0, 2.0, 3.0, 4.0]);
         assert_eq!(y.borrow().shape, vec![4]);
     }
@@ -4967,7 +4967,7 @@ mod dropout_tests {
         // With keep_prob=0, the mask is all zeros => output is all zeros.
         let layer = Dropout::new(1.0);
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], true);
-        let y = <Dropout as Module>::forward(&layer, &x);
+        let y = <Dropout as Layer>::forward(&layer, &x);
         for v in y.borrow().data.to_vec() {
             assert_eq!(v, 0.0, "dropout p=1 should zero all elements");
         }
@@ -4979,7 +4979,7 @@ mod dropout_tests {
         let mut layer = Dropout::new(0.9);
         layer.train(false);
         let x = RawTensor::new(vec![5.0; 16], &[16], true);
-        let y = <Dropout as Module>::forward(&layer, &x);
+        let y = <Dropout as Layer>::forward(&layer, &x);
         for v in y.borrow().data.to_vec() {
             assert_eq!(v, 5.0);
         }
@@ -4989,7 +4989,7 @@ mod dropout_tests {
     fn shape_preserved_under_training() {
         let layer = Dropout::new(0.5);
         let x = RawTensor::new(vec![1.0; 2 * 3 * 4], &[2, 3, 4], true);
-        let y = <Dropout as Module>::forward(&layer, &x);
+        let y = <Dropout as Layer>::forward(&layer, &x);
         assert_eq!(y.borrow().shape, vec![2, 3, 4]);
     }
 
@@ -5001,7 +5001,7 @@ mod dropout_tests {
         let layer = Dropout::new(0.5);
         let n = 20_000;
         let x = RawTensor::new(vec![1.0; n], &[n], false);
-        let y = <Dropout as Module>::forward(&layer, &x);
+        let y = <Dropout as Layer>::forward(&layer, &x);
         let sum: f32 = y.borrow().data.to_vec().iter().sum();
         let mean = sum / n as f32;
         // E[mean] = 1.0, std ≈ sqrt(p / ((1-p)*n)) ≈ 0.007 for p=0.5, n=20k.
@@ -5039,7 +5039,7 @@ mod batchnorm_tests {
     fn bn1d_forward_shape_preserved() {
         let layer = BatchNorm1d::new(4);
         let x = RawTensor::new(vec![1.0; 8 * 4], &[8, 4], true);
-        let y = <BatchNorm1d as Module>::forward(&layer, &x);
+        let y = <BatchNorm1d as Layer>::forward(&layer, &x);
         assert_eq!(y.borrow().shape, vec![8, 4]);
     }
 
@@ -5052,7 +5052,7 @@ mod batchnorm_tests {
             &[4, 2],
             false,
         );
-        let y = <BatchNorm1d as Module>::forward(&layer, &x);
+        let y = <BatchNorm1d as Layer>::forward(&layer, &x);
         let out = y.borrow().data.to_vec();
         // Output mean per column should be ~0 and stddev ~1 (gamma=1, beta=0).
         let col0: Vec<f32> = (0..4).map(|i| fetch(&out, i * 2)).collect();
@@ -5078,7 +5078,7 @@ mod batchnorm_tests {
             &[4, 3],
             false,
         );
-        let _ = <BatchNorm1d as Module>::forward(&layer, &x);
+        let _ = <BatchNorm1d as Layer>::forward(&layer, &x);
 
         let (rm1, rv1) = running_stats(&<BatchNorm1d as Module>::state_dict(&layer));
         // Running mean should have moved toward batch mean for each feature.
@@ -5119,7 +5119,7 @@ mod batchnorm_tests {
 
         // Input == running_mean => normalized output should be ~0 (then * gamma=1 + beta=0).
         let x = RawTensor::new(vec![5.0, -5.0, 5.0, -5.0], &[2, 2], false);
-        let y = <BatchNorm1d as Module>::forward(&layer, &x);
+        let y = <BatchNorm1d as Layer>::forward(&layer, &x);
         for v in y.borrow().data.to_vec() {
             assert!(
                 v.abs() < 1e-4,
@@ -5135,7 +5135,7 @@ mod batchnorm_tests {
         // Use stricter epsilon on BN since it's mean-centered (small grads).
         let (_max_e, _mean_e, passed) = RawTensor::check_gradients(
             &x,
-            |t| <BatchNorm1d as Module>::forward(&layer, t).sum(),
+            |t| <BatchNorm1d as Layer>::forward(&layer, t).sum(),
             1e-2,
             1e-2,
         );
@@ -5162,7 +5162,7 @@ mod batchnorm_tests {
         let layer = BatchNorm2d::new(3);
         // (B=2, C=3, H=2, W=2)
         let x = RawTensor::new(vec![1.0; 2 * 3 * 2 * 2], &[2, 3, 2, 2], true);
-        let y = <BatchNorm2d as Module>::forward(&layer, &x);
+        let y = <BatchNorm2d as Layer>::forward(&layer, &x);
         assert_eq!(y.borrow().shape, vec![2, 3, 2, 2]);
     }
 
@@ -5183,7 +5183,7 @@ mod batchnorm_tests {
             }
         }
         let x = RawTensor::new(data, &[2, 2, 2, 2], false);
-        let _ = <BatchNorm2d as Module>::forward(&layer, &x);
+        let _ = <BatchNorm2d as Layer>::forward(&layer, &x);
 
         let (rm1, _rv1) = running_stats(&<BatchNorm2d as Module>::state_dict(&layer));
         // momentum=0.1: rm = 0.9*0 + 0.1*[1, 5] = [0.1, 0.5]
@@ -5202,7 +5202,7 @@ mod batchnorm_tests {
         let x = RawTensor::new(data, &[2, 2, 2, 2], true);
         let (_max_e, _mean_e, passed) = RawTensor::check_gradients(
             &x,
-            |t| <BatchNorm2d as Module>::forward(&layer, t).sum(),
+            |t| <BatchNorm2d as Layer>::forward(&layer, t).sum(),
             1e-2,
             1e-2,
         );

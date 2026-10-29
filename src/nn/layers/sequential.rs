@@ -1,13 +1,13 @@
 use crate::Linear;
 use crate::ReLU;
 use crate::io::StateDict;
-use crate::nn::Module;
+use crate::nn::{Layer, Module};
 use crate::tensor::Tensor;
 
 /// Internal struct to hold a layer with an optional name
 pub(crate) struct LayerEntry {
     pub(crate) name: Option<String>,
-    pub(crate) layer: Box<dyn Module>,
+    pub(crate) layer: Box<dyn Layer>,
 }
 
 pub struct Sequential {
@@ -15,13 +15,6 @@ pub struct Sequential {
 }
 
 impl Module for Sequential {
-    fn forward(&self, x: &Tensor) -> Tensor {
-        let mut current = x.clone();
-        for entry in &self.layers {
-            current = entry.layer.forward(&current);
-        }
-        current
-    }
     fn parameters(&self) -> Vec<Tensor> {
         self.layers
             .iter()
@@ -88,10 +81,20 @@ impl Module for Sequential {
     }
 }
 
+impl Layer for Sequential {
+    fn forward(&self, x: &Tensor) -> Tensor {
+        let mut current = x.clone();
+        for entry in &self.layers {
+            current = entry.layer.forward(&current);
+        }
+        current
+    }
+}
+
 impl Sequential {
     // Helper constructor for easier testing and building
     #[must_use]
-    pub fn new(layers: Vec<Box<dyn Module>>) -> Self {
+    pub fn new(layers: Vec<Box<dyn Layer>>) -> Self {
         Self {
             layers: layers
                 .into_iter()
@@ -108,7 +111,7 @@ impl Sequential {
 
     /// Get a layer by index
     #[must_use]
-    pub fn get(&self, index: usize) -> Option<&dyn Module> {
+    pub fn get(&self, index: usize) -> Option<&dyn Layer> {
         self.layers.get(index).map(|e| &*e.layer)
     }
 
@@ -116,7 +119,7 @@ impl Sequential {
     ///
     /// Returns None if no layer with the given name exists
     #[must_use]
-    pub fn get_named(&self, name: &str) -> Option<&dyn Module> {
+    pub fn get_named(&self, name: &str) -> Option<&dyn Layer> {
         self.layers
             .iter()
             .find(|e| e.name.as_ref().is_some_and(|n| n == name))
@@ -126,7 +129,7 @@ impl Sequential {
     /// Get a mutable reference to a layer by name
     ///
     /// Returns None if no layer with the given name exists
-    pub fn get_named_mut(&mut self, name: &str) -> Option<&mut (dyn Module + '_)> {
+    pub fn get_named_mut(&mut self, name: &str) -> Option<&mut (dyn Layer + '_)> {
         for entry in &mut self.layers {
             if entry.name.as_ref().is_some_and(|n| n == name) {
                 return Some(&mut *entry.layer);

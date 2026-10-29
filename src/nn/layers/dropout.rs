@@ -1,5 +1,5 @@
 use crate::io::StateDict;
-use crate::nn::Module;
+use crate::nn::{Layer, Module};
 use crate::tensor::{RawTensor, Tensor};
 use rand::Rng;
 
@@ -26,6 +26,24 @@ impl Dropout {
 }
 
 impl Module for Dropout {
+    fn parameters(&self) -> Vec<Tensor> {
+        vec![]
+    }
+
+    fn state_dict(&self) -> StateDict {
+        StateDict::new()
+    }
+
+    fn load_state_dict(&mut self, _state: &StateDict) {
+        // Stateless
+    }
+
+    fn train(&mut self, mode: bool) {
+        self.training = mode;
+    }
+}
+
+impl Layer for Dropout {
     fn forward(&self, x: &Tensor) -> Tensor {
         if !self.training || self.p == 0.0 {
             return x.clone();
@@ -57,21 +75,5 @@ impl Module for Dropout {
 
         // Apply mask: x * mask
         x.elem_mul(&mask)
-    }
-
-    fn parameters(&self) -> Vec<Tensor> {
-        vec![]
-    }
-
-    fn state_dict(&self) -> StateDict {
-        StateDict::new()
-    }
-
-    fn load_state_dict(&mut self, _state: &StateDict) {
-        // Stateless
-    }
-
-    fn train(&mut self, mode: bool) {
-        self.training = mode;
     }
 }

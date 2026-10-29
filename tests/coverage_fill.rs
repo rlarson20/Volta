@@ -1,8 +1,8 @@
 //! Gap-filling tests: `BatchNorm2d` / `Flatten` gradient checks, `Dropout` edge cases, `SGD` momentum arithmetic, and mutable `Storage` access.
-use volta::{Dropout, Flatten};
+use volta::{Dropout, Flatten, Layer};
 use volta::{
     RawTensor, Storage, check_gradients_simple,
-    nn::{BatchNorm2d, Module, SGD},
+    nn::{BatchNorm2d, SGD},
 };
 
 #[test]

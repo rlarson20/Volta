@@ -1,5 +1,5 @@
 use super::sequential::LayerEntry;
-use crate::nn::{Module, Sequential};
+use crate::nn::{Layer, Sequential};
 
 /// Builder for constructing Sequential models with named or unnamed layers
 ///
@@ -32,7 +32,7 @@ impl SequentialBuilder {
     ///
     /// The layer will be assigned a numeric index in the state dict
     #[must_use]
-    pub fn add_unnamed(mut self, layer: Box<dyn Module>) -> Self {
+    pub fn add_unnamed(mut self, layer: Box<dyn Layer>) -> Self {
         self.entries.push(LayerEntry { name: None, layer });
         self
     }
@@ -42,7 +42,7 @@ impl SequentialBuilder {
     /// The layer will use the provided name in the state dict.
     /// Empty strings are treated as unnamed.
     #[must_use]
-    pub fn add_named(mut self, name: impl Into<String>, layer: Box<dyn Module>) -> Self {
+    pub fn add_named(mut self, name: impl Into<String>, layer: Box<dyn Layer>) -> Self {
         let name_str = name.into();
         let name_opt = if name_str.is_empty() {
             None
