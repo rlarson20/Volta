@@ -1,5 +1,6 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
+use crate::index::slot;
 use crate::shape::Shape;
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
@@ -101,10 +102,8 @@ impl WhereGradFn {
         if needs_true {
             let mut data = vec![0.0; out_grad.data.len()];
             for (i, (&g, &c)) in out_grad.data.iter().zip(&self.condition).enumerate() {
-                if c != 0.0
-                    && let Some(slot) = data.get_mut(i)
-                {
-                    *slot = g;
+                if c != 0.0 {
+                    *slot(&mut data, i) = g;
                 }
             }
             let reduced =
@@ -120,10 +119,8 @@ impl WhereGradFn {
         if needs_false {
             let mut data = vec![0.0; out_grad.data.len()];
             for (i, (&g, &c)) in out_grad.data.iter().zip(&self.condition).enumerate() {
-                if c == 0.0
-                    && let Some(slot) = data.get_mut(i)
-                {
-                    *slot = g;
+                if c == 0.0 {
+                    *slot(&mut data, i) = g;
                 }
             }
             let reduced =

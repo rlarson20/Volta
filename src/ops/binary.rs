@@ -1,5 +1,6 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
+use crate::index::{fetch, slot};
 use crate::macros::define_ops;
 use crate::shape::{Shape, Strides};
 use crate::storage::Storage;
@@ -171,9 +172,10 @@ impl RawTensor {
         // Pad from_shape with leading 1s to match rank
         let mut padded_from = vec![1; to_shape.len()];
         let offset = to_shape.len() - from_shape.len();
-        if let Some(dest) = padded_from.get_mut(offset..) {
-            dest.copy_from_slice(from_shape);
-        }
+        padded_from
+            .get_mut(offset..)
+            .expect("offset = rank difference, so it is within the padded rank")
+            .copy_from_slice(from_shape);
         let from_strides_padded = Strides::from_shape(&padded_from);
         let from_strides_padded = from_strides_padded.truncate_rank();
         let to_strides = Strides::from_shape(to_shape);
@@ -195,11 +197,7 @@ impl RawTensor {
                     from_idx += coord * from_stride;
                 }
             }
-            if let Some(&src_val) = data.get(from_idx)
-                && let Some(slot) = result.get_mut(i)
-            {
-                *slot = src_val;
-            }
+            *slot(&mut result, i) = fetch(data, from_idx);
         }
         result
     }
@@ -221,9 +219,10 @@ impl RawTensor {
         // Pad target_shape with leading 1s to match ranks
         let mut padded_target = vec![1; grad_shape.len()];
         let offset = grad_shape.len() - target_shape.len();
-        if let Some(dest) = padded_target.get_mut(offset..) {
-            dest.copy_from_slice(target_shape);
-        }
+        padded_target
+            .get_mut(offset..)
+            .expect("offset = rank difference, so it is within the padded rank")
+            .copy_from_slice(target_shape);
 
         // Find dimensions that need summing (where target was 1, grad is >1)
         let mut sum_axes = Vec::new();
@@ -267,11 +266,7 @@ impl RawTensor {
                     target_idx += coord * target_stride;
                 }
             }
-            if target_idx < result.len()
-                && let Some(slot) = result.get_mut(target_idx)
-            {
-                *slot += grad_val;
-            }
+            *slot(&mut result, target_idx) += grad_val;
         }
         result
     }

@@ -1,5 +1,6 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
+use crate::index::{fetch, slot};
 use crate::shape::Shape;
 use crate::spec::MatmulSpec;
 use crate::storage::Storage;
@@ -41,11 +42,7 @@ impl RawTensor {
         let mut result = vec![0.0; m * n];
         for i in 0..m {
             for j in 0..n {
-                if let Some(src) = data.get(i * n + j)
-                    && let Some(dst) = result.get_mut(j * m + i)
-                {
-                    *dst = *src;
-                }
+                *slot(&mut result, j * m + i) = fetch(data, i * n + j);
             }
         }
         result
@@ -180,15 +177,9 @@ impl RawTensor {
                 for i in 0..m {
                     let mut sum = 0.0;
                     for j in 0..n {
-                        if let Some(a_val) = data_a.get(i * n + j)
-                            && let Some(b_val) = data_b.get(j)
-                        {
-                            sum += *a_val * *b_val;
-                        }
+                        sum += fetch(&data_a, i * n + j) * fetch(&data_b, j);
                     }
-                    if let Some(slot) = result_data.get_mut(i) {
-                        *slot = sum;
-                    }
+                    *slot(&mut result_data, i) = sum;
                 }
 
                 edge(
@@ -210,16 +201,10 @@ impl RawTensor {
                 for j in 0..p {
                     let mut sum = 0.0;
                     for i in 0..n {
-                        if let Some(a_val) = data_a.get(i)
-                            && let Some(b_val) = data_b.get(i * p + j)
-                        {
-                            sum += *a_val * *b_val;
-                        }
+                        sum += fetch(&data_a, i) * fetch(&data_b, i * p + j);
                     }
 
-                    if let Some(slot) = result_data.get_mut(j) {
-                        *slot = sum;
-                    }
+                    *slot(&mut result_data, j) = sum;
                 }
 
                 edge(
@@ -498,13 +483,9 @@ impl MatMulGradFn {
                     let n = x.shape.get(1).copied().unwrap_or(1);
                     let mut grad_data = vec![0.0; m * n];
                     for i in 0..m {
-                        let gz_i = out_grad.data.get(i).copied().unwrap_or(0.0);
+                        let gz_i = fetch(&out_grad.data, i);
                         for j in 0..n {
-                            if let Some(y_val) = y.data.get(j)
-                                && let Some(slot) = grad_data.get_mut(i * n + j)
-                            {
-                                *slot = gz_i * *y_val;
-                            }
+                            *slot(&mut grad_data, i * n + j) = gz_i * fetch(&y.data, j);
                         }
                     }
                     Some(RawTensor::new(grad_data, &x.shape, false))
@@ -519,12 +500,8 @@ impl MatMulGradFn {
                     #[allow(clippy::needless_range_loop)]
                     for i in 0..len_x {
                         for j in 0..len_y_p {
-                            if let Some(og) = out_grad.data.get(j)
-                                && let Some(y_val) = y.data.get(i * len_y_p + j)
-                                && let Some(slot) = grad_data.get_mut(i)
-                            {
-                                *slot += *og * *y_val;
-                            }
+                            *slot(&mut grad_data, i) +=
+                                fetch(&out_grad.data, j) * fetch(&y.data, i * len_y_p + j);
                         }
                     }
                     Some(RawTensor::new(grad_data, &x.shape, false))
@@ -532,7 +509,7 @@ impl MatMulGradFn {
                 (None, 1, 1) => {
                     // Dot: (n,) @ (n,) -> scalar
                     // ∂L/∂x = out_grad * y
-                    let og = out_grad.data.first().copied().unwrap_or(0.0);
+                    let og = fetch(&out_grad.data, 0);
                     let grad_data: Vec<f32> = y.data.iter().map(|&v| og * v).collect();
                     Some(RawTensor::new(grad_data, &x.shape, false))
                 }
@@ -561,15 +538,9 @@ impl MatMulGradFn {
                     for j in 0..n {
                         let mut sum = 0.0;
                         for i in 0..m {
-                            if let Some(x_val) = x.data.get(i * n + j)
-                                && let Some(og) = out_grad.data.get(i)
-                            {
-                                sum += *x_val * *og;
-                            }
+                            sum += fetch(&x.data, i * n + j) * fetch(&out_grad.data, i);
                         }
-                        if let Some(slot) = grad_data.get_mut(j) {
-                            *slot = sum;
-                        }
+                        *slot(&mut grad_data, j) = sum;
                     }
                     Some(RawTensor::new(grad_data, &y.shape, false))
                 }
@@ -580,19 +551,15 @@ impl MatMulGradFn {
                     let mut grad_data = vec![0.0; dim0 * dim1];
                     for i in 0..dim0 {
                         for j in 0..dim1 {
-                            if let Some(x_val) = x.data.get(i)
-                                && let Some(og) = out_grad.data.get(j)
-                                && let Some(slot) = grad_data.get_mut(i * dim1 + j)
-                            {
-                                *slot = *x_val * *og;
-                            }
+                            *slot(&mut grad_data, i * dim1 + j) =
+                                fetch(&x.data, i) * fetch(&out_grad.data, j);
                         }
                     }
                     Some(RawTensor::new(grad_data, &y.shape, false))
                 }
                 (None, 1, 1) => {
                     // Dot: (n,) @ (n,) -> scalar
-                    let og = out_grad.data.first().copied().unwrap_or(0.0);
+                    let og = fetch(&out_grad.data, 0);
                     let grad_data: Vec<f32> = x.data.iter().map(|&u| og * u).collect();
                     Some(RawTensor::new(grad_data, &y.shape, false))
                 }

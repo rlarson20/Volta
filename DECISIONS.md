@@ -320,6 +320,18 @@ Choke points for whoever lands views: the operand reads in `RawTensor::matmul` (
 
 **Likely next step, only if profiling shows the backward copies matter:** a per-operand transpose flag (`CblasTrans` on cblas, swapped strides on `matrixmultiply`). Not checked against the call sites.
 
+### Indexing policy: panic, not NaN (ADDENDUM §8)
+
+**Decision:** kernel code reads and writes through `crate::index::{fetch, slot, span}`, which panic on an out-of-bounds index in every build profile, with `#[track_caller]` naming the kernel site. `.get(i).unwrap_or(0.0)`, `if let Some(slot) = v.get_mut(i)`, and the `if let Some(&v) = x.get(i) { v } else { 0.0 }` form are banned for numeric data; `just check-fallbacks` enforces it. `clippy::indexing_slicing` stays denied, since the helpers are built on `get`.
+
+**Why not §8's NaN:** §8 sketched `fetch` as `debug_assert!` plus a NaN fallback in release. A NaN can make a bad *read* loud, but a skipped *write* has no value to poison: the slot just keeps its old contents, so the write half of the policy would still be silent in release. Splitting the rule (reads NaN, writes panic) was the alternative. One rule for both is easier to review, and a panic costs the same as `get` plus `unwrap_or`.
+
+**Zero that means something:** conv and im2col padding reads as zero because the coordinate is outside the image. That check is spelled out (`ih < height && iw < width`) and commented at the site, and the in-range read then goes through `fetch`. A slice bound never implements padding.
+
+**Two panics that wait on the error-handling policy:** the §8 pass added two panics that go past "kernel mapping bug" and touch the undecided panic-vs-`Result` question (`notes/TODO.md`, H4 and Rust/errors). `to_one_hot` asserts `label < num_classes`, and that label can come from real data, so it may belong on the `Result` side. `GpuKernels::binary_backward_broadcast_safe` panics on rank > 4 instead of truncating the shape into a 4-wide array (H5); the path is unreachable today. Both were kept loud because the alternative was silent corruption. Revisit them when the error regime lands.
+
+**Out of scope:** `HashMap` lookups (`state.get("weight")`, where a missing key is legitimate) and the integer `unwrap_or(1)` shape/stride defaults. The latter are tracked in `notes/TODO.md` and overlap the `Shape` field flip.
+
 ## Concurrency and Async
 
 ### Stay synchronous

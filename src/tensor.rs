@@ -1,6 +1,7 @@
 use crate::Storage;
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
+use crate::index::{fetch, slot, span};
 use crate::ops::binary::BinaryOp;
 use crate::ops::reduce::ReduceOp;
 use crate::ops::ternary::TernaryOp;
@@ -704,28 +705,20 @@ impl SumDimGradFn {
             let mut coords = vec![0; self.input_shape.len()];
             let mut rem = i;
             for (d, &dim_sz) in self.input_shape.iter().enumerate().rev() {
-                if let Some(slot) = coords.get_mut(d) {
-                    *slot = rem % dim_sz;
-                }
+                *slot(&mut coords, d) = rem % dim_sz;
                 rem /= dim_sz;
             }
 
             // Map to gradient coordinates (zero out the summed dimension)
             let mut grad_coords = coords.clone();
-            if let Some(slot) = grad_coords.get_mut(self.dim) {
-                *slot = 0;
-            }
+            *slot(&mut grad_coords, self.dim) = 0;
 
             let grad_idx: usize = grad_coords
                 .iter()
                 .zip(grad_strides)
                 .map(|(c, s)| c * s)
                 .sum();
-            if let Some(val) = grad_data.get(grad_idx)
-                && let Some(slot) = result.get_mut(i)
-            {
-                *slot = *val;
-            }
+            *slot(&mut result, i) = fetch(grad_data, grad_idx);
         }
 
         vec![Some(RawTensor::new(result, &self.input_shape, false))]
@@ -767,9 +760,7 @@ impl MaxDimGradFn {
             let mut grad_coords = vec![0; expanded_shape.len()];
             let mut rem = out_idx;
             for (d, &dim_sz) in expanded_shape.iter().enumerate().rev() {
-                if let Some(slot) = grad_coords.get_mut(d) {
-                    *slot = rem % dim_sz;
-                }
+                *slot(&mut grad_coords, d) = rem % dim_sz;
                 rem /= dim_sz;
             }
 
@@ -778,11 +769,7 @@ impl MaxDimGradFn {
                 .zip(grad_strides)
                 .map(|(c, s)| c * s)
                 .sum();
-            if let Some(val) = grad_data.get(grad_idx)
-                && let Some(slot) = result.get_mut(max_lin_idx)
-            {
-                *slot = *val;
-            }
+            *slot(&mut result, max_lin_idx) = fetch(grad_data, grad_idx);
         }
 
         vec![Some(RawTensor::new(result, &self.input_shape, false))]
@@ -816,9 +803,7 @@ impl RawTensor {
         let dim_size = axis_size(&shape, dim)?;
         let dim = dim.0;
         let mut out_shape = shape.clone();
-        if let Some(slot) = out_shape.get_mut(dim) {
-            *slot = 1; // intermediate shape before squeeze
-        }
+        *slot(&mut out_shape, dim) = 1; // intermediate shape before squeeze
         let out_size: usize = out_shape.iter().product();
         let mut result = vec![0.0; out_size];
 
@@ -834,13 +819,9 @@ impl RawTensor {
                 let mut sum = 0.0;
                 for k in 0..dim_size {
                     let in_idx = outer * dim_size * inner_size + k * inner_size + inner;
-                    if let Some(val) = data.get(in_idx) {
-                        sum += *val;
-                    }
+                    sum += fetch(&data, in_idx);
                 }
-                if let Some(slot) = result.get_mut(out_idx) {
-                    *slot = sum;
-                }
+                *slot(&mut result, out_idx) = sum;
             }
         }
 
@@ -942,9 +923,7 @@ impl RawTensor {
         let dim_size = axis_size(&shape, dim).unwrap_or_else(|e| panic!("max_dim: {e}"));
         let dim = dim.0;
         let mut out_shape = shape.clone();
-        if let Some(slot) = out_shape.get_mut(dim) {
-            *slot = 1;
-        }
+        *slot(&mut out_shape, dim) = 1;
         let out_size: usize = out_shape.iter().product();
 
         let mut result = vec![f32::NEG_INFINITY; out_size];
@@ -961,14 +940,10 @@ impl RawTensor {
                 let out_idx = outer * inner_size + inner;
                 for k in 0..dim_size {
                     let in_idx = outer * dim_size * inner_size + k * inner_size + inner;
-                    if let Some(&in_val) = data.get(in_idx)
-                        && let Some(out_slot) = result.get_mut(out_idx)
-                        && in_val > *out_slot
-                    {
-                        *out_slot = in_val;
-                        if let Some(idx_slot) = max_indices.get_mut(out_idx) {
-                            *idx_slot = in_idx;
-                        }
+                    let in_val = fetch(&data, in_idx);
+                    if in_val > fetch(&result, out_idx) {
+                        *slot(&mut result, out_idx) = in_val;
+                        *slot(&mut max_indices, out_idx) = in_idx;
                     }
                 }
             }
@@ -1101,9 +1076,7 @@ impl RawTensor {
             for i in 0..original_data.len() {
                 //f(x + epsilon)
                 let mut data_plus = original_data.clone();
-                if let Some(val) = data_plus.get_mut(i) {
-                    *val += epsilon;
-                }
+                *slot(&mut data_plus, i) += epsilon;
                 let tensor_plus = Self::new(data_plus.to_vec(), &original_shape, requires_grad);
                 let loss_plus = loss_fn(&tensor_plus);
                 assert!(
@@ -1111,12 +1084,10 @@ impl RawTensor {
                     "check_gradients: loss must be scalar, got shape {:?}",
                     loss_plus.borrow().shape
                 );
-                let val_plus = loss_plus.borrow().data.first().copied().unwrap_or(0.0);
+                let val_plus = fetch(&loss_plus.borrow().data, 0);
 
                 let mut data_minus = original_data.clone();
-                if let Some(val) = data_minus.get_mut(i) {
-                    *val -= epsilon;
-                }
+                *slot(&mut data_minus, i) -= epsilon;
                 let tensor_minus = Self::new(data_minus.to_vec(), &original_shape, requires_grad);
                 let loss_minus = loss_fn(&tensor_minus);
                 assert!(
@@ -1124,11 +1095,9 @@ impl RawTensor {
                     "check_gradients: loss must be scalar, got shape {:?}",
                     loss_minus.borrow().shape
                 );
-                let val_minus = loss_minus.borrow().data.first().copied().unwrap_or(0.0);
+                let val_minus = fetch(&loss_minus.borrow().data, 0);
                 //central diff
-                if let Some(val) = numerical_grad.get_mut(i) {
-                    *val = (val_plus - val_minus) / (2.0 * epsilon);
-                }
+                *slot(&mut numerical_grad, i) = (val_plus - val_minus) / (2.0 * epsilon);
             }
         }
 
@@ -1499,12 +1468,11 @@ impl Iterator for DataLoader {
             let data_start = idx * sample_size;
             let target_start = idx * target_size;
 
-            if let Some(data_slice) = self.data.get(data_start..data_start + sample_size) {
-                batch_data.extend_from_slice(data_slice);
-            }
-            if let Some(target_slice) = self.targets.get(target_start..target_start + target_size) {
-                batch_targets.extend_from_slice(target_slice);
-            }
+            batch_data.extend_from_slice(span(&self.data, data_start..data_start + sample_size));
+            batch_targets.extend_from_slice(span(
+                &self.targets,
+                target_start..target_start + target_size,
+            ));
         }
 
         self.current = end;

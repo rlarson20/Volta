@@ -1,6 +1,7 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::error::Result;
+use crate::index::{fetch, slot};
 use crate::shape::{Axis, Shape, Strides};
 use crate::spec::PadValue;
 use crate::storage::Storage;
@@ -274,11 +275,7 @@ fn apply_movement_backward<M: BackwardIndexMapper>(
 ) {
     // Base case: reached the innermost dimension
     if dim == ctx.input_shape.len() {
-        if let Some(&val) = grad.get(output_offset)
-            && let Some(slot) = result.get_mut(input_offset)
-        {
-            *slot = val;
-        }
+        *slot(result, input_offset) = fetch(grad, output_offset);
         return;
     }
 
@@ -337,11 +334,7 @@ fn apply_movement_forward<M: ForwardIndexMapper>(
 ) {
     // Base case: reached the innermost dimension
     if dim == ctx.input_shape.len() {
-        if let Some(&src) = data.get(input_offset)
-            && let Some(slot) = result.get_mut(output_offset)
-        {
-            *slot = src;
-        }
+        *slot(result, output_offset) = fetch(data, input_offset);
         return;
     }
 
@@ -416,9 +409,7 @@ impl MovementGradFn {
                 // Invert the permutation to restore original order
                 let mut inverse_axes = vec![0; axes.len()];
                 for (i, &ax) in axes.iter().enumerate() {
-                    if let Some(slot) = inverse_axes.get_mut(ax) {
-                        *slot = i;
-                    }
+                    *slot(&mut inverse_axes, ax) = i;
                 }
 
                 // Try GPU path
@@ -485,11 +476,7 @@ impl MovementGradFn {
                             old_idx += coord * old_strides.get(j).copied().unwrap_or(1);
                         }
                     }
-                    if let Some(og_val) = out_grad.data.get(i)
-                        && let Some(slot) = grad_data.get_mut(old_idx)
-                    {
-                        *slot += *og_val;
-                    }
+                    *slot(&mut grad_data, old_idx) += fetch(&out_grad.data, i);
                 }
                 RawTensor::new(grad_data, &self.original_shape, false)
             }
@@ -679,12 +666,9 @@ impl RawTensor {
             let mut coords = vec![0; shape.len()];
             let mut remaining = idx;
             for i in (0..shape.len()).rev() {
-                if let Some(&dim_size) = shape.get(i) {
-                    if let Some(slot) = coords.get_mut(i) {
-                        *slot = remaining % dim_size;
-                    }
-                    remaining /= dim_size;
-                }
+                let dim_size = fetch(shape, i);
+                *slot(&mut coords, i) = remaining % dim_size;
+                remaining /= dim_size;
             }
             coords
         }
@@ -700,7 +684,7 @@ impl RawTensor {
         };
         assert_eq!(axes.len(), shape.len(), "Axes length must match rank");
 
-        let new_shape: Vec<usize> = axes.iter().filter_map(|&i| shape.get(i).copied()).collect();
+        let new_shape: Vec<usize> = axes.iter().map(|&i| fetch(&shape, i)).collect();
 
         // Try GPU path first if available
         if device.is_gpu()
@@ -721,16 +705,10 @@ impl RawTensor {
             // Map new coordinates back to old coordinates
             let mut old_coords = vec![0; axes.len()];
             for (i, &ax) in axes.iter().enumerate() {
-                if let Some(slot) = old_coords.get_mut(ax)
-                    && let Some(&coord) = new_coords.get(i)
-                {
-                    *slot = coord;
-                }
+                *slot(&mut old_coords, ax) = fetch(&new_coords, i);
             }
             let old_idx = coords_to_index(&old_coords, old_strides);
-            if let Some(&data_val) = cpu_data.get(old_idx) {
-                *val = data_val;
-            }
+            *val = fetch(&cpu_data, old_idx);
         }
         (Storage::cpu(new_data), new_shape, Device::CPU)
     }
@@ -821,11 +799,7 @@ impl RawTensor {
                         old_idx += coord * stride;
                     }
                 }
-                if let Some(&src_val) = cpu_data.get(old_idx)
-                    && let Some(slot) = result.get_mut(i)
-                {
-                    *slot = src_val;
-                }
+                *slot(&mut result, i) = fetch(&cpu_data, old_idx);
             }
             (Storage::cpu(result), Device::CPU)
         };
