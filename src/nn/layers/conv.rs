@@ -2,6 +2,7 @@
 use crate::Storage;
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
+use crate::index::{fetch, slot};
 use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
 use crate::shape::Axis;
@@ -336,11 +337,7 @@ impl DirectConvGradFn {
                                         + oc * (h_out * w_out)
                                         + oh * w_out
                                         + ow;
-                                    let dout = if let Some(&val) = out_grad_data.get(out_idx) {
-                                        val
-                                    } else {
-                                        0.0
-                                    };
+                                    let dout = fetch(out_grad_data, out_idx);
 
                                     // Starting position in input for this output position
                                     let h_start = oh * stride_h;
@@ -365,11 +362,7 @@ impl DirectConvGradFn {
                                             + ic * (kernel_h * kernel_w)
                                             + kh * kernel_w
                                             + kw;
-                                        let w_val = if let Some(&val) = weight_data.get(w_idx) {
-                                            val
-                                        } else {
-                                            0.0
-                                        };
+                                        let w_val = fetch(weight_data, w_idx);
 
                                         sum += dout * w_val;
                                     }
@@ -379,9 +372,7 @@ impl DirectConvGradFn {
 
                         let in_idx =
                             b * (in_ch * height * width) + ic * (height * width) + ih * width + iw;
-                        if let Some(slot) = grad_x_data.get_mut(in_idx) {
-                            *slot = sum;
-                        }
+                        *slot(&mut grad_x_data, in_idx) = sum;
                     }
                 }
             }
@@ -418,11 +409,7 @@ impl DirectConvGradFn {
                         // Get output gradient
                         let out_idx =
                             b * (out_ch * h_out * w_out) + oc * (h_out * w_out) + oh * w_out + ow;
-                        let dout = if let Some(&val) = out_grad_data.get(out_idx) {
-                            val
-                        } else {
-                            0.0
-                        };
+                        let dout = fetch(out_grad_data, out_idx);
 
                         // Starting position in input (accounting for padding)
                         let h_start = oh * stride_h;
@@ -452,20 +439,14 @@ impl DirectConvGradFn {
                                             + ic * (height * width)
                                             + in_h * width
                                             + in_w;
-                                        let in_val = if let Some(&val) = x_data.get(in_idx) {
-                                            val
-                                        } else {
-                                            0.0
-                                        };
+                                        let in_val = fetch(x_data, in_idx);
 
                                         // Accumulate weight gradient
                                         let w_idx = oc * (in_ch * kernel_h * kernel_w)
                                             + ic * (kernel_h * kernel_w)
                                             + kh * kernel_w
                                             + kw;
-                                        if let Some(slot) = grad_w_data.get_mut(w_idx) {
-                                            *slot += in_val * dout;
-                                        }
+                                        *slot(&mut grad_w_data, w_idx) += in_val * dout;
                                     }
                                 }
                             }
@@ -695,21 +676,18 @@ impl IGEMMGradFn {
                                             + kh * kernel_w
                                             + kw;
 
-                                        if let (Some(&dout), Some(&w_val)) =
-                                            (out_grad.get(out_idx), weight.get(w_idx))
-                                        {
-                                            sum += dout * w_val;
-                                        }
+                                        let dout = fetch(out_grad, out_idx);
+                                        let w_val = fetch(weight, w_idx);
+                                        sum += dout * w_val;
                                     }
                                 }
                             }
                         }
 
                         // Input grad index: (b, ic, ih, iw)
-                        let in_idx = b * (in_ch * height * width) + ic * (height * width) + s_idx;
-                        if let Some(slot) = grad_x.get_mut(in_idx) {
-                            *slot = sum;
-                        }
+                        let in_idx =
+                            b * (in_ch * height * width) + ic * (height * width) + remaining;
+                        *slot(grad_x, in_idx) = sum;
                     }
                 }
             }
@@ -765,12 +743,12 @@ impl IGEMMGradFn {
                         let w_start = ow * stride_w;
 
                         // Output grad index: (b, oc, oh, ow)
-                        let out_idx_base = b * (out_ch * spatial_out) + s_idx;
+                        let out_idx_base = b * (out_ch * spatial_out) + remaining;
 
                         // For each output channel and kernel position:
                         for oc in oc_start..oc_end {
                             let out_idx = out_idx_base + oc * spatial_out;
-                            let dout = *out_grad.get(out_idx).unwrap_or(&0.0);
+                            let dout = fetch(out_grad, out_idx);
 
                             for ic in ic_start..ic_end {
                                 for kh in 0..kernel_h {
@@ -802,11 +780,7 @@ impl IGEMMGradFn {
                                                 + kh * kernel_w
                                                 + kw;
 
-                                            if let (Some(&in_val), Some(slot)) =
-                                                (x.get(in_idx), grad_w.get_mut(w_idx))
-                                            {
-                                                *slot += in_val * dout;
-                                            }
+                                            *slot(grad_w, w_idx) += fetch(x, in_idx) * dout;
                                         }
                                     }
                                 }
@@ -999,11 +973,8 @@ impl Conv2d {
                                 let col_idx = c * (kh * kw) + kh_idx * kw + kw_idx;
                                 let result_idx = row_idx * cols + col_idx;
                                 let cpu_data = data.to_vec();
-                                if let Some(&src_val) = cpu_data.get(in_idx)
-                                    && let Some(slot) = result.get_mut(result_idx)
-                                {
-                                    *slot = src_val;
-                                }
+                                let src_val = fetch(&cpu_data, in_idx);
+                                *slot(&mut result, result_idx) = src_val;
                             }
                         }
                     }
@@ -1061,11 +1032,8 @@ impl Conv2d {
                                 let col_idx = c * (kh * kw) + kh_idx * kw + kw_idx;
                                 let cols = channels * kh * kw;
                                 let col_data_idx = row_idx * cols + col_idx;
-                                if let Some(&col_val) = col.get(col_data_idx)
-                                    && let Some(slot) = result.get_mut(out_idx)
-                                {
-                                    *slot += col_val;
-                                }
+                                let col_val = fetch(col, col_data_idx);
+                                *slot(&mut result, out_idx) += col_val;
                             }
                         }
                     }
@@ -1151,11 +1119,9 @@ impl Conv2d {
                                             + kh * kernel_w
                                             + kw;
 
-                                        if let (Some(&in_val), Some(&w_val)) =
-                                            (x_data_cpu.get(in_idx), w_data_cpu.get(w_idx))
-                                        {
-                                            sum += in_val * w_val;
-                                        }
+                                        let in_val = fetch(&x_data_cpu, in_idx);
+                                        let w_val = fetch(&w_data_cpu, w_idx);
+                                        sum += in_val * w_val;
                                     }
                                 }
                             }
@@ -1164,9 +1130,7 @@ impl Conv2d {
                         // Output index: (b, oc, oh, ow)
                         let out_idx =
                             b * (out_ch * h_out * w_out) + oc * (h_out * w_out) + oh * w_out + ow;
-                        if let Some(slot) = output.get_mut(out_idx) {
-                            *slot = sum;
-                        }
+                        *slot(&mut output, out_idx) = sum;
                     }
                 }
             }
@@ -1399,21 +1363,17 @@ impl Conv2d {
                                                 + kh * kernel_w
                                                 + kw;
 
-                                            if let (Some(&in_val), Some(&w_val)) =
-                                                (x_data.get(in_idx), w_data.get(w_idx))
-                                            {
-                                                sum += in_val * w_val;
-                                            }
+                                            let in_val = fetch(x_data, in_idx);
+                                            let w_val = fetch(w_data, w_idx);
+                                            sum += in_val * w_val;
                                         }
                                     }
                                 }
                             }
 
                             // Output index: (b, oc, oh, ow)
-                            let out_idx = b * (out_ch * spatial_out) + oc * spatial_out + s_idx;
-                            if let Some(slot) = output.get_mut(out_idx) {
-                                *slot += sum;
-                            }
+                            let out_idx = b * (out_ch * spatial_out) + oc * spatial_out + remaining;
+                            *slot(output, out_idx) += sum;
                         }
                     }
                 }
@@ -2420,6 +2380,79 @@ mod conv2d_tests {
                 abs_diff < 1e-4,
                 "Weight grad mismatch at index {i}: Direct={direct_val}, IGEMM={igemm_val}, diff={abs_diff}"
             );
+        }
+    }
+
+    /// Regression: `igemm_tiled`, `igemm_backward_weight`, and `igemm_backward_input` added the
+    /// batch offset twice (`s_idx` already contains `b * spatial`). Every iGEMM correctness test
+    /// used batch 1 and the batch > 1 tests checked only shapes, so the wrong indices were
+    /// hidden by `if let Some` / `unwrap_or(&0.0)`, which dropped the out-of-range accesses.
+    /// Seeded and backpropped through a random weighted loss, so a misplaced element cannot
+    /// cancel out the way it would under a plain `.sum()`.
+    #[test]
+    fn test_conv2d_igemm_batch_gt_one_matches_direct() {
+        crate::tensor::manual_seed(0xB47C);
+        let (batch, in_ch, out_ch, h, w) = (3, 2, 4, 5, 5);
+        let x_data = crate::tensor::randn(&[batch, in_ch, h, w])
+            .borrow()
+            .data
+            .to_vec();
+        let loss_weights = crate::tensor::randn(&[batch, out_ch, h, w]);
+
+        let conv_direct = Conv2d::new(in_ch, out_ch, 3, 1, 1, true);
+        conv_direct.set_algo(ConvAlgo::Direct);
+        let conv_igemm = Conv2d::new(in_ch, out_ch, 3, 1, 1, true);
+        conv_igemm.set_algo(ConvAlgo::IGEMM);
+        let weight_data = conv_direct.weight.borrow().data.to_vec();
+        conv_igemm.weight.borrow_mut().data = crate::storage::Storage::cpu(weight_data);
+        let bias_data = conv_direct.bias.as_ref().unwrap().borrow().data.to_vec();
+        conv_igemm.bias.as_ref().unwrap().borrow_mut().data =
+            crate::storage::Storage::cpu(bias_data);
+
+        let x_direct = RawTensor::new(x_data.clone(), &[batch, in_ch, h, w], true);
+        let x_igemm = RawTensor::new(x_data, &[batch, in_ch, h, w], true);
+        let y_direct = conv_direct.forward(&x_direct);
+        let y_igemm = conv_igemm.forward(&x_igemm);
+
+        let out_direct = y_direct.borrow().data.to_vec();
+        let out_igemm = y_igemm.borrow().data.to_vec();
+        assert_eq!(out_direct.len(), out_igemm.len());
+        for (i, (d, g)) in out_direct.iter().zip(&out_igemm).enumerate() {
+            assert!(
+                (d - g).abs() < 1e-4,
+                "forward mismatch at {i}: Direct={d}, IGEMM={g}"
+            );
+        }
+
+        y_direct
+            .elem_mul(&loss_weights)
+            .sum()
+            .into_loss()
+            .expect("scalar loss")
+            .backward();
+        y_igemm
+            .elem_mul(&loss_weights)
+            .sum()
+            .into_loss()
+            .expect("scalar loss")
+            .backward();
+
+        let pairs = [
+            ("input", x_direct.grad().unwrap(), x_igemm.grad().unwrap()),
+            (
+                "weight",
+                conv_direct.weight.grad().unwrap(),
+                conv_igemm.weight.grad().unwrap(),
+            ),
+        ];
+        for (name, direct, igemm) in pairs {
+            assert_eq!(direct.len(), igemm.len());
+            for (i, (d, g)) in direct.iter().zip(&igemm).enumerate() {
+                assert!(
+                    (d - g).abs() < 1e-3,
+                    "{name} grad mismatch at {i}: Direct={d}, IGEMM={g}"
+                );
+            }
         }
     }
 

@@ -6,6 +6,7 @@
 )]
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
+use crate::index::{fetch, slot};
 use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
 use crate::shape::Axis;
@@ -118,11 +119,8 @@ impl ConvTranspose2d {
                                 let col_idx = c * (kh * kw) + kh_idx * kw + kw_idx;
                                 let cols = out_channels * kh * kw;
                                 let col_data_idx = row_idx * cols + col_idx;
-                                if let Some(&col_val) = col.get(col_data_idx)
-                                    && let Some(slot) = result.get_mut(out_idx)
-                                {
-                                    *slot += col_val;
-                                }
+                                let col_val = fetch(col, col_data_idx);
+                                *slot(&mut result, out_idx) += col_val;
                             }
                         }
                     }
@@ -212,11 +210,8 @@ impl ConvTranspose2dGradFn {
                                             + kh_idx * kw
                                             + kw_idx;
 
-                                        if let Some(&og_val) = out_grad_data.get(out_idx)
-                                            && let Some(&w_val) = weight_data.get(w_idx)
-                                        {
-                                            grad_sum += og_val * w_val;
-                                        }
+                                        grad_sum += fetch(&out_grad_data, out_idx)
+                                            * fetch(&weight_data, w_idx);
                                     }
                                 }
                             }
@@ -225,9 +220,7 @@ impl ConvTranspose2dGradFn {
                         let in_idx =
                             b * (in_channels * in_h * in_w) + c_in * (in_h * in_w) + ih * in_w + iw;
 
-                        if let Some(slot) = grad_input_data.get_mut(in_idx) {
-                            *slot = grad_sum;
-                        }
+                        *slot(&mut grad_input_data, in_idx) = grad_sum;
                     }
                 }
             }
@@ -274,11 +267,8 @@ impl ConvTranspose2dGradFn {
                                             + h_out as usize * out_w
                                             + w_out as usize;
 
-                                        if let Some(&in_val) = input_data.get(in_idx)
-                                            && let Some(&og_val) = out_grad_data.get(out_idx)
-                                        {
-                                            grad_sum += in_val * og_val;
-                                        }
+                                        grad_sum += fetch(&input_data, in_idx)
+                                            * fetch(&out_grad_data, out_idx);
                                     }
                                 }
                             }
@@ -289,9 +279,7 @@ impl ConvTranspose2dGradFn {
                             + kh_idx * kw
                             + kw_idx;
 
-                        if let Some(slot) = grad_weight_data.get_mut(w_idx) {
-                            *slot = grad_sum;
-                        }
+                        *slot(&mut grad_weight_data, w_idx) = grad_sum;
                     }
                 }
             }

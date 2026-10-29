@@ -1,5 +1,6 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
+use crate::index::{fetch, slot};
 use crate::io::StateDict;
 use crate::nn::Module;
 use crate::shape::Shape;
@@ -110,21 +111,16 @@ impl MaxPool2d {
                                 let w_in = w_start + kw;
                                 let in_idx =
                                     (((b * channels + c) * padded_h) + h_in) * padded_w + w_in;
-                                if let Some(&val) = data.get(in_idx)
-                                    && val > max_val
-                                {
+                                let val = fetch(&data, in_idx);
+                                if val > max_val {
                                     max_val = val;
                                     max_idx = in_idx;
                                 }
                             }
                         }
 
-                        if let Some(slot) = out_data.get_mut(out_idx) {
-                            *slot = max_val;
-                        }
-                        if let Some(slot) = max_indices.get_mut(out_idx) {
-                            *slot = max_idx;
-                        }
+                        *slot(&mut out_data, out_idx) = max_val;
+                        *slot(&mut max_indices, out_idx) = max_idx;
                     }
                 }
             }
@@ -163,10 +159,8 @@ impl MaxPool2dGradFn {
         let mut grad_input = vec![0.0; input_shape.iter().product()];
 
         for (idx, &max_linear_idx) in self.max_indices.iter().enumerate() {
-            let grad_val = out_grad.data.get(idx).copied().unwrap_or(0.0);
-            if let Some(slot) = grad_input.get_mut(max_linear_idx) {
-                *slot += grad_val;
-            }
+            let grad_val = fetch(&out_grad.data, idx);
+            *slot(&mut grad_input, max_linear_idx) += grad_val;
         }
 
         vec![Some(RawTensor::new(grad_input, &input_shape, false))]
