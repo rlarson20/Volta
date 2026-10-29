@@ -4,7 +4,6 @@ description = "A PyTorch-like Machine Learning framework."
 version = "0.3.0"
 edition = "2024"
 rust-version = "1.89.0"
-build = "build.rs"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/rlarson20/Volta"
@@ -31,65 +30,12 @@ libm = "0.2.16"
 
 # Examples
 [[example]]
-name = "gpu"
-path = "examples/gpu.rs"
-
-[[example]]
-name = "showcase"
-path = "examples/showcase.rs"
-
-
-[[example]]
 name = "readme1"
 path = "examples/readme-1.rs"
 
 [[example]]
 name = "readme2"
 path = "examples/readme-2.rs"
-
-[[example]]
-name = "load_external_mnist"
-path = "examples/load_external_mnist.rs"
-
-[[example]]
-name = "mnist_cnn"
-path = "examples/mnist_cnn.rs"
-
-[[example]]
-name = "mnist_rnn"
-path = "examples/mnist_rnn.rs"
-
-[[example]]
-name = "regression"
-path = "examples/regression.rs"
-
-[[example]]
-name = "char_language_model"
-path = "examples/char_language_model.rs"
-
-[[example]]
-name = "char_transformer_model"
-path = "examples/char_transformer_model.rs"
-
-[[example]]
-name = "dcgan"
-path = "examples/dcgan.rs"
-
-[[example]]
-name = "gpu_training"
-path = "examples/gpu_training.rs"
-
-[[example]]
-name = "super_resolution"
-path = "examples/super_resolution.rs"
-
-[[example]]
-name = "time_sequence"
-path = "examples/time_sequence.rs"
-
-[[example]]
-name = "vae"
-path = "examples/vae.rs"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 blas-src = { version = "0.14", features = ["accelerate"], optional = true }
@@ -134,8 +80,7 @@ missing_docs = "deny"
 # Organization:
 # 1. Defensive/Safety Lints (deny) - Critical for correctness
 # 2. Code Quality Lints (deny) - Important for maintainability
-# 3. Pedantic Lints (selective) - Quality improvements where practical
-# 4. Allowed Lints - Explicitly documented exceptions
+# 3. Allowed Lints - Explicitly documented exceptions
 # =============================================================================
 
 [lints.clippy]
@@ -146,7 +91,7 @@ missing_docs = "deny"
 # These lints prevent common sources of runtime errors and undefined behavior
 
 # Memory safety and bounds checking
-indexing_slicing = "deny" # Use .get() instead of [] to prevent panics
+indexing_slicing = "deny" # Use crate::index::{fetch, slot, span}; tests are exempt via clippy.toml
 
 # Type safety and conversions
 fallible_impl_from = "deny" # Fallible conversions should use TryFrom, not From
@@ -157,7 +102,7 @@ unneeded_field_pattern = "deny"  # Don't ignore struct fields unnecessarily
 
 # API design
 fn_params_excessive_bools = "deny" # 4+ bool params usually indicate need for an enum
-must_use_candidate = "deny"        # Mark types that should not be ignored
+must_use_candidate = "deny"        # Mark functions whose result should not be ignored
 
 # -----------------------------------------------------------------------------
 # 2. CODE QUALITY LINTS (deny)
@@ -173,7 +118,7 @@ explicit_iter_loop = "deny"            # Use iter() explicitly in for loops
 semicolon_if_nothing_returned = "deny" # Consistent semicolon usage
 
 # Type and trait improvements
-default_trait_access = "deny" # Use Default::default() instead of Type::default()
+default_trait_access = "deny" # Use Type::default() instead of Default::default()
 implicit_clone = "deny"       # Make clones explicit for clarity
 assigning_clones = "deny"     # Use clone_from when assigning clones
 cast_lossless = "deny"        # Use From/Into for lossless casts
@@ -199,7 +144,7 @@ struct_field_names = "deny"    # Avoid redundant prefixes in struct field names
 pub_underscore_fields = "deny" # Public fields shouldn't start with underscore
 
 # Conditionals and control flow
-bool_to_int_with_if = "deny" # Use as conversion instead of if bool { 1 } else { 0 }
+bool_to_int_with_if = "deny" # Use From/Into instead of if bool { 1 } else { 0 }
 if_not_else = "deny"         # Put the positive case in if, not else
 manual_let_else = "deny"     # Use let-else syntax when appropriate
 manual_assert = "deny"       # Use assert! macro instead of manual if panic!
@@ -215,6 +160,12 @@ missing_panics_doc = "deny"            # Document when functions can panic
 missing_errors_doc = "deny"            # Document error conditions
 missing_docs_in_private_items = "deny"
 missing_fields_in_debug = "deny"       # Include all fields in Debug implementations
+
+# Leftover debugging and unsafe hygiene
+dbg_macro = "deny"                  # No dbg! left in committed code
+todo = "deny"                       # Track work in notes/TODO.md, not todo!()
+unimplemented = "deny"              # Same: no unimplemented!() stubs
+undocumented_unsafe_blocks = "deny" # Every unsafe block states its SAFETY invariant
 
 # Misc improvements
 unreadable_literal = "deny" # Use underscores in large numeric literals (1_000_000)

@@ -96,6 +96,9 @@ impl RawTensor {
             let dim = |x: usize| i32::try_from(x).expect("matmul dim exceeds i32");
             let (mi, ki, ni) = (dim(m), dim(k), dim(n));
             let mut result = vec![0.0; m * n];
+            // SAFETY: the asserts above fix `a.len() == m*k` and `b.len() == k*n`, and `result`
+            // holds m*n floats. With row-major leading dimensions k, n, n every access is in
+            // bounds, and the three buffers are distinct allocations.
             unsafe {
                 cblas_sgemm(
                     101, // CblasRowMajor
@@ -120,6 +123,9 @@ impl RawTensor {
         {
             // Use matrixmultiply crate for portable performance
             let mut result = vec![0.0; m * n];
+            // SAFETY: the asserts above fix `a.len() == m*k` and `b.len() == k*n`, and `result`
+            // holds m*n floats. The row strides (k, n, n) and unit column strides keep every
+            // access in bounds, and the three buffers are distinct allocations.
             unsafe {
                 matrixmultiply::sgemm(
                     m,

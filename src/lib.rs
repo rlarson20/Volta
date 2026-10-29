@@ -14,7 +14,6 @@
 //! functions that know how to backpropagate through that operation.
 #![allow(
     clippy::float_cmp,
-    clippy::similar_names,
     clippy::cast_precision_loss,
     clippy::missing_docs_in_private_items,
     missing_docs //FIXME: MUST REMOVE BEFORE MERGING IN
