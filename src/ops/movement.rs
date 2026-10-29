@@ -642,7 +642,7 @@ impl RawTensor {
         let new_size: usize = new_shape.iter().product();
         assert_eq!(old_size, new_size, "Cannot reshape: size mismatch");
 
-        // Reshape is a view operation - data stays in place, only shape changes.
+        // `data` shares the input's buffer (copy-on-write storage); only the shape changes.
         Self::movement_edge(
             self_t,
             data,

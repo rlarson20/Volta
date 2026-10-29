@@ -11,6 +11,7 @@ use crate::dtype::DType;
 use crate::gpu::{GpuBuffer, is_gpu_available};
 use bytemuck::{cast_slice, cast_slice_mut};
 use half::{bf16, f16};
+use std::sync::Arc;
 
 #[cfg(feature = "gpu")]
 use std::cell::RefCell;
@@ -23,8 +24,12 @@ use std::ops::{
 /// This enum allows tensors to store their data either on CPU (as raw bytes with dtype)
 /// or on GPU (as a `GpuBuffer`). Operations automatically handle the right backend.
 pub enum Storage {
-    /// CPU storage - data lives in main memory as raw bytes
-    Cpu { data: Vec<u8>, dtype: DType },
+    /// CPU storage - data lives in main memory as raw bytes.
+    ///
+    /// The bytes are shared: `clone` bumps a refcount instead of copying. Every write
+    /// goes through `as_f32_slice_mut`, which copies first if the buffer is shared
+    /// (copy-on-write), so a write to one storage is never visible through another.
+    Cpu { data: Arc<[u8]>, dtype: DType },
 
     /// GPU storage - data lives in GPU memory
     #[cfg(feature = "gpu")]
@@ -43,7 +48,7 @@ impl Clone for Storage {
     fn clone(&self) -> Self {
         match self {
             Self::Cpu { data, dtype } => Self::Cpu {
-                data: data.clone(),
+                data: Arc::clone(data),
                 dtype: *dtype,
             },
             #[cfg(feature = "gpu")]
@@ -62,9 +67,8 @@ impl Storage {
     /// Create new CPU storage from f32 data (default dtype)
     #[must_use]
     pub fn cpu(data: Vec<f32>) -> Self {
-        let bytes: Vec<u8> = cast_slice(&data).to_vec();
         Self::Cpu {
-            data: bytes,
+            data: Arc::from(cast_slice::<_, u8>(&data)),
             dtype: DType::F32,
         }
     }
@@ -78,9 +82,8 @@ impl Storage {
     /// Create new CPU storage from f64 data
     #[must_use]
     pub fn cpu_f64(data: Vec<f64>) -> Self {
-        let bytes: Vec<u8> = cast_slice(&data).to_vec();
         Self::Cpu {
-            data: bytes,
+            data: Arc::from(cast_slice::<_, u8>(&data)),
             dtype: DType::F64,
         }
     }
@@ -88,9 +91,8 @@ impl Storage {
     /// Create new CPU storage from f16 data
     #[must_use]
     pub fn cpu_f16(data: Vec<f16>) -> Self {
-        let bytes: Vec<u8> = cast_slice(&data).to_vec();
         Self::Cpu {
-            data: bytes,
+            data: Arc::from(cast_slice::<_, u8>(&data)),
             dtype: DType::F16,
         }
     }
@@ -98,9 +100,8 @@ impl Storage {
     /// Create new CPU storage from bf16 data
     #[must_use]
     pub fn cpu_bf16(data: Vec<bf16>) -> Self {
-        let bytes: Vec<u8> = cast_slice(&data).to_vec();
         Self::Cpu {
-            data: bytes,
+            data: Arc::from(cast_slice::<_, u8>(&data)),
             dtype: DType::BF16,
         }
     }
@@ -126,7 +127,10 @@ impl Storage {
                 dtype.size_of()
             )));
         }
-        Ok(Self::Cpu { data, dtype })
+        Ok(Self::Cpu {
+            data: Arc::from(data),
+            dtype,
+        })
     }
 
     /// Create new GPU storage from f32 data (falls back to CPU if GPU unavailable)
@@ -259,12 +263,16 @@ impl Storage {
         self.try_as_f32_slice().expect("Storage dtype is not F32")
     }
 
-    /// Get data as mutable f32 slice. Only valid if dtype is F32.
+    /// Get data as mutable f32 slice. Only valid if dtype is F32 and on the CPU.
+    ///
+    /// This is the one CPU write path. If another storage shares the buffer, it is copied
+    /// first, so the write never shows through a clone; a unique owner writes in place.
     pub fn as_f32_slice_mut(&mut self) -> Option<&mut [f32]> {
         match self {
             Self::Cpu { data, dtype } => {
                 if *dtype == DType::F32 {
-                    Some(cast_slice_mut(data))
+                    // Copy-on-write: copies only if another storage shares the buffer.
+                    Some(cast_slice_mut(Arc::make_mut(data)))
                 } else {
                     None
                 }
@@ -500,17 +508,15 @@ impl Storage {
             }
             DType::I32 => {
                 let data: Vec<i32> = f32_data.iter().map(|&x| x as i32).collect();
-                let bytes: Vec<u8> = cast_slice(&data).to_vec();
                 Self::Cpu {
-                    data: bytes,
+                    data: Arc::from(cast_slice::<_, u8>(&data)),
                     dtype: DType::I32,
                 }
             }
             DType::I64 => {
                 let data: Vec<i64> = f32_data.iter().map(|&x| x as i64).collect();
-                let bytes: Vec<u8> = cast_slice(&data).to_vec();
                 Self::Cpu {
-                    data: bytes,
+                    data: Arc::from(cast_slice::<_, u8>(&data)),
                     dtype: DType::I64,
                 }
             }
@@ -520,14 +526,14 @@ impl Storage {
                     .map(|&x| x.clamp(0.0, 255.0) as u8)
                     .collect();
                 Self::Cpu {
-                    data,
+                    data: Arc::from(data),
                     dtype: DType::U8,
                 }
             }
             DType::Bool => {
                 let data: Vec<u8> = f32_data.iter().map(|&x| u8::from(x != 0.0)).collect();
                 Self::Cpu {
-                    data,
+                    data: Arc::from(data),
                     dtype: DType::Bool,
                 }
             }
@@ -563,13 +569,15 @@ impl Storage {
     #[must_use]
     pub fn to_device(&self, device: &Device) -> Self {
         match device {
-            Device::CPU => {
-                let data = self.as_bytes().to_vec();
-                Self::Cpu {
-                    data,
+            Device::CPU => match self {
+                // Already host memory: share the buffer.
+                Self::Cpu { .. } => self.clone(),
+                #[cfg(feature = "gpu")]
+                Self::Gpu { .. } => Self::Cpu {
+                    data: Arc::from(self.as_bytes()),
                     dtype: self.dtype(),
-                }
-            }
+                },
+            },
             Device::GPU(_) => {
                 #[cfg(feature = "gpu")]
                 {
@@ -879,5 +887,31 @@ mod tests {
         assert_eq!(storage.dtype(), DType::F32);
         assert_eq!(storage.len(), 4);
         assert_eq!(storage.as_f32_slice(), &data);
+    }
+
+    #[test]
+    fn cpu_clone_shares_buffer() {
+        let a = Storage::cpu(vec![1.0, 2.0, 3.0]);
+        let b = a.clone();
+        assert_eq!(a.as_bytes().as_ptr(), b.as_bytes().as_ptr());
+    }
+
+    #[test]
+    fn cpu_write_after_clone_copies() {
+        let a = Storage::cpu(vec![1.0, 2.0, 3.0]);
+        let mut b = a.clone();
+        *crate::index::slot(b.as_f32_slice_mut().expect("f32 cpu storage"), 1) = 9.0;
+        assert_eq!(a.as_f32_slice(), &[1.0, 2.0, 3.0]);
+        assert_eq!(b.as_f32_slice(), &[1.0, 9.0, 3.0]);
+        assert_ne!(a.as_bytes().as_ptr(), b.as_bytes().as_ptr());
+    }
+
+    #[test]
+    fn cpu_unique_write_is_in_place() {
+        let mut a = Storage::cpu(vec![1.0, 2.0, 3.0]);
+        let before = a.as_bytes().as_ptr();
+        *crate::index::slot(a.as_f32_slice_mut().expect("f32 cpu storage"), 0) = 5.0;
+        assert_eq!(a.as_bytes().as_ptr(), before);
+        assert_eq!(fetch(&a, 0), 5.0);
     }
 }
