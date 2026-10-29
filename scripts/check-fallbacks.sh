@@ -19,8 +19,8 @@ keyed='state(_dict)?\.get(_mut)?\('
 hits=$(
     {
         git grep -nE --untracked 'unwrap_or\((&)?0\.0\)|unwrap_or\(f32::NAN\)' -- "${dirs[@]}" || true
-        git grep -nE --untracked 'let Some\(&?[A-Za-z_]+\) = .*\.get(_mut)?\(' -- "${dirs[@]}" \
-            | grep -vE "get(_mut)?\((&|\")" | grep -vE "$keyed" || true
+        git grep -nE --untracked 'let Some\(&?[A-Za-z_]+\) = .*\.get(_mut)?\(' -- "${dirs[@]}" |
+            grep -vE "get(_mut)?\((&|\")" | grep -vE "$keyed" || true
     } | grep -vE "$skip" | sort -u || true
 )
 

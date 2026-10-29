@@ -1,3 +1,6 @@
+md:
+	fd . --extension md | xargs nvim
+
 test-all:
 	cargo nextest run --no-fail-fast
 
