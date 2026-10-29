@@ -36,7 +36,7 @@ Work that a Linux CPU can verify, and that reviews as a PR. Current candidates f
 - **Anything whose evidence needs a GPU:** H5, GPU broadcast backward, the GPU part of H3, GPU parity claims, the GPU side of `DevicePolicy`. A passing GPU test here was skipped. Writing GPU code is fine once the user agrees; marking it verified, or `[x]` in `notes/TODO.md`, is not. Hand it off as "needs `just test-gpu` on the Mac".
 - **Performance and the Accelerate path:** benches, speed claims, and timing thresholds. `bench_matmul_speedup` (`src/lib.rs`) uses the non-Accelerate threshold and may flake on a shared VM. Report it; don't loosen it.
 - **Shader validation:** `just validate-shaders` needs `naga`. Install it, or say the check did not run.
-- **Git:** never push to `main` or `improvements`, never force-push, never `--no-verify` or `SKIP=`. Work on a branch off `improvements` and open the PR against `improvements`.
+- **Git:** never push to `main` or `improvements`, never force-push, never `--no-verify` or `SKIP=`. Branch and target PRs as in "Stacked PRs" below.
 
 ## How to work there
 
@@ -44,3 +44,14 @@ Work that a Linux CPU can verify, and that reviews as a PR. Current candidates f
 - Ask when you'd ask locally. Make each question answerable from a phone: short, options listed, your recommendation first. Batch them, and keep working on whatever doesn't depend on the answer. Never guess past an invariant or a design decision to avoid waiting. If no answer arrives before the session ends, put the open question in the PR description.
 - The PR description must say "CPU-only, Linux, GPU tests skipped" and list what was not verified.
 - One task per session and per PR. Keep diffs reviewable.
+
+## Stacked PRs
+
+Open PRs form chains rooted at `improvements`: each PR's base is the branch of the PR below it. A session adds its PR to the top of a chain instead of waiting for the chain to merge.
+
+- **Pick the base.** List the open PRs and follow the chains up from `improvements`. Branch from the tip of the longest chain and open the PR against that tip's branch. Branch from `improvements` only when no PR is open, or when the user asks for an independent PR. If two chains are equally long, ask which one to extend.
+- **Say where it sits.** Start the PR description with "Stacked on #N" and the merge order down to `improvements`, as in #10. A series on one topic also numbers its titles ("(2/3)").
+- **Merge bottom-up** with a merge commit, not squash or rebase: the branches above still carry the lower PR's original commits. After a PR merges, retarget the PR above it to `improvements` (GitHub does it automatically only when the merged branch is deleted).
+- **Change a lower PR, then propagate.** Push the fix to the lower branch, then merge that branch into each branch above it, bottom-up, and push. This is a merge, never a rebase, because force-push is ruled out above.
+- **Conflicts across the stack** are resolved at the lowest branch where they appear, then propagated upward the same way.
+- Each PR still holds one task. Stacking orders reviews; it does not widen a PR.
