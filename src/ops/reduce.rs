@@ -33,18 +33,15 @@ impl SumGradFn {
         let grad_val: f32 = fetch(&out_grad.data.to_host_f32(), 0);
 
         // Check if we can do GPU backward
-        #[cfg(feature = "gpu")]
+        if out_grad.device.is_gpu()
+            && let Some(storage) = crate::RawTensor::gpu_sum_backward(grad_val, size)
         {
-            if out_grad.device.is_gpu()
-                && let Some(storage) = crate::RawTensor::gpu_sum_backward(grad_val, size)
-            {
-                return vec![Some(RawTensor::new_with_storage(
-                    storage,
-                    self.input_shape.clone(),
-                    out_grad.device.clone(),
-                    false,
-                ))];
-            }
+            return vec![Some(RawTensor::new_with_storage(
+                storage,
+                self.input_shape.clone(),
+                out_grad.device.clone(),
+                false,
+            ))];
         }
 
         // CPU fallback
@@ -75,19 +72,16 @@ impl MaxReduceGradFn {
         let grad_val: f32 = fetch(&out_grad.data.to_host_f32(), 0);
 
         // Check if we can do GPU backward
-        #[cfg(feature = "gpu")]
+        if out_grad.device.is_gpu()
+            && let Some(storage) =
+                crate::RawTensor::gpu_max_backward(grad_val, size, self.max_index)
         {
-            if out_grad.device.is_gpu()
-                && let Some(storage) =
-                    crate::RawTensor::gpu_max_backward(grad_val, size, self.max_index)
-            {
-                return vec![Some(RawTensor::new_with_storage(
-                    storage,
-                    self.input_shape.clone(),
-                    out_grad.device.clone(),
-                    false,
-                ))];
-            }
+            return vec![Some(RawTensor::new_with_storage(
+                storage,
+                self.input_shape.clone(),
+                out_grad.device.clone(),
+                false,
+            ))];
         }
 
         // CPU fallback
@@ -119,18 +113,15 @@ impl MeanGradFn {
         let grad_val: f32 = fetch(&out_grad.data.to_host_f32(), 0);
 
         // Check if we can do GPU backward
-        #[cfg(feature = "gpu")]
+        if out_grad.device.is_gpu()
+            && let Some(storage) = crate::RawTensor::gpu_mean_backward(grad_val, size)
         {
-            if out_grad.device.is_gpu()
-                && let Some(storage) = crate::RawTensor::gpu_mean_backward(grad_val, size)
-            {
-                return vec![Some(RawTensor::new_with_storage(
-                    storage,
-                    self.input_shape.clone(),
-                    out_grad.device.clone(),
-                    false,
-                ))];
-            }
+            return vec![Some(RawTensor::new_with_storage(
+                storage,
+                self.input_shape.clone(),
+                out_grad.device.clone(),
+                false,
+            ))];
         }
 
         // CPU fallback
@@ -161,19 +152,10 @@ impl RawTensor {
         let (result_val, grad_fn): (f32, GradFn) = match op {
             ReduceOp::Sum => {
                 // Try GPU first if available
-                let sum: f32 = if device.is_gpu() {
-                    #[cfg(feature = "gpu")]
-                    {
-                        if let Some(result) = Self::gpu_sum_reduce(&data) {
-                            result
-                        } else {
-                            data.to_host_f32().iter().sum()
-                        }
-                    }
-                    #[cfg(not(feature = "gpu"))]
-                    {
-                        data.to_host_f32().iter().sum()
-                    }
+                let sum: f32 = if device.is_gpu()
+                    && let Some(result) = Self::gpu_sum_reduce(&data)
+                {
+                    result
                 } else {
                     data.to_host_f32().iter().sum()
                 };
@@ -181,33 +163,10 @@ impl RawTensor {
             }
             ReduceOp::Max => {
                 // Try GPU first if available
-                let (max_val, max_idx) = if device.is_gpu() {
-                    #[cfg(feature = "gpu")]
-                    {
-                        if let Some(result) = Self::gpu_max_reduce(&data) {
-                            result
-                        } else {
-                            let (max_val, max_idx) = data
-                                .to_host_f32()
-                                .iter()
-                                .enumerate()
-                                .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-                                .map(|(idx, &val)| (val, idx))
-                                .unwrap();
-                            (max_val, max_idx)
-                        }
-                    }
-                    #[cfg(not(feature = "gpu"))]
-                    {
-                        let (max_val, max_idx) = data
-                            .to_host_f32()
-                            .iter()
-                            .enumerate()
-                            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-                            .map(|(idx, &val)| (val, idx))
-                            .unwrap();
-                        (max_val, max_idx)
-                    }
+                let (max_val, max_idx) = if device.is_gpu()
+                    && let Some(result) = Self::gpu_max_reduce(&data)
+                {
+                    result
                 } else {
                     let (max_val, max_idx) = data
                         .to_host_f32()
@@ -228,21 +187,10 @@ impl RawTensor {
             }
             ReduceOp::Mean => {
                 // Try GPU first if available
-                let mean_val: f32 = if device.is_gpu() {
-                    #[cfg(feature = "gpu")]
-                    {
-                        if let Some(result) = Self::gpu_mean_reduce(&data) {
-                            result
-                        } else {
-                            let sum: f32 = data.to_host_f32().iter().sum();
-                            sum / (data.len() as f32)
-                        }
-                    }
-                    #[cfg(not(feature = "gpu"))]
-                    {
-                        let sum: f32 = data.to_host_f32().iter().sum();
-                        sum / (data.len() as f32)
-                    }
+                let mean_val: f32 = if device.is_gpu()
+                    && let Some(result) = Self::gpu_mean_reduce(&data)
+                {
+                    result
                 } else {
                     let sum: f32 = data.to_host_f32().iter().sum();
                     sum / (data.len() as f32)

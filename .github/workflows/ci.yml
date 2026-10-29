@@ -7,9 +7,8 @@ on:
 jobs:
   # Honest "no default features" lane. Everything here is CPU-only; the `gpu`
   # feature is excluded from every step (wgpu is heavy and cannot run on
-  # GPU-less Linux runners). The CPU-only build compiles and tests (B5 is fixed),
-  # but this lane stays red on the clippy step until the CPU-only clippy errors
-  # in notes/TODO.md are fixed.
+  # GPU-less Linux runners). GPU wrappers have not-gpu stubs at their definition
+  # (ADDENDUM §9), so call sites carry no `cfg` and this lane's clippy is clean.
   cpu-only:
     runs-on: ubuntu-latest
     strategy:

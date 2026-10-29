@@ -61,6 +61,7 @@ harness = false
 [[bench]]
 name = "gpu_comparison"
 harness = false
+required-features = ["gpu"]
 
 [[bench]]
 name = "conv_algorithms"

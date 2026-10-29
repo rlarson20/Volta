@@ -73,20 +73,17 @@ impl UnaryGradFn {
             .expect("unary ops require 1 parent");
 
         // Check GPU path - if both out_grad and x are on GPU, use GPU backward
-        #[cfg(feature = "gpu")]
+        if out_grad.device.is_gpu()
+            && x.device.is_gpu()
+            && let Some(grad_storage) =
+                RawTensor::gpu_unary_backward(&out_grad.data, &x.data, self.op)
         {
-            if out_grad.device.is_gpu()
-                && x.device.is_gpu()
-                && let Some(grad_storage) =
-                    RawTensor::gpu_unary_backward(&out_grad.data, &x.data, self.op)
-            {
-                return vec![Some(RawTensor::new_with_storage(
-                    grad_storage,
-                    x.shape.clone(),
-                    x.device.clone(),
-                    false,
-                ))];
-            }
+            return vec![Some(RawTensor::new_with_storage(
+                grad_storage,
+                x.shape.clone(),
+                x.device.clone(),
+                false,
+            ))];
         }
 
         // CPU fallback. Chain rule: ∂L/∂x = ∂L/∂y · ∂y/∂x, with the derivative from
@@ -121,19 +118,16 @@ impl RawTensor {
 
         // Fast path: if the tensor already lives on GPU and the op has a kernel
         // (`gpu_unary` returns `None` for `cpu_only` ops), run it there.
-        #[cfg(feature = "gpu")]
+        if Self::common_gpu_device(&[t]).is_some()
+            && let Some(storage) = Self::gpu_unary(&data, op)
         {
-            if Self::common_gpu_device(&[t]).is_some()
-                && let Some(storage) = Self::gpu_unary(&data, op)
-            {
-                return edge(
-                    [t.clone()],
-                    storage,
-                    shape,
-                    device,
-                    GradFn::Unary(UnaryGradFn { op }),
-                );
-            }
+            return edge(
+                [t.clone()],
+                storage,
+                shape,
+                device,
+                GradFn::Unary(UnaryGradFn { op }),
+            );
         }
 
         // CPU fallback (or when GPU feature is disabled / the op is `cpu_only`).

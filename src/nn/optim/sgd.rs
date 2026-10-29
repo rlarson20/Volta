@@ -248,8 +248,4 @@ impl SGD {
     fn step_gpu_param(&mut self, _i: usize) {
         unreachable!("GPU step should not be called without GPU feature");
     }
-
-    fn step_gpu_param_simple(&mut self, _i: usize) {
-        unreachable!("GPU step should not be called without GPU feature");
-    }
 }

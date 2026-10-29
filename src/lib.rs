@@ -3537,6 +3537,7 @@ mod axis_reduce_tests {
 #[cfg(test)]
 mod gpu_tests {
     use super::*;
+    #[cfg(feature = "gpu")]
     use approx::assert_abs_diff_eq;
 
     #[test]

@@ -349,15 +349,12 @@ impl ScalarLoss {
 impl RawTensor {
     /// Add a gradient contribution to an existing gradient storage, preferring GPU accumulation.
     pub(crate) fn accumulate_grad(existing: &mut Storage, new_grad: &Storage) {
-        #[cfg(feature = "gpu")]
-        {
-            if existing.is_gpu() && new_grad.is_gpu() {
-                if let Some(sum) = Self::gpu_add(existing, new_grad) {
-                    *existing = sum;
-                    return;
-                }
-                log::warn!("GPU gradient accumulation failed; falling back to CPU accumulation");
+        if existing.is_gpu() && new_grad.is_gpu() {
+            if let Some(sum) = Self::gpu_add(existing, new_grad) {
+                *existing = sum;
+                return;
             }
+            log::warn!("GPU gradient accumulation failed; falling back to CPU accumulation");
         }
 
         // CPU fallback: both storages are synced to CPU for element-wise addition.

@@ -538,7 +538,6 @@ impl RawTensor {
     }
 }
 
-#[cfg(feature = "gpu")]
 impl RawTensor {
     /// Return the GPU device shared by `tensors` if every tensor lives on the same GPU.
     ///
@@ -557,7 +556,10 @@ impl RawTensor {
         }
         Some(first_device)
     }
+}
 
+#[cfg(feature = "gpu")]
+impl RawTensor {
     /// Clear any CPU-side cached copy of GPU data
     ///
     /// This releases CPU memory for GPU tensors that have been read back to CPU.
