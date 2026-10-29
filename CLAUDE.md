@@ -4,6 +4,8 @@ Educational PyTorch-style autograd engine in pure Rust. Correctness and defensib
 
 Area-specific rules live in `.claude/rules/` and load automatically when you read or edit matching files. This file holds only what applies everywhere.
 
+In a cloud session (Linux, `CLAUDE_CODE_REMOTE` set, no `rtk`, no GPU), read `dev-docs/CLOUD.md` first.
+
 ## Current state
 
 Update this section when a phase lands or the merge gate changes. Keep it short.
@@ -56,6 +58,7 @@ Read these when the need comes up; don't preload them.
 | Feature ideas after Phase 2 | `docs/backlog.md` (don't start these unprompted) |
 | Step-by-step: adding an op or layer | `dev-docs/DEVELOPMENT.md` (pre-Phase-1 in places; the invariants above win) |
 | Conv algorithms and selection | `dev-docs/CONV2D_IMPLEMENTATION.md` |
+| What's valid in a cloud session; Linux/no-GPU differences | `dev-docs/CLOUD.md` |
 
 ## Filing what you learn
 
