@@ -71,9 +71,9 @@ impl FeedForward {
         let input_shape = x.borrow().shape.clone();
 
         // Reshape to 2D for Linear layers: [batch, seq_len, embed_dim] -> [batch * seq_len, embed_dim]
-        let batch_size = *input_shape.first().unwrap();
-        let seq_len = *input_shape.get(1).unwrap();
-        let embed_dim = *input_shape.get(2).unwrap();
+        let batch_size = input_shape.dim_at(0);
+        let seq_len = input_shape.dim_at(1);
+        let embed_dim = input_shape.dim_at(2);
 
         let x_2d = x.reshape(&[batch_size * seq_len, embed_dim]);
 

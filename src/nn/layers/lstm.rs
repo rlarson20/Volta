@@ -1,4 +1,4 @@
-use crate::index::{fetch, span};
+use crate::index::span;
 use crate::io::{StateDict, TensorData};
 use crate::nn::{Module, RecurrentLayer, SealedLayer};
 use crate::tensor::{RawTensor, Tensor};
@@ -65,7 +65,7 @@ impl LSTMCell {
 
         // Extract columns [start:end] for all rows
         // gates shape: [batch, 4*hidden_size]
-        let batch_size = fetch(&gates.borrow().shape, 0);
+        let batch_size = gates.borrow().shape.dim_at(0);
         let gates_ref = gates.borrow();
         let data = &*gates_ref.data.to_host_f32();
 

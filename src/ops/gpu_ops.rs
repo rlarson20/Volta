@@ -9,6 +9,7 @@ use crate::gpu::GpuKernels;
 use crate::ops::BinaryOp;
 #[cfg(feature = "gpu")]
 use crate::ops::UnaryOp;
+use crate::shape::Shape;
 use crate::spec::PadValue;
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
@@ -221,7 +222,7 @@ impl RawTensor {
         self_t: &Tensor,
         other: &Tensor,
         op: BinaryOp,
-    ) -> Option<(Vec<usize>, Storage, Device)> {
+    ) -> Option<(Shape, Storage, Device)> {
         let (shape_a, device_a, storage_a) = {
             let a = self_t.borrow();
             (a.shape.clone(), a.device.clone(), a.data.clone())
@@ -248,7 +249,7 @@ impl RawTensor {
         _self_t: &Tensor,
         _other: &Tensor,
         _op: BinaryOp,
-    ) -> Option<(Vec<usize>, Storage, Device)> {
+    ) -> Option<(Shape, Storage, Device)> {
         None
     }
 
@@ -301,7 +302,7 @@ impl RawTensor {
             let storage = Self::gpu_binary_backward_a(&out_grad.data, &x.data, &y.data, op)?;
             Some(Self::new_with_storage(
                 storage,
-                &x.shape,
+                x.shape.clone(),
                 x.device.clone(),
                 false,
             ))
@@ -312,7 +313,7 @@ impl RawTensor {
             let storage = Self::gpu_binary_backward_b(&out_grad.data, &x.data, &y.data, op)?;
             Some(Self::new_with_storage(
                 storage,
-                &y.shape,
+                y.shape.clone(),
                 y.device.clone(),
                 false,
             ))
@@ -335,16 +336,16 @@ impl RawTensor {
             &x.data,
             &y.data,
             op,
-            &out_grad.shape,
-            &x.shape,
-            &y.shape,
+            out_grad.shape.truncate_rank(),
+            x.shape.truncate_rank(),
+            y.shape.truncate_rank(),
         )?;
         let gx = x
             .requires_grad
-            .then(|| Self::new_with_storage(grad_a, &x.shape, x.device.clone(), false));
+            .then(|| Self::new_with_storage(grad_a, x.shape.clone(), x.device.clone(), false));
         let gy = y
             .requires_grad
-            .then(|| Self::new_with_storage(grad_b, &y.shape, y.device.clone(), false));
+            .then(|| Self::new_with_storage(grad_b, y.shape.clone(), y.device.clone(), false));
         Some(vec![gx, gy])
     }
 

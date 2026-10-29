@@ -397,7 +397,7 @@ impl Layer for ConvTranspose2d {
         edge(
             inputs,
             final_data,
-            Shape::derived(final_shape),
+            final_shape,
             Device::CPU,
             GradFn::ConvTranspose2d(ConvTranspose2dGradFn {
                 spec,
@@ -569,7 +569,7 @@ mod tests {
             let y = conv.forward(&x);
 
             // Output shape should maintain batch size
-            assert_eq!(fetch(&y.borrow().shape, 0), batch_size);
+            assert_eq!(y.borrow().shape.dim_at(0), batch_size);
             assert_eq!(y.borrow().shape, vec![batch_size, 4, 16, 16]);
         }
     }

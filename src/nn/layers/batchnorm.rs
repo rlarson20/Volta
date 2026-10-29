@@ -1,7 +1,7 @@
 use crate::index::{fetch, slot};
 use crate::io::{StateDict, TensorData};
 use crate::nn::{Layer, Module};
-use crate::shape::{Axis, fixed_dims};
+use crate::shape::Axis;
 use crate::tensor::{RawTensor, Tensor};
 
 pub struct BatchNorm2d {
@@ -93,12 +93,12 @@ impl Layer for BatchNorm2d {
     fn forward(&self, x: &Tensor) -> Tensor {
         let x_borrow = x.borrow();
         assert_eq!(
-            x_borrow.shape.len(),
+            x_borrow.shape.rank(),
             4,
             "BatchNorm2d expected 4D input (B,C,H,W)"
         );
         assert_eq!(
-            fetch(&x_borrow.shape, 1),
+            x_borrow.shape.dim_at(1),
             self.num_features,
             "Channel mismatch"
         );
@@ -113,7 +113,7 @@ impl Layer for BatchNorm2d {
         // We need reshaping to utilize current Tensor ops for mean/var
         // (C, B, H, W) -> (C, B*H*W)
         let x_shape = &x.borrow().shape;
-        let [b, _, h, w] = fixed_dims::<4>(x_shape);
+        let [b, _, h, w] = x_shape.fixed::<4>();
         let num_pixels = (b * h * w) as f32;
 
         let x_flat = x_perm.reshape(&[self.num_features, b * h * w]);
@@ -283,16 +283,16 @@ impl Layer for BatchNorm1d {
     fn forward(&self, x: &Tensor) -> Tensor {
         let x_borrow = x.borrow();
         assert_eq!(
-            x_borrow.shape.len(),
+            x_borrow.shape.rank(),
             2,
             "BatchNorm1d expected 2D input (B, C)"
         );
         assert_eq!(
-            fetch(&x_borrow.shape, 1),
+            x_borrow.shape.dim_at(1),
             self.num_features,
             "Feature mismatch"
         );
-        let batch_size = fetch(&x_borrow.shape, 0) as f32;
+        let batch_size = x_borrow.shape.dim_at(0) as f32;
         drop(x_borrow);
 
         let (mean, var) = if self.training {

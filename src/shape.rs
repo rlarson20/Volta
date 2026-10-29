@@ -132,6 +132,107 @@ impl Shape {
             })
     }
 
+    /// Size of dimension `i`, for a caller that has already bounded `i` by the rank
+    /// (a rank-bounded loop, or after a rank check).
+    ///
+    /// # Panics
+    ///
+    /// If `i >= rank`, naming the caller. Use [`Self::dim`] when `i` comes from a user.
+    #[track_caller]
+    #[must_use]
+    pub(crate) fn dim_at(&self, i: usize) -> usize {
+        crate::index::fetch(&self.0, i)
+    }
+
+    /// The dims as an array, for a caller that has already checked the rank is `N`.
+    ///
+    /// # Panics
+    ///
+    /// If the rank is not `N`, naming the caller.
+    #[track_caller]
+    #[must_use]
+    pub(crate) fn fixed<const N: usize>(&self) -> [usize; N] {
+        fixed_dims(&self.0)
+    }
+
+    /// The dims in order, as values.
+    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = usize> + ExactSizeIterator + '_ {
+        self.0.iter().copied()
+    }
+
+    /// Product of the dims before position `i` (the "outer" size of a reduction over `i`).
+    ///
+    /// # Panics
+    ///
+    /// If `i > rank`.
+    #[track_caller]
+    #[must_use]
+    pub(crate) fn numel_before(&self, i: usize) -> usize {
+        crate::index::span(&self.0, 0..i).iter().product()
+    }
+
+    /// Product of the dims from position `i` on. `numel_from(rank)` is `1`.
+    ///
+    /// # Panics
+    ///
+    /// If `i > rank`.
+    #[track_caller]
+    #[must_use]
+    pub(crate) fn numel_from(&self, i: usize) -> usize {
+        crate::index::span(&self.0, i..self.0.len())
+            .iter()
+            .product()
+    }
+
+    /// This shape with a size-1 axis inserted at position `i` (keepdim reductions).
+    ///
+    /// # Panics
+    ///
+    /// If `i > rank`.
+    #[track_caller]
+    #[must_use]
+    pub(crate) fn unsqueeze(&self, i: usize) -> Self {
+        assert!(
+            i <= self.0.len(),
+            "unsqueeze at {i} past rank {}",
+            self.0.len()
+        );
+        let mut dims = self.0.clone();
+        dims.insert(i, 1);
+        Self(dims)
+    }
+
+    /// This shape with dimension `i` set to `size` (a reduction's keepdim output).
+    ///
+    /// # Panics
+    ///
+    /// If `i >= rank`.
+    #[track_caller]
+    #[must_use]
+    pub(crate) fn with_dim(&self, i: usize, size: usize) -> Self {
+        let mut dims = self.0.clone();
+        *crate::index::slot(&mut dims, i) = size;
+        Self::derived(dims)
+    }
+
+    /// This shape with dimension `i` removed (a reduction's non-keepdim output).
+    ///
+    /// # Panics
+    ///
+    /// If `i >= rank`.
+    #[track_caller]
+    #[must_use]
+    pub(crate) fn squeeze(&self, i: usize) -> Self {
+        assert!(
+            i < self.0.len(),
+            "squeeze at {i} past rank {}",
+            self.0.len()
+        );
+        let mut dims = self.0.clone();
+        dims.remove(i);
+        Self(dims)
+    }
+
     /// Named, explicit demotion to a raw `&[usize]` view of the dimensions.
     ///
     /// Deliberately not exposed via `Deref`/`AsRef` — every place that steps
@@ -140,6 +241,33 @@ impl Shape {
     #[must_use]
     pub fn truncate_rank(&self) -> &[usize] {
         &self.0
+    }
+}
+
+// Comparing a shape with literal dims (`assert_eq!(t.shape(), [2, 3])`) is equality,
+// not a demotion: it hands no `&[usize]` to a shape-blind API, so it needs no
+// `truncate_rank()`.
+impl PartialEq<[usize]> for Shape {
+    fn eq(&self, other: &[usize]) -> bool {
+        self.0 == other
+    }
+}
+
+impl<const N: usize> PartialEq<[usize; N]> for Shape {
+    fn eq(&self, other: &[usize; N]) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<Vec<usize>> for Shape {
+    fn eq(&self, other: &Vec<usize>) -> bool {
+        &self.0 == other
+    }
+}
+
+impl PartialEq<Shape> for Vec<usize> {
+    fn eq(&self, other: &Shape) -> bool {
+        *self == other.0
     }
 }
 

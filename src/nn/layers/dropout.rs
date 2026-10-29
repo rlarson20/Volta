@@ -71,7 +71,7 @@ impl Layer for Dropout {
                 .collect()
         });
 
-        let mask = RawTensor::new(mask_data, &shape, false).to_device(device);
+        let mask = RawTensor::from_shape(mask_data, shape.clone(), false).to_device(device);
 
         // Apply mask: x * mask
         x.elem_mul(&mask)

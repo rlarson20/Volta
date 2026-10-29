@@ -40,7 +40,7 @@ impl MulAccGradFn {
                 .zip(y_val.data.to_host_f32().iter())
                 .map(|(&g, &y)| g * y)
                 .collect();
-            Some(RawTensor::new(data, &out_grad.shape, false))
+            Some(RawTensor::from_shape(data, out_grad.shape.clone(), false))
         } else {
             None
         };
@@ -53,15 +53,15 @@ impl MulAccGradFn {
                 .zip(x_val.data.to_host_f32().iter())
                 .map(|(&g, &x)| g * x)
                 .collect();
-            Some(RawTensor::new(data, &out_grad.shape, false))
+            Some(RawTensor::from_shape(data, out_grad.shape.clone(), false))
         } else {
             None
         };
 
         let grad_z = if parents.get(2).is_some_and(|p| p.borrow().requires_grad) {
-            Some(RawTensor::new(
+            Some(RawTensor::from_shape(
                 out_grad.data.to_vec(),
-                &out_grad.shape,
+                out_grad.shape.clone(),
                 false,
             ))
         } else {
@@ -78,9 +78,9 @@ impl MulAccGradFn {
 /// along any dimensions that were broadcast.
 #[derive(Clone)]
 pub(crate) struct WhereGradFn {
-    condition: Vec<f32>,     // broadcasted condition (matches out_grad shape)
-    true_shape: Vec<usize>,  // original shape of the "true" branch
-    false_shape: Vec<usize>, // original shape of the "false" branch
+    condition: Vec<f32>, // broadcasted condition (matches out_grad shape)
+    true_shape: Shape,   // original shape of the "true" branch
+    false_shape: Shape,  // original shape of the "false" branch
 }
 
 impl WhereGradFn {
@@ -114,9 +114,16 @@ impl WhereGradFn {
                     *slot(&mut data, i) = g;
                 }
             }
-            let reduced =
-                RawTensor::sum_over_broadcast_dims(&data, &out_grad.shape, &self.true_shape);
-            grad_true = Some(RawTensor::new(reduced, &self.true_shape, false));
+            let reduced = RawTensor::sum_over_broadcast_dims(
+                &data,
+                out_grad.shape.truncate_rank(),
+                self.true_shape.truncate_rank(),
+            );
+            grad_true = Some(RawTensor::from_shape(
+                reduced,
+                self.true_shape.clone(),
+                false,
+            ));
         }
 
         #[allow(
@@ -137,9 +144,16 @@ impl WhereGradFn {
                     *slot(&mut data, i) = g;
                 }
             }
-            let reduced =
-                RawTensor::sum_over_broadcast_dims(&data, &out_grad.shape, &self.false_shape);
-            grad_false = Some(RawTensor::new(reduced, &self.false_shape, false));
+            let reduced = RawTensor::sum_over_broadcast_dims(
+                &data,
+                out_grad.shape.truncate_rank(),
+                self.false_shape.truncate_rank(),
+            );
+            grad_false = Some(RawTensor::from_shape(
+                reduced,
+                self.false_shape.clone(),
+                false,
+            ));
         }
 
         vec![grad_true, grad_false]
@@ -188,7 +202,7 @@ impl RawTensor {
                                 return edge(
                                     [x.clone(), y.clone(), z.clone()],
                                     sum,
-                                    Shape::derived(shape_x),
+                                    shape_x,
                                     dev_x,
                                     GradFn::MulAcc(MulAccGradFn),
                                 );
@@ -211,7 +225,7 @@ impl RawTensor {
                 edge(
                     [x.clone(), y.clone(), z.clone()],
                     Storage::cpu(result_data),
-                    Shape::derived(shape_x),
+                    shape_x,
                     Device::CPU,
                     GradFn::MulAcc(MulAccGradFn),
                 )
@@ -231,13 +245,25 @@ impl RawTensor {
                     (s.data.clone(), s.shape.clone())
                 };
 
-                let tmp_shape = Self::broadcast_shape(&cond_shape, &true_shape);
-                let out_shape = Self::broadcast_shape(&tmp_shape, &false_shape);
+                let tmp_shape =
+                    Self::broadcast_shape(cond_shape.truncate_rank(), true_shape.truncate_rank());
+                let out_shape = Self::broadcast_shape(&tmp_shape, false_shape.truncate_rank());
 
-                let cond_bc = Self::broadcast_to(&cond_data.to_host_f32(), &cond_shape, &out_shape);
-                let true_bc = Self::broadcast_to(&true_data.to_host_f32(), &true_shape, &out_shape);
-                let false_bc =
-                    Self::broadcast_to(&false_data.to_host_f32(), &false_shape, &out_shape);
+                let cond_bc = Self::broadcast_to(
+                    &cond_data.to_host_f32(),
+                    cond_shape.truncate_rank(),
+                    &out_shape,
+                );
+                let true_bc = Self::broadcast_to(
+                    &true_data.to_host_f32(),
+                    true_shape.truncate_rank(),
+                    &out_shape,
+                );
+                let false_bc = Self::broadcast_to(
+                    &false_data.to_host_f32(),
+                    false_shape.truncate_rank(),
+                    &out_shape,
+                );
 
                 let result_data = cond_bc
                     .iter()

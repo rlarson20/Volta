@@ -73,41 +73,37 @@ impl ScaledDotProductAttention {
         let v_shape = value.borrow().shape.clone();
 
         assert_eq!(
-            q_shape.len(),
+            q_shape.rank(),
             3,
             "Query must be 3D tensor [batch, seq_len, d_k]"
         );
         assert_eq!(
-            k_shape.len(),
+            k_shape.rank(),
             3,
             "Key must be 3D tensor [batch, seq_len, d_k]"
         );
         assert_eq!(
-            v_shape.len(),
+            v_shape.rank(),
             3,
             "Value must be 3D tensor [batch, seq_len, d_v]"
         );
 
-        let (_batch, seq_len, d_k) = (
-            *q_shape.first().unwrap(),
-            *q_shape.get(1).unwrap(),
-            *q_shape.get(2).unwrap(),
-        );
-        let _d_v = *v_shape.get(2).unwrap();
+        let (_batch, seq_len, d_k) = (q_shape.dim_at(0), q_shape.dim_at(1), q_shape.dim_at(2));
+        let _d_v = v_shape.dim_at(2);
 
         assert_eq!(
             d_k,
-            *k_shape.get(2).unwrap(),
+            k_shape.dim_at(2),
             "Query and key must have same dimension d_k"
         );
         assert_eq!(
             seq_len,
-            *k_shape.get(1).unwrap(),
+            k_shape.dim_at(1),
             "Query and key must have same sequence length"
         );
         assert_eq!(
             seq_len,
-            *v_shape.get(1).unwrap(),
+            v_shape.dim_at(1),
             "Query and value must have same sequence length"
         );
 

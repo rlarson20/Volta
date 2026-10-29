@@ -20,7 +20,7 @@ pub enum ReduceOp {
 /// Sum reduction collapses to scalar, so gradient broadcasts back to original shape.
 #[derive(Clone)]
 pub(crate) struct SumGradFn {
-    input_shape: Vec<usize>,
+    input_shape: Shape,
 }
 
 impl SumGradFn {
@@ -40,7 +40,7 @@ impl SumGradFn {
             {
                 return vec![Some(RawTensor::new_with_storage(
                     storage,
-                    &self.input_shape,
+                    self.input_shape.clone(),
                     out_grad.device.clone(),
                     false,
                 ))];
@@ -50,7 +50,7 @@ impl SumGradFn {
         // CPU fallback
         vec![Some(RawTensor::new(
             vec![grad_val; size],
-            &self.input_shape,
+            self.input_shape.truncate_rank(),
             false,
         ))]
     }
@@ -61,7 +61,7 @@ impl SumGradFn {
 /// Only the maximum element receives gradient; all others get zero.
 #[derive(Clone)]
 pub(crate) struct MaxReduceGradFn {
-    input_shape: Vec<usize>,
+    input_shape: Shape,
     max_index: usize, // Linear index of the maximum element
 }
 
@@ -83,7 +83,7 @@ impl MaxReduceGradFn {
             {
                 return vec![Some(RawTensor::new_with_storage(
                     storage,
-                    &self.input_shape,
+                    self.input_shape.clone(),
                     out_grad.device.clone(),
                     false,
                 ))];
@@ -93,7 +93,11 @@ impl MaxReduceGradFn {
         // CPU fallback
         let mut grad_data = vec![0.0; size];
         *slot(&mut grad_data, self.max_index) = grad_val;
-        vec![Some(RawTensor::new(grad_data, &self.input_shape, false))]
+        vec![Some(RawTensor::from_shape(
+            grad_data,
+            self.input_shape.clone(),
+            false,
+        ))]
     }
 }
 
@@ -102,7 +106,7 @@ impl MaxReduceGradFn {
 /// Each element gets gradient / `num_elements`.
 #[derive(Clone)]
 pub(crate) struct MeanGradFn {
-    input_shape: Vec<usize>,
+    input_shape: Shape,
 }
 
 impl MeanGradFn {
@@ -122,7 +126,7 @@ impl MeanGradFn {
             {
                 return vec![Some(RawTensor::new_with_storage(
                     storage,
-                    &self.input_shape,
+                    self.input_shape.clone(),
                     out_grad.device.clone(),
                     false,
                 ))];
@@ -133,7 +137,7 @@ impl MeanGradFn {
         let grad_val_cpu = grad_val / (size as f32);
         vec![Some(RawTensor::new(
             vec![grad_val_cpu; size],
-            &self.input_shape,
+            self.input_shape.truncate_rank(),
             false,
         ))]
     }

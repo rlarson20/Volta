@@ -1,4 +1,3 @@
-use crate::index::fetch;
 use crate::io::{StateDict, TensorData};
 use crate::nn::{Layer, Module};
 use crate::shape::Axis;
@@ -104,7 +103,7 @@ impl Module for LayerNorm {
 impl Layer for LayerNorm {
     fn forward(&self, x: &Tensor) -> Tensor {
         let input_shape = x.borrow().shape.clone();
-        let input_rank = input_shape.len();
+        let input_rank = input_shape.rank();
 
         // Validate that last N dimensions match normalized_shape
         let norm_rank = self.normalized_shape.len();
@@ -114,7 +113,7 @@ impl Layer for LayerNorm {
         );
 
         for (i, &expected_size) in self.normalized_shape.iter().enumerate() {
-            let actual_size = fetch(&input_shape, input_rank - norm_rank + i);
+            let actual_size = input_shape.dim_at(input_rank - norm_rank + i);
             assert_eq!(
                 actual_size,
                 expected_size,
@@ -131,8 +130,8 @@ impl Layer for LayerNorm {
         // Reshape to compute stats more efficiently:
         // - Flatten leading dimensions: (B, T, ..., C) -> (B*T*..., C)
         // - Then compute mean/var over the last dimension
-        let leading_dims: usize = input_shape.get(..dim).map_or(1, |s| s.iter().product());
-        let trailing_dims: usize = input_shape.get(dim..).map_or(1, |s| s.iter().product());
+        let leading_dims = input_shape.numel_before(dim);
+        let trailing_dims = input_shape.numel_from(dim);
 
         // Reshape to (leading_dims, trailing_dims)
         let x_reshaped = x.reshape(&[leading_dims, trailing_dims]);
@@ -158,7 +157,7 @@ impl Layer for LayerNorm {
         let out = x_norm.elem_mul(&gamma_reshaped).add(&beta_reshaped);
 
         // Reshape back to original shape
-        out.reshape(&input_shape)
+        out.reshape(input_shape.truncate_rank())
     }
 }
 

@@ -119,7 +119,7 @@ impl PositionalEncoding {
     #[must_use]
     pub fn forward(&self, x: &Tensor) -> Tensor {
         let shape = x.borrow().shape.clone();
-        let seq_len = *shape.get(1).unwrap();
+        let seq_len = shape.dim_at(1);
 
         assert!(
             seq_len <= self.max_len,
@@ -137,9 +137,9 @@ impl PositionalEncoding {
                     .expect("Sinusoidal encoding should be created");
 
                 let input_shape = x.borrow().shape.clone();
-                let batch_size = *input_shape.first().unwrap();
-                let seq_len = *input_shape.get(1).unwrap();
-                let embed_dim = *input_shape.get(2).unwrap();
+                let batch_size = input_shape.dim_at(0);
+                let seq_len = input_shape.dim_at(1);
+                let embed_dim = input_shape.dim_at(2);
 
                 // Slice encoding to match sequence length: [max_len, embed_dim] -> [seq_len, embed_dim]
                 let enc_slice = enc.shrink(&[(0, seq_len), (0, embed_dim)]);
@@ -169,9 +169,9 @@ impl PositionalEncoding {
                     .expect("Learned embedding should be created");
 
                 let input_shape = x.borrow().shape.clone();
-                let batch_size = *input_shape.first().unwrap();
-                let seq_len = *input_shape.get(1).unwrap();
-                let embed_dim = *input_shape.get(2).unwrap();
+                let batch_size = input_shape.dim_at(0);
+                let seq_len = input_shape.dim_at(1);
+                let embed_dim = input_shape.dim_at(2);
 
                 // Create position indices [0, 1, ..., seq_len-1]
                 let positions: Vec<usize> = (0..seq_len).collect();

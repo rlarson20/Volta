@@ -1,7 +1,6 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::macros::define_ops;
-use crate::shape::Shape;
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
 
@@ -83,7 +82,7 @@ impl UnaryGradFn {
             {
                 return vec![Some(RawTensor::new_with_storage(
                     grad_storage,
-                    &x.shape,
+                    x.shape.clone(),
                     x.device.clone(),
                     false,
                 ))];
@@ -99,7 +98,11 @@ impl UnaryGradFn {
             .zip(x.data.to_host_f32().iter())
             .map(|(&g, &x)| self.op.backward(g, x))
             .collect();
-        vec![Some(RawTensor::new(grad_data, &x.shape, false))]
+        vec![Some(RawTensor::from_shape(
+            grad_data,
+            x.shape.clone(),
+            false,
+        ))]
     }
 }
 
@@ -126,7 +129,7 @@ impl RawTensor {
                 return edge(
                     [t.clone()],
                     storage,
-                    Shape::derived(shape),
+                    shape,
                     device,
                     GradFn::Unary(UnaryGradFn { op }),
                 );
@@ -140,7 +143,7 @@ impl RawTensor {
         edge(
             [t.clone()],
             Storage::cpu(result),
-            Shape::derived(shape),
+            shape,
             Device::CPU,
             GradFn::Unary(UnaryGradFn { op }),
         )

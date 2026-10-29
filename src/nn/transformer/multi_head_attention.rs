@@ -106,9 +106,9 @@ impl MultiHeadAttention {
     pub fn forward(&self, x: &Tensor, causal: bool, attention_mask: Option<&Tensor>) -> Tensor {
         let input_shape = x.borrow().shape.clone();
         let (batch_size, seq_len, _embed_dim) = (
-            *input_shape.first().unwrap(),
-            *input_shape.get(1).unwrap(),
-            *input_shape.get(2).unwrap(),
+            input_shape.dim_at(0),
+            input_shape.dim_at(1),
+            input_shape.dim_at(2),
         );
 
         // Apply layer norm if present
@@ -178,7 +178,7 @@ impl MultiHeadAttention {
     ) -> Tensor {
         // Get sequence length from query tensor shape
         let q_shape = q.borrow().shape.clone();
-        let seq_len = *q_shape.get(2).unwrap(); // [batch, num_heads, seq_len, head_dim]
+        let seq_len = q_shape.dim_at(2); // [batch, num_heads, seq_len, head_dim]
 
         // Compute scaled dot-product attention
         // QK^T: [batch, num_heads, seq_len, head_dim] @ [batch, num_heads, head_dim, seq_len]

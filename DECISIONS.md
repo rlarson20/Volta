@@ -210,6 +210,8 @@ A bool breaks as soon as one `no_grad()` scope nests inside another, for example
 
 ### Shape boundary: signatures, not the field
 
+**Superseded** by "`RawTensor.shape` is a `Shape`" (Phase 3). Kept for the reasoning.
+
 **Decision:** `Shape` is the type at function boundaries (`edge()`, tensor construction and validation), and `Axis` is the type of dim arguments. `RawTensor.shape` stays a `Vec<usize>`, and `Tensor::shape()` still returns one.
 
 Roughly 440 places in `src/` read the `.shape` field (about 365 outside `lib.rs`): kernels, `GradFn` structs, and conv/matmul index math. `Shape` deliberately has no `Deref`; stepping outside it must be spelled `truncate_rank()` so the demotion stays greppable. Storing a `Shape` in the field would turn those reads into hundreds of `truncate_rank()` calls, and a grep that matches everything finds nothing. The field flips naturally with the storage work (ADDENDUM §7), when kernels stop reading it directly.
@@ -389,6 +391,37 @@ Before, `fetch(&s.data, i)`, `zip(&data)`, and `data.iter()` coerced silently, s
 **Writes keep their failure mode:** every former `DerefMut`/`iter_mut` write (optimizers, BatchNorm running stats, `check_gradients`, Muon) already panicked on GPU storage. It now panics at a named `expect` instead of inside the trait impl. Muon's names H8.
 
 **Public API:** this breaks `Storage` users that indexed, iterated, or coerced it (pre-1.0). In-repo, two integration tests changed (`coverage_fill`, `test_error_paths`).
+
+### `RawTensor.shape` is a `Shape` (supersedes "Shape boundary")
+
+**Decision:** the field is a `Shape`. Op, layer, and backward code reads it through typed accessors, not by demoting it:
+
+| Need | Accessor |
+|---|---|
+| rank, element count | `rank()`, `numel()` |
+| a user-supplied axis | `dim(Axis) -> Result` |
+| a position bounded by rank (loop, prior check) | `dim_at(i)`, panics naming the caller |
+| all dims of a known-rank shape | `fixed::<N>() -> [usize; N]` |
+| outer and inner sizes around an axis | `numel_before(i)`, `numel_from(i)` |
+| keepdim and squeeze shapes | `with_dim(i, n)`, `squeeze(i)`, `unsqueeze(i)` |
+| iterate the dims | `iter()` |
+| strides | `strides()` |
+
+A backward pass hands its parent's shape on by value: `RawTensor::from_shape(data, x.shape.clone(), false)` (new, `pub(crate)`), and `new_with_storage`/`try_new_with_storage` now take a `Shape`. `GradFn` fields that store a tensor's shape (`input_shape`, `original_shape`, `true_shape`/`false_shape`) are `Shape`s. User-supplied targets (`MovementOp::Reshape/Expand { new_shape }`, `LayerNorm::normalized_shape`) stay `Vec`, because they are inputs, not a tensor's shape.
+
+**Where `truncate_rank()` remains:** 64 calls outside `shape.rs` (was 8; `Strides::truncate_rank` not counted). Each one sits at one of four kinds of boundary:
+1. Raw index-math helpers that really are slice code: `broadcast_to`, `sum_over_broadcast_dims`, `transpose_2d`, `MovementContext`, and the GPU wrappers' parameter packing. Most of the 64 are here; `movement.rs` alone has 24.
+2. Public `&[usize]` APIs called internally: `broadcast_shape`, `reshape`, `ones`/`zeros`/`randn`.
+3. Serialization and error payloads: `TensorData.shape`, `ShapeDataMismatch`, and `load_weight`'s comparison.
+4. `Tensor::shape()`, until it returns `Shape` (PR 3 of the flip).
+
+The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at every read. It didn't come true: about 440 implicit raw reads became about 64 named demotions, and everything else is an accessor. A new `truncate_rank()` belongs only at one of these four boundaries.
+
+**Comparison:** `Shape` implements `PartialEq` with `[usize]`, `[usize; N]`, and `Vec<usize>` (both directions for `Vec`). Equality hands no slice to a shape-blind API, so it isn't a demotion, and `assert_eq!(t.shape, vec![2, 3])` keeps reading naturally.
+
+**Lost test:** `test_try_new_with_storage_rejects_zero_dim` is deleted. `try_new_with_storage` takes a `Shape` now, and a zero-dim `Shape` can't be constructed; `shape::tests::from_dims_zero_dim_errs` and `derived_panics_on_zero_dim` cover that.
+
+**Fallout:** `axis_size` (a `&[usize]` → `Shape::from_dims` → `dim` round trip) is gone; reductions call `shape.dim(axis)`.
 
 ## Concurrency and Async
 

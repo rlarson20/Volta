@@ -3122,14 +3122,6 @@ mod edge_case_tests {
     }
 
     #[test]
-    fn test_try_new_with_storage_rejects_zero_dim() {
-        let err = RawTensor::try_new_with_storage(Storage::cpu(vec![]), &[0], Device::CPU, false)
-            .err()
-            .unwrap();
-        assert!(matches!(err, VoltaError::InvalidParameter(_)), "{err:?}");
-    }
-
-    #[test]
     #[should_panic(expected = "Expand: invalid target shape")]
     fn test_expand_over_max_numel_panics() {
         let x = RawTensor::new(vec![1.0, 2.0], &[1, 2], false);
@@ -4916,12 +4908,8 @@ mod linear_tests {
             .as_ref()
             .map(|b| b.borrow().data.to_vec())
             .unwrap_or_default();
-        let w_shape = layer.weight.borrow().shape.clone();
-        let b_shape = layer
-            .bias
-            .as_ref()
-            .map(|b| b.borrow().shape.clone())
-            .unwrap_or_default();
+        let w_shape = layer.weight.shape();
+        let b_shape = layer.bias.as_ref().map(|b| b.shape()).unwrap_or_default();
         let x = RawTensor::new(vec![0.5, -1.0, 1.5, 0.25, 0.0, 2.0], &[2, 3], true);
 
         let passed = RawTensor::check_gradients_simple(&x, |t| {

@@ -6,7 +6,7 @@ use crate::ops::binary::BinaryOp;
 use crate::ops::reduce::ReduceOp;
 use crate::ops::ternary::TernaryOp;
 use crate::ops::unary::UnaryOp;
-use crate::shape::{Axis, Shape, Strides};
+use crate::shape::{Axis, Shape};
 use crate::spec::PadValue;
 use crate::{Result, VoltaError};
 use rand::Rng;
@@ -85,7 +85,8 @@ impl Tensor {
     /// fields that encode graph structure. Safe to expose without qualification.
     #[must_use]
     pub fn shape(&self) -> Vec<usize> {
-        self.inner.borrow().shape.clone()
+        // PR 3 of the Shape flip returns `Shape` here.
+        self.inner.borrow().shape.truncate_rank().to_vec()
     }
 
     /// Overwrite this tensor's values from a state-dict entry (H7).
@@ -98,11 +99,13 @@ impl Tensor {
     /// match it. `name` is the state-dict key, used in the message.
     pub(crate) fn load_weight(&self, name: &str, src: &crate::io::TensorData) {
         let mut t = self.inner.borrow_mut();
+        // `TensorData.shape` is the serialized `Vec`; compare it at the io boundary.
         assert_eq!(
-            src.shape, t.shape,
+            src.shape.as_slice(),
+            t.shape.truncate_rank(),
             "load_state_dict: shape mismatch for '{name}'"
         );
-        let numel: usize = t.shape.iter().product();
+        let numel = t.shape.numel();
         assert_eq!(
             src.data.len(),
             numel,
@@ -243,7 +246,7 @@ impl Tensor {
 /// - `device`: where computation happens (CPU/GPU)
 pub struct RawTensor {
     pub data: Storage,         // Storage enum
-    pub shape: Vec<usize>,     //tensor dims, eg [B,C,H,W]
+    pub shape: Shape,          //tensor dims, eg [B,C,H,W]
     pub grad: Option<Storage>, //grad w.r.t tensor data, None if req_grad == false
     pub requires_grad: bool,
     pub(crate) grad_fn: Option<GradFn>, //func to compute grad, if result of op
@@ -306,13 +309,6 @@ impl std::fmt::Debug for RawTensor {
     }
 }
 
-/// Size of `axis` in `shape`, or `DimensionOutOfBounds`.
-///
-/// `shape` comes from an existing tensor, so it is already a valid [`Shape`].
-fn axis_size(shape: &[usize], axis: Axis) -> Result<usize> {
-    Shape::from_dims(shape)?.dim(axis)
-}
-
 // ===== TENSOR CONSTRUCTORS =====
 impl RawTensor {
     /// Create a new tensor from data and shape (fallible)
@@ -334,7 +330,7 @@ impl RawTensor {
 
         let raw = Self {
             data: Storage::cpu(data),
-            shape: shape.truncate_rank().to_vec(),
+            shape,
             grad: None,
             requires_grad,
             grad_fn: None,
@@ -368,11 +364,10 @@ impl RawTensor {
     #[allow(dead_code)]
     pub(crate) fn try_new_with_storage(
         data: crate::storage::Storage,
-        shape: &[usize],
+        shape: Shape,
         device: Device,
         requires_grad: bool,
     ) -> Result<Tensor> {
-        let shape = Shape::from_dims(shape)?;
         if data.len() != shape.numel() {
             return Err(VoltaError::ShapeDataMismatch {
                 shape: shape.truncate_rank().to_vec(),
@@ -383,7 +378,7 @@ impl RawTensor {
 
         let raw = Self {
             data,
-            shape: shape.truncate_rank().to_vec(),
+            shape,
             grad: None,
             requires_grad,
             grad_fn: None,
@@ -399,12 +394,21 @@ impl RawTensor {
     #[allow(dead_code)]
     pub(crate) fn new_with_storage(
         data: crate::storage::Storage,
-        shape: &[usize],
+        shape: Shape,
         device: Device,
         requires_grad: bool,
     ) -> Tensor {
         Self::try_new_with_storage(data, shape, device, requires_grad)
             .expect("Data length must match shape")
+    }
+
+    /// CPU tensor from data and an already-validated `Shape` (op and backward code).
+    ///
+    /// # Panics
+    ///
+    /// If `data.len()` != `shape.numel()`.
+    pub(crate) fn from_shape(data: Vec<f32>, shape: Shape, requires_grad: bool) -> Tensor {
+        Self::new_with_storage(Storage::cpu(data), shape, Device::CPU, requires_grad)
     }
 
     /// Create a tensor filled with zeros
@@ -454,7 +458,7 @@ impl RawTensor {
     #[must_use]
     pub fn randn_like(tensor: &Tensor) -> Tensor {
         let shape = tensor.borrow().shape.clone();
-        Self::randn(&shape)
+        Self::randn(shape.truncate_rank())
     }
 
     /// Xavier uniform initialization
@@ -624,7 +628,7 @@ impl RawTensor {
     #[must_use]
     pub fn kl_divergence_gaussian(mu: &Tensor, logvar: &Tensor) -> Tensor {
         // 1 + logvar
-        let one = Self::ones(&mu.borrow().shape);
+        let one = Self::ones(mu.borrow().shape.truncate_rank());
         let term1 = one.add(logvar);
 
         // mu^2
@@ -659,9 +663,9 @@ impl RawTensor {
         let term1 = target.elem_mul(&log_pred);
 
         // (1-y) * log(1-y_hat)
-        let one = Self::ones(&target.borrow().shape);
+        let one = Self::ones(target.borrow().shape.truncate_rank());
         let one_minus_target = one.sub(target);
-        let one_minus_pred = Self::ones(&pred.borrow().shape).sub(pred);
+        let one_minus_pred = Self::ones(pred.borrow().shape.truncate_rank()).sub(pred);
         let log_one_minus_pred = one_minus_pred.log();
         let term2 = one_minus_target.elem_mul(&log_one_minus_pred);
 
@@ -682,8 +686,8 @@ impl RawTensor {
     #[must_use]
     pub fn bce_with_logits_loss(logits: &Tensor, target: &Tensor) -> Tensor {
         let shape = logits.borrow().shape.clone();
-        let zeros = Self::zeros(&shape);
-        let one = Self::ones(&shape);
+        let zeros = Self::zeros(shape.truncate_rank());
+        let one = Self::ones(shape.truncate_rank());
 
         // max(x, 0); ties at x == 0 route gradient to `logits`, giving relu'(0) = 1.
         let pos_part = logits.max_elem(&zeros);
@@ -702,7 +706,7 @@ impl RawTensor {
 /// Gradient for `sum_dim`: broadcast ones back to input shape
 #[derive(Clone)]
 pub(crate) struct SumDimGradFn {
-    input_shape: Vec<usize>,
+    input_shape: Shape,
     dim: usize,
     keepdim: bool,
 }
@@ -717,24 +721,25 @@ impl SumDimGradFn {
         let grad_shape = &out_grad.shape;
 
         // If keepdim=false, we need to unsqueeze the dimension back
-        let mut expanded_shape = grad_shape.clone();
-        if !self.keepdim {
-            expanded_shape.insert(self.dim, 1);
-        }
+        let expanded_shape = if self.keepdim {
+            grad_shape.clone()
+        } else {
+            grad_shape.unsqueeze(self.dim)
+        };
 
         // Broadcast gradient back to input shape
         // Each output element contributed to by input_shape[dim] elements
-        let size: usize = self.input_shape.iter().product();
+        let size = self.input_shape.numel();
         let mut result = vec![0.0; size];
 
-        let grad_strides = Strides::from_shape(&expanded_shape);
+        let grad_strides = expanded_shape.strides();
         let grad_strides = grad_strides.truncate_rank();
 
         for i in 0..size {
             // Get input coordinates
-            let mut coords = vec![0; self.input_shape.len()];
+            let mut coords = vec![0; self.input_shape.rank()];
             let mut rem = i;
-            for (d, &dim_sz) in self.input_shape.iter().enumerate().rev() {
+            for (d, dim_sz) in self.input_shape.iter().enumerate().rev() {
                 *slot(&mut coords, d) = rem % dim_sz;
                 rem /= dim_sz;
             }
@@ -751,14 +756,18 @@ impl SumDimGradFn {
             *slot(&mut result, i) = fetch(grad_data, grad_idx);
         }
 
-        vec![Some(RawTensor::new(result, &self.input_shape, false))]
+        vec![Some(RawTensor::from_shape(
+            result,
+            self.input_shape.clone(),
+            false,
+        ))]
     }
 }
 
 /// Gradient for `max_dim`: sparse gradient to max elements only
 #[derive(Clone)]
 pub(crate) struct MaxDimGradFn {
-    input_shape: Vec<usize>,
+    input_shape: Shape,
     max_indices: Vec<usize>, // linear indices of max elements
     dim: usize,
     keepdim: bool,
@@ -773,23 +782,24 @@ impl MaxDimGradFn {
         let grad_data = &*out_grad.data.to_host_f32();
         let grad_shape = &out_grad.shape;
 
-        let mut expanded_shape = grad_shape.clone();
-        if !self.keepdim {
-            expanded_shape.insert(self.dim, 1);
-        }
+        let expanded_shape = if self.keepdim {
+            grad_shape.clone()
+        } else {
+            grad_shape.unsqueeze(self.dim)
+        };
 
-        let size: usize = self.input_shape.iter().product();
+        let size = self.input_shape.numel();
         let mut result = vec![0.0; size];
 
         // Only max elements receive gradient
-        let grad_strides = Strides::from_shape(&expanded_shape);
+        let grad_strides = expanded_shape.strides();
         let grad_strides = grad_strides.truncate_rank();
 
         for (out_idx, &max_lin_idx) in self.max_indices.iter().enumerate() {
             // Convert output index to coordinates in expanded shape
-            let mut grad_coords = vec![0; expanded_shape.len()];
+            let mut grad_coords = vec![0; expanded_shape.rank()];
             let mut rem = out_idx;
-            for (d, &dim_sz) in expanded_shape.iter().enumerate().rev() {
+            for (d, dim_sz) in expanded_shape.iter().enumerate().rev() {
                 *slot(&mut grad_coords, d) = rem % dim_sz;
                 rem /= dim_sz;
             }
@@ -802,7 +812,11 @@ impl MaxDimGradFn {
             *slot(&mut result, max_lin_idx) = fetch(grad_data, grad_idx);
         }
 
-        vec![Some(RawTensor::new(result, &self.input_shape, false))]
+        vec![Some(RawTensor::from_shape(
+            result,
+            self.input_shape.clone(),
+            false,
+        ))]
     }
 }
 
@@ -830,17 +844,16 @@ impl RawTensor {
             (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
-        let dim_size = axis_size(&shape, dim)?;
+        let dim_size = shape.dim(dim)?;
         let dim = dim.0;
-        let mut out_shape = shape.clone();
-        *slot(&mut out_shape, dim) = 1; // intermediate shape before squeeze
-        let out_size: usize = out_shape.iter().product();
+        let out_shape = shape.with_dim(dim, 1); // intermediate shape before squeeze
+        let out_size = out_shape.numel();
         let mut result = vec![0.0; out_size];
 
         // Optimized stride-based reduction: O(1) per element instead of O(rank) coordinate conversion
         // View data as: [outer_size, dim_size, inner_size] where we sum over dim_size
-        let outer_size: usize = shape.get(..dim).unwrap_or(&[]).iter().product();
-        let inner_size: usize = shape.get(dim + 1..).unwrap_or(&[]).iter().product();
+        let outer_size = shape.numel_before(dim);
+        let inner_size = shape.numel_from(dim + 1);
 
         // Sum over the target dimension using stride arithmetic
         let data = data.to_host_f32();
@@ -860,12 +873,7 @@ impl RawTensor {
         let final_shape = if keepdim {
             out_shape
         } else {
-            out_shape
-                .iter()
-                .enumerate()
-                .filter(|(d, _)| *d != dim)
-                .map(|(_, &sz)| sz)
-                .collect()
+            out_shape.squeeze(dim)
         };
 
         // Place the reduction result on the same logical device as the input.
@@ -874,7 +882,7 @@ impl RawTensor {
         Ok(edge(
             [self_t.clone()],
             storage,
-            Shape::derived(final_shape),
+            final_shape,
             device,
             GradFn::SumDim(SumDimGradFn {
                 input_shape: shape,
@@ -951,19 +959,18 @@ impl RawTensor {
             (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
-        let dim_size = axis_size(&shape, dim).unwrap_or_else(|e| panic!("max_dim: {e}"));
+        let dim_size = shape.dim(dim).unwrap_or_else(|e| panic!("max_dim: {e}"));
         let dim = dim.0;
-        let mut out_shape = shape.clone();
-        *slot(&mut out_shape, dim) = 1;
-        let out_size: usize = out_shape.iter().product();
+        let out_shape = shape.with_dim(dim, 1);
+        let out_size = out_shape.numel();
 
         let mut result = vec![f32::NEG_INFINITY; out_size];
         let mut max_indices = vec![0; out_size]; // track which index won
 
         // Optimized stride-based reduction: O(1) per element instead of O(rank) coordinate conversion
         // View data as: [outer_size, dim_size, inner_size] where we find max over dim_size
-        let outer_size: usize = shape.get(..dim).unwrap_or(&[]).iter().product();
-        let inner_size: usize = shape.get(dim + 1..).unwrap_or(&[]).iter().product();
+        let outer_size = shape.numel_before(dim);
+        let inner_size = shape.numel_from(dim + 1);
 
         // Find max over the target dimension using stride arithmetic
         let data = data.to_host_f32();
@@ -982,14 +989,9 @@ impl RawTensor {
         }
 
         let final_shape = if keepdim {
-            out_shape.clone()
-        } else {
             out_shape
-                .iter()
-                .enumerate()
-                .filter(|(d, _)| *d != dim)
-                .map(|(_, &sz)| sz)
-                .collect()
+        } else {
+            out_shape.squeeze(dim)
         };
 
         // Ensure the max result lives on the same logical device as the input.
@@ -998,7 +1000,7 @@ impl RawTensor {
         edge(
             [self_t.clone()],
             storage,
-            Shape::derived(final_shape),
+            final_shape,
             device,
             GradFn::MaxDim(MaxDimGradFn {
                 input_shape: shape,
@@ -1043,7 +1045,7 @@ impl RawTensor {
             (t.shape.clone(), t.device.clone())
         };
 
-        let n = axis_size(&shape, dim).unwrap_or_else(|e| panic!("mean_dim: {e}")) as f32;
+        let n = shape.dim(dim).unwrap_or_else(|e| panic!("mean_dim: {e}")) as f32;
         let sum = Self::sum_dim(self_t, dim, keepdim);
         let div_tensor = Self::new(vec![n], &[1], false);
 
@@ -1114,7 +1116,8 @@ impl RawTensor {
                         .expect("check_gradients: CPU F32 input"),
                     i,
                 ) += epsilon;
-                let tensor_plus = Self::new(data_plus.to_vec(), &original_shape, requires_grad);
+                let tensor_plus =
+                    Self::from_shape(data_plus.to_vec(), original_shape.clone(), requires_grad);
                 let loss_plus = loss_fn(&tensor_plus);
                 assert!(
                     !loss_plus.borrow().data.is_empty(),
@@ -1130,7 +1133,8 @@ impl RawTensor {
                         .expect("check_gradients: CPU F32 input"),
                     i,
                 ) -= epsilon;
-                let tensor_minus = Self::new(data_minus.to_vec(), &original_shape, requires_grad);
+                let tensor_minus =
+                    Self::from_shape(data_minus.to_vec(), original_shape.clone(), requires_grad);
                 let loss_minus = loss_fn(&tensor_minus);
                 assert!(
                     !loss_minus.borrow().data.is_empty(),

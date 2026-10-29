@@ -107,22 +107,18 @@ impl Muon {
                 // Muon logic:
                 // 1. Flatten params to 2D (keeping output dim as row usually)
                 // If vector (1D), treat as (Rows, 1)
-                let (rows, cols) = if shape.len() < 2 {
+                let (rows, cols) = if shape.rank() < 2 {
                     // A vector is (n, 1). A rank-0 parameter is a single value: (1, 1).
-                    match shape.as_slice() {
-                        [n] => (*n, 1),
-                        _ => (1, 1),
+                    if shape.rank() == 1 {
+                        (shape.dim_at(0), 1)
+                    } else {
+                        (1, 1)
                     }
                 } else {
                     // For Linear: [In, Out] -> Muon treats as [In, Out] usually or [Out, In]
                     // For Conv2d: [Out, In, K, K] -> flatten to [Out, In*K*K]
-                    let rows = fetch(shape, 0);
-                    let cols = shape
-                        .get(1..)
-                        .iter()
-                        .flat_map(|s| s.iter())
-                        .copied()
-                        .product();
+                    let rows = shape.dim_at(0);
+                    let cols = shape.numel_from(1);
                     (rows, cols)
                 };
 
