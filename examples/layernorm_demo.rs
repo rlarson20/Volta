@@ -2,7 +2,6 @@
 use volta::RawTensor;
 use volta::{LayerNorm, Module, TensorOps};
 
-#[allow(clippy::cast_precision_loss)]
 fn main() {
     println!("=== LayerNorm Demonstration ===\n");
 

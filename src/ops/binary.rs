@@ -182,7 +182,6 @@ impl RawTensor {
         let to_strides = to_strides.truncate_rank();
 
         // For each output position, compute corresponding input position
-        #[allow(clippy::needless_range_loop)]
         for i in 0..to_size {
             let mut from_idx = 0;
             let mut remainder = i;

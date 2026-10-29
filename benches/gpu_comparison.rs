@@ -2,7 +2,6 @@
 //!
 //! These benchmarks are only available when the `gpu` feature is enabled.
 //! They compare CPU and GPU performance for key operations.
-#![allow(clippy::cast_precision_loss)]
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_main};
 use volta::{Device, RawTensor, Tensor, TensorOps};
 
@@ -647,7 +646,6 @@ fn bench_memory_transfer(c: &mut Criterion) {
 
 /// Kernel-dispatch overhead on the GPU: `many_small_ops` runs an op over 20 tensors of 256 elements, `single_large_op` runs it once over one 5120-element tensor (the same total work). Uses 10 samples and checks system resources first to avoid exhausting memory. Skipped when no GPU is available.
 #[cfg(feature = "gpu")]
-#[allow(clippy::too_many_lines)]
 fn bench_gpu_batch_processing(c: &mut Criterion) {
     if !is_gpu_enabled() {
         return;

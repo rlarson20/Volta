@@ -1,4 +1,3 @@
-#![allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
 use crate::Storage;
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
@@ -201,7 +200,6 @@ pub(crate) struct DirectConvGradFn {
 }
 
 impl DirectConvGradFn {
-    #[allow(clippy::too_many_lines)]
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         // parents: [input, weight]
         let x = parents.first().cloned();
@@ -471,7 +469,6 @@ pub(crate) struct IGEMMGradFn {
 }
 
 impl IGEMMGradFn {
-    #[allow(clippy::too_many_lines)]
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         // parents: [input, weight]
         let x = parents.first().cloned();
@@ -1193,7 +1190,6 @@ impl Conv2d {
     /// - Reduces memory bandwidth (no im2col materialization)
     /// - Improves cache locality (tiled computation)
     /// - Enables future optimizations (Winograd, FFT)
-    #[allow(clippy::too_many_lines)]
     fn igemm_forward(
         x: &Tensor,
         weight: &Tensor,
@@ -1383,7 +1379,6 @@ impl Conv2d {
 
     /// # Panics
     /// Input needs to be 4D
-    #[allow(clippy::too_many_lines)]
     pub fn forward(&self, x: &Tensor) -> Tensor {
         let spec = Conv2dSpec::new(
             &Shape::derived(x.shape()),
@@ -2790,7 +2785,7 @@ mod conv2d_gpu_tests {
 
         // Create CPU conv with deterministic weights
         let conv_cpu = Conv2d::new_on_device(4, 8, 1, 1, 0, true, Device::CPU);
-        #[allow(clippy::identity_op)]
+        #[expect(clippy::identity_op, reason = "kernel dims are spelled out as factors")]
         let weight_size = 4 * 8 * 1 * 1;
         conv_cpu.weight.borrow_mut().data = crate::storage::Storage::cpu(vec![1.0; weight_size]);
         conv_cpu.bias.as_ref().unwrap().borrow_mut().data =

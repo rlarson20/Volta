@@ -59,7 +59,6 @@ impl RawTensor {
     /// `a.len() != m * k`, `b.len() != k * n`, or a dimension that does not fit in `i32`
     /// (cblas path only)
     #[must_use]
-    #[allow(clippy::many_single_char_names, reason = "Numerical code")]
     pub(crate) fn matmul_raw(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
         assert_eq!(
             a.len(),
@@ -158,7 +157,6 @@ impl RawTensor {
     /// - (n,) @ (n,) -> scalar   [dot product]
     /// # Panics
     /// Dimension mismatch, or matrix operands of unequal rank (see [`MatmulSpec`])
-    #[allow(clippy::too_many_lines)]
     #[must_use]
     pub fn matmul(self_t: &Tensor, other: &Tensor) -> Tensor {
         let (data_a, shape_a) = {
@@ -419,7 +417,6 @@ impl MatMulGradFn {
 }
 
 impl MatMulGradFn {
-    #[allow(clippy::too_many_lines, clippy::many_single_char_names)]
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let x = parents
             .first()
@@ -503,7 +500,6 @@ impl MatMulGradFn {
                     let len_x = x.shape.first().copied().unwrap_or(1);
                     let len_y_p = y.shape.get(1).copied().unwrap_or(1);
                     let mut grad_data = vec![0.0; len_x];
-                    #[allow(clippy::needless_range_loop)]
                     for i in 0..len_x {
                         for j in 0..len_y_p {
                             *slot(&mut grad_data, i) +=
@@ -540,7 +536,6 @@ impl MatMulGradFn {
                     let m = x.shape.first().copied().unwrap_or(1);
                     let n = x.shape.get(1).copied().unwrap_or(1);
                     let mut grad_data = vec![0.0; n];
-                    #[allow(clippy::needless_range_loop)]
                     for j in 0..n {
                         let mut sum = 0.0;
                         for i in 0..m {

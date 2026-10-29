@@ -138,7 +138,6 @@ impl RawTensor {
     /// Apply ternary operations (3 inputs, 1 output)
     /// # Panics
     /// assert shape match for `x`, `y`
-    #[allow(clippy::too_many_lines)]
     #[must_use]
     pub fn ternary_op(x: &Tensor, y: &Tensor, z: &Tensor, op: TernaryOp) -> Tensor {
         match op {

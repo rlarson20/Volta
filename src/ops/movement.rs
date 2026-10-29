@@ -394,7 +394,6 @@ pub(crate) struct MovementGradFn {
 }
 
 impl MovementGradFn {
-    #[allow(clippy::too_many_lines)]
     pub(crate) fn backward(
         &self,
         out_grad: &RawTensor,
@@ -786,7 +785,6 @@ impl RawTensor {
             let old_strides = Strides::from_shape(&old_shape);
             let old_strides = old_strides.truncate_rank();
 
-            #[allow(clippy::needless_range_loop)]
             for i in 0..new_size {
                 let mut old_idx = 0;
                 let mut rem = i;

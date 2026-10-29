@@ -51,7 +51,6 @@ impl Module for Sequential {
     fn load_state_dict(&mut self, state: &StateDict) {
         for (i, entry) in self.layers.iter_mut().enumerate() {
             // Try name first, fallback to numeric index
-            #[allow(clippy::option_if_let_else, reason = "Don't know how to fix right now")]
             let possible_prefixes: Vec<String> = if let Some(ref name) = entry.name {
                 vec![format!("{}.", name), format!("{}.", i)]
             } else {

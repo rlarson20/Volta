@@ -13,8 +13,6 @@
 //! dynamic computation graphs. Each tensor operation creates new tensors and stores gradient
 //! functions that know how to backpropagate through that operation.
 #![allow(
-    clippy::float_cmp,
-    clippy::cast_precision_loss,
     clippy::missing_docs_in_private_items,
     missing_docs //FIXME: MUST REMOVE BEFORE MERGING IN
 )]
@@ -633,7 +631,6 @@ mod misc_tests {
     }
 
     #[test]
-    #[allow(clippy::many_single_char_names)]
     fn test_broadcast_bias_add() {
         // Common pattern: batch matmul + bias
         // (batch=2, in=3) @ (3, 4) + (4,) -> (2, 4)
@@ -688,7 +685,10 @@ mod misc_tests {
         );
     }
     #[test]
-    #[allow(clippy::identity_op)]
+    #[expect(
+        clippy::identity_op,
+        reason = "spelled-out batch dims keep the example clearer"
+    )]
     //Allow identity op to make the example clearer
     fn test_batched_matmul_broadcasting() {
         // (2, 1, 2, 3) @ (1, 2, 3, 1) -> (2, 2, 2, 1)
@@ -999,7 +999,6 @@ mod misc_tests {
     }
 
     #[test]
-    #[allow(clippy::many_single_char_names)]
     fn test_gradcheck_neural_network_layer() {
         // Test full linear layer: y = xW + b
         let x = RawTensor::new(vec![1.0, 2.0, 3.0], &[1, 3], true);
@@ -3345,7 +3344,6 @@ mod axis_reduce_tests {
     /// 4. Loading into a Volta model with named layers
     /// 5. Verifying the model works correctly
     #[test]
-    #[allow(clippy::too_many_lines)]
     fn test_external_model_loading_integration() {
         use crate::io::{TensorData, load_state_dict, mapping::StateDictMapper, save_state_dict};
         use crate::nn::{Linear, Module, ReLU, Sequential};

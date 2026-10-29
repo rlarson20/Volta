@@ -6,7 +6,6 @@
 //! - `DataLoader` with automatic GPU prefetch
 //! - Full training loop staying on GPU
 //! - Performance comparison with CPU training
-#![allow(clippy::cast_possible_truncation)]
 use std::time::Instant;
 use volta::{
     Adam, Device, Linear, Module, RawTensor, ReLU, Sequential, Tensor, TensorOps, mse_loss,
@@ -117,7 +116,6 @@ fn train_with_to_device(x_data: Vec<f32>, y_data: Vec<f32>, device: &Device) {
 }
 
 /// Compare CPU vs GPU training performance
-#[allow(clippy::similar_names)]
 fn compare_cpu_vs_gpu(x_data: Vec<f32>, y_data: Vec<f32>) {
     // CPU training
     println!("Training on CPU...");

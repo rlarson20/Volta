@@ -1,4 +1,3 @@
-#![allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
 use crate::index::{fetch, slot};
 use crate::storage::Storage;
 use crate::tensor::Tensor;
@@ -136,7 +135,6 @@ impl Adam {
     }
 
     /// CPU update for a single parameter
-    #[allow(clippy::needless_range_loop)]
     fn step_cpu_param(&mut self, i: usize) {
         let param = self.params.get(i).unwrap();
         let mut p = param.borrow_mut();

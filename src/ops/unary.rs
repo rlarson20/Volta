@@ -108,7 +108,6 @@ impl RawTensor {
     ///
     /// This is the unified implementation for all unary ops.
     /// Creates a new tensor and sets up gradient tracking if needed.
-    #[allow(clippy::cast_possible_truncation)]
     #[must_use]
     pub fn unary_op(t: &Tensor, op: UnaryOp) -> Tensor {
         let (data, shape, device) = {

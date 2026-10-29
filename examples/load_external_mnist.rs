@@ -132,7 +132,6 @@ fn run_validation(model: &Sequential, test_data_path: &str) {
     run_demo_inference(model);
 }
 /// Runs `model` on one synthetic, flattened 28x28 input and prints the output shape and values. It checks that the loaded model runs, not that its outputs are correct.
-#[allow(clippy::cast_precision_loss)]
 fn run_demo_inference(model: &Sequential) {
     println!("Running demo inference...");
 

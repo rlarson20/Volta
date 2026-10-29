@@ -173,7 +173,6 @@ pub fn gpu_cleanup() -> bool {
 /// ```
 #[must_use]
 pub fn gpu_compact() -> bool {
-    #[allow(clippy::option_if_let_else)]
     if let Some(ctx) = get_gpu_context() {
         // Step 1: Clear buffer pools (drops wgpu::Buffer instances)
         ctx.buffer_pool().clear();

@@ -3,12 +3,6 @@
 //! This module contains the logic for dispatching compute shaders.
 //! Each operation creates a command buffer, binds the appropriate
 //! pipeline and buffers, and submits work to the GPU.
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::too_many_lines,
-    clippy::many_single_char_names
-)]
 use super::{GpuBuffer, get_gpu_context};
 use crate::index::slot;
 use crate::ops::{BinaryOp, UnaryOp};
@@ -1684,7 +1678,6 @@ impl GpuKernels {
         // Pack padding into params (same as forward pad operation)
         let mut op_params = [0u32; 4];
         let mut padding2 = 0u32;
-        #[allow(clippy::used_underscore_binding)] //TEMP!!!
         let mut _padding = [0u32; 2];
 
         for (i, &(left, right)) in padding.iter().enumerate().take(4) {

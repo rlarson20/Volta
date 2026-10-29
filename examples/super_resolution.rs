@@ -122,7 +122,6 @@ fn main() {
 ///
 /// Creates smooth low-resolution images and corresponding high-resolution targets
 /// with added detail/frequency content to simulate the super-resolution task
-#[allow(clippy::cast_precision_loss)]
 fn generate_synthetic_data(
     batch_size: usize,
     low_res_size: usize,

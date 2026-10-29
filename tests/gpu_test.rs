@@ -1,5 +1,4 @@
 //! GPU integration tests: device availability, buffer round-trips, `add`, autograd with the root gradient on the GPU, gradient accumulation on the GPU, and movement ops. Only built with the `gpu` feature.
-#![allow(clippy::cast_precision_loss)]
 #[cfg(feature = "gpu")]
 use volta::Axis;
 #[cfg(feature = "gpu")]

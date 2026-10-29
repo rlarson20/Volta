@@ -3,7 +3,6 @@
 //! Prints a message first saying whether a GPU is available (checked only with the `gpu` feature).
 use volta::{Device, RawTensor, TensorOps};
 
-#[allow(clippy::similar_names)]
 fn main() {
     // Check if GPU is available
     #[cfg(feature = "gpu")]

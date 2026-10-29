@@ -720,7 +720,6 @@ impl SumDimGradFn {
         let grad_strides = Strides::from_shape(&expanded_shape);
         let grad_strides = grad_strides.truncate_rank();
 
-        #[allow(clippy::needless_range_loop)]
         for i in 0..size {
             // Get input coordinates
             let mut coords = vec![0; self.input_shape.len()];

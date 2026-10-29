@@ -18,7 +18,6 @@
 //
 // If loss doesn't move at all, the most likely culprit is the FeedForward::forward reshape — it expects exactly 3D input [batch, seq_len, embed_dim].
 // A shape panic there would silently corrupt the graph on some code paths.
-#![allow(clippy::cast_precision_loss)]
 
 use std::collections::HashMap;
 use volta::{

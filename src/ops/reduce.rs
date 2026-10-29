@@ -147,7 +147,6 @@ impl RawTensor {
     /// All reduction ops produce a shape \[1\] output.
     /// # Panics
     /// unwrap map
-    #[allow(clippy::too_many_lines)]
     #[must_use]
     pub fn reduce_op(self_t: &Tensor, op: ReduceOp) -> Tensor {
         let (data, shape, device) = {
@@ -160,7 +159,6 @@ impl RawTensor {
                 // Try GPU first if available
                 let sum: f32 = if device.is_gpu() {
                     #[cfg(feature = "gpu")]
-                    #[allow(clippy::option_if_let_else, reason = "can't figure out right now")]
                     {
                         if let Some(result) = Self::gpu_sum_reduce(&data) {
                             result
@@ -182,7 +180,6 @@ impl RawTensor {
                 let (max_val, max_idx) = if device.is_gpu() {
                     #[cfg(feature = "gpu")]
                     {
-                        #[allow(clippy::option_if_let_else, reason = "can't figure out rn")]
                         if let Some(result) = Self::gpu_max_reduce(&data) {
                             result
                         } else {
@@ -227,7 +224,6 @@ impl RawTensor {
                 let mean_val: f32 = if device.is_gpu() {
                     #[cfg(feature = "gpu")]
                     {
-                        #[allow(clippy::option_if_let_else, reason = "can't figure out rn")]
                         if let Some(result) = Self::gpu_mean_reduce(&data) {
                             result
                         } else {
