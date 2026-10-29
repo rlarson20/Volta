@@ -1,3 +1,4 @@
+use crate::index::{fetch, slot};
 use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
 use crate::shape::Axis;
@@ -104,18 +105,14 @@ impl Module for BatchNorm2d {
                 let m = self.momentum;
 
                 for i in 0..self.num_features {
-                    let rm_val = rm.data.get(i).copied().unwrap_or(0.0);
-                    let bm_val = bm_data.get(i).copied().unwrap_or(0.0);
-                    if let Some(slot) = rm.data.get_mut(i) {
-                        *slot = (1.0 - m).mul_add(rm_val, m * bm_val);
-                    }
+                    let rm_val = fetch(&rm.data, i);
+                    let bm_val = fetch(bm_data, i);
+                    *slot(&mut rm.data, i) = (1.0 - m).mul_add(rm_val, m * bm_val);
                     // Bessel correction for running_var update usually applied
-                    let bv_val = bv_data.get(i).copied().unwrap_or(0.0);
+                    let bv_val = fetch(bv_data, i);
                     let unbiased_var = bv_val * num_pixels / (num_pixels - 1.0);
-                    let rv_val = rv.data.get(i).copied().unwrap_or(0.0);
-                    if let Some(slot) = rv.data.get_mut(i) {
-                        *slot = (1.0 - m).mul_add(rv_val, m * unbiased_var);
-                    }
+                    let rv_val = fetch(&rv.data, i);
+                    *slot(&mut rv.data, i) = (1.0 - m).mul_add(rv_val, m * unbiased_var);
                 }
             }
 
@@ -268,18 +265,14 @@ impl Module for BatchNorm1d {
 
                 let m = self.momentum;
                 for i in 0..self.num_features {
-                    let rm_val = rm.data.get(i).copied().unwrap_or(0.0);
-                    let bm_val = bm_data.get(i).copied().unwrap_or(0.0);
-                    if let Some(slot) = rm.data.get_mut(i) {
-                        *slot = (1.0 - m).mul_add(rm_val, m * bm_val);
-                    }
+                    let rm_val = fetch(&rm.data, i);
+                    let bm_val = fetch(bm_data, i);
+                    *slot(&mut rm.data, i) = (1.0 - m).mul_add(rm_val, m * bm_val);
                     // Bessel correction for running_var update
-                    let bv_val = bv_data.get(i).copied().unwrap_or(0.0);
+                    let bv_val = fetch(bv_data, i);
                     let unbiased_var = bv_val * batch_size / (batch_size - 1.0);
-                    let rv_val = rv.data.get(i).copied().unwrap_or(0.0);
-                    if let Some(slot) = rv.data.get_mut(i) {
-                        *slot = (1.0 - m).mul_add(rv_val, m * unbiased_var);
-                    }
+                    let rv_val = fetch(&rv.data, i);
+                    *slot(&mut rv.data, i) = (1.0 - m).mul_add(rv_val, m * unbiased_var);
                 }
             }
 

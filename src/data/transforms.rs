@@ -1,3 +1,5 @@
+use crate::index::slot;
+
 /// Normalize data in-place: (x - mean) / std
 pub fn normalize(data: &mut [f32], mean: f32, std: f32) {
     for x in data.iter_mut() {
@@ -7,16 +9,22 @@ pub fn normalize(data: &mut [f32], mean: f32, std: f32) {
 
 /// Convert label indices to one-hot encoding
 /// labels: [0, 1, 2, ...] -> one-hot vectors concatenated
+///
+/// # Panics
+///
+/// If any label is `>= num_classes`. Such a label would otherwise set a slot in the
+/// next sample's row, or be dropped on the last one.
 #[must_use]
 pub fn to_one_hot(labels: &[u8], num_classes: usize) -> Vec<f32> {
     let mut one_hot = vec![0.0; labels.len() * num_classes];
 
     for (i, &label) in labels.iter().enumerate() {
         let offset = i * num_classes;
-        let idx = offset + label as usize;
-        if let Some(slot) = one_hot.get_mut(idx) {
-            *slot = 1.0;
-        }
+        assert!(
+            (label as usize) < num_classes,
+            "label {label} out of range for {num_classes} classes"
+        );
+        *slot(&mut one_hot, offset + label as usize) = 1.0;
     }
 
     one_hot
@@ -25,6 +33,7 @@ pub fn to_one_hot(labels: &[u8], num_classes: usize) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::fetch;
 
     #[test]
     fn test_normalize() {
@@ -41,8 +50,16 @@ mod tests {
 
         // Expected: [1,0,0, 0,0,1, 0,1,0]
         assert_eq!(one_hot.len(), 9);
-        assert_eq!(one_hot.first().copied().unwrap_or(f32::NAN), 1.0); // label 0
-        assert_eq!(one_hot.get(5).copied().unwrap_or(f32::NAN), 1.0); // label 2
-        assert_eq!(one_hot.get(7).copied().unwrap_or(f32::NAN), 1.0); // label 1
+        assert_eq!(fetch(&one_hot, 0), 1.0); // label 0
+        assert_eq!(fetch(&one_hot, 5), 1.0); // label 2
+        assert_eq!(fetch(&one_hot, 7), 1.0); // label 1
+        assert_eq!(one_hot.iter().sum::<f32>(), 3.0);
+    }
+
+    /// A label past `num_classes` panics instead of landing in the next sample's row.
+    #[test]
+    #[should_panic(expected = "out of range")]
+    fn test_to_one_hot_label_out_of_range_panics() {
+        let _ = to_one_hot(&[0, 3, 1], 3);
     }
 }

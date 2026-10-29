@@ -1,3 +1,4 @@
+use crate::index::{fetch, slot};
 use crate::io::StateDict;
 
 /// Builder for composable state dict transformations
@@ -142,11 +143,8 @@ impl StateDictMapper {
                     // Transpose row-major layout: [R, C] -> [C, R]
                     for i in 0..rows {
                         for j in 0..cols {
-                            if let Some(src) = tensor_data.data.get(i * cols + j)
-                                && let Some(dst) = transposed.get_mut(j * rows + i)
-                            {
-                                *dst = *src;
-                            }
+                            *slot(&mut transposed, j * rows + i) =
+                                fetch(&tensor_data.data, i * cols + j);
                         }
                     }
 
@@ -181,11 +179,8 @@ impl StateDictMapper {
 
                         for i in 0..rows {
                             for j in 0..cols {
-                                if let Some(src) = tensor_data.data.get(i * cols + j)
-                                    && let Some(dst) = transposed.get_mut(j * rows + i)
-                                {
-                                    *dst = *src;
-                                }
+                                *slot(&mut transposed, j * rows + i) =
+                                    fetch(&tensor_data.data, i * cols + j);
                             }
                         }
 

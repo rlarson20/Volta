@@ -1,4 +1,5 @@
 use crate::Device;
+use crate::index::fetch;
 use crate::io::StateDict;
 use crate::nn::Module;
 use crate::nn::layers::embedding::Embedding;
@@ -154,8 +155,8 @@ impl PositionalEncoding {
                 for b in 0..batch_size {
                     let start = b * slice_size;
                     for i in 0..slice_size {
-                        let x_val = x_data.get(start + i).copied().unwrap_or(0.0);
-                        let enc_val = enc_data.get(i).copied().unwrap_or(0.0);
+                        let x_val = fetch(&x_data, start + i);
+                        let enc_val = fetch(&enc_data, i);
                         result_data.push(x_val + enc_val);
                     }
                 }
@@ -187,8 +188,8 @@ impl PositionalEncoding {
                 for b in 0..batch_size {
                     let start = b * slice_size;
                     for i in 0..slice_size {
-                        let x_val = x_data.get(start + i).copied().unwrap_or(0.0);
-                        let emb_val = emb_data.get(i).copied().unwrap_or(0.0);
+                        let x_val = fetch(&x_data, start + i);
+                        let emb_val = fetch(&emb_data, i);
                         result_data.push(x_val + emb_val);
                     }
                 }

@@ -1,3 +1,4 @@
+use crate::index::{fetch, slot};
 use crate::tensor::{RawTensor, Tensor};
 
 /// Muon: Momentum Orthogonal Optimizer
@@ -77,14 +78,8 @@ impl Muon {
             for i in 0..cols {
                 for j in 0..cols {
                     let idx = i * cols + j;
-                    let val = xt_x.get(idx).copied().unwrap_or(0.0);
-                    if i == j {
-                        if let Some(slot) = c.get_mut(idx) {
-                            *slot = 3.0 - val;
-                        }
-                    } else if let Some(slot) = c.get_mut(idx) {
-                        *slot = -val;
-                    }
+                    let val = fetch(&xt_x, idx);
+                    *slot(&mut c, idx) = if i == j { 3.0 - val } else { -val };
                 }
             }
 
@@ -93,9 +88,7 @@ impl Muon {
             let next_x = RawTensor::matmul_raw(g, &c, rows, cols, cols);
 
             for (i, val) in next_x.iter().enumerate() {
-                if let Some(slot) = g.get_mut(i) {
-                    *slot = val * 0.5;
-                }
+                *slot(g, i) = val * 0.5;
             }
         }
 

@@ -1,3 +1,4 @@
+use crate::index::span;
 use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
 use crate::tensor::{RawTensor, Tensor, TensorOps};
@@ -132,9 +133,7 @@ impl LSTMCell {
         let mut gate_data = Vec::with_capacity(batch_size * self.hidden_size);
         for i in 0..batch_size {
             let row_start = i * 4 * self.hidden_size;
-            if let Some(slice) = data.get(row_start + start..row_start + end) {
-                gate_data.extend_from_slice(slice);
-            }
+            gate_data.extend_from_slice(span(data, row_start + start..row_start + end));
         }
 
         RawTensor::new(

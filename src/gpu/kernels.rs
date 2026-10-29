@@ -10,6 +10,7 @@
     clippy::many_single_char_names
 )]
 use super::{GpuBuffer, get_gpu_context};
+use crate::index::slot;
 use crate::ops::{BinaryOp, UnaryOp};
 use crate::spec::PadValue;
 
@@ -741,21 +742,15 @@ impl GpuKernels {
 
         for (i, &dim) in out_shape.iter().enumerate() {
             let idx = out_offset + i;
-            if let Some(slot) = out_shape_padded.get_mut(idx) {
-                *slot = dim as u32;
-            }
+            *slot(&mut out_shape_padded, idx) = dim as u32;
         }
         for (i, &dim) in a_shape.iter().enumerate() {
             let idx = a_offset + i;
-            if let Some(slot) = a_shape_padded.get_mut(idx) {
-                *slot = dim as u32;
-            }
+            *slot(&mut a_shape_padded, idx) = dim as u32;
         }
         for (i, &dim) in b_shape.iter().enumerate() {
             let idx = b_offset + i;
-            if let Some(slot) = b_shape_padded.get_mut(idx) {
-                *slot = dim as u32;
-            }
+            *slot(&mut b_shape_padded, idx) = dim as u32;
         }
 
         let params = BinaryBackwardParams {
@@ -1403,9 +1398,7 @@ impl GpuKernels {
 
         // Create max indices buffer
         let mut indices = vec![0u32; input_size.div_ceil(256)];
-        if let Some(slot) = indices.get_mut(0) {
-            *slot = max_index as u32;
-        }
+        *slot(&mut indices, 0) = max_index as u32;
         let max_indices_buffer =
             ctx.device()
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1510,9 +1503,7 @@ impl GpuKernels {
         // For expand, op_params represents which dimensions were broadcast (size 1 -> N)
         let mut broadcast_flags = [0u32; 4];
         for (i, (&old, &new)) in old_shape.iter().zip(new_shape).take(4).enumerate() {
-            if let Some(slot) = broadcast_flags.get_mut(i) {
-                *slot = u32::from(old == 1 && new > 1);
-            }
+            *slot(&mut broadcast_flags, i) = u32::from(old == 1 && new > 1);
         }
 
         let params = MovementParams {
@@ -1547,12 +1538,8 @@ impl GpuKernels {
         let mut pad_params = [0u32; 4];
         for (i, &(left, right)) in padding.iter().enumerate().take(2) {
             let idx = i * 2;
-            if let Some(slot) = pad_params.get_mut(idx) {
-                *slot = left as u32;
-            }
-            if let Some(slot) = pad_params.get_mut(idx + 1) {
-                *slot = right as u32;
-            }
+            *slot(&mut pad_params, idx) = left as u32;
+            *slot(&mut pad_params, idx + 1) = right as u32;
         }
 
         // Pack dim 2 into padding2 (left in upper 16 bits, right in lower 16 bits)
@@ -1747,9 +1734,7 @@ impl GpuKernels {
         // Pack range starts into op_params
         let mut range_starts = [0usize; 4];
         for (i, &(start, _)) in ranges.iter().enumerate().take(4) {
-            if let Some(slot) = range_starts.get_mut(i) {
-                *slot = start;
-            }
+            *slot(&mut range_starts, i) = start;
         }
 
         let params = MovementParams {
@@ -2753,9 +2738,7 @@ impl GpuKernels {
 fn pad_to_u32_4(values: &[usize]) -> [u32; 4] {
     let mut result = [0u32; 4];
     for (i, &v) in values.iter().take(4).enumerate() {
-        if let Some(slot) = result.get_mut(i) {
-            *slot = v as u32;
-        }
+        *slot(&mut result, i) = v as u32;
     }
     result
 }

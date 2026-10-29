@@ -836,8 +836,8 @@ mod tests {
         assert_eq!(storage.dtype(), DType::F32);
         assert_eq!(storage.len(), 4);
         assert_eq!(storage.as_f32_slice(), &data);
-        assert_eq!(storage.first().copied().unwrap_or(f32::NAN), 1.0);
-        assert_eq!(storage.get(3).copied().unwrap_or(f32::NAN), 4.0);
+        assert_eq!(storage.first().copied().expect("index in range"), 1.0);
+        assert_eq!(storage.get(3).copied().expect("index in range"), 4.0);
     }
 
     #[test]
@@ -855,7 +855,7 @@ mod tests {
         // Test conversion to f32
         let f32_vec = storage.to_f32_vec();
         assert_eq!(f32_vec.len(), 4);
-        assert!((f32_vec.first().copied().unwrap_or(f32::NAN) - 1.0).abs() < 0.01);
+        assert!((f32_vec.first().copied().expect("index in range") - 1.0).abs() < 0.01);
     }
 
     #[test]
@@ -872,7 +872,7 @@ mod tests {
         let f32_storage = f16_storage.to_dtype(DType::F32);
         assert_eq!(f32_storage.dtype(), DType::F32);
         let recovered = f32_storage.to_f32_vec();
-        assert!((recovered.first().copied().unwrap_or(f32::NAN) - 1.0).abs() < 0.01);
+        assert!((recovered.first().copied().expect("index in range") - 1.0).abs() < 0.01);
     }
 
     #[test]

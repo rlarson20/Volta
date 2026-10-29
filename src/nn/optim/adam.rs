@@ -1,4 +1,5 @@
 #![allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+use crate::index::{fetch, slot};
 use crate::storage::Storage;
 use crate::tensor::Tensor;
 
@@ -170,18 +171,14 @@ impl Adam {
 
         // Update biased moments
         for j in 0..active_grad.len() {
-            let m_val = m_slice.get(j).copied().unwrap_or(0.0);
-            let g_val = active_grad.get(j).copied().unwrap_or(0.0);
-            if let Some(slot) = m_slice.get_mut(j) {
-                *slot = self.betas.0.mul_add(m_val, (1.0 - self.betas.0) * g_val);
-            }
-            let v_val = v_slice.get(j).copied().unwrap_or(0.0);
-            if let Some(slot) = v_slice.get_mut(j) {
-                *slot = self
-                    .betas
-                    .1
-                    .mul_add(v_val, (1.0 - self.betas.1) * g_val.powi(2));
-            }
+            let m_val = fetch(m_slice, j);
+            let g_val = fetch(&active_grad, j);
+            *slot(m_slice, j) = self.betas.0.mul_add(m_val, (1.0 - self.betas.0) * g_val);
+            let v_val = fetch(v_slice, j);
+            *slot(v_slice, j) = self
+                .betas
+                .1
+                .mul_add(v_val, (1.0 - self.betas.1) * g_val.powi(2));
         }
 
         // Bias correction
@@ -194,13 +191,11 @@ impl Adam {
             .as_mut_slice()
             .expect("Parameter should be CPU storage");
         for j in 0..p_data.len() {
-            let m_val = m_slice.get(j).copied().unwrap_or(0.0);
-            let v_val = v_slice.get(j).copied().unwrap_or(0.0);
+            let m_val = fetch(m_slice, j);
+            let v_val = fetch(v_slice, j);
             let m_hat = m_val * m_hat_scale;
             let v_hat = v_val * v_hat_scale;
-            if let Some(slot) = p_data.get_mut(j) {
-                *slot -= self.lr * m_hat / (v_hat.sqrt() + self.eps);
-            }
+            *slot(p_data, j) -= self.lr * m_hat / (v_hat.sqrt() + self.eps);
         }
     }
 }

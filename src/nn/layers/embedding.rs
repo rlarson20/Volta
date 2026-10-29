@@ -1,5 +1,6 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
+use crate::index::{fetch, slot, span};
 use crate::io::StateDict;
 use crate::nn::Module;
 use crate::shape::Shape;
@@ -95,9 +96,7 @@ impl Embedding {
             );
             let start = idx * self.dim;
             let end = start + self.dim;
-            if let Some(slice) = weight_data.get(start..end) {
-                output_data.extend_from_slice(slice);
-            }
+            output_data.extend_from_slice(span(weight_data, start..end));
         }
 
         drop(weight_borrowed);
@@ -172,10 +171,7 @@ impl EmbeddingGradFn {
             for d in 0..self.embedding_dim {
                 let out_grad_idx = i * self.embedding_dim + d;
                 let weight_idx = idx * self.embedding_dim + d;
-                let grad_val = out_grad.data.get(out_grad_idx).copied().unwrap_or(0.0);
-                if let Some(slot) = grad_weight.get_mut(weight_idx) {
-                    *slot += grad_val;
-                }
+                *slot(&mut grad_weight, weight_idx) += fetch(&out_grad.data, out_grad_idx);
             }
         }
 
@@ -212,16 +208,16 @@ mod tests {
         // Check that the first embedding matches the first row of weight
         for i in 0..4 {
             assert_eq!(
-                output_data.get(i).copied().unwrap_or(f32::NAN),
-                weight_data.get(i).copied().unwrap_or(f32::NAN)
+                output_data.get(i).copied().expect("index in range"),
+                weight_data.get(i).copied().expect("index in range")
             );
         }
 
         // Check that the second embedding (index 5) matches row 5 of weight
         for i in 0..4 {
             assert_eq!(
-                output_data.get(4 + i).copied().unwrap_or(f32::NAN),
-                weight_data.get(5 * 4 + i).copied().unwrap_or(f32::NAN)
+                output_data.get(4 + i).copied().expect("index in range"),
+                weight_data.get(5 * 4 + i).copied().expect("index in range")
             );
         }
     }
@@ -245,7 +241,7 @@ mod tests {
         // Each embedding contributes 1.0 per dimension (from sum)
         // So index 2 should have grad of 2.0 per dimension
         for d in 0..4 {
-            let grad_at_idx2 = grad_data.get(2 * 4 + d).copied().unwrap_or(f32::NAN);
+            let grad_at_idx2 = grad_data.get(2 * 4 + d).copied().expect("index in range");
             assert!(
                 (grad_at_idx2 - 2.0).abs() < 1e-5,
                 "Expected grad ~2.0 for repeated index, got {grad_at_idx2}"
@@ -254,7 +250,7 @@ mod tests {
 
         // Indices 7 should have grad of 1.0 per dimension
         for d in 0..4 {
-            let grad_at_idx7 = grad_data.get(7 * 4 + d).copied().unwrap_or(f32::NAN);
+            let grad_at_idx7 = grad_data.get(7 * 4 + d).copied().expect("index in range");
             assert!(
                 (grad_at_idx7 - 1.0).abs() < 1e-5,
                 "Expected grad ~1.0 for single index, got {grad_at_idx7}"
