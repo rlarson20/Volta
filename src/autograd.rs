@@ -433,4 +433,53 @@ mod tests {
             .expect("one element");
         assert!(second > first, "second backward should add to the first");
     }
+
+    /// A reshape shares its input's buffer (copy-on-write storage), so an in-place
+    /// optimizer write to the input must copy first and leave the reshape's values alone.
+    #[test]
+    fn optimizer_write_does_not_leak_into_shared_reshape() {
+        crate::tensor::manual_seed(7);
+        let x = crate::tensor::randn(&[2, 3]);
+        x.set_requires_grad(true);
+        let y = x.reshape(&[3, 2]);
+        assert_eq!(
+            x.borrow().data.as_bytes().as_ptr(),
+            y.borrow().data.as_bytes().as_ptr(),
+            "reshape should share the buffer, or this test checks nothing"
+        );
+        let before = x.data();
+
+        x.elem_mul(&x).sum().into_loss().expect("scalar").backward();
+        let mut opt = crate::nn::optim::SGD::new(vec![x.clone()], 0.1, 0.0, 0.0);
+        opt.step();
+
+        assert_ne!(x.data(), before, "SGD step should have changed x");
+        assert_eq!(y.data(), before);
+    }
+
+    /// `x` reaches the loss along two paths (`x * x` and `x`), so its gradient is the
+    /// sum of both contributions: `2x + 1`.
+    #[test]
+    fn diamond_accumulates_both_paths() {
+        crate::tensor::manual_seed(11);
+        let x = crate::tensor::randn(&[5]);
+        x.set_requires_grad(true);
+
+        x.elem_mul(&x)
+            .add(&x)
+            .sum()
+            .into_loss()
+            .expect("scalar")
+            .backward();
+
+        let xs = x.data();
+        let grad = x.grad().expect("x has a gradient");
+        assert_eq!(grad.len(), xs.len());
+        for (g, v) in grad.iter().zip(&xs) {
+            assert!(
+                (g - 2.0f32.mul_add(*v, 1.0)).abs() < 1e-6,
+                "grad {g} at x={v}"
+            );
+        }
+    }
 }

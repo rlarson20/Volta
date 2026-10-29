@@ -18,7 +18,7 @@ Last verified: 2026-10-29.
 
 - [x] **H1** MaxPool2d padded with `0.0` instead of `-inf`. Fixed by `PadValue`: `pool_forward` calls `pad_with(.., PadValue::NEG_INF)`, and padding above half the kernel is rejected. Evidence: `maxpool::tests::test_maxpool2d_padding_never_beats_negative_input_h1_repro` (all-`-5` input, was `0.0`), `..._padding_routes_one_unit_per_output_to_real_input`, `..._padding_over_half_kernel_panics`; GPU parity in `tests/movement_backward_test.rs` (ran on a real adapter).
 - [x] **H2** `bce_with_logits_loss` now uses `max(x,0) - x*y + ln(1+exp(-|x|))`; `tests/bce_with_logits.rs` checks loss and gradient at ±100 and at x=0.
-- [~] **H3** Unsafe GPU cache accessors. `invalidate_cpu_cache` now takes `&mut self` (`991a8b7`). The `unsafe` slice accessors and the f64/f16/bf16 GPU reinterpretation remain. Fixed by `OnceCell` storage (Phase 3).
+- [~] **H3** Unsafe GPU cache accessors. `invalidate_cpu_cache` now takes `&mut self` (`991a8b7`). The `unsafe` slice accessors and the f64/f16/bf16 GPU reinterpretation remain. Fixed by `OnceCell` storage (Phase 3). Separately, GPU clones share one `Arc<GpuBuffer>` but each has its own host cache. The in-place GPU optimizer step (SGD/Adam) clears only the parameter's own cache, so a clone that read its host copy before the step keeps returning the old values. The optimizer also writes through `&Storage` into a buffer that clones still share, so a GPU snapshot does not keep its value the way a CPU one does under copy-on-write.
 - [ ] **H4** The library panics on ordinary data. Panic-vs-`Result` policy is undecided (see Rust/errors).
 - [ ] **H5** GPU broadcast backward silently truncates rank > 4. The param packing in `binary_backward_broadcast_safe` now panics on rank > 4 instead; the other GPU wrappers still truncate by design with `.take(4)`.
 - [x] **H6** TransformerBlock was decorative (parameterless `SimpleAttention`). It holds a real `MultiHeadAttention` now, `causal` is passed through, and `attention.*` state loads (DECISIONS.md, "Split layer traits").
@@ -33,7 +33,7 @@ Last verified: 2026-10-29.
 - [x] The vector matmul arms ((2,1), (1,2), (1,1)) in `ops/matmul.rs` wrote through `if let Some` and `unwrap_or(0.0)`. They use `fetch`/`slot` now, so an index bug panics. They are still not covered by `MatmulSpec` (2026-10-29).
 - [x] **CPU iGEMM was wrong for batch > 1** (found by the §8 conversion). `igemm_tiled`, `igemm_backward_weight`, and `igemm_backward_input` added the batch offset twice (`s_idx` already contains `b * spatial`), so for batch > 1 the forward wrote into the wrong place or past the end, and the backward weight/input read wrong or out-of-range gradients. The old `if let Some` / `unwrap_or(&0.0)` hid it, and every iGEMM correctness test used batch 1 while the batch > 1 tests checked only shapes. Fixed by using the within-sample offset. Regression: `conv2d_tests::test_conv2d_igemm_batch_gt_one_matches_direct` (seeded, weighted loss, matches Direct for output, input grad, and weight grad; each of the three fixes is individually guarded). Direct and im2col were unaffected (2026-10-29).
 - [ ] Integer shape/stride defaults (`shape.get(i).copied().unwrap_or(1)`, about 70 sites) are still silent defaults. Out of scope for the §8 pass (f32 data only), and they overlap the `Shape` field flip. `just check-fallbacks` also does not catch the multi-line `if let Some(&v) = x.get(i) { v } else { 0.0 }` form; none remain.
-- [ ] Every op deep-copies storage; broadcasts are materialized (no stride-0 views). Phase 3/4.
+- [~] Every op deep-copied storage. CPU snapshots (`data.clone()`) are now shared through copy-on-write `Arc<[u8]>` (DECISIONS.md, "CPU storage: `Arc<[u8]>` copy-on-write"). Op outputs still allocate, and broadcasts are still materialized (no stride-0 views). Phase 3/4.
 - [ ] im2col copies the whole tensor per kernel element (`to_vec` inside the `kw_idx` loop).
 - [ ] Conv input gradient scans all output positions per input pixel. It should iterate the ≤K² contributing positions.
 - [ ] GPU reductions are single-threaded (`workgroup_size(1)`); `gpu_max_reduce` reads back to CPU.
@@ -62,7 +62,7 @@ Last verified: 2026-10-29.
 ## Tests (OPUS §5)
 
 - [x] `assert_trainable!` exists for every parameterized layer, with a weighted loss and seeded random inputs (2026-10-26).
-- [ ] Add a regression test for multi-consumer (diamond) gradient accumulation.
+- [x] Add a regression test for multi-consumer (diamond) gradient accumulation: `autograd::tests::diamond_accumulates_both_paths` (`x*x + x`, random input, grad `2x + 1`).
 - [ ] Add a gradient test for `PositionalEncoding` (B3).
 - [ ] Remove example workarounds for broken components once the components are fixed.
   - `examples/char_transformer_model.rs` hand-rolls positional encoding (B3).
@@ -109,7 +109,7 @@ Last verified: 2026-10-29.
 
 - [x] Split traits `Module`/`Layer`/`IndexedLayer`/`RecurrentLayer` with trybuild tests (§3.1, §3.2). `IndexedLayer` and `RecurrentLayer` are sealed; `Module` and `Layer` stay open (DECISIONS.md, "Split layer traits"). Retires H6 and the Embedding panic. `LSTMCell::forward_step` is replaced by `RecurrentLayer::step`. `pkg/README.md` and `minigrad-react/src/wasm/README.md` are copies of the old README and still show `Module::forward`.
 - [ ] `DevicePolicy` (§2.1). Retires the silent GPU→CPU fallback.
-- [ ] Storage: `Arc` / `OnceCell` / no `Deref` (§7). Retires H3 and the clone economy. Matmul operand reads must materialize contiguous (DECISIONS.md, "Matmul layout: contiguous-only").
+- [~] Storage: `Arc` / `OnceCell` / no `Deref` (§7). CPU `Arc<[u8]>` copy-on-write is done (DECISIONS.md). The `OnceCell` GPU cache (H3) and the `Deref` removal are still open. Retires H3 and the clone economy. Matmul operand reads must materialize contiguous (DECISIONS.md, "Matmul layout: contiguous-only").
 - [ ] Flip `RawTensor.shape` to `Shape` and make `Tensor::shape()` return it. Moved here from Phase 2: it touches about 440 kernel reads of the field, the same sites the storage rewrite rewrites (DECISIONS.md, "Shape boundary").
 - [x] Indexing policy (§8): `crate::index::{fetch, slot, span}` panic on out of bounds in every profile (not NaN: DECISIONS.md, "Indexing policy"). All `unwrap_or(0.0)` and the positional `if let Some` reads and writes of f32 data are converted (library via the helpers, tests, examples, and benches via `.expect`), including `broadcast_to` / `sum_over_broadcast_dims`. `just check-fallbacks` (in `just ci` and pre-commit) keeps it that way. It also made `to_one_hot` and the GPU broadcast-backward param packing reject out-of-range input loudly. The integer shape defaults are a follow-up (Medium).
 - [x] Delete `TensorOps` (§3.4). The methods are inherent on `Tensor` (DECISIONS.md, "Delete `TensorOps`"). `pkg/README.md` and `minigrad-react/src/wasm/README.md` are separate copies of the old README and still mention it.

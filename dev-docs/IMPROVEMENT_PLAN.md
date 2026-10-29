@@ -49,7 +49,7 @@ Layer prefix matching uses `key.starts_with("{i}.")`. For an unnamed model with 
 
 ### P2 (smaller, real):
 
-- **`reshape` claims to be a view but deep-copies on CPU** (`src/ops/movement.rs:618-647`): the comment says "data stays in place," but `Storage::clone` on CPU copies the whole `Vec<u8>`. Misleading, and it matters because reshape is on every hot path (BatchNorm reshapes twice per forward).
+- **(Fixed: CPU storage is copy-on-write `Arc<[u8]>`, DECISIONS.md.)** **`reshape` claims to be a view but deep-copies on CPU** (`src/ops/movement.rs:618-647`): the comment says "data stays in place," but `Storage::clone` on CPU copies the whole `Vec<u8>`. Misleading, and it matters because reshape is on every hot path (BatchNorm reshapes twice per forward).
 - **Mixed-device binary ops silently produce CPU results** (`src/ops/binary.rs:607-688`): GPU⊕CPU inputs fall to the CPU path and the output stays on CPU, whereas `sum_dim`/`max_dim` move results back to the input device. Pick one policy (error on mixed devices, like PyTorch, is the honest one) and apply it everywhere.
 - **`try_new` hard-caps tensors at 100M elements and forbids zero-element tensors** (`src/tensor.rs:120-129`): arbitrary, undocumented in the API surface, and `broadcast_to` has its own separate 100M assert. A 100M-element tensor is 400 MB of f32 — legitimate for embeddings.
 - **`Adam::step_cpu_param` panics if a CPU parameter has a GPU gradient** (`expect("State should be CPU storage")`) — reachable through the P1-2 desync above.
