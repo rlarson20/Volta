@@ -664,30 +664,25 @@ mod misc_tests {
 
     #[test]
     fn test_batched_matmul() {
-        // (2, 2, 3) @ (2, 3, 2) -> (2, 2, 2)
-        let x = RawTensor::ones(&[2, 2, 3]);
-        let y = RawTensor::ones(&[2, 3, 2]);
+        // (2, 2, 3) @ (2, 3, 2) -> (2, 2, 2). Distinct, signed values per batch, so a
+        // swapped batch, a transposed operand, or a dropped batch offset changes the result
+        // (all-ones inputs gave 3.0 everywhere and could see none of them).
+        let x = RawTensor::new((1..=12).map(|v| v as f32).collect(), &[2, 2, 3], false);
+        let y = RawTensor::new(
+            vec![
+                1.0, -2.0, 3.0, 4.0, -5.0, 6.0, // batch 0
+                2.0, 0.0, -1.0, 3.0, 4.0, -2.0, // batch 1
+            ],
+            &[2, 3, 2],
+            false,
+        );
         let z = x.matmul(&y);
 
-        assert_eq!(z.borrow().shape, vec![2, 2, 2]);
-        // dot product of two [1,1,1] vecs is 3.0
+        assert_eq!(z.shape(), vec![2, 2, 2]);
+        // Computed independently (Python triple loop).
         assert_eq!(
-            z.borrow()
-                .data
-                .to_host_f32()
-                .first()
-                .copied()
-                .expect("tensor data should exist"),
-            3.0
-        );
-        assert_eq!(
-            z.borrow()
-                .data
-                .to_host_f32()
-                .get(7)
-                .copied()
-                .expect("tensor data should exist"),
-            3.0
+            z.data(),
+            vec![-8.0, 24.0, -11.0, 48.0, 42.0, 6.0, 57.0, 9.0]
         );
     }
     #[test]

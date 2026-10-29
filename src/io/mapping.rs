@@ -500,7 +500,9 @@ mod tests {
 
         assert!(mapped.contains_key("enc.fc.weight"));
         let weight = mapped.get("enc.fc.weight").unwrap();
-        assert_eq!(weight.shape, vec![2, 2]); // Transposed (but 2x2 is symmetric)
+        // The shape alone can't show a transpose of a square matrix; the data can.
+        assert_eq!(weight.shape, vec![2, 2]);
+        assert_eq!(weight.data, vec![1.0, 3.0, 2.0, 4.0]);
     }
 
     #[test]
