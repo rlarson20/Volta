@@ -26,8 +26,5 @@ fn main() {
     loss.clone().into_loss().expect("scalar loss").backward();
     optim.step();
 
-    println!(
-        "Loss: {:?}",
-        loss.data().first().copied().expect("index in range")
-    );
+    println!("Loss: {:?}", loss.item());
 }

@@ -84,7 +84,7 @@ fn main() {
 
         // Compute MSE loss
         let loss_tensor = mse_loss(&output, &high_res);
-        let loss_value = loss_tensor.data().first().copied().expect("index in range");
+        let loss_value = loss_tensor.item();
 
         // Backward pass
         optimizer.zero_grad();

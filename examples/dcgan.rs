@@ -192,7 +192,7 @@ fn main() {
 
             // Total discriminator loss
             let d_loss = d_loss_real.add(&d_loss_fake);
-            total_d_loss += d_loss.data().first().copied().expect("index in range");
+            total_d_loss += d_loss.item();
 
             d_loss.into_loss().expect("scalar loss").backward();
             d_optimizer.step();
@@ -208,7 +208,7 @@ fn main() {
             let d_fake = discriminator.forward(&fake_images);
             let g_loss = bce_with_logits_loss(&d_fake, &real_labels); // Use real labels
 
-            total_g_loss += g_loss.data().first().copied().expect("index in range");
+            total_g_loss += g_loss.item();
 
             g_loss.into_loss().expect("scalar loss").backward();
             g_optimizer.step();

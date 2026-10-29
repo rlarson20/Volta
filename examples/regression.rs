@@ -54,7 +54,7 @@ fn main() {
         progress.update(epoch + 1);
 
         if epoch % 100 == 99 {
-            let loss_val = loss.data().first().copied().expect("index in range");
+            let loss_val = loss.item();
             println!(" Loss = {loss_val:.6}");
         }
     }
@@ -63,10 +63,7 @@ fn main() {
     let final_pred = model.forward(&x);
     let final_loss = RawTensor::mse_loss(&final_pred, &y_true);
     println!("\n=== Training Complete ===");
-    println!(
-        "Final Loss: {:.6}",
-        final_loss.data().first().copied().expect("index in range")
-    );
+    println!("Final Loss: {:.6}", final_loss.item());
 
     // Show a few predictions
     println!("\nSample predictions:");

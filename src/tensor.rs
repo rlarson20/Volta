@@ -120,6 +120,27 @@ impl Tensor {
         self.inner.borrow().data.to_vec()
     }
 
+    /// The value of a single-element tensor, decoded to `f32` regardless of dtype/device.
+    ///
+    /// Use this to read a loss or any other scalar. It is stricter than
+    /// `data().first()`, which would quietly return the first of many elements.
+    ///
+    /// # Panics
+    ///
+    /// If the tensor does not hold exactly one element (a `[1, 1]` tensor is fine).
+    #[must_use]
+    #[track_caller]
+    pub fn item(&self) -> f32 {
+        match self.data().as_slice() {
+            [value] => *value,
+            other => panic!(
+                "item() needs a single-element tensor, got {} elements (shape {:?})",
+                other.len(),
+                self.inner.borrow().shape
+            ),
+        }
+    }
+
     /// The device this tensor's data lives on.
     #[must_use]
     pub fn device(&self) -> Device {
@@ -1614,6 +1635,27 @@ mod tensor_tests {
         assert_eq!(b.shape, vec![16, 3, 3, 3]);
         assert_eq!(b.data.len(), 16 * 3 * 3 * 3);
         assert!(b.data.iter().any(|v| v.abs() > 0.0));
+    }
+
+    /// `item` reads a rank-0-style `[1]` tensor and a `[1, 1]` tensor.
+    #[test]
+    fn test_item_reads_single_element() {
+        assert_eq!(RawTensor::new(vec![2.5], &[1], false).item(), 2.5);
+        assert_eq!(RawTensor::new(vec![-4.0], &[1, 1], false).item(), -4.0);
+    }
+
+    /// `item` of a reduction is the reduced value.
+    #[test]
+    fn test_item_of_sum() {
+        let t = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], false);
+        assert_eq!(t.sum().item(), 6.0);
+    }
+
+    /// `item` on a multi-element tensor panics instead of returning the first element.
+    #[test]
+    #[should_panic(expected = "single-element tensor")]
+    fn test_item_panics_on_multiple_elements() {
+        let _ = RawTensor::new(vec![1.0, 2.0], &[2], false).item();
     }
 }
 

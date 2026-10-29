@@ -56,14 +56,14 @@ fn test_sgd_momentum_logic() {
     // v = 0.9*0 - lr*grad = -0.1*0.1 = -0.01
     // w = 1.0 + (-0.01) = 0.99
     opt.step();
-    let val1 = t.data().first().copied().expect("index in range");
+    let val1 = t.item();
     assert!((val1 - 0.99).abs() < 1e-6);
 
     // Step 2:
     // v = 0.9*(-0.01) - 0.1*0.1 = -0.009 - 0.01 = -0.019
     // w = 0.99 + (-0.019) = 0.971
     opt.step();
-    let val2 = t.data().first().copied().expect("index in range");
+    let val2 = t.item();
     assert!((val2 - 0.971).abs() < 1e-6);
 }
 

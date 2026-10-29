@@ -4677,16 +4677,7 @@ mod reduce_ops_tests {
     #[test]
     fn sum_forward() {
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], false);
-        assert_relative_eq!(
-            x.sum()
-                .borrow()
-                .data
-                .first()
-                .copied()
-                .expect("index in range"),
-            10.0,
-            epsilon = 1e-6
-        );
+        assert_relative_eq!(x.sum().item(), 10.0, epsilon = 1e-6);
     }
 
     #[test]
@@ -4699,16 +4690,7 @@ mod reduce_ops_tests {
     #[test]
     fn mean_forward() {
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], false);
-        assert_relative_eq!(
-            x.mean()
-                .borrow()
-                .data
-                .first()
-                .copied()
-                .expect("index in range"),
-            2.5,
-            epsilon = 1e-6
-        );
+        assert_relative_eq!(x.mean().item(), 2.5, epsilon = 1e-6);
     }
 
     #[test]
@@ -4875,11 +4857,7 @@ mod matmul_tests {
         let b = RawTensor::new(vec![4.0, -1.0, 2.0], &[3], false);
         let z = a.matmul(&b);
         // 4 - 2 + 6 = 8; result is scalar shape
-        assert_relative_eq!(
-            z.borrow().data.first().copied().expect("index in range"),
-            8.0,
-            epsilon = 1e-6
-        );
+        assert_relative_eq!(z.item(), 8.0, epsilon = 1e-6);
     }
 
     #[test]

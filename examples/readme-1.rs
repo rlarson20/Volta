@@ -33,11 +33,7 @@ fn main() {
         let loss = mse_loss(&pred, &y);
 
         if epoch % 20 == 0 {
-            println!(
-                "Epoch {}: loss = {:.6}",
-                epoch,
-                loss.data().first().copied().expect("index in range")
-            );
+            println!("Epoch {}: loss = {:.6}", epoch, loss.item());
         }
 
         loss.into_loss().expect("scalar loss").backward();

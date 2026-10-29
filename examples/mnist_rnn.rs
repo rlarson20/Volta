@@ -172,7 +172,7 @@ fn main() {
             loss.clone().into_loss().expect("scalar loss").backward();
             optimizer.step();
 
-            epoch_loss += loss.data().first().copied().expect("index in range");
+            epoch_loss += loss.item();
             num_batches += 1;
             progress.update(num_batches);
         }

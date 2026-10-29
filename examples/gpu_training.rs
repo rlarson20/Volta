@@ -184,21 +184,17 @@ fn train_model(model: &Sequential, opt: &mut Adam, x: &Tensor, y: &Tensor, epoch
         let loss = mse_loss(&predictions, y);
 
         if epoch == 0 {
-            initial_loss = loss.data().first().copied().expect("index in range");
+            initial_loss = loss.item();
         }
         if epoch == epochs - 1 {
-            final_loss = loss.data().first().copied().expect("index in range");
+            final_loss = loss.item();
         }
 
         loss.clone().into_loss().expect("scalar loss").backward();
         opt.step();
 
         if epoch % 20 == 0 {
-            println!(
-                "  Epoch {:>3}: Loss = {:.6}",
-                epoch,
-                loss.data().first().copied().expect("index in range")
-            );
+            println!("  Epoch {:>3}: Loss = {:.6}", epoch, loss.item());
         }
     }
 

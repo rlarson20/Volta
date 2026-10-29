@@ -55,7 +55,7 @@ fn main() {
         opt.step();
 
         if epoch % 20 == 0 {
-            let loss_val = loss.data().first().copied().expect("index in range");
+            let loss_val = loss.item();
             println!("Epoch {epoch:>3}: Loss = {loss_val:.6}");
         }
     }

@@ -292,7 +292,7 @@ fn main() {
             loss.clone().into_loss().expect("scalar loss").backward();
             optimizer.step();
 
-            epoch_loss += loss.data().first().copied().expect("index in range");
+            epoch_loss += loss.item();
         }
 
         let avg_loss = epoch_loss / num_batches as f32;
