@@ -51,12 +51,30 @@ impl RawTensor {
         result
     }
 
-    // Helper: raw matmul computation
     /// Raw matrix multiplication: (m,k) @ (k,n) -> (m,n)
     /// Uses `cblas_sgemm` on macOS, `matrixmultiply::sgemm` elsewhere
+    ///
+    /// Layout contract (DECISIONS.md, "Matmul layout: contiguous-only"): `a` is a dense
+    /// row-major m×k buffer and `b` a dense row-major k×n buffer. There are no strides, so
+    /// a transposed or sliced view must be made contiguous before it gets here.
+    ///
+    /// # Panics
+    /// `a.len() != m * k`, `b.len() != k * n`, or a dimension that does not fit in `i32`
+    /// (cblas path only)
     #[must_use]
-    #[allow(clippy::many_single_char_names)]
-    pub fn matmul_raw(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
+    #[allow(clippy::many_single_char_names, reason = "Numerical code")]
+    pub(crate) fn matmul_raw(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
+        assert_eq!(
+            a.len(),
+            m * k,
+            "matmul_raw: A has the wrong length for ({m},{k})"
+        );
+        assert_eq!(
+            b.len(),
+            k * n,
+            "matmul_raw: B has the wrong length for ({k},{n})"
+        );
+
         #[cfg(all(feature = "accelerate", target_os = "macos"))]
         {
             unsafe extern "C" {
@@ -78,24 +96,25 @@ impl RawTensor {
                 );
             }
 
+            let dim = |x: usize| i32::try_from(x).expect("matmul dim exceeds i32");
+            let (mi, ki, ni) = (dim(m), dim(k), dim(n));
             let mut result = vec![0.0; m * n];
-            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
             unsafe {
                 cblas_sgemm(
                     101, // CblasRowMajor
                     111, // CblasNoTrans
                     111, // CblasNoTrans
-                    m as i32,
-                    n as i32,
-                    k as i32,
+                    mi,
+                    ni,
+                    ki,
                     1.0,
                     a.as_ptr(),
-                    k as i32,
+                    ki,
                     b.as_ptr(),
-                    n as i32,
+                    ni,
                     0.0,
                     result.as_mut_ptr(),
-                    n as i32,
+                    ni,
                 );
             }
             result
@@ -657,6 +676,103 @@ mod tests {
     fn test_matmul_batch_dim_broadcast_on_one_side_gradients() {
         assert_matmul_gradients(&[1, 3, 4], &[2, 4, 5]);
         assert_matmul_gradients(&[2, 3, 4], &[1, 4, 5]);
+    }
+
+    /// Naive row-major (m,k) @ (k,n) reference, independent of `matmul_raw`.
+    fn reference_matmul(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
+        a.chunks_exact(k)
+            .take(m)
+            .flat_map(|row| {
+                (0..n).map(move |j| {
+                    row.iter()
+                        .zip(b.iter().skip(j).step_by(n))
+                        .map(|(x, y)| x * y)
+                        .sum()
+                })
+            })
+            .collect()
+    }
+
+    fn assert_close(actual: &[f32], expected: &[f32], what: &str) {
+        assert_eq!(actual.len(), expected.len(), "{what}: length");
+        for (i, (x, y)) in actual.iter().zip(expected).enumerate() {
+            assert!((x - y).abs() <= 1e-4, "{what}: index {i}: {x} vs {y}");
+        }
+    }
+
+    // The three tests below are the fence for the contiguous-only contract: they pass today
+    // because transpose/permute copy, and start guarding it once those return views.
+
+    #[test]
+    fn matmul_of_transposed_operand_matches_reference() {
+        crate::tensor::manual_seed(0xA11C);
+        // Non-square on every side so a cancelling transpose bug cannot hide.
+        let a = randn(&[3, 4]);
+        let b = randn(&[5, 4]);
+        let out = a.matmul(&b.transpose());
+        assert_eq!(out.shape(), vec![3, 5]);
+
+        let b_t = RawTensor::transpose_2d(&b.data(), &[5, 4]);
+        let expected = reference_matmul(&a.data(), &b_t, 3, 4, 5);
+        assert_close(&out.data(), &expected, "a @ b^T");
+
+        let double = a.transpose().transpose().matmul(&b.transpose());
+        assert_close(&double.data(), &expected, "(a^T)^T @ b^T");
+    }
+
+    #[test]
+    fn matmul_of_permuted_batched_operand_matches_reference() {
+        use crate::shape::Axis;
+
+        crate::tensor::manual_seed(0xBA7C);
+        let (batch, m, k, n) = (2, 3, 4, 5);
+        let a = randn(&[batch, m, k]);
+        let b = randn(&[batch, n, k]);
+        let out = a.matmul(&b.permute(&[Axis(0), Axis(2), Axis(1)]));
+        assert_eq!(out.shape(), vec![batch, m, n]);
+
+        let (a_data, b_data) = (a.data(), b.data());
+        let mut expected = Vec::new();
+        for (a_slice, b_slice) in a_data.chunks_exact(m * k).zip(b_data.chunks_exact(n * k)) {
+            let b_t = RawTensor::transpose_2d(b_slice, &[n, k]);
+            expected.extend(reference_matmul(a_slice, &b_t, m, k, n));
+        }
+        assert_close(&out.data(), &expected, "batched a @ permute(b)");
+    }
+
+    #[test]
+    fn test_matmul_through_transpose_gradients() {
+        crate::tensor::manual_seed(0x7A25);
+        let a = operand(&[3, 4]);
+        let b = operand(&[5, 4]);
+        let w = randn(&[3, 5]);
+
+        let (max_a, mean_a, ok_a) = RawTensor::check_gradients(
+            &a,
+            |t| t.matmul(&b.transpose()).elem_mul(&w).sum(),
+            1e-2,
+            2e-2,
+        );
+        assert!(ok_a, "grad wrt A failed: max={max_a:.3e} mean={mean_a:.3e}");
+        let (max_b, mean_b, ok_b) = RawTensor::check_gradients(
+            &b,
+            |t| a.matmul(&t.transpose()).elem_mul(&w).sum(),
+            1e-2,
+            2e-2,
+        );
+        assert!(ok_b, "grad wrt B failed: max={max_b:.3e} mean={mean_b:.3e}");
+    }
+
+    #[test]
+    #[should_panic(expected = "A has the wrong length")]
+    fn matmul_raw_rejects_short_a() {
+        let _ = RawTensor::matmul_raw(&[1.0; 5], &[1.0; 6], 2, 3, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "B has the wrong length")]
+    fn matmul_raw_rejects_long_b() {
+        let _ = RawTensor::matmul_raw(&[1.0; 6], &[1.0; 7], 2, 3, 2);
     }
 
     #[test]

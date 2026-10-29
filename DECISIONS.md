@@ -306,6 +306,20 @@ A size silently defaulting to 1 is the same class as `.get(i).unwrap_or(0.0)` (i
 
 **`backward` can be called twice.** It takes `&self` and accumulates, as before. `set_requires_grad(false)` on another handle after `into_loss` is the only way to break the check, and `run_backward` has a `debug_assert!` for it.
 
+## Traits and Storage (ADDENDUM Phase 3)
+
+### Matmul layout: contiguous-only
+
+**Decision:** matmul only ever sees dense row-major operands. `matmul_raw` is `pub(crate)`, documents that contract, and asserts `a.len() == m*k` and `b.len() == k*n`. The same assumption holds in the vector forms, the batched `chunks_exact` slicing, the CPU backward, and the GPU forward and backward kernels. When storage gains strides, the public `matmul` makes a view contiguous before computing; it does not panic on one, because `x.t().matmul(y)` is ordinary usage.
+
+Choke points for whoever lands views: the operand reads in `RawTensor::matmul` (`s.data.clone()`, `o.data.clone()`) and in `MatMulGradFn::backward` (`x.data`, `y.data`, `out_grad.data`) must go through a contiguous materialization.
+
+**Rejected:** a strided `MatmulSpec` carrying per-operand `(rs, cs)`. It cannot be tested until views exist, so the bounds check and the strides would be written against nothing real. On the default macOS build `cblas_sgemm` takes only `lda`, so it would also mean two backends with different copy behaviour behind one API. Contiguous-only is the restrictive option, so widening it later is additive; the reverse is not.
+
+**Consequence:** the `transpose_2d` copies in backward and the materialized batch broadcasts stay. That costs speed, not correctness. The contract is vacuously true today, so `matmul_of_transposed_operand_matches_reference`, `matmul_of_permuted_batched_operand_matches_reference`, and `test_matmul_through_transpose_gradients` pass now and are the fence that starts guarding it when `transpose`/`permute` return views.
+
+**Likely next step, only if profiling shows the backward copies matter:** a per-operand transpose flag (`CblasTrans` on cblas, swapped strides on `matrixmultiply`). Not checked against the call sites.
+
 ## Concurrency and Async
 
 ### Stay synchronous

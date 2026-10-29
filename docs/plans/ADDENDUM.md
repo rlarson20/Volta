@@ -483,6 +483,8 @@ Every hidden GPU→CPU sync (today invisible behind `data.iter()`) and every hid
 - **Contiguous-only:** `matmul` asserts contiguity and materializes otherwise. Simple, and keeps today's `transpose_2d` copies in the backward pass.
 - **Strided:** `MatmulSpec` carries per-operand `(rs, cs)` and passes them to `matrixmultiply::sgemm`, which already takes a row and column stride per operand. That is more general than `lda`: a transpose is swapped strides with no copy, which retires the backward pass's `transpose_2d` copies and the materialized batch broadcasts. Bounds-check `(rows-1)*rs + (cols-1)*cs < len` in the spec. Accelerate's `cblas_sgemm` only takes `lda`, so views that are not a plain row-major sub-tile need a copy on that path.
 
+**Decided: contiguous-only** (DECISIONS.md, "Matmul layout: contiguous-only").
+
 Either way, `matmul_raw` stops being a safe `pub fn` over raw slices: make it `pub(crate)`, or assert slice lengths against the spec. A strided reference GEMM under `#[cfg(test)]` (§10) is the oracle for both options.
 
 ---

@@ -102,11 +102,11 @@ Last verified: 2026-10-28.
 
 - [ ] Sealed and split traits with trybuild tests (§3). Retires H6 and the Embedding panic.
 - [ ] `DevicePolicy` (§2.1). Retires the silent GPU→CPU fallback.
-- [ ] Storage: `Arc` / `OnceCell` / no `Deref` (§7). Retires H3 and the clone economy.
+- [ ] Storage: `Arc` / `OnceCell` / no `Deref` (§7). Retires H3 and the clone economy. Matmul operand reads must materialize contiguous (DECISIONS.md, "Matmul layout: contiguous-only").
 - [ ] Flip `RawTensor.shape` to `Shape` and make `Tensor::shape()` return it. Moved here from Phase 2: it touches about 440 kernel reads of the field, the same sites the storage rewrite rewrites (DECISIONS.md, "Shape boundary").
 - [ ] Indexing policy plus `fetch` (NaN, not zero) (§8). Retires the silent-zero class, including the `broadcast_to` / `sum_over_broadcast_dims` zero-fill that kept B4 silent.
 - [ ] Delete `TensorOps` (§3).
-- [ ] Matmul layout contract (ADDENDUM §7, "Matmul under views"). Decide before views land: `matmul` requires contiguous inputs and asserts it, or `MatmulSpec` carries per-operand `(rs, cs)` passed straight to `matrixmultiply` with a bounds check `(rows-1)*rs + (cols-1)*cs < len`. Today `matmul_raw` hardcodes `lda = k`, `ldb = n`, `ldc = n`, which silently computes the wrong product on a transposed or sliced view.
+- [x] Matmul layout contract (ADDENDUM §7, "Matmul under views"): contiguous-only (DECISIONS.md, "Matmul layout: contiguous-only"). `matmul_raw` is `pub(crate)` and asserts operand lengths; fence tests pass today and guard it once views land.
 
 ## Phase 4 — endgame (optional, last)
 
