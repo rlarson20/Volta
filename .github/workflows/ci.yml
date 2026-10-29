@@ -7,8 +7,9 @@ on:
 jobs:
   # Honest "no default features" lane. Everything here is CPU-only; the `gpu`
   # feature is excluded from every step (wgpu is heavy and cannot run on
-  # GPU-less Linux runners). This lane is expected to stay red until bug B5
-  # (CPU-only build does not compile, see notes/TODO.md) is fixed.
+  # GPU-less Linux runners). The CPU-only build compiles and tests (B5 is fixed),
+  # but this lane stays red on the clippy step until the CPU-only clippy errors
+  # in notes/TODO.md are fixed.
   cpu-only:
     runs-on: ubuntu-latest
     strategy:
@@ -25,14 +26,13 @@ jobs:
         with:
           tool: cargo-hack
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      - uses: Swatinem/rust-cache@v2
 
       - name: Check formatting
         run: cargo fmt --check
+
+      - name: Check silent fallbacks
+        run: ./scripts/check-fallbacks.sh
 
       - name: Clippy (no default features)
         run: cargo clippy --no-default-features --all-targets -- -D warnings
@@ -40,10 +40,9 @@ jobs:
       - name: Test (no default features)
         run: cargo test --no-default-features
 
-      - name: Doc tests (no default features)
-        run: cargo test --doc --no-default-features
-
       - name: Build docs (no default features)
+        env:
+          RUSTDOCFLAGS: -D warnings
         run: cargo doc --no-deps --no-default-features
 
       # Feature-combination rot check. `--feature-powerset` includes the
@@ -71,11 +70,7 @@ jobs:
         with:
           tool: cargo-hack
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      - uses: Swatinem/rust-cache@v2
 
       - name: Clippy (all features)
         run: cargo clippy --all-targets --all-features -- -D warnings
@@ -83,10 +78,9 @@ jobs:
       - name: Test (all features)
         run: cargo test --all-features
 
-      - name: Doc tests (all features)
-        run: cargo test --doc --all-features
-
       - name: Build docs (all features)
+        env:
+          RUSTDOCFLAGS: -D warnings
         run: cargo doc --no-deps --all-features
 
       - name: cargo-hack feature powerset

@@ -5,7 +5,7 @@
 /// bugs from Part I (ADDENDUM.md §5.3): a layer whose output is silently disconnected
 /// from a parameter's autograd graph looks fine at a glance but never trains.
 ///
-/// `$input` must be non-degenerate — use [`crate::macros::trainable_input`]. Constant
+/// `$input` must be non-degenerate — use `crate::macros::trainable_input`. Constant
 /// inputs make tokens/features identical, which zeroes gradients mathematically for
 /// normalization and attention layers (`LayerNorm` gamma, attention Q/K projections).
 ///

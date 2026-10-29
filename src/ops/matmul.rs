@@ -156,7 +156,7 @@ impl RawTensor {
     /// - (n,) @ (n,p) -> (p,)    [vector-matrix]
     /// - (n,) @ (n,) -> scalar   [dot product]
     /// # Panics
-    /// Dimension mismatch, or matrix operands of unequal rank (see [`MatmulSpec`])
+    /// Dimension mismatch, or matrix operands of unequal rank (see `MatmulSpec`)
     #[must_use]
     pub fn matmul(self_t: &Tensor, other: &Tensor) -> Tensor {
         let (data_a, shape_a) = {
