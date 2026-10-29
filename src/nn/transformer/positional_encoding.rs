@@ -3,7 +3,6 @@ use crate::index::fetch;
 use crate::io::StateDict;
 use crate::nn::Module;
 use crate::nn::layers::embedding::Embedding;
-use crate::tensor::TensorOps;
 use crate::tensor::{RawTensor, Tensor};
 
 /// Positional encoding type
@@ -105,7 +104,7 @@ impl PositionalEncoding {
         }
 
         let encoding = RawTensor::new(encoding_data, &[max_len, embed_dim], false);
-        TensorOps::to_device(&encoding, device)
+        encoding.to_device(device)
     }
 
     /// Add positional encoding to input embeddings
@@ -143,7 +142,7 @@ impl PositionalEncoding {
                 let embed_dim = *input_shape.get(2).unwrap();
 
                 // Slice encoding to match sequence length: [max_len, embed_dim] -> [seq_len, embed_dim]
-                let enc_slice = TensorOps::shrink(enc, &[(0, seq_len), (0, embed_dim)]);
+                let enc_slice = enc.shrink(&[(0, seq_len), (0, embed_dim)]);
 
                 // Add encoding to each batch element individually
                 // Process each batch slice as [seq_len, embed_dim]

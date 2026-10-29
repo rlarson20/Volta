@@ -21,7 +21,7 @@ This project is an educational endeavor to demystify the inner workings of moder
 
 - **Dynamic Computation Graph:** Build and backpropagate through graphs on the fly, just like PyTorch.
 - **Reverse-Mode Autodiff:** Efficient reverse-mode automatic differentiation with topological sorting.
-- **Rich Tensor Operations:** A comprehensive set of unary, binary, reduction, and matrix operations via an ergonomic `TensorOps` trait.
+- **Rich Tensor Operations:** A comprehensive set of unary, binary, reduction, and matrix operations as methods on `Tensor`.
 - **Broadcasting:** Full NumPy-style broadcasting support for arithmetic operations.
 - **Neural Network Layers:** `Linear`, `Conv2d`, `ConvTranspose2d`, `MaxPool2d`, `Embedding`, `LSTMCell`, `PixelShuffle`, `LayerNorm`, `Flatten`, `ReLU`, `GELU`, `Sigmoid`, `Tanh`, `Dropout`, `BatchNorm1d`, `BatchNorm2d`.
 - **Optimizers:** `SGD` (momentum + weight decay), `Adam` (bias-corrected + weight decay), and experimental `Muon`.
@@ -152,7 +152,7 @@ Here's how to define a simple Multi-Layer Perceptron (MLP) with named layers, tr
 
 ```rust
 use volta::{
-    Adam, Sequential, TensorOps, io,
+    Adam, Sequential, io,
     nn::{Linear, Module, ReLU},
     tensor::{RawTensor, mse_loss},
 };
@@ -214,7 +214,6 @@ The following utilizes the current API to define a training-ready CNN.
 ```rust
 use volta::{Sequential, Conv2d, MaxPool2d, Flatten, Linear, ReLU, Adam};
 use volta::nn::Module;
-use volta::TensorOps;
 
 fn main() {
     // 1. Define Model
@@ -298,7 +297,7 @@ See `examples/load_external_mnist.rs` for a complete end-to-end example with val
 ### GPU Acceleration Example
 
 ```rust
-use volta::{Device, TensorOps, randn};
+use volta::{Device, randn};
 
 fn main() {
     // Create tensors on CPU
@@ -325,7 +324,7 @@ fn main() {
 The library is designed around a few core concepts:
 
 - **`Tensor`**: The central data structure, an `Rc<RefCell<RawTensor>>`, which holds data, shape, gradient information, and device location. Supports multiple data types (f32, f16, bf16, f64, i32, i64, u8, bool).
-- **`TensorOps`**: A trait implemented for `Tensor` that provides the ergonomic, user-facing API for all operations (e.g., `tensor.add(&other)`, `tensor.matmul(&weights)`).
+- **Tensor methods**: `Tensor` has inherent methods for all operations (e.g., `tensor.add(&other)`, `tensor.matmul(&weights)`); there is no trait to import.
 - **`nn::Module`**: A trait for building neural network layers and composing them into larger models. Provides `forward()`, `parameters()`, `state_dict()`, `load_state_dict()`, and `to_device()` methods.
 - **`Sequential::builder()`**: Builder pattern for composing layers with named parameters for robust serialization. Supports both `add_named()` for human-readable state dict keys and `add_unnamed()` for activation layers.
 - **Optimizers (`Adam`, `SGD`, `Muon`)**: Structures that take a list of model parameters and update their weights based on computed gradients during `step()`.

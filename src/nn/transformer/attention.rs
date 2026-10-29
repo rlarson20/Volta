@@ -1,5 +1,4 @@
 use crate::shape::Axis;
-use crate::tensor::TensorOps;
 use crate::tensor::{RawTensor, Tensor};
 
 /// Scaled Dot-Product Attention

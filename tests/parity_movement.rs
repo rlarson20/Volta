@@ -15,7 +15,6 @@ use common::{
 };
 use volta::Axis;
 use volta::Device;
-use volta::tensor::TensorOps;
 
 // ---------------------------------------------------------------------------
 // transpose
@@ -136,7 +135,7 @@ fn permute_backward_parity() {
 }
 
 // ---------------------------------------------------------------------------
-// flatten  (via reshape, since TensorOps has no standalone flatten method)
+// flatten  (via reshape, since Tensor has no standalone flatten method)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -181,6 +180,6 @@ fn flatten_backward_parity() {
 }
 
 // ---------------------------------------------------------------------------
-// pow — not available in TensorOps; no `pow` method exists on Tensor.
+// pow — not available; no `pow` method exists on Tensor.
 // Skipping as the operation is not implemented in the framework.
 // ---------------------------------------------------------------------------

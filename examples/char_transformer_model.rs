@@ -21,7 +21,7 @@
 
 use std::collections::HashMap;
 use volta::{
-    Adam, Embedding, LayerNorm, RawTensor, TensorOps,
+    Adam, Embedding, LayerNorm, RawTensor,
     nn::{
         Module,
         transformer::{FeedForward, MultiHeadAttention},

@@ -69,7 +69,7 @@ pub fn is_gpu_available() -> bool {
 /// # Example
 ///
 /// ```ignore
-/// use volta::{gpu_sync, RawTensor, TensorOps, Device};
+/// use volta::{gpu_sync, RawTensor, Device};
 ///
 /// // Run many GPU operations
 /// for _ in 0..100 {
@@ -96,7 +96,7 @@ pub fn gpu_sync() -> bool {
 /// # Example
 ///
 /// ```ignore
-/// use volta::{gpu_pending_count, RawTensor, TensorOps, Device};
+/// use volta::{gpu_pending_count, RawTensor, Device};
 ///
 /// let t = tensor.to_device(Device::gpu().unwrap());
 /// let _ = t.relu();
@@ -246,7 +246,7 @@ pub fn gpu_pool_stats() -> Option<(usize, usize)> {
 /// # Example
 ///
 /// ```ignore
-/// use volta::{Device, TensorOps, Tensor, gpu::invalidate_all_tensor_caches};
+/// use volta::{Device, Tensor, gpu::invalidate_all_tensor_caches};
 ///
 /// let a = tensor.to_device(Device::gpu().unwrap());
 /// let b = tensor.to_device(Device::gpu().unwrap());

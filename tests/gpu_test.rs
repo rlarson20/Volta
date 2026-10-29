@@ -6,7 +6,7 @@ use volta::gpu;
 #[cfg(all(test, feature = "gpu"))]
 mod gpu_tests {
     use super::*;
-    use volta::{Device, RawTensor, TensorOps};
+    use volta::{Device, RawTensor};
 
     #[test]
     fn test_gpu_available() {

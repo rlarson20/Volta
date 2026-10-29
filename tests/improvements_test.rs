@@ -188,7 +188,7 @@ fn test_broadcast_safety_improvements() {
         let a = RawTensor::new(vec![1.0, 2.0], &[2], true);
         let b = RawTensor::new(vec![3.0, 4.0], &[2], true);
         let _ = RawTensor::broadcast_shape(&[2], &[3]); // Incompatible
-        a.add(&b);
+        let _ = a.add(&b);
     });
     // Should handle gracefully
 }

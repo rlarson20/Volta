@@ -22,7 +22,7 @@ To add a new tensor operation:
 
 4. **Implement backward pass** by creating a GradFn struct that implements the `GradFn` trait
 
-5. **Add TensorOps wrapper** in `src/tensor.rs` that calls the appropriate helper function
+5. **Add an inherent method** on `Tensor` in `src/tensor.rs` that forwards to the helper function, with a doc comment and `#[must_use]`
 
 6. **Add gradient check test** in `src/lib.rs` to verify correctness
 

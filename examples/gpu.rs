@@ -1,7 +1,7 @@
 //! Moves two 1000x1000 random tensors to the GPU, multiplies them there, and copies the product back to the CPU.
 //!
 //! Prints a message first saying whether a GPU is available (checked only with the `gpu` feature).
-use volta::{Device, RawTensor, TensorOps};
+use volta::{Device, RawTensor};
 
 fn main() {
     // Check if GPU is available

@@ -4,9 +4,7 @@
 //! by stressing the command queue with various workload patterns.
 #[cfg(feature = "gpu")]
 mod gpu_stress_tests {
-    use volta::{
-        Device, RawTensor, TensorOps, gpu, gpu_pending_count, gpu_sync, gpu_sync_threshold,
-    };
+    use volta::{Device, RawTensor, gpu, gpu_pending_count, gpu_sync, gpu_sync_threshold};
 
     /// Helper to create a test tensor on GPU
     ///

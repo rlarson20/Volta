@@ -1,6 +1,6 @@
 use crate::io::StateDict;
 use crate::nn::Module;
-use crate::tensor::{RawTensor, Tensor, TensorOps};
+use crate::tensor::{RawTensor, Tensor};
 use rand::Rng;
 
 pub struct Dropout {

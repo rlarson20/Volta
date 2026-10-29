@@ -2,7 +2,7 @@ use crate::index::{fetch, slot};
 use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
 use crate::shape::Axis;
-use crate::tensor::{RawTensor, Tensor, TensorOps};
+use crate::tensor::{RawTensor, Tensor};
 
 pub struct BatchNorm2d {
     num_features: usize,

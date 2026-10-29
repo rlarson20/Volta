@@ -579,7 +579,7 @@ impl MatMulGradFn {
 #[cfg(test)]
 mod tests {
     use crate::spec::MatmulSpec;
-    use crate::tensor::{RawTensor, Tensor, TensorOps, randn};
+    use crate::tensor::{RawTensor, Tensor, randn};
 
     /// Runs `f` and returns the panic message, failing if it does not panic.
     fn panic_message(f: impl FnOnce() -> Tensor) -> String {

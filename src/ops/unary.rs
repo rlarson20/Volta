@@ -149,7 +149,7 @@ impl RawTensor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tensor::{TensorOps as _, check_gradients, manual_seed, randn};
+    use crate::tensor::{check_gradients, manual_seed, randn};
 
     /// Inputs inside each op's domain, away from kinks (`ReLU` at 0) and poles.
     fn domain_input(op: UnaryOp) -> Tensor {

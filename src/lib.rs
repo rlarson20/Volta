@@ -65,7 +65,7 @@ pub use nn::{
     LayerNorm, Linear, MaxPool2d, Module, PixelShuffle, ReLU, SGD, Sequential, SequentialBuilder,
     Sigmoid, Tanh,
 };
-pub use tensor::{RawTensor, Tensor, TensorOps};
+pub use tensor::{RawTensor, Tensor};
 
 // Main entry points
 
@@ -961,12 +961,12 @@ mod misc_tests {
     fn test_gradcheck_reduce_ops() {
         // Test mean gradient
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], true);
-        let passed = RawTensor::check_gradients_simple(&x, super::tensor::TensorOps::mean);
+        let passed = RawTensor::check_gradients_simple(&x, Tensor::mean);
         assert!(passed, "Mean gradient check failed");
 
         // Test max gradient (more challenging due to discontinuity)
         let x = RawTensor::new(vec![1.0, 5.0, 3.0, 2.0], &[4], true);
-        let passed = RawTensor::check_gradients_simple(&x, super::tensor::TensorOps::max_reduce);
+        let passed = RawTensor::check_gradients_simple(&x, Tensor::max_reduce);
         assert!(passed, "Max gradient check failed");
     }
 
@@ -1811,7 +1811,7 @@ mod edge_case_tests {
     fn test_reshape_invalid_size() {
         // Attempt to reshape 6-element tensor to shape requiring 8 elements
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[6], false);
-        x.reshape(&[2, 4]); // 2*4 = 8, but we have 6 elements
+        let _ = x.reshape(&[2, 4]); // 2*4 = 8, but we have 6 elements
     }
 
     #[test]
@@ -1825,7 +1825,7 @@ mod edge_case_tests {
             &[3, 4],
             false,
         );
-        x.reshape(&[2, 3]); // 2*3 = 6, but we have 12 elements
+        let _ = x.reshape(&[2, 3]); // 2*3 = 6, but we have 12 elements
     }
 
     // Note: Zero-sized reshape doesn't panic because product of [0, 6] is 0,
@@ -1836,7 +1836,7 @@ mod edge_case_tests {
     fn test_reshape_zero_dimension() {
         // Attempt to reshape to shape with zero dimension
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
-        x.reshape(&[0, 6]); // Product is 0, doesn't match 6 elements
+        let _ = x.reshape(&[0, 6]); // Product is 0, doesn't match 6 elements
     }
 
     // ===== PERMUTE INVALID AXES TESTS =====
@@ -1850,7 +1850,7 @@ mod edge_case_tests {
             &[2, 2, 2],
             false,
         );
-        x.permute(&[Axis(0), Axis(1)]); // Missing third axis
+        let _ = x.permute(&[Axis(0), Axis(1)]); // Missing third axis
     }
 
     #[test]
@@ -1858,7 +1858,7 @@ mod edge_case_tests {
     fn test_permute_wrong_length_too_long() {
         // Attempt to permute rank-2 tensor with 3 axes
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
-        x.permute(&[Axis(0), Axis(1), Axis(2)]); // Too many axes for rank-2 tensor
+        let _ = x.permute(&[Axis(0), Axis(1), Axis(2)]); // Too many axes for rank-2 tensor
     }
 
     #[test]
@@ -1866,7 +1866,7 @@ mod edge_case_tests {
     fn test_permute_out_of_bounds_axis() {
         // Attempt to permute with axis exceeding tensor rank
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
-        x.permute(&[Axis(0), Axis(5)]); // Axis 5 doesn't exist in rank-2 tensor
+        let _ = x.permute(&[Axis(0), Axis(5)]); // Axis 5 doesn't exist in rank-2 tensor
     }
 
     #[test]
@@ -1874,7 +1874,7 @@ mod edge_case_tests {
     fn test_permute_duplicate_axes() {
         // Attempt to permute with duplicate axes
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
-        x.permute(&[Axis(0), Axis(0)]); // Axis 0 appears twice
+        let _ = x.permute(&[Axis(0), Axis(0)]); // Axis 0 appears twice
     }
 
     #[test]
@@ -1886,7 +1886,7 @@ mod edge_case_tests {
             &[2, 2, 2],
             false,
         );
-        x.permute(&[Axis(0), Axis(1), Axis(3)]); // Axis 3 doesn't exist (should be 0, 1, 2)
+        let _ = x.permute(&[Axis(0), Axis(1), Axis(3)]); // Axis 3 doesn't exist (should be 0, 1, 2)
     }
 
     // ===== PAD INVALID SIZE TESTS =====
@@ -1896,7 +1896,7 @@ mod edge_case_tests {
     fn test_pad_wrong_length_too_short() {
         // Attempt to pad rank-2 tensor with only 1 dimension of padding
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
-        x.pad_with(&[(1, 1)], PadValue::ZERO); // Missing padding for second dimension
+        let _ = x.pad_with(&[(1, 1)], PadValue::ZERO); // Missing padding for second dimension
     }
 
     #[test]
@@ -1904,7 +1904,7 @@ mod edge_case_tests {
     fn test_pad_wrong_length_too_long() {
         // Attempt to pad rank-2 tensor with 3 dimensions of padding
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
-        x.pad_with(&[(1, 1), (1, 1), (1, 1)], PadValue::ZERO); // Too many padding specifications
+        let _ = x.pad_with(&[(1, 1), (1, 1), (1, 1)], PadValue::ZERO); // Too many padding specifications
     }
 
     #[test]
@@ -1914,7 +1914,7 @@ mod edge_case_tests {
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
         // This would create a tensor with (2 + 5000) * (2 + 5000) = ~25M elements
         // To exceed 100M, we need even larger padding
-        x.pad_with(&[(50000, 50000), (50000, 50000)], PadValue::ZERO); // Way over 100M elements
+        let _ = x.pad_with(&[(50000, 50000), (50000, 50000)], PadValue::ZERO); // Way over 100M elements
     }
 
     // ===== AXIS BOUNDS TESTS =====
@@ -2226,7 +2226,7 @@ mod edge_case_tests {
 
         // Invalid ranges should panic
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            x.shrink(&[(0, 2), (0, 10)]); // end exceeds dimension
+            let _ = x.shrink(&[(0, 2), (0, 10)]); // end exceeds dimension
         }));
         assert!(result.is_err(), "shrink() should panic on invalid ranges");
     }

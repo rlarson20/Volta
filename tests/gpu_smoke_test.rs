@@ -6,7 +6,7 @@ use volta::Axis;
 #[cfg(feature = "gpu")]
 fn test_tensor_gpu_unary_add_binary_smoke() {
     use volta::gpu::is_gpu_available;
-    use volta::{Device, RawTensor, TensorOps};
+    use volta::{Device, RawTensor};
 
     if !is_gpu_available() {
         return;
@@ -31,7 +31,7 @@ fn test_tensor_gpu_unary_add_binary_smoke() {
 #[cfg(feature = "gpu")]
 fn test_tensor_gpu_sum_output_device_and_grad_on_gpu() {
     use volta::gpu::is_gpu_available;
-    use volta::{Device, RawTensor, TensorOps};
+    use volta::{Device, RawTensor};
 
     if !is_gpu_available() {
         return;
@@ -60,7 +60,7 @@ fn test_tensor_gpu_sum_output_device_and_grad_on_gpu() {
 #[cfg(feature = "gpu")]
 fn test_tensor_gpu_matmul_matches_cpu() {
     use volta::gpu::is_gpu_available;
-    use volta::{Device, RawTensor, TensorOps};
+    use volta::{Device, RawTensor};
 
     if !is_gpu_available() {
         return;
@@ -97,7 +97,7 @@ fn test_tensor_gpu_matmul_matches_cpu() {
 #[cfg(feature = "gpu")]
 fn test_tensor_gpu_matmul_backward_consistent_with_cpu() {
     use volta::gpu::is_gpu_available;
-    use volta::{Device, RawTensor, TensorOps};
+    use volta::{Device, RawTensor};
 
     if !is_gpu_available() {
         return;
@@ -150,7 +150,7 @@ fn test_tensor_gpu_matmul_backward_consistent_with_cpu() {
 #[cfg(feature = "gpu")]
 fn test_tensor_gpu_mulacc_matches_cpu_and_grad() {
     use volta::gpu::is_gpu_available;
-    use volta::{Device, RawTensor, TensorOps};
+    use volta::{Device, RawTensor};
 
     if !is_gpu_available() {
         return;
@@ -202,7 +202,7 @@ fn test_tensor_gpu_mulacc_matches_cpu_and_grad() {
 #[cfg(feature = "gpu")]
 fn test_tensor_gpu_unary_relu_matches_cpu() {
     use volta::gpu::is_gpu_available;
-    use volta::{Device, RawTensor, TensorOps};
+    use volta::{Device, RawTensor};
 
     if !is_gpu_available() {
         return;
@@ -231,8 +231,8 @@ fn test_tensor_gpu_unary_relu_matches_cpu() {
 #[test]
 #[cfg(feature = "gpu")]
 fn test_tensor_gpu_mixed_device_binary_fallbacks_to_cpu() {
+    use volta::RawTensor;
     use volta::{Device, is_gpu_available};
-    use volta::{RawTensor, TensorOps};
 
     if !is_gpu_available() {
         return;
@@ -254,7 +254,7 @@ fn test_tensor_gpu_mixed_device_binary_fallbacks_to_cpu() {
 #[cfg(feature = "gpu")]
 fn test_tensor_gpu_binary_basic_matches_cpu() {
     use volta::gpu::is_gpu_available;
-    use volta::{Device, RawTensor, TensorOps};
+    use volta::{Device, RawTensor};
 
     if !is_gpu_available() {
         return;
@@ -321,7 +321,7 @@ fn test_tensor_gpu_binary_basic_matches_cpu() {
 #[cfg(feature = "gpu")]
 fn test_tensor_gpu_sum_dim_device_and_grad_on_gpu() {
     use volta::gpu::is_gpu_available;
-    use volta::{Device, RawTensor, TensorOps};
+    use volta::{Device, RawTensor};
 
     if !is_gpu_available() {
         return;
@@ -354,7 +354,7 @@ fn test_tensor_gpu_sum_dim_device_and_grad_on_gpu() {
 #[cfg(feature = "gpu")]
 fn test_tensor_gpu_max_dim_device_and_grad_on_gpu() {
     use volta::gpu::is_gpu_available;
-    use volta::{Device, RawTensor, TensorOps};
+    use volta::{Device, RawTensor};
 
     if !is_gpu_available() {
         return;
@@ -388,7 +388,7 @@ fn test_tensor_gpu_max_dim_device_and_grad_on_gpu() {
 #[cfg(feature = "gpu")]
 fn test_binary_add_backward_simple() {
     use volta::gpu::is_gpu_available;
-    use volta::{Device, RawTensor, TensorOps};
+    use volta::{Device, RawTensor};
 
     if !is_gpu_available() {
         return;

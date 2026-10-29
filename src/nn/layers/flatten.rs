@@ -1,6 +1,6 @@
 use crate::io::StateDict;
 use crate::nn::Module;
-use crate::tensor::{Tensor, TensorOps};
+use crate::tensor::Tensor;
 
 /// Flattens the input tensor into a 2D tensor (`batch_size`, `remaining_features`).
 ///

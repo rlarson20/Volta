@@ -107,7 +107,7 @@ Each operation type follows a consistent pattern:
 1. **Enum definition** (e.g., `BinaryOp::Add`, `UnaryOp::Sigmoid`)
 2. **Forward implementation** in operation-specific functions
 3. **`GradFn` variant** wrapping a per-op struct with a `backward` method, plus an arm in the `GradFn::backward` and `GradFn::is_trivial` matches (`src/autograd.rs`)
-4. **TensorOps wrapper** for user-facing API
+4. **`Tensor` method** (a one-line forward in `src/tensor.rs`) for the user-facing API
 5. **GPU kernel** (in `src/gpu/kernels.rs`) for GPU acceleration
 
 ## Neural Network Layers (`src/nn/layers/`)

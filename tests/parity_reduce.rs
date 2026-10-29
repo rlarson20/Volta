@@ -11,7 +11,6 @@ mod common;
 
 use common::{TOL_FWD_GPU, assert_reduce_parity};
 use volta::Axis;
-use volta::tensor::TensorOps;
 
 #[test]
 fn sum_whole_tensor_parity() {

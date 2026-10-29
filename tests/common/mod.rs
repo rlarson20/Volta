@@ -13,7 +13,6 @@
 #![allow(dead_code)] // each test file uses only a subset
 
 use volta::gpu::is_gpu_available;
-use volta::tensor::TensorOps;
 use volta::{Device, RawTensor, Tensor};
 
 pub const TOL_FWD_GPU: f32 = 1e-5;

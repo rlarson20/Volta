@@ -828,7 +828,7 @@ mod tests {
     use super::*;
     use crate::gpu::is_gpu_available;
     use crate::storage::Storage;
-    use crate::tensor::{Tensor, TensorOps as _};
+    use crate::tensor::Tensor;
 
     #[test]
     fn gpu_add_returns_gpu_storage_without_eager_transfer() {

@@ -3,7 +3,7 @@
 #[cfg(feature = "gpu")]
 fn test_new_unary_ops_gpu_autograd() {
     use volta::gpu::is_gpu_available;
-    use volta::{Device, RawTensor, TensorOps};
+    use volta::{Device, RawTensor};
 
     if !is_gpu_available() {
         return;

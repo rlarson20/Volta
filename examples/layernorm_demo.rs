@@ -1,6 +1,6 @@
 //! `LayerNorm` demonstration: a 2-D `(B, C)` input, a transformer-style 3-D `(B, T, C)` input, and a gradient-flow check that backprop reaches the input, `gamma`, and `beta`.
 use volta::RawTensor;
-use volta::{LayerNorm, Module, TensorOps};
+use volta::{LayerNorm, Module};
 
 fn main() {
     println!("=== LayerNorm Demonstration ===\n");
@@ -70,11 +70,11 @@ fn main() {
     let params3 = ln3.parameters();
     println!(
         "Gamma gradient exists: {}",
-        params3.first().and_then(volta::TensorOps::grad).is_some()
+        params3.first().and_then(volta::Tensor::grad).is_some()
     );
     println!(
         "Beta gradient exists: {}",
-        params3.get(1).and_then(volta::TensorOps::grad).is_some()
+        params3.get(1).and_then(volta::Tensor::grad).is_some()
     );
 
     println!("\n=== All LayerNorm demonstrations completed successfully! ===");

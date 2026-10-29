@@ -378,7 +378,6 @@ impl RawTensor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tensor::TensorOps;
 
     #[test]
     fn into_loss_rejects_non_scalar() {

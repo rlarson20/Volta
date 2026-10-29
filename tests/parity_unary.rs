@@ -10,7 +10,6 @@
 mod common;
 
 use common::{TOL_BWD_GPU, TOL_FWD_GPU, assert_unary_parity, assert_unary_parity_backward};
-use volta::tensor::TensorOps;
 
 const SHAPE_2D: &[usize] = &[4, 5];
 

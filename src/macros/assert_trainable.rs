@@ -20,9 +20,6 @@
 #[macro_export]
 macro_rules! assert_trainable {
     ($layer:expr, $input:expr) => {{
-        #[allow(unused_imports)]
-        use $crate::tensor::TensorOps as _;
-
         let output = <_ as $crate::nn::Module>::forward(&$layer, &$input);
         // Randomly weighted sum, not plain `.sum()`: under a plain sum, normalized
         // activations sum to zero, so e.g. BatchNorm's gamma gets an exactly-zero

@@ -1,7 +1,6 @@
 use crate::io::StateDict;
 use crate::nn::{GELU, Linear, Module};
 use crate::tensor::Tensor;
-use crate::tensor::TensorOps;
 
 /// Feed-Forward Network (FFN) layer for transformer blocks
 ///

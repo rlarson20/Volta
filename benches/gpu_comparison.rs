@@ -3,7 +3,7 @@
 //! These benchmarks are only available when the `gpu` feature is enabled.
 //! They compare CPU and GPU performance for key operations.
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_main};
-use volta::{Device, RawTensor, Tensor, TensorOps};
+use volta::{Device, RawTensor, Tensor};
 
 #[cfg(feature = "gpu")]
 use volta::gpu::invalidate_all_tensor_caches;
@@ -718,7 +718,7 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
 
         b.iter(|| {
             for t in &tensors {
-                black_box(&t).relu();
+                black_box(black_box(&t).relu());
             }
 
             // Sync to ensure GPU work completes and timing is accurate
@@ -761,7 +761,7 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
         }
 
         b.iter(|| {
-            black_box(&large_tensor).relu();
+            black_box(black_box(&large_tensor).relu());
 
             // Sync to ensure GPU work completes and timing is accurate
             if !gpu_sync() {

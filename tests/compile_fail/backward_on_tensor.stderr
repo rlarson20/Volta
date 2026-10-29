@@ -1,5 +1,5 @@
 error[E0599]: no method named `backward` found for struct `Tensor` in the current scope
- --> tests/compile_fail/backward_on_tensor.rs:9:7
+ --> tests/compile_fail/backward_on_tensor.rs:6:7
   |
-9 |     x.backward();
+6 |     x.backward();
   |       ^^^^^^^^ method not found in `Tensor`

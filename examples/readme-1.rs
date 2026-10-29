@@ -1,6 +1,6 @@
 //! The first example in the README
 use volta::{
-    Adam, Sequential, TensorOps, io,
+    Adam, Sequential, io,
     nn::{Linear, Module, ReLU},
     tensor::{RawTensor, mse_loss},
 };

@@ -1,5 +1,5 @@
 //! `bce_with_logits_loss` stability: the loss stays finite and matches an `f64` reference at saturated logits (+-100), and the gradient is correct at those logits and at `x = 0`.
-use volta::{RawTensor, TensorOps, bce_with_logits_loss};
+use volta::{RawTensor, bce_with_logits_loss};
 
 /// Reference: max(x,0) - x*y + ln(1 + exp(-|x|)), evaluated in f64.
 fn reference(x: f64, y: f64) -> f64 {

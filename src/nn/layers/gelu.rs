@@ -1,6 +1,5 @@
 use crate::io::StateDict;
 use crate::nn::Module;
-use crate::tensor::TensorOps;
 use crate::tensor::{RawTensor, Tensor};
 
 /// Gaussian Error Linear Unit (GELU) activation function.
@@ -25,7 +24,6 @@ use crate::tensor::{RawTensor, Tensor};
 /// ```
 /// # use volta::GELU;
 /// # use volta::Module;
-/// # use volta::TensorOps;
 /// # use volta::RawTensor;
 /// let gelu = GELU::new();
 /// let x = RawTensor::new(vec![1.0, -1.0, 0.0], &[3], false);

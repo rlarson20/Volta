@@ -1,7 +1,7 @@
 use crate::index::span;
 use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
-use crate::tensor::{RawTensor, Tensor, TensorOps};
+use crate::tensor::{RawTensor, Tensor};
 
 /// LSTM Cell - processes one timestep at a time
 ///

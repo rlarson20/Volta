@@ -185,7 +185,6 @@ impl EmbeddingGradFn {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tensor::TensorOps;
 
     #[test]
     fn test_embedding_forward_shape() {

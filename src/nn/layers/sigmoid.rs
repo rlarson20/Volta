@@ -1,7 +1,6 @@
 use crate::io::StateDict;
 use crate::nn::Module;
 use crate::tensor::Tensor;
-use crate::tensor::TensorOps;
 
 pub struct Sigmoid;
 

@@ -18,6 +18,6 @@ paths:
 - Don't add new loose `Vec<usize>` shape or `usize` dim parameters to public functions.
 - **Backward** runs only through `Tensor::into_loss()?.backward()` (`ScalarLoss`). Don't add another public entry point or a seeded-gradient variant; reduce with `.sum()` first.
 - `NO_GRAD` is a thread-local, reentrant depth counter (`Cell<u32>`), so `no_grad()` scopes nest. Don't simplify it to a bool.
-- `TensorOps` is slated for deletion (ADDENDUM §3). Keep any method you add to it as a one-line forward; the logic belongs in `src/ops/`.
+- User-facing ops are inherent methods on `Tensor` (`impl Tensor` in `src/tensor.rs`; the `TensorOps` trait is gone). Keep each a documented one-line forward with `#[must_use]`; the logic belongs in `src/ops/`.
 - **Every new op needs a numerical gradient check** (`check_gradients`) with random inputs, covering unequal-rank and broadcast cases. B4 (wrong unequal-rank matmul backward) shipped because only equal-rank shapes were tested.
 - When a backward pass derives dims, take them from the tensor whose gradient you are computing. Better still, compute a validated spec once in forward and store it in the `GradFn` (`MatmulSpec` and the conv specs in `src/spec.rs`).

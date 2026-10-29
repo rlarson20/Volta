@@ -1,4 +1,3 @@
-use crate::tensor::TensorOps;
 use crate::tensor::{RawTensor, Tensor};
 
 /// Generate a causal (lower-triangular) mask for autoregressive attention

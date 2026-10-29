@@ -67,7 +67,7 @@ impl Tensor {
     ///
     /// For the rare case where code outside this module needs a `Tensor` around a
     /// `RawTensor` it already has in hand (e.g. wrapping a `&RawTensor` gradient
-    /// argument so a `TensorOps` method can be called on it) — `inner` being private
+    /// argument so a `Tensor` method can be called on it) — `inner` being private
     /// means a `Tensor { inner: .. }` struct literal only compiles inside this
     /// module, so this is the crate-wide way to do it instead.
     /// TODO: investigate why i actually need this
@@ -149,7 +149,7 @@ impl Tensor {
 
     /// This tensor's gradient as raw `Storage` (e.g. to check `.is_gpu()`), if any.
     ///
-    /// Prefer `TensorOps::grad()` (returns `Option<Vec<f32>>`) unless you
+    /// Prefer `Tensor::grad()` (returns `Option<Vec<f32>>`) unless you
     /// specifically need the `Storage` handle rather than decoded values.
     #[must_use]
     pub fn grad_storage(&self) -> Option<Storage> {
@@ -805,7 +805,7 @@ impl RawTensor {
     ///
     /// # Examples
     /// ```
-    /// use volta::{Axis, RawTensor, TensorOps};
+    /// use volta::{Axis, RawTensor};
     /// let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], true);
     /// assert_eq!(x.sum_dim(Axis(1), false).shape(), vec![2]); // [6, 15]
     /// assert_eq!(x.sum_dim(Axis(1), true).shape(), vec![2, 1]); // [[6], [15]]
@@ -879,7 +879,7 @@ impl RawTensor {
     ///
     /// # Examples
     /// ```
-    /// use volta::{Axis, RawTensor, TensorOps};
+    /// use volta::{Axis, RawTensor};
     /// let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], true);
     /// assert_eq!(x.sum_dim(Axis(1), false).shape(), vec![2]); // [6, 15]
     /// assert_eq!(x.sum_dim(Axis(1), true).shape(), vec![2, 1]); // [[6], [15]]
@@ -1182,204 +1182,254 @@ impl RawTensor {
     }
 }
 
-// ===== TRAIT-BASED API =====
+// ===== TENSOR OPS =====
 
-/// Public trait for tensor operations
-///
-/// This provides a more ergonomic API: `tensor.add(&other)` instead of `RawTensor::add(&tensor, &other)`
-pub trait TensorOps {
-    //Binary ops
-    fn add(&self, other: &Tensor) -> Tensor;
-    fn sub(&self, other: &Tensor) -> Tensor;
-    fn elem_mul(&self, other: &Tensor) -> Tensor;
-    fn div(&self, other: &Tensor) -> Tensor;
-    fn max_elem(&self, other: &Tensor) -> Tensor;
-    fn modulo(&self, other: &Tensor) -> Tensor;
-    fn cmplt(&self, other: &Tensor) -> Tensor;
-
-    // Unary ops
-    fn neg(&self) -> Tensor;
-    fn recip(&self) -> Tensor;
-    fn sqrt(&self) -> Tensor;
-    fn exp2(&self) -> Tensor;
-    fn log2(&self) -> Tensor;
-    fn exp(&self) -> Tensor;
-    fn log(&self) -> Tensor;
-    fn sin(&self) -> Tensor;
-    fn cos(&self) -> Tensor;
-    fn tanh(&self) -> Tensor;
-    fn sigmoid(&self) -> Tensor;
-    fn relu(&self) -> Tensor;
-    fn erf(&self) -> Tensor;
-
-    //Reduce ops
-    fn sum(&self) -> Tensor;
-    fn max_reduce(&self) -> Tensor;
-    fn mean(&self) -> Tensor;
-
-    //Ternary ops
-    fn mulacc(&self, y: &Tensor, z: &Tensor) -> Tensor;
-    fn where_op(&self, x: &Tensor, y: &Tensor) -> Tensor;
-
-    // Movement ops
-    fn reshape(&self, new_shape: &[usize]) -> Tensor;
-    fn permute(&self, axes: &[Axis]) -> Tensor;
-    fn expand(&self, new_shape: &[usize]) -> Tensor;
-    fn pad_with(&self, padding: &[(usize, usize)], value: PadValue) -> Tensor;
-    fn shrink(&self, ranges: &[(usize, usize)]) -> Tensor;
-    fn stride_op(&self, strides: &[usize]) -> Tensor;
-    fn to_device(&self, device: Device) -> Tensor;
-
-    //Matmul
-    fn matmul(&self, other: &Tensor) -> Tensor;
-    fn transpose(&self) -> Tensor;
-
-    //Gradient ops
-    fn grad(&self) -> Option<Vec<f32>>;
-    fn zero_grad(&self);
-
-    // Axis reductions
-    fn sum_dim(&self, dim: Axis, keepdim: bool) -> Tensor;
-    fn max_dim(&self, dim: Axis, keepdim: bool) -> Tensor;
-    fn mean_dim(&self, dim: Axis, keepdim: bool) -> Tensor;
-
-    // Softmax
-    fn softmax(&self, dim: Axis) -> Tensor;
-    fn log_softmax(&self, dim: Axis) -> Tensor;
-}
-
-impl TensorOps for Tensor {
-    fn add(&self, other: &Tensor) -> Tensor {
+impl Tensor {
+    /// Elementwise sum, with broadcasting.
+    #[must_use]
+    pub fn add(&self, other: &Self) -> Self {
         RawTensor::binary_op(self, other, BinaryOp::Add)
     }
-    fn sub(&self, other: &Tensor) -> Tensor {
+
+    /// Elementwise difference, with broadcasting.
+    #[must_use]
+    pub fn sub(&self, other: &Self) -> Self {
         RawTensor::binary_op(self, other, BinaryOp::Sub)
     }
-    fn elem_mul(&self, other: &Tensor) -> Tensor {
+
+    /// Elementwise product, with broadcasting.
+    #[must_use]
+    pub fn elem_mul(&self, other: &Self) -> Self {
         RawTensor::binary_op(self, other, BinaryOp::Mul)
     }
-    fn div(&self, other: &Tensor) -> Tensor {
+
+    /// Elementwise quotient, with broadcasting.
+    #[must_use]
+    pub fn div(&self, other: &Self) -> Self {
         RawTensor::binary_op(self, other, BinaryOp::Div)
     }
-    fn max_elem(&self, other: &Tensor) -> Tensor {
+
+    /// Elementwise maximum, with broadcasting.
+    #[must_use]
+    pub fn max_elem(&self, other: &Self) -> Self {
         RawTensor::binary_op(self, other, BinaryOp::Max)
     }
-    fn modulo(&self, other: &Tensor) -> Tensor {
+
+    /// Elementwise remainder, with broadcasting.
+    #[must_use]
+    pub fn modulo(&self, other: &Self) -> Self {
         RawTensor::binary_op(self, other, BinaryOp::Mod)
     }
-    fn cmplt(&self, other: &Tensor) -> Tensor {
+
+    /// Elementwise `self < other` as 1.0 or 0.0, with broadcasting.
+    #[must_use]
+    pub fn cmplt(&self, other: &Self) -> Self {
         RawTensor::binary_op(self, other, BinaryOp::Cmplt)
     }
 
-    fn neg(&self) -> Tensor {
+    /// Negation, elementwise.
+    #[must_use]
+    pub fn neg(&self) -> Self {
         RawTensor::unary_op(self, UnaryOp::Neg)
     }
-    fn recip(&self) -> Tensor {
+
+    /// Reciprocal, elementwise.
+    #[must_use]
+    pub fn recip(&self) -> Self {
         RawTensor::unary_op(self, UnaryOp::Recip)
     }
-    fn sqrt(&self) -> Tensor {
+
+    /// Square root, elementwise.
+    #[must_use]
+    pub fn sqrt(&self) -> Self {
         RawTensor::unary_op(self, UnaryOp::Sqrt)
     }
-    fn exp2(&self) -> Tensor {
+
+    /// Base-2 exponential, elementwise.
+    #[must_use]
+    pub fn exp2(&self) -> Self {
         RawTensor::unary_op(self, UnaryOp::Exp2)
     }
-    fn log2(&self) -> Tensor {
+
+    /// Base-2 logarithm, elementwise.
+    #[must_use]
+    pub fn log2(&self) -> Self {
         RawTensor::unary_op(self, UnaryOp::Log2)
     }
-    fn exp(&self) -> Tensor {
+
+    /// Natural exponential, elementwise.
+    #[must_use]
+    pub fn exp(&self) -> Self {
         RawTensor::unary_op(self, UnaryOp::Exp)
     }
-    fn log(&self) -> Tensor {
+
+    /// Natural logarithm, elementwise.
+    #[must_use]
+    pub fn log(&self) -> Self {
         RawTensor::unary_op(self, UnaryOp::Log)
     }
-    fn sin(&self) -> Tensor {
+
+    /// Sine, elementwise.
+    #[must_use]
+    pub fn sin(&self) -> Self {
         RawTensor::unary_op(self, UnaryOp::Sin)
     }
-    fn cos(&self) -> Tensor {
+
+    /// Cosine, elementwise.
+    #[must_use]
+    pub fn cos(&self) -> Self {
         RawTensor::unary_op(self, UnaryOp::Cos)
     }
-    fn tanh(&self) -> Tensor {
+
+    /// Hyperbolic tangent, elementwise.
+    #[must_use]
+    pub fn tanh(&self) -> Self {
         RawTensor::unary_op(self, UnaryOp::Tanh)
     }
-    fn sigmoid(&self) -> Tensor {
+
+    /// Logistic sigmoid, elementwise.
+    #[must_use]
+    pub fn sigmoid(&self) -> Self {
         RawTensor::unary_op(self, UnaryOp::Sigmoid)
     }
-    fn relu(&self) -> Tensor {
+
+    /// Rectified linear unit, elementwise.
+    #[must_use]
+    pub fn relu(&self) -> Self {
         RawTensor::unary_op(self, UnaryOp::ReLU)
     }
-    fn erf(&self) -> Tensor {
+
+    /// Error function, elementwise.
+    #[must_use]
+    pub fn erf(&self) -> Self {
         RawTensor::unary_op(self, UnaryOp::Erf)
     }
 
-    fn sum(&self) -> Tensor {
+    /// Sum of all elements, as a scalar.
+    #[must_use]
+    pub fn sum(&self) -> Self {
         RawTensor::reduce_op(self, ReduceOp::Sum)
     }
-    fn max_reduce(&self) -> Tensor {
+
+    /// Maximum of all elements, as a scalar.
+    #[must_use]
+    pub fn max_reduce(&self) -> Self {
         RawTensor::reduce_op(self, ReduceOp::Max)
     }
-    fn mean(&self) -> Tensor {
+
+    /// Mean of all elements, as a scalar.
+    #[must_use]
+    pub fn mean(&self) -> Self {
         RawTensor::reduce_op(self, ReduceOp::Mean)
     }
 
-    fn mulacc(&self, y: &Tensor, z: &Tensor) -> Tensor {
+    /// Fused `self * y + z`.
+    #[must_use]
+    pub fn mulacc(&self, y: &Self, z: &Self) -> Self {
         RawTensor::ternary_op(self, y, z, TernaryOp::MulAcc)
     }
-    fn where_op(&self, x: &Tensor, y: &Tensor) -> Tensor {
+
+    /// Selects `x` where `self` is nonzero, else `y`.
+    #[must_use]
+    pub fn where_op(&self, x: &Self, y: &Self) -> Self {
         RawTensor::ternary_op(self, x, y, TernaryOp::Where)
     }
 
-    fn reshape(&self, new_shape: &[usize]) -> Tensor {
+    /// Reshapes to `new_shape`; the element count must match.
+    #[must_use]
+    pub fn reshape(&self, new_shape: &[usize]) -> Self {
         RawTensor::reshape(self, new_shape)
     }
-    fn permute(&self, axes: &[Axis]) -> Tensor {
+
+    /// Permutes the dimensions by `axes`.
+    #[must_use]
+    pub fn permute(&self, axes: &[Axis]) -> Self {
         RawTensor::permute(self, axes)
     }
-    fn expand(&self, new_shape: &[usize]) -> Tensor {
+
+    /// Broadcasts to `new_shape`.
+    #[must_use]
+    pub fn expand(&self, new_shape: &[usize]) -> Self {
         RawTensor::expand(self, new_shape)
     }
-    fn pad_with(&self, padding: &[(usize, usize)], value: PadValue) -> Tensor {
+
+    /// Pads each dimension by `(before, after)`, filling the border with `value`.
+    #[must_use]
+    pub fn pad_with(&self, padding: &[(usize, usize)], value: PadValue) -> Self {
         RawTensor::pad_with(self, padding, value)
     }
-    fn shrink(&self, ranges: &[(usize, usize)]) -> Tensor {
+
+    /// Slices each dimension to the half-open `(start, end)` range.
+    #[must_use]
+    pub fn shrink(&self, ranges: &[(usize, usize)]) -> Self {
         RawTensor::shrink(self, ranges)
     }
-    fn stride_op(&self, strides: &[usize]) -> Tensor {
+
+    /// Takes every `strides[i]`-th element along each dimension.
+    #[must_use]
+    pub fn stride_op(&self, strides: &[usize]) -> Self {
         RawTensor::stride_op(self, strides)
     }
 
-    fn to_device(&self, device: Device) -> Tensor {
+    /// Moves the tensor to `device`, keeping its autograd metadata.
+    #[must_use]
+    pub fn to_device(&self, device: Device) -> Self {
         RawTensor::to_device(self, device)
     }
 
-    fn matmul(&self, other: &Tensor) -> Tensor {
+    /// Matrix product.
+    #[must_use]
+    pub fn matmul(&self, other: &Self) -> Self {
         RawTensor::matmul(self, other)
     }
-    fn transpose(&self) -> Tensor {
+
+    /// Transposes a 2-D tensor.
+    #[must_use]
+    pub fn transpose(&self) -> Self {
         RawTensor::transpose(self)
     }
 
-    fn grad(&self) -> Option<Vec<f32>> {
+    /// The accumulated gradient as host data, or `None` if there is none.
+    #[must_use]
+    pub fn grad(&self) -> Option<Vec<f32>> {
         self.borrow()
             .grad
             .as_ref()
             .map(super::storage::Storage::to_vec)
     }
-    fn zero_grad(&self) {
+
+    /// Clears the accumulated gradient.
+    pub fn zero_grad(&self) {
         RawTensor::zero_grad(self);
     }
-    fn sum_dim(&self, dim: Axis, keepdim: bool) -> Tensor {
+
+    /// Sum along `dim`.
+    #[must_use]
+    pub fn sum_dim(&self, dim: Axis, keepdim: bool) -> Self {
         RawTensor::sum_dim(self, dim, keepdim)
     }
-    fn max_dim(&self, dim: Axis, keepdim: bool) -> Tensor {
+
+    /// Maximum along `dim`.
+    #[must_use]
+    pub fn max_dim(&self, dim: Axis, keepdim: bool) -> Self {
         RawTensor::max_dim(self, dim, keepdim)
     }
-    fn mean_dim(&self, dim: Axis, keepdim: bool) -> Tensor {
+
+    /// Mean along `dim`.
+    #[must_use]
+    pub fn mean_dim(&self, dim: Axis, keepdim: bool) -> Self {
         RawTensor::mean_dim(self, dim, keepdim)
     }
-    fn softmax(&self, dim: Axis) -> Tensor {
+
+    /// Softmax along `dim`.
+    #[must_use]
+    pub fn softmax(&self, dim: Axis) -> Self {
         RawTensor::softmax(self, dim)
     }
-    fn log_softmax(&self, dim: Axis) -> Tensor {
+
+    /// Log-softmax along `dim`.
+    #[must_use]
+    pub fn log_softmax(&self, dim: Axis) -> Self {
         RawTensor::log_softmax(self, dim)
     }
 }

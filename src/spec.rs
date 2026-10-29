@@ -400,7 +400,7 @@ fn with_matrix(batch: &[usize], rows: usize, cols: usize) -> Vec<usize> {
     dims
 }
 
-/// The scalar that fills the border added by [`pad_with`](crate::TensorOps::pad_with).
+/// The scalar that fills the border added by [`pad_with`](crate::Tensor::pad_with).
 ///
 /// Padding used to be hard-wired to `0.0`, which is right for convolution and
 /// wrong for max pooling (H1: a zero border beat all-negative inputs). The

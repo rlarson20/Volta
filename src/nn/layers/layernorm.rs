@@ -1,7 +1,7 @@
 use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
 use crate::shape::Axis;
-use crate::tensor::{RawTensor, Tensor, TensorOps};
+use crate::tensor::{RawTensor, Tensor};
 
 /// Layer Normalization layer.
 ///

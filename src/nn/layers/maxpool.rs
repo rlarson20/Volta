@@ -6,7 +6,7 @@ use crate::nn::Module;
 use crate::shape::Shape;
 use crate::spec::{PadValue, Window2dSpec};
 use crate::storage::Storage;
-use crate::tensor::{RawTensor, Tensor, TensorOps};
+use crate::tensor::{RawTensor, Tensor};
 
 /// 2D max pooling layer
 ///
@@ -171,7 +171,7 @@ impl MaxPool2dGradFn {
 mod tests {
     use super::MaxPool2d;
     use crate::nn::Module;
-    use crate::tensor::{RawTensor, TensorOps};
+    use crate::tensor::RawTensor;
 
     // ==================== Basic Existing Tests ====================
 

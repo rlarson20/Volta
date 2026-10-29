@@ -1,7 +1,7 @@
 use crate::io::StateDict;
 use crate::nn::Module;
 use crate::shape::Axis;
-use crate::tensor::{Tensor, TensorOps};
+use crate::tensor::Tensor;
 
 /// `PixelShuffle`: Rearranges elements from (B, C*r², H, W) to (B, C, H*r, W*r)
 ///

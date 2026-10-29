@@ -332,6 +332,16 @@ Choke points for whoever lands views: the operand reads in `RawTensor::matmul` (
 
 **Out of scope:** `HashMap` lookups (`state.get("weight")`, where a missing key is legitimate) and the integer `unwrap_or(1)` shape/stride defaults. The latter are tracked in `notes/TODO.md` and overlap the `Shape` field flip.
 
+### Delete `TensorOps` (ADDENDUM §3.4)
+
+**Decision:** the 47-method `TensorOps` trait is gone. Its methods are inherent methods on `Tensor` (`impl Tensor` in `src/tensor.rs`), each a one-line forward to the `RawTensor` function in `src/ops/`, with a doc comment and `#[must_use]`. Nothing replaces the `use volta::TensorOps` import, so callers just drop it.
+
+**Why no re-export-only extension trait:** §3.4 allowed one "for discoverability". It would keep an import that does nothing, and the crate root already re-exports `Tensor`. It would also be one more public trait to seal under §3.1.
+
+**Why now, before the storage and `Shape` work:** the trait duplicated every op signature, so the `RawTensor.shape` flip and the storage rewrite would have changed each one twice.
+
+**What changed at call sites:** `#[must_use]` is new. It flagged 15 places that discarded a result, all `#[should_panic]` tests and bench loops, now `let _ =` or `black_box(..)`. `use_self` also applies, so signatures say `Self`. The trybuild case `backward_on_tensor` still pins E0599; it used to import `TensorOps` to prove the trait method was gone, and an inherent `backward` would now be found without an import, so the import is no longer needed.
+
 ## Concurrency and Async
 
 ### Stay synchronous

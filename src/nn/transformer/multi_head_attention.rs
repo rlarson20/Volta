@@ -1,7 +1,6 @@
 use crate::io::StateDict;
 use crate::nn::{LayerNorm, Linear, Module};
 use crate::shape::Axis;
-use crate::tensor::TensorOps;
 use crate::tensor::{RawTensor, Tensor};
 
 /// Multi-Head Attention layer

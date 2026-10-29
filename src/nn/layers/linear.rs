@@ -1,7 +1,7 @@
 use crate::device::Device;
 use crate::io::{StateDict, TensorData};
 use crate::nn::Module;
-use crate::tensor::{RawTensor, Tensor, TensorOps};
+use crate::tensor::{RawTensor, Tensor};
 
 /// Fully-connected (dense/linear) layer
 ///

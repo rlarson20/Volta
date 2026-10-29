@@ -6,7 +6,7 @@ use crate::nn::Module;
 use crate::shape::Axis;
 use crate::shape::Shape;
 use crate::spec::ConvTranspose2dSpec;
-use crate::tensor::{RawTensor, Tensor, TensorOps};
+use crate::tensor::{RawTensor, Tensor};
 
 /// Transposed 2D convolution (also called deconvolution)
 ///

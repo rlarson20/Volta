@@ -2,8 +2,8 @@
 //!
 //! If the MNIST files are missing it falls back to constant synthetic data, which only exercises the code path and does not train a meaningful model.
 use volta::{
-    Linear, Module, ProgressBar, RawTensor, SGD, TensorOps, kl_divergence_gaussian,
-    load_mnist_images, mse_loss, normalize, randn_like,
+    Linear, Module, ProgressBar, RawTensor, SGD, kl_divergence_gaussian, load_mnist_images,
+    mse_loss, normalize, randn_like,
 };
 
 fn main() {

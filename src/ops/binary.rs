@@ -334,7 +334,7 @@ impl RawTensor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tensor::{TensorOps as _, check_gradients, manual_seed, randn};
+    use crate::tensor::{check_gradients, manual_seed, randn};
 
     /// Differentiable ops only: the gradcheck below needs a backward to check.
     fn differentiable() -> impl Iterator<Item = BinaryOp> {

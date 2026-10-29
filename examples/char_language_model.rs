@@ -8,9 +8,7 @@
 //! The model predicts the next character in a sequence, learning patterns
 //! from a small text corpus.
 use std::collections::HashMap;
-use volta::{
-    Adam, Dropout, Embedding, LSTMCell, Linear, Module, RawTensor, TensorOps, manual_seed,
-};
+use volta::{Adam, Dropout, Embedding, LSTMCell, Linear, Module, RawTensor, manual_seed};
 
 /// Vocabulary for character-level language modeling
 struct CharVocab {

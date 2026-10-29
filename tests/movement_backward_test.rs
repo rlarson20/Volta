@@ -1,10 +1,10 @@
 //! Tests for GPU-accelerated movement operation backward passes
 #![cfg(feature = "gpu")]
 
+use volta::RawTensor;
 use volta::device::Device;
 use volta::gpu::is_gpu_available;
 use volta::{Axis, PadValue};
-use volta::{RawTensor, TensorOps};
 
 fn approx_eq(a: f32, b: f32, epsilon: f32) -> bool {
     (a - b).abs() < epsilon

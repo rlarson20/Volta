@@ -8,7 +8,7 @@
 //! - Movement operations (reshape, transpose, etc.)
 use criterion::{BenchmarkId, Criterion, black_box, criterion_main};
 use volta::{Axis, PadValue};
-use volta::{RawTensor, Tensor, TensorOps};
+use volta::{RawTensor, Tensor};
 
 /// Generate a random tensor of the given size
 fn random_tensor(size: usize) -> Tensor {
