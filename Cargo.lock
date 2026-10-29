@@ -1547,6 +1547,7 @@ dependencies = [
  "pollster",
  "rand",
  "rand_distr",
+ "rustversion",
  "safetensors",
  "thiserror 2.0.21",
  "trybuild",

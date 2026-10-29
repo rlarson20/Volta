@@ -16,6 +16,7 @@ paths:
 - Never encode a bug in an assertion. Use `#[ignore = "<defect ID>: <why>"]`.
 - Examples must not route around broken components. If an example needs a workaround, file the defect in `notes/TODO.md` instead.
 - Run `cargo clippy --all-targets`, not just `--all`, so tests and examples get linted.
+- trybuild `.stderr` files (`tests/compile_fail/`) are pinned to rustc >= 1.93 wording; `tests/compile_fail.rs` is ignored below that. Re-bless on stable with `TRYBUILD=overwrite` under both feature sets, never on the 1.89 MSRV.
 - GPU integration tests are `tests/gpu_*.rs`. CPU/GPU parity tests are `tests/parity_*.rs`.
 - Document tests, examples, and benches like the library: a `//!` crate doc saying what the target covers, and `///` on every item. Don't silence `missing_docs` or `clippy::missing_docs_in_private_items` to avoid writing docs. Exceptions need the user's say-so, and an `allow` must be scoped to the narrowest item and carry a `reason`.
 - The one standing exception is `criterion_group!` (criterion 0.5), which generates an undocumented `pub fn benches`. A lint attribute on the macro call is ignored, so wrap the call in a `mod group { .. }` that carries `#[allow(missing_docs, clippy::missing_docs_in_private_items, reason = "..")]`, with targets as `super::bench_x`, and `use group::benches;`. See `benches/tensor_ops.rs`.
