@@ -1,5 +1,6 @@
 use crate::index::{fetch, slot};
 use crate::io::StateDict;
+use crate::shape::fixed_dims;
 
 /// Builder for composable state dict transformations
 ///
@@ -136,8 +137,7 @@ impl StateDictMapper {
                 if let Some(tensor_data) = state.get_mut(&key)
                     && tensor_data.shape.len() == 2
                 {
-                    let rows = tensor_data.shape.first().copied().unwrap_or(1);
-                    let cols = tensor_data.shape.get(1).copied().unwrap_or(1);
+                    let [rows, cols] = fixed_dims::<2>(&tensor_data.shape);
                     let mut transposed = vec![0.0; rows * cols];
 
                     // Transpose row-major layout: [R, C] -> [C, R]
@@ -173,8 +173,7 @@ impl StateDictMapper {
                     if let Some(tensor_data) = state.get_mut(&key)
                         && tensor_data.shape.len() == 2
                     {
-                        let rows = tensor_data.shape.first().copied().unwrap_or(1);
-                        let cols = tensor_data.shape.get(1).copied().unwrap_or(1);
+                        let [rows, cols] = fixed_dims::<2>(&tensor_data.shape);
                         let mut transposed = vec![0.0; rows * cols];
 
                         for i in 0..rows {

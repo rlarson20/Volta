@@ -32,7 +32,7 @@ impl Generator {
 
     /// Maps noise `[batch, latent_dim]` to images `[batch, 1, 28, 28]` in `[-1, 1]`.
     fn forward(&self, z: &volta::Tensor) -> volta::Tensor {
-        let batch = *z.shape().first().unwrap_or(&1);
+        let batch = *z.shape().first().expect("noise has a batch dim");
 
         // z: [batch, latent_dim] -> [batch, 256*7*7]
         let x = self.fc.forward(z).relu();

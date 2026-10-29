@@ -1,7 +1,7 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::index::{fetch, slot};
-use crate::shape::Shape;
+use crate::shape::{Shape, fixed_dims};
 use crate::spec::MatmulSpec;
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
@@ -22,8 +22,7 @@ impl TransposeGradFn {
         _parents: &[Tensor],
     ) -> Vec<Option<Tensor>> {
         let transposed = RawTensor::transpose_2d(&out_grad.data.to_host_f32(), &out_grad.shape);
-        let dim0 = out_grad.shape.first().copied().unwrap_or(1);
-        let dim1 = out_grad.shape.get(1).copied().unwrap_or(1);
+        let [dim0, dim1] = fixed_dims::<2>(&out_grad.shape);
         let new_shape = vec![dim1, dim0];
         vec![Some(RawTensor::new(transposed, &new_shape, false))]
     }
@@ -37,8 +36,7 @@ impl RawTensor {
     /// For shape [m, n], produces shape [n, m]
     pub(crate) fn transpose_2d(data: &[f32], shape: &[usize]) -> Vec<f32> {
         assert_eq!(shape.len(), 2, "Transpose expects 2D shape");
-        let m = shape.first().copied().unwrap_or(1);
-        let n = shape.get(1).copied().unwrap_or(1);
+        let [m, n] = fixed_dims::<2>(shape);
         let mut result = vec![0.0; m * n];
         for i in 0..m {
             for j in 0..n {
@@ -173,9 +171,8 @@ impl RawTensor {
             (2, 1) => {
                 let (a_host, b_host) = (data_a.to_host_f32(), data_b.to_host_f32());
                 // Matrix-vector: (m,n) @ (n,) -> (m,)
-                let m = shape_a.first().copied().unwrap_or(1);
-                let n = shape_a.get(1).copied().unwrap_or(1);
-                let n2 = shape_b.first().copied().unwrap_or(1);
+                let [m, n] = fixed_dims::<2>(&shape_a);
+                let [n2] = fixed_dims::<1>(&shape_b);
                 assert_eq!(n, n2, "Matmul dimension mismatch: ({m},{n}) @ ({n2})");
 
                 let mut result_data = vec![0.0; m];
@@ -198,9 +195,8 @@ impl RawTensor {
             (1, 2) => {
                 let (a_host, b_host) = (data_a.to_host_f32(), data_b.to_host_f32());
                 // Vector-matrix: (n,) @ (n,p) -> (p,)
-                let n = shape_a.first().copied().unwrap_or(1);
-                let n2 = shape_b.first().copied().unwrap_or(1);
-                let p = shape_b.get(1).copied().unwrap_or(1);
+                let [n] = fixed_dims::<1>(&shape_a);
+                let [n2, p] = fixed_dims::<2>(&shape_b);
                 assert_eq!(n, n2, "Matmul dimension mismatch: ({n}) @ ({n2},{p})");
 
                 let mut result_data = vec![0.0; p];
@@ -224,8 +220,8 @@ impl RawTensor {
             (1, 1) => {
                 let (a_host, b_host) = (data_a.to_host_f32(), data_b.to_host_f32());
                 // Dot product: (n,) @ (n,) -> scalar
-                let n = shape_a.first().copied().unwrap_or(1);
-                let n2 = shape_b.first().copied().unwrap_or(1);
+                let [n] = fixed_dims::<1>(&shape_a);
+                let [n2] = fixed_dims::<1>(&shape_b);
                 assert_eq!(n, n2, "Dot product dimension mismatch: ({n}) @ ({n2})");
 
                 let sum: f32 = a_host.iter().zip(b_host.iter()).map(|(a, b)| a * b).sum();
@@ -342,8 +338,7 @@ impl RawTensor {
         assert_eq!(shape.len(), 2, "Transpose expects 2D tensor");
 
         let transposed_data = Self::transpose_2d(&data.to_host_f32(), &shape);
-        let dim0 = shape.first().copied().unwrap_or(1);
-        let dim1 = shape.get(1).copied().unwrap_or(1);
+        let [dim0, dim1] = fixed_dims::<2>(&shape);
         let new_shape = vec![dim1, dim0];
 
         edge(
@@ -502,8 +497,7 @@ impl MatMulGradFn {
                 (None, 2, 1) => {
                     // Matrix-vector: (m,n) @ (n,) -> (m,)
                     // ∂L/∂x = ∂L/∂z[:,None] @ v[None,:] = outer(out_grad, v)
-                    let m = x.shape.first().copied().unwrap_or(1);
-                    let n = x.shape.get(1).copied().unwrap_or(1);
+                    let [m, n] = fixed_dims::<2>(&x.shape);
                     let mut grad_data = vec![0.0; m * n];
                     for i in 0..m {
                         let gz_i = fetch(&g_host, i);
@@ -517,8 +511,8 @@ impl MatMulGradFn {
                     // Vector-matrix: (n,) @ (n,p) -> (p,)
                     // ∂L/∂x: out_grad is (p,), y is (n,p)
                     // grad_x = out_grad @ y^T -> (p,) @ (p,n) -> (n,)
-                    let len_x = x.shape.first().copied().unwrap_or(1);
-                    let len_y_p = y.shape.get(1).copied().unwrap_or(1);
+                    let [len_x] = fixed_dims::<1>(&x.shape);
+                    let [_, len_y_p] = fixed_dims::<2>(&y.shape);
                     let mut grad_data = vec![0.0; len_x];
                     for i in 0..len_x {
                         for j in 0..len_y_p {
@@ -553,8 +547,7 @@ impl MatMulGradFn {
                 (None, 2, 1) => {
                     // Matrix-vector: (m,n) @ (n,) -> (m,)
                     // ∂L/∂v = X^T @ ∂L/∂z -> (n,)
-                    let m = x.shape.first().copied().unwrap_or(1);
-                    let n = x.shape.get(1).copied().unwrap_or(1);
+                    let [m, n] = fixed_dims::<2>(&x.shape);
                     let mut grad_data = vec![0.0; n];
                     for j in 0..n {
                         let mut sum = 0.0;
@@ -567,8 +560,7 @@ impl MatMulGradFn {
                 }
                 (None, 1, 2) => {
                     // grad_y = x^T @ out_grad -> (n,1) @ (1,p) -> (n,p)
-                    let dim0 = y.shape.first().copied().unwrap_or(1);
-                    let dim1 = y.shape.get(1).copied().unwrap_or(1);
+                    let [dim0, dim1] = fixed_dims::<2>(&y.shape);
                     let mut grad_data = vec![0.0; dim0 * dim1];
                     for i in 0..dim0 {
                         for j in 0..dim1 {

@@ -170,9 +170,34 @@ impl Strides {
     }
 }
 
+/// The dims of a raw shape whose rank the caller already knows is `N`, as an array.
+///
+/// Replaces the positional `shape.get(i).copied()` + size-1 default reads (DECISIONS.md,
+/// "Indexing policy"): a missing dim is a rank bug upstream, not a size-1 axis.
+///
+/// # Panics
+///
+/// If `dims.len() != N`, naming the caller.
+#[track_caller]
+pub(crate) fn fixed_dims<const N: usize>(dims: &[usize]) -> [usize; N] {
+    <[usize; N]>::try_from(dims)
+        .unwrap_or_else(|_| panic!("expected a rank-{N} shape, got {dims:?}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_dims_reads_exact_rank() {
+        assert_eq!(fixed_dims::<2>(&[3, 4]), [3, 4]);
+    }
+
+    #[test]
+    #[should_panic(expected = "expected a rank-2 shape, got [3]")]
+    fn fixed_dims_rejects_wrong_rank() {
+        let _ = fixed_dims::<2>(&[3]);
+    }
 
     #[test]
     fn strides_of_3x4x5_are_row_major() {

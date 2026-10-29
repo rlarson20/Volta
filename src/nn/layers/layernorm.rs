@@ -1,3 +1,4 @@
+use crate::index::fetch;
 use crate::io::{StateDict, TensorData};
 use crate::nn::{Layer, Module};
 use crate::shape::Axis;
@@ -113,7 +114,7 @@ impl Layer for LayerNorm {
         );
 
         for (i, &expected_size) in self.normalized_shape.iter().enumerate() {
-            let actual_size = *input_shape.get(input_rank - norm_rank + i).unwrap_or(&1);
+            let actual_size = fetch(&input_shape, input_rank - norm_rank + i);
             assert_eq!(
                 actual_size,
                 expected_size,

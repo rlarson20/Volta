@@ -569,7 +569,7 @@ mod tests {
             let y = conv.forward(&x);
 
             // Output shape should maintain batch size
-            assert_eq!(y.borrow().shape.first().copied().unwrap_or(0), batch_size);
+            assert_eq!(fetch(&y.borrow().shape, 0), batch_size);
             assert_eq!(y.borrow().shape, vec![batch_size, 4, 16, 16]);
         }
     }

@@ -119,12 +119,12 @@ impl RawTensor {
                 let max_len = a.len().max(b.len());
                 for i in 0..max_len {
                     let a_dim = if i < a.len() && !a.is_empty() {
-                        a.get(a.len() - 1 - i).copied().unwrap_or(1)
+                        fetch(&a, a.len() - 1 - i)
                     } else {
                         1
                     };
                     let b_dim = if i < b.len() && !b.is_empty() {
-                        b.get(b.len() - 1 - i).copied().unwrap_or(1)
+                        fetch(&b, b.len() - 1 - i)
                     } else {
                         1
                     };
@@ -188,12 +188,12 @@ impl RawTensor {
             let mut remainder = i;
             //calc coords based on to_shape and map
             for dim in 0..to_shape.len() {
-                let stride = to_strides.get(dim).copied().unwrap_or(1);
+                let stride = fetch(to_strides, dim);
                 let coord = remainder / stride;
                 remainder %= stride;
                 //if dim broadcast (size was 1) use coord 0 for from_idx
-                if padded_from.get(dim).copied().unwrap_or(1) != 1 {
-                    let from_stride = from_strides_padded.get(dim).copied().unwrap_or(1);
+                if fetch(&padded_from, dim) != 1 {
+                    let from_stride = fetch(from_strides_padded, dim);
                     from_idx += coord * from_stride;
                 }
             }
@@ -255,14 +255,14 @@ impl RawTensor {
 
             // convert lin index i in grad_shape to coords and map to target
             for dim in 0..grad_shape.len() {
-                let grad_stride = grad_strides.get(dim).copied().unwrap_or(1);
+                let grad_stride = fetch(grad_strides, dim);
                 let coord = remainder / grad_stride;
                 remainder %= grad_stride;
 
                 // Map to target coordinate (skip if was broadcast)
-                if dim >= offset && padded_target.get(dim).copied().unwrap_or(1) != 1 {
+                if dim >= offset && fetch(&padded_target, dim) != 1 {
                     let target_dim_idx = dim - offset;
-                    let target_stride = target_strides.get(target_dim_idx).copied().unwrap_or(1);
+                    let target_stride = fetch(target_strides, target_dim_idx);
                     target_idx += coord * target_stride;
                 }
             }

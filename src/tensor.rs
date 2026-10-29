@@ -462,11 +462,21 @@ impl RawTensor {
     /// Samples weights uniformly from [-limit, limit] where
     /// limit = sqrt(6 / (`fan_in` + `fan_out`))
     ///
-    /// This helps maintain gradient variance across layers.
+    /// This helps maintain gradient variance across layers. A rank-1 shape `[n]` is
+    /// treated as `[n, 1]` (a bias vector).
+    ///
+    /// # Panics
+    ///
+    /// If `shape` is not rank 1 or rank 2.
     #[must_use]
     pub fn xavier_uniform(shape: &[usize]) -> Tensor {
-        let fan_in = shape.first().copied().unwrap_or(1);
-        let fan_out = shape.get(1).copied().unwrap_or(1);
+        // A rank-1 shape is a bias vector: one fan-out per element. Any other rank has no
+        // [in, out] reading, so it fails here instead of later as a data/shape mismatch.
+        let (fan_in, fan_out) = match *shape {
+            [n] => (n, 1),
+            [fan_in, fan_out] => (fan_in, fan_out),
+            _ => panic!("xavier_uniform expects a rank-1 or rank-2 shape, got {shape:?}"),
+        };
         let limit = (6.0 / (fan_in + fan_out) as f32).sqrt();
         let data: Vec<f32> = with_rng(|rng| {
             (0..fan_in * fan_out)
@@ -494,7 +504,7 @@ impl RawTensor {
         }
 
         let fan_in = match shape.len() {
-            1 | 2 => shape.first().copied().unwrap_or(1), // Linear weights: [in, out]
+            1 | 2 => fetch(shape, 0), // Linear weights: [in, out]
             _ => shape.get(1..).unwrap_or(&[]).iter().product(), // Conv weights: [out, in, kH, kW, ...]
         };
         if fan_in == 0 {
@@ -1679,6 +1689,24 @@ where
 #[cfg(test)]
 mod tensor_tests {
     use super::*;
+
+    /// A rank-1 shape is a bias vector: `n` values bounded by `sqrt(6 / (n + 1))`.
+    #[test]
+    fn xavier_uniform_rank_one_is_a_bias_vector() {
+        let t = RawTensor::xavier_uniform(&[8]);
+        let limit = (6.0f32 / 9.0).sqrt();
+        let data = t.data();
+        assert_eq!(data.len(), 8);
+        assert!(data.iter().all(|v| v.abs() <= limit));
+    }
+
+    /// Rank 3 has no `[in, out]` reading. It used to default `fan_out` to the second dim
+    /// and fail later as a data/shape mismatch; it now fails up front.
+    #[test]
+    #[should_panic(expected = "xavier_uniform expects a rank-1 or rank-2 shape, got [2, 3, 4]")]
+    fn xavier_uniform_rejects_rank_three() {
+        let _ = RawTensor::xavier_uniform(&[2, 3, 4]);
+    }
 
     #[test]
     fn test_he_initialization_linear_shape() {

@@ -95,7 +95,7 @@ impl ForwardIndexMapper for StrideMapper {
 
     fn map_forward_indices(&self, dim: usize, iter_idx: usize) -> (usize, usize) {
         // Forward: input_idx (original) = output_idx (strided) * stride
-        let stride = self.strides.get(dim).copied().unwrap_or(1);
+        let stride = fetch(&self.strides, dim);
         (iter_idx * stride, iter_idx)
     }
 }
@@ -211,7 +211,7 @@ impl BackwardIndexMapper for StrideBackwardMapper {
     ) -> Option<(usize, usize)> {
         // Backward: we iterate over output shape and map to larger input shape
         // output_idx = iter_idx, input_idx = iter_idx * stride
-        let stride = self.strides.get(dim).copied().unwrap_or(1);
+        let stride = fetch(&self.strides, dim);
         let input_idx = iter_idx * stride;
         if input_idx < input_dim_size {
             Some((input_idx, iter_idx))
@@ -281,9 +281,9 @@ fn apply_movement_backward<M: BackwardIndexMapper>(
 
     // Get the iteration shape for this backward operation
     let iter_shape = mapper.iteration_shape(ctx.input_shape, ctx.output_shape);
-    let dim_size = iter_shape.get(dim).copied().unwrap_or(1);
-    let input_dim_size = ctx.input_shape.get(dim).copied().unwrap_or(1);
-    let output_dim_size = ctx.output_shape.get(dim).copied().unwrap_or(1);
+    let dim_size = fetch(iter_shape, dim);
+    let input_dim_size = fetch(ctx.input_shape, dim);
+    let output_dim_size = fetch(ctx.output_shape, dim);
 
     // Iterate according to the mapper's iteration shape
     for iter_idx in 0..dim_size {
@@ -291,8 +291,8 @@ fn apply_movement_backward<M: BackwardIndexMapper>(
         if let Some((input_idx, output_idx)) =
             mapper.map_backward_indices(dim, iter_idx, input_dim_size, output_dim_size)
         {
-            let input_stride = ctx.input_strides.get(dim).copied().unwrap_or(1);
-            let output_stride = ctx.output_strides.get(dim).copied().unwrap_or(1);
+            let input_stride = fetch(ctx.input_strides, dim);
+            let output_stride = fetch(ctx.output_strides, dim);
 
             apply_movement_backward(
                 ctx,
@@ -340,9 +340,9 @@ fn apply_movement_forward<M: ForwardIndexMapper>(
 
     // Get the iteration shape for this operation
     let iter_shape = mapper.iteration_shape(ctx.input_shape, ctx.output_shape);
-    let dim_size = iter_shape.get(dim).copied().unwrap_or(1);
-    let input_dim_size = ctx.input_shape.get(dim).copied().unwrap_or(1);
-    let output_dim_size = ctx.output_shape.get(dim).copied().unwrap_or(1);
+    let dim_size = fetch(iter_shape, dim);
+    let input_dim_size = fetch(ctx.input_shape, dim);
+    let output_dim_size = fetch(ctx.output_shape, dim);
 
     // Iterate through the dimension
     for iter_idx in 0..dim_size {
@@ -351,8 +351,8 @@ fn apply_movement_forward<M: ForwardIndexMapper>(
 
         // Check bounds
         if input_idx < input_dim_size && output_idx < output_dim_size {
-            let input_stride = ctx.input_strides.get(dim).copied().unwrap_or(1);
-            let output_stride = ctx.output_strides.get(dim).copied().unwrap_or(1);
+            let input_stride = fetch(ctx.input_strides, dim);
+            let output_stride = fetch(ctx.output_strides, dim);
 
             apply_movement_forward(
                 ctx,
@@ -468,12 +468,12 @@ impl MovementGradFn {
                     let mut old_idx = 0;
                     let mut rem = i;
                     for j in (0..new_shape.len()).rev() {
-                        let dim_size = new_shape.get(j).copied().unwrap_or(1);
+                        let dim_size = fetch(new_shape, j);
                         let coord = rem % dim_size;
                         rem /= dim_size;
                         // If this dimension was size 1, don't advance the index
-                        if self.original_shape.get(j).copied().unwrap_or(1) != 1 {
-                            old_idx += coord * old_strides.get(j).copied().unwrap_or(1);
+                        if fetch(&self.original_shape, j) != 1 {
+                            old_idx += coord * fetch(old_strides, j);
                         }
                     }
                     *slot(&mut grad_data, old_idx) += fetch(&g_host, i);
@@ -814,11 +814,11 @@ impl RawTensor {
                 let mut old_idx = 0;
                 let mut rem = i;
                 for j in (0..new_shape.len()).rev() {
-                    let dim_size = new_shape.get(j).copied().unwrap_or(1);
+                    let dim_size = fetch(new_shape, j);
                     let coord = rem % dim_size;
                     rem /= dim_size;
-                    if old_shape.get(j).copied().unwrap_or(1) != 1 {
-                        let stride = old_strides.get(j).copied().unwrap_or(1);
+                    if fetch(&old_shape, j) != 1 {
+                        let stride = fetch(old_strides, j);
                         old_idx += coord * stride;
                     }
                 }
