@@ -66,7 +66,8 @@ impl LSTMCell {
         // Extract columns [start:end] for all rows
         // gates shape: [batch, 4*hidden_size]
         let batch_size = gates.borrow().shape.first().copied().unwrap_or(1);
-        let data = &gates.borrow().data;
+        let gates_ref = gates.borrow();
+        let data = &*gates_ref.data.to_host_f32();
 
         let mut gate_data = Vec::with_capacity(batch_size * self.hidden_size);
         for i in 0..batch_size {

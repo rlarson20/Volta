@@ -561,7 +561,7 @@ impl RawTensor {
     /// ```ignore
     /// let t = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], false)
     ///     .to_device(Device::gpu().unwrap());
-    /// let _ = t.borrow().data.as_f32_slice(); // Populates CPU cache
+    /// let _ = t.borrow().data.to_host_f32(); // Populates CPU cache
     /// t.borrow_mut().invalidate_gpu_cache(); // Releases CPU copy
     /// ```
     pub fn invalidate_gpu_cache(&mut self) {
@@ -703,7 +703,7 @@ impl SumDimGradFn {
         out_grad: &RawTensor,
         _parents: &[Tensor],
     ) -> Vec<Option<Tensor>> {
-        let grad_data = &out_grad.data;
+        let grad_data = &*out_grad.data.to_host_f32();
         let grad_shape = &out_grad.shape;
 
         // If keepdim=false, we need to unsqueeze the dimension back
@@ -760,7 +760,7 @@ impl MaxDimGradFn {
         out_grad: &RawTensor,
         _parents: &[Tensor],
     ) -> Vec<Option<Tensor>> {
-        let grad_data = &out_grad.data;
+        let grad_data = &*out_grad.data.to_host_f32();
         let grad_shape = &out_grad.shape;
 
         let mut expanded_shape = grad_shape.clone();
@@ -833,6 +833,7 @@ impl RawTensor {
         let inner_size: usize = shape.get(dim + 1..).unwrap_or(&[]).iter().product();
 
         // Sum over the target dimension using stride arithmetic
+        let data = data.to_host_f32();
         for outer in 0..outer_size {
             for inner in 0..inner_size {
                 let out_idx = outer * inner_size + inner;
@@ -955,6 +956,7 @@ impl RawTensor {
         let inner_size: usize = shape.get(dim + 1..).unwrap_or(&[]).iter().product();
 
         // Find max over the target dimension using stride arithmetic
+        let data = data.to_host_f32();
         for outer in 0..outer_size {
             for inner in 0..inner_size {
                 let out_idx = outer * inner_size + inner;
@@ -1096,7 +1098,12 @@ impl RawTensor {
             for i in 0..original_data.len() {
                 //f(x + epsilon)
                 let mut data_plus = original_data.clone();
-                *slot(&mut data_plus, i) += epsilon;
+                *slot(
+                    data_plus
+                        .as_host_f32_mut()
+                        .expect("check_gradients: CPU F32 input"),
+                    i,
+                ) += epsilon;
                 let tensor_plus = Self::new(data_plus.to_vec(), &original_shape, requires_grad);
                 let loss_plus = loss_fn(&tensor_plus);
                 assert!(
@@ -1104,10 +1111,15 @@ impl RawTensor {
                     "check_gradients: loss must be scalar, got shape {:?}",
                     loss_plus.borrow().shape
                 );
-                let val_plus = fetch(&loss_plus.borrow().data, 0);
+                let val_plus = fetch(&loss_plus.borrow().data.to_host_f32(), 0);
 
                 let mut data_minus = original_data.clone();
-                *slot(&mut data_minus, i) -= epsilon;
+                *slot(
+                    data_minus
+                        .as_host_f32_mut()
+                        .expect("check_gradients: CPU F32 input"),
+                    i,
+                ) -= epsilon;
                 let tensor_minus = Self::new(data_minus.to_vec(), &original_shape, requires_grad);
                 let loss_minus = loss_fn(&tensor_minus);
                 assert!(
@@ -1115,7 +1127,7 @@ impl RawTensor {
                     "check_gradients: loss must be scalar, got shape {:?}",
                     loss_minus.borrow().shape
                 );
-                let val_minus = fetch(&loss_minus.borrow().data, 0);
+                let val_minus = fetch(&loss_minus.borrow().data.to_host_f32(), 0);
                 //central diff
                 *slot(&mut numerical_grad, i) = (val_plus - val_minus) / (2.0 * epsilon);
             }
@@ -1674,7 +1686,7 @@ mod tensor_tests {
         let b = t.borrow();
         assert_eq!(b.shape, vec![64, 32]);
         assert_eq!(b.data.len(), 64 * 32);
-        assert!(b.data.iter().any(|v| v.abs() > 0.0));
+        assert!(b.data.to_host_f32().iter().any(|v| v.abs() > 0.0));
     }
 
     #[test]
@@ -1683,7 +1695,7 @@ mod tensor_tests {
         let b = t.borrow();
         assert_eq!(b.shape, vec![16, 3, 3, 3]);
         assert_eq!(b.data.len(), 16 * 3 * 3 * 3);
-        assert!(b.data.iter().any(|v| v.abs() > 0.0));
+        assert!(b.data.to_host_f32().iter().any(|v| v.abs() > 0.0));
     }
 
     /// `item` reads a rank-0-style `[1]` tensor and a `[1, 1]` tensor.

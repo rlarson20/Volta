@@ -147,7 +147,12 @@ impl Adam {
         // Apply weight decay to gradient
         let mut active_grad = grad;
         if self.weight_decay != 0.0 {
-            for (g, theta) in active_grad.iter_mut().zip(p.data.iter()) {
+            for (g, theta) in active_grad
+                .as_host_f32_mut()
+                .expect("Adam weight decay: CPU F32 gradient")
+                .iter_mut()
+                .zip(p.data.to_host_f32().iter())
+            {
                 *g += self.weight_decay * *theta;
             }
         }
@@ -159,18 +164,19 @@ impl Adam {
         let m_slice = self
             .m
             .get_mut(i)
-            .and_then(|s| s.as_mut_slice())
+            .and_then(|s| s.as_host_f32_mut().ok())
             .expect("State should be CPU storage");
         let v_slice = self
             .v
             .get_mut(i)
-            .and_then(|s| s.as_mut_slice())
+            .and_then(|s| s.as_host_f32_mut().ok())
             .expect("State should be CPU storage");
 
         // Update biased moments
-        for j in 0..active_grad.len() {
+        let g_host = active_grad.to_host_f32();
+        for j in 0..g_host.len() {
             let m_val = fetch(m_slice, j);
-            let g_val = fetch(&active_grad, j);
+            let g_val = fetch(&g_host, j);
             *slot(m_slice, j) = self.betas.0.mul_add(m_val, (1.0 - self.betas.0) * g_val);
             let v_val = fetch(v_slice, j);
             *slot(v_slice, j) = self
@@ -186,7 +192,7 @@ impl Adam {
         // Update parameters
         let p_data = p
             .data
-            .as_mut_slice()
+            .as_host_f32_mut()
             .expect("Parameter should be CPU storage");
         for j in 0..p_data.len() {
             let m_val = fetch(m_slice, j);

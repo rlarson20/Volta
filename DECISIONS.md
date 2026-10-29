@@ -356,17 +356,37 @@ Choke points for whoever lands views: the operand reads in `RawTensor::matmul` (
 
 ### CPU storage: `Arc<[u8]>` copy-on-write (ADDENDUM §7)
 
-**Decision:** `Storage::Cpu` holds `Arc<[u8]>`. `clone` is a refcount bump, and the one write path, `as_f32_slice_mut` (behind `DerefMut`, `IndexMut`, `iter_mut`, and `as_mut_slice`), calls `Arc::make_mut`, which copies only when another storage shares the buffer. Value semantics are unchanged: a write to one tensor is never visible through another. Before this, every `data.clone()` snapshot in an op prologue or a `GradFn` was a full memcpy, including `reshape`, whose comment claimed it was a view.
+**Decision:** `Storage::Cpu` holds `Arc<[u8]>`. `clone` is a refcount bump, and the one write path (`as_f32_slice_mut` at the time, `as_host_f32_mut` since the `Deref` removal) calls `Arc::make_mut`, which copies only when another storage shares the buffer. Value semantics are unchanged: a write to one tensor is never visible through another. Before this, every `data.clone()` snapshot in an op prologue or a `GradFn` was a full memcpy, including `reshape`, whose comment claimed it was a view.
 
 **Why `Arc`, not `Rc`:** §7 specifies it, the GPU arm already uses `Arc<GpuBuffer>`, and `Rc` would build a `!Send` type into storage, which the arena route to threading (§6, "Stay synchronous") would then have to undo. Whether `Storage` is `Send` today with the `gpu` feature on was not checked. The atomic refcount costs nothing measurable next to the copies it removes. No speed numbers were taken; this was done in a cloud session where benches aren't valid.
 
 **Why `Arc<[u8]>`, not `Arc<Vec<u8>>`:** one indirection instead of two, and every typed constructor (`cpu`, `cpu_f64`, ...) already copies once from the typed `Vec` into bytes, so building the `Arc` straight from that slice costs no more than before. The exception is `try_from_bytes(Vec<u8>)` (and `to_dtype`'s `U8`/`Bool` arms), which used to take the `Vec` without copying and now copy it once into the `Arc`.
 
-**Alignment (unchanged):** `cast_slice::<u8, f32>` needs 4-byte alignment. The old `Vec<u8>` relied on the allocator handing out aligned blocks. `Arc<[u8]>` puts the bytes after its two-`usize` header, so they are 8-aligned in practice. Neither is a documented guarantee. bytemuck panics on a misaligned cast, so a failure would be loud. A typed backing store would fix it properly; that waits for the `Deref` removal.
+**Alignment (unchanged):** `cast_slice::<u8, f32>` needs 4-byte alignment. The old `Vec<u8>` relied on the allocator handing out aligned blocks. `Arc<[u8]>` puts the bytes after its two-`usize` header, so they are 8-aligned in practice. Neither is a documented guarantee. bytemuck panics on a misaligned cast, so a failure would be loud. A typed backing store would fix it properly.
 
-**Not changed:** op outputs still allocate, and broadcasts still materialize. The GPU host cache (`OnceCell`, H3) and the `Deref` removal are separate PRs.
+**Not changed:** op outputs still allocate, and broadcasts still materialize. The GPU host cache (`OnceCell`, H3) is a separate PR; the `Deref` removal is the next entry.
 
 **Tests:** `storage::tests::{cpu_clone_shares_buffer, cpu_write_after_clone_copies, cpu_unique_write_is_in_place}` pin sharing, copy-on-write, and the no-copy path for a unique owner (the optimizer case). `autograd::tests::optimizer_write_does_not_leak_into_shared_reshape` checks that an SGD step on `x` leaves a reshape of `x`, which shares its buffer, unchanged.
+
+### No `Deref` on `Storage` (ADDENDUM §7)
+
+**Decision:** `Storage` has no `Deref`/`DerefMut`, no `Index`/`IndexMut`, no `IntoIterator`, and no `iter`/`iter_mut`/`as_slice`/`as_f32_slice`/`as_f32_slice_mut`. Host access is three explicit methods:
+
+- `as_host_f32() -> Result<&[f32], VoltaError>`: CPU F32 only, never transfers. GPU storage is `DeviceError`; another dtype is `DTypeMismatch`.
+- `to_host_f32() -> Cow<'_, [f32]>`: the host transfer, spelled out. CPU F32 is borrowed; GPU F32 syncs on first read and borrows the cached copy; other dtypes convert into an owned `Vec`.
+- `as_host_f32_mut() -> Result<&mut [f32], VoltaError>`: the one write path, copy-on-write. GPU storage and other dtypes are errors. Callers `.expect` with a message naming the site.
+
+Before, `fetch(&s.data, i)`, `zip(&data)`, and `data.iter()` coerced silently, so a GPU→host readback or a GPU-storage panic (`DerefMut` on GPU, the H8 class) had no trace at the call site. The removal is pinned by `tests/compile_fail/storage_no_deref.rs`.
+
+**Why kernels call `to_host_f32`, not `as_host_f32`:** GPU storage can reach CPU kernels today through the GPU→CPU fallbacks, and which of the 144 `to_host_f32` call sites in `src/` can see it was not checked on a GPU. `to_host_f32` keeps each site's behavior on both devices; `as_host_f32().expect(..)` would have added panics that only a GPU run could exercise. Narrowing sites to `as_host_f32` is for `DevicePolicy`, which decides what a GPU operand at a CPU kernel should do.
+
+**Why the GPU arm borrows the existing cache:** an owned readback per call would re-copy from the GPU on every read where today's cache serves it once, a performance change that can't be measured off a GPU. The cache, and its `unsafe` block, stay until the `OnceCell` PR (H3), which changes only the internals of `to_host_f32`.
+
+**Hoisting:** the conversion was compiler-driven, and its first pass put `to_host_f32()` inside element loops. Those 28 sites now take one host view before the loop. In GPU-capable functions the view is taken after the GPU dispatch (matmul backward, for example), so a successful GPU path never syncs to the host.
+
+**Writes keep their failure mode:** every former `DerefMut`/`iter_mut` write (optimizers, BatchNorm running stats, `check_gradients`, Muon) already panicked on GPU storage. It now panics at a named `expect` instead of inside the trait impl. Muon's names H8.
+
+**Public API:** this breaks `Storage` users that indexed, iterated, or coerced it (pre-1.0). In-repo, two integration tests changed (`coverage_fill`, `test_error_paths`).
 
 ## Concurrency and Async
 

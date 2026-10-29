@@ -136,23 +136,33 @@ impl Layer for BatchNorm2d {
                 let _no_grad = crate::autograd::no_grad();
                 let mut rm = self.running_mean.borrow_mut();
                 let mut rv = self.running_var.borrow_mut();
-                let bm_data = &batch_mean.borrow().data;
-                let bv_data = &batch_var.borrow().data;
+                let bm_ref = batch_mean.borrow();
+                let bm_data = &*bm_ref.data.to_host_f32();
+                let bv_ref = batch_var.borrow();
+                let bv_data = &*bv_ref.data.to_host_f32();
 
                 // Note: PyTorch uses unbiased (N-1) for running_var update,
                 // but biased for batch norm calculation.
                 // We stick to standard implementation:
                 let m = self.momentum;
 
+                let rm_host = rm
+                    .data
+                    .as_host_f32_mut()
+                    .expect("BatchNorm running_mean: CPU F32 storage");
+                let rv_host = rv
+                    .data
+                    .as_host_f32_mut()
+                    .expect("BatchNorm running_var: CPU F32 storage");
                 for i in 0..self.num_features {
-                    let rm_val = fetch(&rm.data, i);
+                    let rm_val = fetch(rm_host, i);
                     let bm_val = fetch(bm_data, i);
-                    *slot(&mut rm.data, i) = (1.0 - m).mul_add(rm_val, m * bm_val);
+                    *slot(rm_host, i) = (1.0 - m).mul_add(rm_val, m * bm_val);
                     // Bessel correction for running_var update usually applied
                     let bv_val = fetch(bv_data, i);
                     let unbiased_var = bv_val * num_pixels / (num_pixels - 1.0);
-                    let rv_val = fetch(&rv.data, i);
-                    *slot(&mut rv.data, i) = (1.0 - m).mul_add(rv_val, m * unbiased_var);
+                    let rv_val = fetch(rv_host, i);
+                    *slot(rv_host, i) = (1.0 - m).mul_add(rv_val, m * unbiased_var);
                 }
             }
 
@@ -301,19 +311,29 @@ impl Layer for BatchNorm1d {
                 let _no_grad = crate::autograd::no_grad();
                 let mut rm = self.running_mean.borrow_mut();
                 let mut rv = self.running_var.borrow_mut();
-                let bm_data = &batch_mean.borrow().data;
-                let bv_data = &batch_var.borrow().data;
+                let bm_ref = batch_mean.borrow();
+                let bm_data = &*bm_ref.data.to_host_f32();
+                let bv_ref = batch_var.borrow();
+                let bv_data = &*bv_ref.data.to_host_f32();
 
                 let m = self.momentum;
+                let rm_host = rm
+                    .data
+                    .as_host_f32_mut()
+                    .expect("BatchNorm running_mean: CPU F32 storage");
+                let rv_host = rv
+                    .data
+                    .as_host_f32_mut()
+                    .expect("BatchNorm running_var: CPU F32 storage");
                 for i in 0..self.num_features {
-                    let rm_val = fetch(&rm.data, i);
+                    let rm_val = fetch(rm_host, i);
                     let bm_val = fetch(bm_data, i);
-                    *slot(&mut rm.data, i) = (1.0 - m).mul_add(rm_val, m * bm_val);
+                    *slot(rm_host, i) = (1.0 - m).mul_add(rm_val, m * bm_val);
                     // Bessel correction for running_var update
                     let bv_val = fetch(bv_data, i);
                     let unbiased_var = bv_val * batch_size / (batch_size - 1.0);
-                    let rv_val = fetch(&rv.data, i);
-                    *slot(&mut rv.data, i) = (1.0 - m).mul_add(rv_val, m * unbiased_var);
+                    let rv_val = fetch(rv_host, i);
+                    *slot(rv_host, i) = (1.0 - m).mul_add(rv_val, m * unbiased_var);
                 }
             }
 

@@ -90,6 +90,7 @@ impl MaxPool2d {
         };
 
         let data = x_padded.borrow().data.clone();
+        let data = data.to_host_f32();
 
         let mut out_data = vec![0.0; batch * channels * h_out * w_out];
         let mut max_indices = vec![0usize; out_data.len()];
@@ -160,8 +161,9 @@ impl MaxPool2dGradFn {
         let input_shape = parents.first().unwrap().borrow().shape.clone();
         let mut grad_input = vec![0.0; input_shape.iter().product()];
 
+        let g_host = out_grad.data.to_host_f32();
         for (idx, &max_linear_idx) in self.max_indices.iter().enumerate() {
-            let grad_val = fetch(&out_grad.data, idx);
+            let grad_val = fetch(&g_host, idx);
             *slot(&mut grad_input, max_linear_idx) += grad_val;
         }
 
@@ -601,7 +603,7 @@ mod tests {
 
         // 1x1 kernel with stride 1 on 1x1 input: output is 1x1 with same value
         assert_eq!(y.borrow().shape, vec![1, 1, 1, 1]);
-        assert_eq!(y.borrow().data.first().copied().unwrap(), 5.0);
+        assert_eq!(y.item(), 5.0);
 
         // Gradient should flow correctly
         let loss = y.sum();
@@ -619,7 +621,7 @@ mod tests {
 
         // 4x4 kernel with stride 1 on 4x4 input: output is 1x1 (global max pool)
         assert_eq!(y.borrow().shape, vec![1, 1, 1, 1]);
-        assert_eq!(y.borrow().data.first().copied().unwrap(), 15.0); // Max is 15.0
+        assert_eq!(y.item(), 15.0); // Max is 15.0
 
         // Gradient should flow to the max position only
         let loss = y.sum();

@@ -163,16 +163,20 @@ impl Im2colGradFn {
                 gpu_storage
             } else {
                 // Fallback to CPU - convert Vec<f32> to Storage
-                crate::storage::Storage::cpu(Conv2d::col2im(&out_grad.data, &self.spec))
+                crate::storage::Storage::cpu(Conv2d::col2im(
+                    &out_grad.data.to_host_f32(),
+                    &self.spec,
+                ))
             }
         } else {
             // CPU path - convert Vec<f32> to Storage
-            crate::storage::Storage::cpu(Conv2d::col2im(&out_grad.data, &self.spec))
+            crate::storage::Storage::cpu(Conv2d::col2im(&out_grad.data.to_host_f32(), &self.spec))
         };
 
         #[cfg(not(feature = "gpu"))]
         // CPU-only build: col2im always runs on the host
-        let grad_storage = crate::storage::Storage::cpu(Conv2d::col2im(&out_grad.data, &self.spec));
+        let grad_storage =
+            crate::storage::Storage::cpu(Conv2d::col2im(&out_grad.data.to_host_f32(), &self.spec));
 
         // Determine device from storage
         let device = if grad_storage.is_gpu() {

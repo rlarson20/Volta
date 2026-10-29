@@ -30,7 +30,7 @@ impl SumGradFn {
         _parents: &[Tensor],
     ) -> Vec<Option<Tensor>> {
         let size: usize = self.input_shape.iter().product();
-        let grad_val: f32 = fetch(&out_grad.data, 0);
+        let grad_val: f32 = fetch(&out_grad.data.to_host_f32(), 0);
 
         // Check if we can do GPU backward
         #[cfg(feature = "gpu")]
@@ -72,7 +72,7 @@ impl MaxReduceGradFn {
         _parents: &[Tensor],
     ) -> Vec<Option<Tensor>> {
         let size: usize = self.input_shape.iter().product();
-        let grad_val: f32 = fetch(&out_grad.data, 0);
+        let grad_val: f32 = fetch(&out_grad.data.to_host_f32(), 0);
 
         // Check if we can do GPU backward
         #[cfg(feature = "gpu")]
@@ -112,7 +112,7 @@ impl MeanGradFn {
         _parents: &[Tensor],
     ) -> Vec<Option<Tensor>> {
         let size: usize = self.input_shape.iter().product();
-        let grad_val: f32 = fetch(&out_grad.data, 0);
+        let grad_val: f32 = fetch(&out_grad.data.to_host_f32(), 0);
 
         // Check if we can do GPU backward
         #[cfg(feature = "gpu")]
@@ -163,15 +163,15 @@ impl RawTensor {
                         if let Some(result) = Self::gpu_sum_reduce(&data) {
                             result
                         } else {
-                            data.iter().sum()
+                            data.to_host_f32().iter().sum()
                         }
                     }
                     #[cfg(not(feature = "gpu"))]
                     {
-                        data.iter().sum()
+                        data.to_host_f32().iter().sum()
                     }
                 } else {
-                    data.iter().sum()
+                    data.to_host_f32().iter().sum()
                 };
                 (sum, GradFn::Sum(SumGradFn { input_shape: shape }))
             }
@@ -184,6 +184,7 @@ impl RawTensor {
                             result
                         } else {
                             let (max_val, max_idx) = data
+                                .to_host_f32()
                                 .iter()
                                 .enumerate()
                                 .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
@@ -195,6 +196,7 @@ impl RawTensor {
                     #[cfg(not(feature = "gpu"))]
                     {
                         let (max_val, max_idx) = data
+                            .to_host_f32()
                             .iter()
                             .enumerate()
                             .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
@@ -204,6 +206,7 @@ impl RawTensor {
                     }
                 } else {
                     let (max_val, max_idx) = data
+                        .to_host_f32()
                         .iter()
                         .enumerate()
                         .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
@@ -227,17 +230,17 @@ impl RawTensor {
                         if let Some(result) = Self::gpu_mean_reduce(&data) {
                             result
                         } else {
-                            let sum: f32 = data.iter().sum();
+                            let sum: f32 = data.to_host_f32().iter().sum();
                             sum / (data.len() as f32)
                         }
                     }
                     #[cfg(not(feature = "gpu"))]
                     {
-                        let sum: f32 = data.iter().sum();
+                        let sum: f32 = data.to_host_f32().iter().sum();
                         sum / (data.len() as f32)
                     }
                 } else {
-                    let sum: f32 = data.iter().sum();
+                    let sum: f32 = data.to_host_f32().iter().sum();
                     sum / (data.len() as f32)
                 };
                 (mean_val, GradFn::Mean(MeanGradFn { input_shape: shape }))

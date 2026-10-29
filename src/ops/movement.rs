@@ -463,6 +463,7 @@ impl MovementGradFn {
                 let old_strides = Strides::from_shape(&self.original_shape);
                 let old_strides = old_strides.truncate_rank();
 
+                let g_host = out_grad.data.to_host_f32();
                 for i in 0..out_grad.data.len() {
                     let mut old_idx = 0;
                     let mut rem = i;
@@ -475,7 +476,7 @@ impl MovementGradFn {
                             old_idx += coord * old_strides.get(j).copied().unwrap_or(1);
                         }
                     }
-                    *slot(&mut grad_data, old_idx) += fetch(&out_grad.data, i);
+                    *slot(&mut grad_data, old_idx) += fetch(&g_host, i);
                 }
                 RawTensor::new(grad_data, &self.original_shape, false)
             }
@@ -516,7 +517,15 @@ impl MovementGradFn {
                     new_strides,
                 );
 
-                apply_movement_backward(&ctx, &mut result, &out_grad.data, 0, &mapper, 0, 0);
+                apply_movement_backward(
+                    &ctx,
+                    &mut result,
+                    &out_grad.data.to_host_f32(),
+                    0,
+                    &mapper,
+                    0,
+                    0,
+                );
                 RawTensor::new(result, &self.original_shape, false)
             }
             MovementOp::Shrink { ranges } => {
@@ -556,7 +565,15 @@ impl MovementGradFn {
                     new_strides,
                 );
 
-                apply_movement_backward(&ctx, &mut result, &out_grad.data, 0, &mapper, 0, 0);
+                apply_movement_backward(
+                    &ctx,
+                    &mut result,
+                    &out_grad.data.to_host_f32(),
+                    0,
+                    &mapper,
+                    0,
+                    0,
+                );
                 RawTensor::new(result, &self.original_shape, false)
             }
             MovementOp::Stride { strides } => {
@@ -596,7 +613,15 @@ impl MovementGradFn {
                     new_strides_mem,
                 );
 
-                apply_movement_backward(&ctx, &mut result, &out_grad.data, 0, &mapper, 0, 0);
+                apply_movement_backward(
+                    &ctx,
+                    &mut result,
+                    &out_grad.data.to_host_f32(),
+                    0,
+                    &mapper,
+                    0,
+                    0,
+                );
                 RawTensor::new(result, &self.original_shape, false)
             }
         };

@@ -317,8 +317,9 @@ mod tests {
 
         // At least some values should be different
         let differences = output_data
+            .to_host_f32()
             .iter()
-            .zip(input_data.iter())
+            .zip(input_data.to_host_f32().iter())
             .filter(|(out, inp)| (**out - **inp).abs() > 1e-6)
             .count();
 
@@ -360,8 +361,9 @@ mod tests {
         let input_data = x.borrow().data.clone();
 
         let differences = output_data
+            .to_host_f32()
             .iter()
-            .zip(input_data.iter())
+            .zip(input_data.to_host_f32().iter())
             .filter(|(out, inp)| (**out - **inp).abs() > 1e-6)
             .count();
 

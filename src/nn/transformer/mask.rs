@@ -56,7 +56,7 @@ mod tests {
     #[test]
     fn test_causal_mask_values() {
         let mask = causal_mask(3, crate::Device::CPU);
-        let data = mask.borrow().data.clone();
+        let data = mask.data();
 
         // Check lower triangle and diagonal (should be 0)
         assert_relative_eq!(*data.first().unwrap(), 0.0); // [0, 0]
@@ -76,13 +76,13 @@ mod tests {
     fn test_causal_mask_size_1() {
         let mask = causal_mask(1, crate::Device::CPU);
         assert_eq!(mask.borrow().shape, vec![1, 1]);
-        assert_relative_eq!(*mask.borrow().data.first().unwrap(), 0.0);
+        assert_relative_eq!(*mask.data().first().unwrap(), 0.0);
     }
 
     #[test]
     fn test_causal_mask_size_2() {
         let mask = causal_mask(2, crate::Device::CPU);
-        let data = mask.borrow().data.clone();
+        let data = mask.data();
 
         // Row 0: [0, -inf]
         assert_relative_eq!(*data.first().unwrap(), 0.0);
