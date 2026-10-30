@@ -392,6 +392,20 @@ Before, `fetch(&s.data, i)`, `zip(&data)`, and `data.iter()` coerced silently, s
 
 **Public API:** this breaks `Storage` users that indexed, iterated, or coerced it (pre-1.0). In-repo, two integration tests changed (`coverage_fill`, `test_error_paths`).
 
+### GPU storage: shared write-once host copy, copy-on-write writes (ADDENDUM §7, H3)
+
+**Decision:** `Storage::Gpu(Arc<GpuStorage>)`, where `GpuStorage { buffer: GpuBuffer, host: OnceLock<Vec<f32>> }`. `clone` is a refcount bump and shares the buffer *and* its host copy. The one GPU write path is `Storage::gpu_buffer_mut(&mut self)`: if the `Arc` is shared it copies the buffer on the device (`GpuBuffer::copy_region`) into a fresh `GpuStorage`, then drops the now-unique host copy. This is the CPU `Arc::make_mut` rule applied to a device buffer. `gpu_optimizer_step` takes `&mut Storage` for the parameter and both state buffers and writes only through it. It was the only kernel that writes a buffer it was handed: every other `GpuKernels` entry point returns a new buffer (checked by listing the `Option<()>`-returning kernels, and gradient accumulation goes through `gpu_add`).
+
+**What was wrong:** clones shared one `Arc<GpuBuffer>` but each had its own `RefCell<Option<Vec<u8>>>` host cache, handed out as `&[f32]` through `unsafe { *cache.as_ptr() }` under a "never cleared" SAFETY comment that `invalidate_cpu_cache` and both optimizers contradicted. The optimizer wrote through `&Storage` into the shared buffer and cleared only the parameter's own cache. A `detach()` snapshot that had not been read yet therefore showed the stepped values (`tests/gpu_storage.rs::detached_snapshot_keeps_its_value_across_an_optimizer_step`, red on the old code). One that had been read kept the old values only because its private cache was stale, not because anything protected it. The cache was also a `Vec<u8>` cast to `&[f32]`, whose alignment is not guaranteed.
+
+**Why one `Arc` for buffer and host copy:** a host copy shared separately from the buffer is exactly how they diverged. In one `Arc` the copy is valid whenever the buffer is unchanged, and the buffer can only change while unshared, where `gpu_buffer_mut` clears the copy. `OnceLock`, not `OnceCell`: the old `Arc<GpuBuffer>` was `Send + Sync`, and an `Arc` around a `OnceCell` would not be (clippy's `arc_with_non_send_sync` caught it). `Tensor` is `Rc`-based, so nothing needs the `Send` today, but the storage should not be the thing that rules it out.
+
+**Removed:** the f64/f16/bf16 accessors' GPU arms. They reinterpreted f32 bytes under another dtype, and GPU storage is f32-only, so `dtype()` returns `F32` for it and the field is gone. `invalidate_cpu_cache` now drops the host copy only if the storage is unshared; a shared copy is still correct and other storages may be reading it.
+
+**Behavior change:** a failed GPU optimizer step used to be dropped (`.is_some()` into a flag), leaving the parameter silently untrained. It is now an `expect`: a CPU fallback cannot write GPU storage.
+
+**Tests:** `ops::gpu_ops::tests::gpu_optimizer_step_{does_not_change_an_unread_snapshot, refreshes_the_params_own_host_read, does_not_change_a_read_snapshot}` and `tests/gpu_storage.rs` (SGD with momentum and Adam against CPU over three steps with a host read after each, the `detach` snapshot, and the bytes round trip). Of these only the unread-snapshot pair and the param-refresh test fail on the old code; the rest are regression guards for the new design. All ran on a real adapter (2026-10-30).
+
 ### `RawTensor.shape` is a `Shape` (supersedes "Shape boundary")
 
 **Decision:** the field is a `Shape`. Op, layer, and backward code reads it through typed accessors, not by demoting it:

@@ -90,80 +90,38 @@ impl SGD {
     }
 
     /// GPU-accelerated step for a single parameter
+    ///
+    /// # Panics
+    /// If the GPU kernel cannot run: a CPU fallback cannot write GPU storage, and skipping
+    /// the update would leave the parameter silently untrained.
     #[cfg(feature = "gpu")]
-    fn step_gpu_param(&self, i: usize) {
+    fn step_gpu_param(&mut self, i: usize) {
         use crate::gpu::OptimizerStepParams;
 
-        // For simple SGD (no momentum), use the simple path
-        if self.momentum == 0.0 {
-            return self.step_gpu_param_simple(i);
-        }
-
-        let op_code = 1; // SGD with momentum
-
         let param = self.params.get(i).unwrap();
-        let p = param.borrow_mut();
+        let mut p = param.borrow_mut();
 
         let grad = match &p.grad {
             Some(g) => g.clone(),
             None => return,
         };
 
-        // Get velocity state (already on GPU)
-        let vel_state = self.velocity.get(i).unwrap();
-
-        // Dummy second state buffer (not used for SGD)
-        let dummy_state2 = Storage::new_zeros(p.data.len(), &p.device);
-
-        // Setup optimizer parameters
-        let opt_params = OptimizerStepParams {
-            op: op_code, // 0=SGD, 1=SGD+momentum
-            lr: self.lr,
-            beta1: self.momentum, // Used as momentum coefficient
-            beta2: 0.0,           // Not used for SGD
-            t: 0.0,               // Not used for SGD
-            eps: 0.0,             // Not used for SGD
-            weight_decay: self.weight_decay,
-            padding: 0.0,
+        let len = p.data.len();
+        let device = p.device.clone();
+        // Plain SGD keeps no state, but the kernel binds both state buffers.
+        let mut dummy_state1 = Storage::new_zeros(len, &device);
+        let mut dummy_state2 = Storage::new_zeros(len, &device);
+        let (op, beta1, state1) = if self.momentum == 0.0 {
+            (0, 0.0, &mut dummy_state1)
+        } else {
+            // Velocity is already on the GPU, with the parameter.
+            (1, self.momentum, self.velocity.get_mut(i).unwrap())
         };
 
-        // Run GPU optimizer step (updates params and velocity in-place)
-        let success = crate::RawTensor::gpu_optimizer_step(
-            &p.data,
-            &grad,
-            vel_state,
-            &dummy_state2,
-            &opt_params,
-        )
-        .is_some();
-
-        // Invalidate CPU cache since parameter was updated on GPU
-        if success && let Storage::Gpu { ref cpu_cache, .. } = p.data {
-            *cpu_cache.borrow_mut() = None;
-        }
-    }
-
-    /// GPU step for simple SGD (no momentum)
-    #[cfg(feature = "gpu")]
-    fn step_gpu_param_simple(&self, i: usize) {
-        use crate::gpu::OptimizerStepParams;
-
-        let param = self.params.get(i).unwrap();
-        let p = param.borrow_mut();
-
-        let grad = match &p.grad {
-            Some(g) => g.clone(),
-            None => return,
-        };
-
-        // Create dummy state buffers
-        let dummy_state1 = Storage::new_zeros(p.data.len(), &p.device);
-        let dummy_state2 = Storage::new_zeros(p.data.len(), &p.device);
-
         let opt_params = OptimizerStepParams {
-            op: 0, // Simple SGD
+            op, // 0=SGD, 1=SGD+momentum
             lr: self.lr,
-            beta1: 0.0,
+            beta1, // Momentum coefficient
             beta2: 0.0,
             t: 0.0,
             eps: 0.0,
@@ -171,18 +129,16 @@ impl SGD {
             padding: 0.0,
         };
 
-        let success = crate::RawTensor::gpu_optimizer_step(
-            &p.data,
+        // Updates the parameter (and velocity) in place. `gpu_optimizer_step` unshares each
+        // buffer first and drops its host copy, so snapshots and later reads stay correct.
+        crate::RawTensor::gpu_optimizer_step(
+            &mut p.data,
             &grad,
-            &dummy_state1,
-            &dummy_state2,
+            state1,
+            &mut dummy_state2,
             &opt_params,
         )
-        .is_some();
-
-        if success && let Storage::Gpu { ref cpu_cache, .. } = p.data {
-            *cpu_cache.borrow_mut() = None;
-        }
+        .expect("GPU SGD step failed: the parameter was not updated");
     }
 
     /// CPU update for a single parameter

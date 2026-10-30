@@ -12,10 +12,6 @@ use crate::shape::Shape;
 use crate::spec::PadValue;
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
-#[cfg(feature = "gpu")]
-use std::cell::RefCell;
-#[cfg(feature = "gpu")]
-use std::sync::Arc;
 
 impl RawTensor {
     /// GPU-accelerated element-wise binary op (same shape; no broadcasting)
@@ -28,11 +24,7 @@ impl RawTensor {
 
         // Return GPU storage without eager CPU transfer.
         // CPU access requires explicit to_vec() call.
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated element-wise addition
@@ -90,11 +82,7 @@ impl RawTensor {
         let buf_b = b.gpu_buffer()?;
 
         let result = GpuKernels::matmul(buf_a, buf_b, spec)?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated unary operation
@@ -103,11 +91,7 @@ impl RawTensor {
         let buf = input.gpu_buffer()?;
 
         let result = GpuKernels::unary_op(buf, op)?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated unary backward operation
@@ -123,11 +107,7 @@ impl RawTensor {
         let buf_x = x.gpu_buffer()?;
 
         let result = GpuKernels::unary_backward(buf_out, buf_x, op)?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated binary backward operation for first input (a)
@@ -145,11 +125,7 @@ impl RawTensor {
         let buf_b = b.gpu_buffer()?;
 
         let result = GpuKernels::binary_backward_a(buf_out, buf_a, buf_b, op)?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated binary backward operation for second input (b)
@@ -167,11 +143,7 @@ impl RawTensor {
         let buf_b = b.gpu_buffer()?;
 
         let result = GpuKernels::binary_backward_b(buf_out, buf_a, buf_b, op)?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated binary backward with RACE-FREE broadcasting support
@@ -199,16 +171,8 @@ impl RawTensor {
         )?;
 
         Some((
-            Storage::Gpu {
-                buffer: Arc::new(a_grad),
-                dtype: crate::dtype::DType::F32,
-                cpu_cache: RefCell::new(None),
-            },
-            Storage::Gpu {
-                buffer: Arc::new(b_grad),
-                dtype: crate::dtype::DType::F32,
-                cpu_cache: RefCell::new(None),
-            },
+            Storage::from_gpu_buffer(a_grad),
+            Storage::from_gpu_buffer(b_grad),
         ))
     }
 
@@ -358,11 +322,7 @@ impl RawTensor {
     ) -> Option<Storage> {
         let buf = data.gpu_buffer()?;
         let result = GpuKernels::permute(buf, old_shape, new_shape, axes)?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated expand (broadcast) operation
@@ -374,11 +334,7 @@ impl RawTensor {
     ) -> Option<Storage> {
         let buf = data.gpu_buffer()?;
         let result = GpuKernels::expand(buf, old_shape, new_shape)?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated pad operation
@@ -392,11 +348,7 @@ impl RawTensor {
     ) -> Option<Storage> {
         let buf = data.gpu_buffer()?;
         let result = GpuKernels::pad(buf, old_shape, new_shape, padding, value)?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated shrink operation
@@ -409,11 +361,7 @@ impl RawTensor {
     ) -> Option<Storage> {
         let buf = data.gpu_buffer()?;
         let result = GpuKernels::shrink(buf, old_shape, new_shape, ranges)?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated stride operation
@@ -426,11 +374,7 @@ impl RawTensor {
     ) -> Option<Storage> {
         let buf = data.gpu_buffer()?;
         let result = GpuKernels::stride(buf, old_shape, new_shape, strides)?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     // Without the `gpu` feature there is no GPU storage, so every forward movement wrapper
@@ -504,11 +448,7 @@ impl RawTensor {
         let buf_b = b.gpu_buffer()?;
 
         let result = GpuKernels::matmul_backward_a(buf_grad, buf_b, spec)?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated matmul backward operation for gradient with respect to B
@@ -524,11 +464,7 @@ impl RawTensor {
         let buf_grad = grad.gpu_buffer()?;
 
         let result = GpuKernels::matmul_backward_b(buf_a, buf_grad, spec)?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated sum backward operation
@@ -537,11 +473,7 @@ impl RawTensor {
     #[cfg(feature = "gpu")]
     pub(crate) fn gpu_sum_backward(grad: f32, input_size: usize) -> Option<Storage> {
         let result = GpuKernels::sum_backward(grad, input_size)?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated mean backward operation
@@ -550,11 +482,7 @@ impl RawTensor {
     #[cfg(feature = "gpu")]
     pub(crate) fn gpu_mean_backward(grad: f32, input_size: usize) -> Option<Storage> {
         let result = GpuKernels::mean_backward(grad, input_size)?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated max backward operation
@@ -567,11 +495,7 @@ impl RawTensor {
         max_index: usize,
     ) -> Option<Storage> {
         let result = GpuKernels::max_backward(grad, input_size, max_index)?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated optimizer step operation
@@ -580,16 +504,18 @@ impl RawTensor {
     /// Supports SGD, SGD with momentum, and Adam optimizers.
     #[cfg(feature = "gpu")]
     pub(crate) fn gpu_optimizer_step(
-        params: &Storage,
+        params: &mut Storage,
         grads: &Storage,
-        state1: &Storage,
-        state2: &Storage,
+        state1: &mut Storage,
+        state2: &mut Storage,
         opt_params: &crate::gpu::OptimizerStepParams,
     ) -> Option<()> {
-        let buf_params = params.gpu_buffer()?;
+        // The kernel writes `params`, `state1` and `state2` in place, so each goes through
+        // the one GPU write path, which unshares it first.
+        let buf_params = params.gpu_buffer_mut()?;
         let buf_grads = grads.gpu_buffer()?;
-        let buf_state1 = state1.gpu_buffer()?;
-        let buf_state2 = state2.gpu_buffer()?;
+        let buf_state1 = state1.gpu_buffer_mut()?;
+        let buf_state2 = state2.gpu_buffer_mut()?;
         GpuKernels::optimizer_step(buf_params, buf_grads, buf_state1, buf_state2, opt_params)
     }
 
@@ -600,11 +526,7 @@ impl RawTensor {
     pub(crate) fn gpu_im2col(input: &Storage, spec: &crate::spec::Window2dSpec) -> Option<Storage> {
         let buf_input = input.gpu_buffer()?;
         let result = GpuKernels::im2col(buf_input, spec)?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated col2im transformation for convolution gradient computation
@@ -615,11 +537,7 @@ impl RawTensor {
     pub(crate) fn gpu_col2im(col: &Storage, spec: &crate::spec::Window2dSpec) -> Option<Storage> {
         let buf_col = col.gpu_buffer()?;
         let result = GpuKernels::col2im(buf_col, spec)?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated direct convolution
@@ -634,11 +552,7 @@ impl RawTensor {
 
         let result = GpuKernels::direct_conv(buf_input, buf_weight, spec)?;
 
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated iGEMM convolution with tiled computation
@@ -653,11 +567,7 @@ impl RawTensor {
 
         let result = GpuKernels::igemm(buf_input, buf_weight, spec)?;
 
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated convolution backward: gradient with respect to input
@@ -672,11 +582,7 @@ impl RawTensor {
 
         let result = crate::gpu::GpuKernels::conv_backward_input(buf_out_grad, buf_weight, spec)?;
 
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated convolution backward: gradient with respect to weights
@@ -691,11 +597,7 @@ impl RawTensor {
 
         let result = crate::gpu::GpuKernels::conv_backward_weight(buf_out_grad, buf_input, spec)?;
 
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated iGEMM convolution backward: gradient with respect to input
@@ -710,11 +612,7 @@ impl RawTensor {
 
         let result = crate::gpu::GpuKernels::igemm_backward_input(buf_out_grad, buf_weight, spec)?;
 
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated iGEMM convolution backward: gradient with respect to weights
@@ -729,11 +627,7 @@ impl RawTensor {
 
         let result = crate::gpu::GpuKernels::igemm_backward_weight(buf_out_grad, buf_input, spec)?;
 
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     // ===== MOVEMENT BACKWARD OPERATIONS =====
@@ -748,11 +642,7 @@ impl RawTensor {
     ) -> Option<Storage> {
         let buf = out_grad.gpu_buffer()?;
         let result = GpuKernels::permute_backward(buf, old_shape, new_shape, axes)?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated expand backward operation (sum over broadcast dimensions)
@@ -764,11 +654,7 @@ impl RawTensor {
     ) -> Option<Storage> {
         let buf = out_grad.gpu_buffer()?;
         let result = GpuKernels::expand_backward(buf, old_shape, new_shape)?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated pad backward operation (extract center region)
@@ -781,11 +667,7 @@ impl RawTensor {
     ) -> Option<Storage> {
         let buf = out_grad.gpu_buffer()?;
         let result = GpuKernels::pad_backward(buf, old_shape, new_shape, padding)?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated shrink backward operation (pad back to original size)
@@ -798,11 +680,7 @@ impl RawTensor {
     ) -> Option<Storage> {
         let buf = out_grad.gpu_buffer()?;
         let result = GpuKernels::shrink_backward(buf, old_shape, new_shape, ranges)?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated stride backward operation (upsample gradient)
@@ -815,11 +693,7 @@ impl RawTensor {
     ) -> Option<Storage> {
         let buf = out_grad.gpu_buffer()?;
         let result = GpuKernels::stride_backward(buf, old_shape, new_shape, strides)?;
-        Some(Storage::Gpu {
-            buffer: Arc::new(result),
-            dtype: crate::dtype::DType::F32,
-            cpu_cache: RefCell::new(None),
-        })
+        Some(Storage::from_gpu_buffer(result))
     }
 
     // Without the `gpu` feature there is no GPU storage, so every wrapper below answers
@@ -1075,7 +949,7 @@ mod tests {
         // Must be GPU-backed storage.
         assert!(out.is_gpu());
 
-        // cpu_cache is NOT eagerly populated (lazy transfer).
+        // The host copy is NOT eagerly read (lazy transfer).
         // to_vec() fetches from GPU buffer when cache is None.
         assert_eq!(out.to_vec(), vec![6.0, 8.0, 10.0, 12.0]);
     }
@@ -1162,5 +1036,81 @@ mod tests {
             (&[2, 3], &[3]),
             (&[4, 2, 3], &[2, 1]),
         ]);
+    }
+
+    fn sgd_params(lr: f32) -> crate::gpu::OptimizerStepParams {
+        crate::gpu::OptimizerStepParams {
+            op: 0,
+            lr,
+            beta1: 0.0,
+            beta2: 0.0,
+            t: 0.0,
+            eps: 0.0,
+            weight_decay: 0.0,
+            padding: 0.0,
+        }
+    }
+
+    /// H3: a snapshot (a clone of the storage) keeps its value across an in-place optimizer
+    /// step, the way a CPU snapshot does under copy-on-write. The snapshot is deliberately
+    /// not read until after the step: clones share one GPU buffer, so before the fix the
+    /// step rewrote the snapshot's data underneath it.
+    #[test]
+    fn gpu_optimizer_step_does_not_change_an_unread_snapshot() {
+        if !is_gpu_available() {
+            return;
+        }
+        let mut param = Storage::gpu(vec![1.0, 2.0, 3.0, 4.0]);
+        let grad = Storage::gpu(vec![1.0, 1.0, 1.0, 1.0]);
+        let (mut s1, mut s2) = (Storage::gpu(vec![0.0; 4]), Storage::gpu(vec![0.0; 4]));
+        let snapshot = param.clone();
+
+        RawTensor::gpu_optimizer_step(&mut param, &grad, &mut s1, &mut s2, &sgd_params(0.5))
+            .expect("optimizer step");
+
+        assert_eq!(param.to_vec(), vec![0.5, 1.5, 2.5, 3.5], "param is updated");
+        assert_eq!(
+            snapshot.to_vec(),
+            vec![1.0, 2.0, 3.0, 4.0],
+            "the snapshot must keep its value"
+        );
+    }
+
+    /// The same snapshot read on the host first. This passed before the fix too, only because
+    /// the snapshot's private host cache held the old values while its buffer was already
+    /// overwritten: it guards the cache and the buffer staying consistent, not the bug above.
+    #[test]
+    fn gpu_optimizer_step_does_not_change_a_read_snapshot() {
+        if !is_gpu_available() {
+            return;
+        }
+        let mut param = Storage::gpu(vec![1.0, 2.0, 3.0, 4.0]);
+        let grad = Storage::gpu(vec![1.0, 1.0, 1.0, 1.0]);
+        let (mut s1, mut s2) = (Storage::gpu(vec![0.0; 4]), Storage::gpu(vec![0.0; 4]));
+        let snapshot = param.clone();
+        assert_eq!(snapshot.to_vec(), vec![1.0, 2.0, 3.0, 4.0]);
+
+        RawTensor::gpu_optimizer_step(&mut param, &grad, &mut s1, &mut s2, &sgd_params(0.5))
+            .expect("optimizer step");
+
+        assert_eq!(snapshot.to_vec(), vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(param.to_vec(), vec![0.5, 1.5, 2.5, 3.5]);
+    }
+
+    /// H3: the step must also drop a host cache the parameter itself read before it.
+    #[test]
+    fn gpu_optimizer_step_refreshes_the_params_own_host_read() {
+        if !is_gpu_available() {
+            return;
+        }
+        let mut param = Storage::gpu(vec![1.0, 2.0]);
+        let grad = Storage::gpu(vec![2.0, 2.0]);
+        let (mut s1, mut s2) = (Storage::gpu(vec![0.0; 2]), Storage::gpu(vec![0.0; 2]));
+        assert_eq!(param.to_vec(), vec![1.0, 2.0]);
+
+        RawTensor::gpu_optimizer_step(&mut param, &grad, &mut s1, &mut s2, &sgd_params(0.5))
+            .expect("optimizer step");
+
+        assert_eq!(param.to_vec(), vec![0.0, 1.0]);
     }
 }

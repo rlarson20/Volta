@@ -95,12 +95,16 @@ impl Adam {
     }
 
     /// GPU-accelerated step for a single parameter
+    ///
+    /// # Panics
+    /// If the GPU kernel cannot run: a CPU fallback cannot write GPU storage, and skipping
+    /// the update would leave the parameter silently untrained.
     #[cfg(feature = "gpu")]
-    fn step_gpu_param(&self, i: usize) {
+    fn step_gpu_param(&mut self, i: usize) {
         use crate::gpu::OptimizerStepParams;
 
         let param = self.params.get(i).unwrap();
-        let p = param.borrow_mut();
+        let mut p = param.borrow_mut();
 
         let grad = match &p.grad {
             Some(g) => g.clone(),
@@ -108,8 +112,8 @@ impl Adam {
         };
 
         // State is already on GPU (stored as Storage)
-        let m_state = self.m.get(i).unwrap();
-        let v_state = self.v.get(i).unwrap();
+        let m_state = self.m.get_mut(i).unwrap();
+        let v_state = self.v.get_mut(i).unwrap();
 
         // Setup optimizer parameters
         let opt_params = OptimizerStepParams {
@@ -123,15 +127,10 @@ impl Adam {
             padding: 0.0,
         };
 
-        // Run GPU optimizer step (updates params, m, v in-place)
-        let success =
-            crate::RawTensor::gpu_optimizer_step(&p.data, &grad, m_state, v_state, &opt_params)
-                .is_some();
-
-        // Invalidate CPU cache since parameter was updated on GPU
-        if success && let Storage::Gpu { ref cpu_cache, .. } = p.data {
-            *cpu_cache.borrow_mut() = None;
-        }
+        // Updates params, m and v in place. `gpu_optimizer_step` unshares each buffer first
+        // and drops its host copy, so snapshots and later reads stay correct.
+        crate::RawTensor::gpu_optimizer_step(&mut p.data, &grad, m_state, v_state, &opt_params)
+            .expect("GPU Adam step failed: the parameter was not updated");
     }
 
     /// CPU update for a single parameter
