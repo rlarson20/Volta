@@ -202,9 +202,33 @@ pub fn assert_matmul_parity(a_shape: &[usize], b_shape: &[usize], tol_fwd: f32, 
     let b_gpu = b_cpu.to_device(gpu_device());
 
     let c_cpu = a_cpu.matmul(&b_cpu);
-    c_cpu.sum().into_loss().expect("scalar loss").backward();
     let c_gpu = a_gpu.matmul(&b_gpu);
-    c_gpu.sum().into_loss().expect("scalar loss").backward();
+    // Only the rank >= 2 arm has a GPU kernel; the vector arms compute on the host and return a
+    // CPU tensor, so for them this checks GPU-resident operands, not a kernel.
+    if a_shape.len() >= 2 && b_shape.len() >= 2 {
+        assert!(
+            matches!(c_gpu.device(), Device::GPU(_)),
+            "GPU matmul fell back to the CPU, so this would compare the CPU with itself"
+        );
+    }
+
+    // A randomly weighted loss: `.sum()` makes dC all ones, which cannot tell dA = dC @ B^T
+    // from dA = dC @ B (or a swapped k/n) on shapes where the two agree.
+    volta::manual_seed(0x0A7B);
+    let w_cpu = volta::randn(c_cpu.shape().truncate_rank());
+    let w_gpu = w_cpu.to_device(gpu_device());
+    c_cpu
+        .elem_mul(&w_cpu)
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
+    c_gpu
+        .elem_mul(&w_gpu)
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
 
     let label = format!("matmul {a_shape:?} @ {b_shape:?}");
     assert_close(
