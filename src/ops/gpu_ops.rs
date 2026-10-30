@@ -7,7 +7,6 @@ use crate::device::Device;
 #[cfg(feature = "gpu")]
 use crate::gpu::GpuKernels;
 use crate::ops::BinaryOp;
-#[cfg(feature = "gpu")]
 use crate::ops::UnaryOp;
 use crate::shape::Shape;
 use crate::spec::PadValue;
@@ -821,6 +820,236 @@ impl RawTensor {
             dtype: crate::dtype::DType::F32,
             cpu_cache: RefCell::new(None),
         })
+    }
+
+    // Without the `gpu` feature there is no GPU storage, so every wrapper below answers
+    // "use the CPU path". They exist so call sites need no `cfg` of their own (ADDENDUM §9).
+
+    /// Not-gpu stub for `gpu_add`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_add(_a: &Storage, _b: &Storage) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_mul`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_mul(_a: &Storage, _b: &Storage) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_sum_reduce`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_sum_reduce(_data: &Storage) -> Option<f32> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_max_reduce`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_max_reduce(_data: &Storage) -> Option<(f32, usize)> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_mean_reduce`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_mean_reduce(_data: &Storage) -> Option<f32> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_matmul`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_matmul(
+        _a: &Storage,
+        _b: &Storage,
+        _spec: &crate::spec::MatmulSpec,
+    ) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_unary`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_unary(_input: &Storage, _op: UnaryOp) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_unary_backward`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_unary_backward(
+        _out_grad: &Storage,
+        _x: &Storage,
+        _op: UnaryOp,
+    ) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_matmul_backward_a`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_matmul_backward_a(
+        _grad: &Storage,
+        _b: &Storage,
+        _spec: &crate::spec::MatmulSpec,
+    ) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_matmul_backward_b`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_matmul_backward_b(
+        _a: &Storage,
+        _grad: &Storage,
+        _spec: &crate::spec::MatmulSpec,
+    ) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_sum_backward`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_sum_backward(_grad: f32, _input_size: usize) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_mean_backward`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_mean_backward(_grad: f32, _input_size: usize) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_max_backward`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_max_backward(
+        _grad: f32,
+        _input_size: usize,
+        _max_index: usize,
+    ) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_im2col`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_im2col(
+        _input: &Storage,
+        _spec: &crate::spec::Window2dSpec,
+    ) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_col2im`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_col2im(_col: &Storage, _spec: &crate::spec::Window2dSpec) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_direct_conv`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_direct_conv(
+        _input: &Storage,
+        _weight: &Storage,
+        _spec: &crate::spec::Conv2dSpec,
+    ) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_igemm`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_igemm(
+        _input: &Storage,
+        _weight: &Storage,
+        _spec: &crate::spec::Conv2dSpec,
+    ) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_conv_backward_input`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_conv_backward_input(
+        _out_grad: &Storage,
+        _weight: &Storage,
+        _spec: &crate::spec::Conv2dSpec,
+    ) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_conv_backward_weight`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_conv_backward_weight(
+        _out_grad: &Storage,
+        _input: &Storage,
+        _spec: &crate::spec::Conv2dSpec,
+    ) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_igemm_backward_input`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_igemm_backward_input(
+        _out_grad: &Storage,
+        _weight: &Storage,
+        _spec: &crate::spec::Conv2dSpec,
+    ) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_igemm_backward_weight`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_igemm_backward_weight(
+        _out_grad: &Storage,
+        _input: &Storage,
+        _spec: &crate::spec::Conv2dSpec,
+    ) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_permute_backward`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_permute_backward(
+        _out_grad: &Storage,
+        _old_shape: &[usize],
+        _new_shape: &[usize],
+        _axes: &[usize],
+    ) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_expand_backward`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_expand_backward(
+        _out_grad: &Storage,
+        _old_shape: &[usize],
+        _new_shape: &[usize],
+    ) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_pad_backward`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_pad_backward(
+        _out_grad: &Storage,
+        _old_shape: &[usize],
+        _new_shape: &[usize],
+        _padding: &[(usize, usize)],
+    ) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_shrink_backward`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_shrink_backward(
+        _out_grad: &Storage,
+        _old_shape: &[usize],
+        _new_shape: &[usize],
+        _ranges: &[(usize, usize)],
+    ) -> Option<Storage> {
+        None
+    }
+
+    /// Not-gpu stub for `gpu_stride_backward`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_stride_backward(
+        _out_grad: &Storage,
+        _old_shape: &[usize],
+        _new_shape: &[usize],
+        _strides: &[usize],
+    ) -> Option<Storage> {
+        None
     }
 }
 

@@ -151,6 +151,7 @@ impl Storage {
     }
 
     #[cfg(not(feature = "gpu"))]
+    #[must_use]
     pub fn gpu(data: Vec<f32>) -> Self {
         Self::cpu(data)
     }
@@ -158,6 +159,7 @@ impl Storage {
     // ========== Dtype Access ==========
 
     /// Get the data type of this storage
+    #[must_use]
     pub const fn dtype(&self) -> DType {
         match self {
             Self::Cpu { dtype, .. } => *dtype,
@@ -229,6 +231,7 @@ impl Storage {
     ///
     /// CPU F32 storage is borrowed with no copy. GPU storage syncs to the host on first
     /// read and borrows the cached copy. Other dtypes are converted into an owned `Vec`.
+    #[must_use]
     pub fn to_host_f32(&self) -> Cow<'_, [f32]> {
         match self.dtype() {
             DType::F32 => Cow::Borrowed(self.f32_host_slice()),
@@ -314,6 +317,7 @@ impl Storage {
     /// Get data as f64 slice. Only valid if dtype is F64.
     /// # Panics
     /// Wrong storage datatype
+    #[must_use]
     pub fn as_f64_slice(&self) -> Option<&[f64]> {
         match self {
             Self::Cpu { data, dtype } if *dtype == DType::F64 => Some(cast_slice(data)),
@@ -345,6 +349,7 @@ impl Storage {
     /// Get data as f16 slice. Only valid if dtype is F16.
     /// # Panics
     /// Wrong storage datatype
+    #[must_use]
     pub fn as_f16_slice(&self) -> Option<&[f16]> {
         match self {
             Self::Cpu { data, dtype } if *dtype == DType::F16 => Some(cast_slice(data)),
@@ -376,6 +381,7 @@ impl Storage {
     /// Get data as bf16 slice. Only valid if dtype is BF16.
     /// # Panics
     /// Wrong storage datatype
+    #[must_use]
     pub fn as_bf16_slice(&self) -> Option<&[bf16]> {
         match self {
             Self::Cpu { data, dtype } if *dtype == DType::BF16 => Some(cast_slice(data)),
@@ -407,6 +413,7 @@ impl Storage {
     /// Get raw bytes
     /// # Panics
     /// unwrap `as_ref` pointer
+    #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         self.try_as_bytes()
             .expect("Failed to get bytes from storage")
@@ -448,6 +455,7 @@ impl Storage {
     /// Convert to `Vec<f32>` (always works, may involve conversion)
     /// # Panics
     ///`as_f64_slice` can panic
+    #[must_use]
     pub fn to_f32_vec(&self) -> Vec<f32> {
         match self.dtype() {
             DType::F32 => self.f32_host_slice().to_vec(),
@@ -494,6 +502,7 @@ impl Storage {
     }
 
     /// Backward compatible: convert to `Vec<f32>`
+    #[must_use]
     pub fn to_vec(&self) -> Vec<f32> {
         self.to_f32_vec()
     }
@@ -560,6 +569,7 @@ impl Storage {
     // ========== Length and Properties ==========
 
     /// Get the number of elements
+    #[must_use]
     pub fn len(&self) -> usize {
         match self {
             Self::Cpu { data, dtype } => data.len() / dtype.size_of(),
@@ -569,11 +579,13 @@ impl Storage {
     }
 
     /// Check if empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// Check if this is GPU storage
+    #[must_use]
     pub const fn is_gpu(&self) -> bool {
         match self {
             Self::Cpu { .. } => false,

@@ -65,46 +65,12 @@ pub trait Module {
     /// # }
     /// ```
     fn to_device(&mut self, device: Device) {
-        use crate::storage::Storage;
-
         for param in self.parameters() {
             let mut p = param.borrow_mut();
-
-            // Transfer storage to new device
-            match (&p.data, &device) {
-                (Storage::Cpu { .. }, Device::CPU) => {
-                    // Already on CPU, no-op
-                }
-                #[cfg(feature = "gpu")]
-                (Storage::Cpu { .. }, Device::GPU(_)) => {
-                    // CPU -> GPU
-                    let data = p.data.to_vec();
-                    p.data = Storage::gpu(data);
-                    p.device = device.clone();
-                }
-                #[cfg(feature = "gpu")]
-                (Storage::Gpu { .. }, Device::CPU) => {
-                    // GPU -> CPU
-                    let cpu_data = p.data.to_vec();
-                    p.data = Storage::cpu(cpu_data);
-                    p.device = device.clone();
-                }
-                #[cfg(feature = "gpu")]
-                (Storage::Gpu { .. }, Device::GPU(_)) => {
-                    // GPU -> GPU (same or different device)
-                    // For now, go through CPU as intermediary
-                    // TODO: implement direct GPU-to-GPU transfer
-                    let cpu_data = p.data.to_vec();
-                    p.data = Storage::gpu(cpu_data);
-                    p.device = device.clone();
-                }
-                #[allow(unreachable_patterns)]
-                _ => {
-                    // Any other combination (e.g., GPU types when feature disabled)
-                    // Just update device marker
-                    p.device = device.clone();
-                }
-            }
+            // `Storage::to_device` round-trips through host memory and warns when the GPU
+            // is unavailable, in which case the data stays on the CPU.
+            p.data = p.data.to_device(&device);
+            p.device = device.clone();
         }
     }
 

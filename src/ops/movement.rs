@@ -412,23 +412,20 @@ impl MovementGradFn {
                 }
 
                 // Try GPU path
-                #[cfg(feature = "gpu")]
+                if out_grad.device.is_gpu()
+                    && let Some(grad_storage) = RawTensor::gpu_permute_backward(
+                        &out_grad.data,
+                        self.original_shape.truncate_rank(),
+                        out_grad.shape.truncate_rank(),
+                        &inverse_axes,
+                    )
                 {
-                    if out_grad.device.is_gpu()
-                        && let Some(grad_storage) = RawTensor::gpu_permute_backward(
-                            &out_grad.data,
-                            self.original_shape.truncate_rank(),
-                            out_grad.shape.truncate_rank(),
-                            &inverse_axes,
-                        )
-                    {
-                        return vec![Some(RawTensor::new_with_storage(
-                            grad_storage,
-                            self.original_shape.clone(),
-                            out_grad.device.clone(),
-                            false,
-                        ))];
-                    }
+                    return vec![Some(RawTensor::new_with_storage(
+                        grad_storage,
+                        self.original_shape.clone(),
+                        out_grad.device.clone(),
+                        false,
+                    ))];
                 }
 
                 // CPU fallback
@@ -444,22 +441,19 @@ impl MovementGradFn {
             }
             MovementOp::Expand { new_shape } => {
                 // Try GPU path
-                #[cfg(feature = "gpu")]
+                if out_grad.device.is_gpu()
+                    && let Some(grad_storage) = RawTensor::gpu_expand_backward(
+                        &out_grad.data,
+                        self.original_shape.truncate_rank(),
+                        new_shape,
+                    )
                 {
-                    if out_grad.device.is_gpu()
-                        && let Some(grad_storage) = RawTensor::gpu_expand_backward(
-                            &out_grad.data,
-                            self.original_shape.truncate_rank(),
-                            new_shape,
-                        )
-                    {
-                        return vec![Some(RawTensor::new_with_storage(
-                            grad_storage,
-                            self.original_shape.clone(),
-                            out_grad.device.clone(),
-                            false,
-                        ))];
-                    }
+                    return vec![Some(RawTensor::new_with_storage(
+                        grad_storage,
+                        self.original_shape.clone(),
+                        out_grad.device.clone(),
+                        false,
+                    ))];
                 }
 
                 // CPU fallback: Sum gradient over dimensions that were expanded (broadcast)
@@ -486,23 +480,20 @@ impl MovementGradFn {
             }
             MovementOp::Pad { padding } => {
                 // Try GPU path
-                #[cfg(feature = "gpu")]
+                if out_grad.device.is_gpu()
+                    && let Some(grad_storage) = RawTensor::gpu_pad_backward(
+                        &out_grad.data,
+                        self.original_shape.truncate_rank(),
+                        out_grad.shape.truncate_rank(),
+                        padding,
+                    )
                 {
-                    if out_grad.device.is_gpu()
-                        && let Some(grad_storage) = RawTensor::gpu_pad_backward(
-                            &out_grad.data,
-                            self.original_shape.truncate_rank(),
-                            out_grad.shape.truncate_rank(),
-                            padding,
-                        )
-                    {
-                        return vec![Some(RawTensor::new_with_storage(
-                            grad_storage,
-                            self.original_shape.clone(),
-                            out_grad.device.clone(),
-                            false,
-                        ))];
-                    }
+                    return vec![Some(RawTensor::new_with_storage(
+                        grad_storage,
+                        self.original_shape.clone(),
+                        out_grad.device.clone(),
+                        false,
+                    ))];
                 }
 
                 // CPU fallback: Remove padding from gradient (extract center region)
@@ -534,23 +525,20 @@ impl MovementGradFn {
             }
             MovementOp::Shrink { ranges } => {
                 // Try GPU path
-                #[cfg(feature = "gpu")]
+                if out_grad.device.is_gpu()
+                    && let Some(grad_storage) = RawTensor::gpu_shrink_backward(
+                        &out_grad.data,
+                        self.original_shape.truncate_rank(),
+                        out_grad.shape.truncate_rank(),
+                        ranges,
+                    )
                 {
-                    if out_grad.device.is_gpu()
-                        && let Some(grad_storage) = RawTensor::gpu_shrink_backward(
-                            &out_grad.data,
-                            self.original_shape.truncate_rank(),
-                            out_grad.shape.truncate_rank(),
-                            ranges,
-                        )
-                    {
-                        return vec![Some(RawTensor::new_with_storage(
-                            grad_storage,
-                            self.original_shape.clone(),
-                            out_grad.device.clone(),
-                            false,
-                        ))];
-                    }
+                    return vec![Some(RawTensor::new_with_storage(
+                        grad_storage,
+                        self.original_shape.clone(),
+                        out_grad.device.clone(),
+                        false,
+                    ))];
                 }
 
                 // CPU fallback: Pad gradient back to original size (inverse of shrink)
@@ -582,23 +570,20 @@ impl MovementGradFn {
             }
             MovementOp::Stride { strides } => {
                 // Try GPU path
-                #[cfg(feature = "gpu")]
+                if out_grad.device.is_gpu()
+                    && let Some(grad_storage) = RawTensor::gpu_stride_backward(
+                        &out_grad.data,
+                        self.original_shape.truncate_rank(),
+                        out_grad.shape.truncate_rank(),
+                        strides,
+                    )
                 {
-                    if out_grad.device.is_gpu()
-                        && let Some(grad_storage) = RawTensor::gpu_stride_backward(
-                            &out_grad.data,
-                            self.original_shape.truncate_rank(),
-                            out_grad.shape.truncate_rank(),
-                            strides,
-                        )
-                    {
-                        return vec![Some(RawTensor::new_with_storage(
-                            grad_storage,
-                            self.original_shape.clone(),
-                            out_grad.device.clone(),
-                            false,
-                        ))];
-                    }
+                    return vec![Some(RawTensor::new_with_storage(
+                        grad_storage,
+                        self.original_shape.clone(),
+                        out_grad.device.clone(),
+                        false,
+                    ))];
                 }
 
                 // CPU fallback: Upsample gradient (inverse of stride/downsampling)

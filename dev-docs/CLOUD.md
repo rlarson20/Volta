@@ -23,10 +23,9 @@ A cloud run is the GitHub `cpu-only` lane in `.github/workflows/ci.yml`, not the
 
 Work that a Linux CPU can verify, and that reviews as a PR. Current candidates from `notes/TODO.md` (check it for live status):
 
-- The CPU-only clippy errors (`cargo clippy --lib --no-default-features -- -D warnings`). Most are the missing not-gpu stub pattern.
 - Seeding the flaky gradient tests (`linear_tests::backward_gradcheck_input` and the conv list). Use the recipe in `notes/TODO.md`: seed, `eps=0.5`, confirm 0/400 seeds fail, and confirm a 1.1x-scaled analytic gradient still fails.
 - Docs toward the merge gate (the undocumented items behind the `lib.rs` allow). Read the code for every claim you write. Don't remove the allow until nothing is left.
-- CPU defects: B2 (LSTM `slice_gate`), B3 (`PositionalEncoding`), the greedy `Sequential::load_state_dict` prefix, a diamond-accumulation regression test, the CPU parts of the GEMM test fixes, a reference triple-loop matmul.
+- CPU defects: B2 (LSTM `slice_gate`), B3 (`PositionalEncoding`), a diamond-accumulation regression test.
 - Comment-only fixes (for example the `BackwardParams` comments in `matmul_backward.wgsl`).
 - Investigations that end in a `notes/TODO.md` or `DECISIONS.md` entry.
 - Phase 3 work (storage, the `Shape` flip) and later architecture, on the same terms as locally: ask before choosing a design. Any GPU-touching part can't be verified here (below).
@@ -40,7 +39,7 @@ Work that a Linux CPU can verify, and that reviews as a PR. Current candidates f
 
 ## How to work there
 
-- Gate, in order: `cargo fmt --check`, `./scripts/check-fallbacks.sh`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, `RUSTDOCFLAGS=-D warnings cargo doc --no-deps`, `cargo build --examples`, then `cargo test --no-default-features`. This is `just ci` plus the CPU-only test; run the steps directly if `just` is missing.
+- Gate, in order: `cargo fmt --check`, `./scripts/check-fallbacks.sh`, `cargo clippy --all-targets -- -D warnings`, `cargo clippy --no-default-features --all-targets -- -D warnings`, `cargo test`, `RUSTDOCFLAGS=-D warnings cargo doc --no-deps`, `cargo build --examples`, then `cargo test --no-default-features`. This is `just ci` plus the CPU-only test; run the steps directly if `just` is missing.
 - Ask when you'd ask locally. Make each question answerable from a phone: short, options listed, your recommendation first. Batch them, and keep working on whatever doesn't depend on the answer. Never guess past an invariant or a design decision to avoid waiting. If no answer arrives before the session ends, put the open question in the PR description.
 - The PR description must say "CPU-only, Linux, GPU tests skipped" and list what was not verified.
 - One task per session and per PR. Keep diffs reviewable.

@@ -94,11 +94,12 @@ lint:
 check-fallbacks:
 	./scripts/check-fallbacks.sh
 
-# CI-like pipeline (fmt -> fallbacks -> lint -> test -> docs -> examples)
+# CI-like pipeline (fmt -> fallbacks -> lint, both feature sets -> test -> docs -> examples)
 ci:
 	cargo fmt --check
 	just check-fallbacks
 	just lint
+	cargo clippy --no-default-features --all-targets -- -D warnings
 	cargo test
 	cargo doc --no-deps
 	cargo build --examples
@@ -129,14 +130,12 @@ bench-name name:
 bench-cpu:
 	cargo bench --bench tensor_ops --no-default-features --
 	cargo bench --bench neural_networks --no-default-features --
-	cargo bench --bench gpu_comparison --no-default-features --
 	cargo bench --bench conv_algorithms --no-default-features --
 
 # Benchmark with Accelerate (macOS BLAS)
 bench-accel:
 	cargo bench --features accelerate --no-default-features --bench tensor_ops --
 	cargo bench --features accelerate --no-default-features --bench neural_networks --
-	cargo bench --features accelerate --no-default-features --bench gpu_comparison --
 	cargo bench --features accelerate --no-default-features --bench conv_algorithms --
 
 # Benchmark GPU comparison

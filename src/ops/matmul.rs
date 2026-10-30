@@ -244,20 +244,17 @@ impl RawTensor {
                     //
                     // If both inputs live on the same GPU device, try the GPU path first.
                     // Fallback to the existing CPU implementation if anything fails.
-                    #[cfg(feature = "gpu")]
-                    {
-                        if let Some(device) = Self::common_gpu_device(&[self_t, other]) {
-                            if let Some(storage) = Self::gpu_matmul(&data_a, &data_b, &spec) {
-                                return edge(
-                                    [self_t.clone(), other.clone()],
-                                    storage,
-                                    Shape::derived(spec.out_dims()),
-                                    device,
-                                    GradFn::MatMul(MatMulGradFn::matrix(spec)),
-                                );
-                            }
-                            log::warn!("GPU matmul requested but failed; falling back to CPU");
+                    if let Some(device) = Self::common_gpu_device(&[self_t, other]) {
+                        if let Some(storage) = Self::gpu_matmul(&data_a, &data_b, &spec) {
+                            return edge(
+                                [self_t.clone(), other.clone()],
+                                storage,
+                                Shape::derived(spec.out_dims()),
+                                device,
+                                GradFn::MatMul(MatMulGradFn::matrix(spec)),
+                            );
                         }
+                        log::warn!("GPU matmul requested but failed; falling back to CPU");
                     }
 
                     // CPU fallback: BLAS/Accelerate or matrixmultiply on host data.
@@ -435,54 +432,37 @@ impl MatMulGradFn {
             .expect("matmul requires 2 parents");
 
         // Check if we can do GPU backward (same pattern as unary/binary)
-        #[cfg(feature = "gpu")]
-        {
-            // For GPU backward, we need:
-            // - out_grad on GPU
-            // - The corresponding input (x for grad_x, y for grad_y) on GPU
-            // - Same device for all involved tensors
-            let gpu_available = out_grad.device.is_gpu()
-                && ((x.device.is_gpu() && y.device.is_gpu())
-                    || (!x.requires_grad || !y.requires_grad));
+        // For GPU backward, we need:
+        // - out_grad on GPU
+        // - The corresponding input (x for grad_x, y for grad_y) on GPU
+        // - Same device for all involved tensors
+        let gpu_available = out_grad.device.is_gpu()
+            && ((x.device.is_gpu() && y.device.is_gpu()) || (!x.requires_grad || !y.requires_grad));
 
-            // Only the plain 2D×2D case runs on GPU; everything else uses the CPU path below.
-            if gpu_available && let Some(spec) = self.spec.as_ref().filter(|s| !s.is_batched()) {
-                let grad_x = if x.requires_grad {
-                    RawTensor::gpu_matmul_backward_a(&out_grad.data, &y.data, spec).map(|storage| {
-                        RawTensor::new_with_storage(
-                            storage,
-                            x.shape.clone(),
-                            x.device.clone(),
-                            false,
-                        )
-                    })
-                } else {
-                    None
-                };
+        // Only the plain 2D×2D case runs on GPU; everything else uses the CPU path below.
+        if gpu_available && let Some(spec) = self.spec.as_ref().filter(|s| !s.is_batched()) {
+            let grad_x = if x.requires_grad {
+                RawTensor::gpu_matmul_backward_a(&out_grad.data, &y.data, spec).map(|storage| {
+                    RawTensor::new_with_storage(storage, x.shape.clone(), x.device.clone(), false)
+                })
+            } else {
+                None
+            };
 
-                let grad_y = if y.requires_grad {
-                    RawTensor::gpu_matmul_backward_b(&x.data, &out_grad.data, spec).map(|storage| {
-                        RawTensor::new_with_storage(
-                            storage,
-                            y.shape.clone(),
-                            y.device.clone(),
-                            false,
-                        )
-                    })
-                } else {
-                    None
-                };
+            let grad_y = if y.requires_grad {
+                RawTensor::gpu_matmul_backward_b(&x.data, &out_grad.data, spec).map(|storage| {
+                    RawTensor::new_with_storage(storage, y.shape.clone(), y.device.clone(), false)
+                })
+            } else {
+                None
+            };
 
-                // Return early only if *every* required gradient was computed. A `None` for a
-                // tensor that needs one would silently freeze that parameter.
-                if (!x.requires_grad || grad_x.is_some()) && (!y.requires_grad || grad_y.is_some())
-                {
-                    return vec![grad_x, grad_y];
-                }
-                log::warn!(
-                    "GPU matmul backward failed for a required gradient; falling back to CPU"
-                );
+            // Return early only if *every* required gradient was computed. A `None` for a
+            // tensor that needs one would silently freeze that parameter.
+            if (!x.requires_grad || grad_x.is_some()) && (!y.requires_grad || grad_y.is_some()) {
+                return vec![grad_x, grad_y];
             }
+            log::warn!("GPU matmul backward failed for a required gradient; falling back to CPU");
         }
 
         // For z = x @ y where x: (m,n), y: (n,p), z: (m,p)
@@ -597,6 +577,7 @@ impl MatMulGradFn {
 
 #[cfg(test)]
 mod tests {
+    use crate::index::{fetch, slot, span};
     use crate::spec::MatmulSpec;
     use crate::tensor::{RawTensor, Tensor, randn};
 
@@ -665,19 +646,161 @@ mod tests {
         assert_matmul_gradients(&[2, 3, 4], &[1, 4, 5]);
     }
 
-    /// Naive row-major (m,k) @ (k,n) reference, independent of `matmul_raw`.
+    /// Reference GEMM, independent of `matmul_raw`: `(m,k) @ (k,n)` where element `(i, j)` of
+    /// an operand is at `i * row_stride + j * col_stride`. A transpose is the same buffer
+    /// with the strides swapped. Accumulates in f64, so it is a stricter oracle than the
+    /// f32 kernels it checks.
+    fn ref_gemm(
+        a: &[f32],
+        (a_rs, a_cs): (usize, usize),
+        b: &[f32],
+        (b_rs, b_cs): (usize, usize),
+        (m, k, n): (usize, usize, usize),
+    ) -> Vec<f32> {
+        let mut c = vec![0.0; m * n];
+        for i in 0..m {
+            for j in 0..n {
+                let acc: f64 = (0..k)
+                    .map(|p| {
+                        f64::from(fetch(a, i * a_rs + p * a_cs))
+                            * f64::from(fetch(b, p * b_rs + j * b_cs))
+                    })
+                    .sum();
+                *slot(&mut c, i * n + j) = acc as f32;
+            }
+        }
+        c
+    }
+
+    /// Naive row-major (m,k) @ (k,n) reference.
     fn reference_matmul(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
-        a.chunks_exact(k)
-            .take(m)
-            .flat_map(|row| {
-                (0..n).map(move |j| {
-                    row.iter()
-                        .zip(b.iter().skip(j).step_by(n))
-                        .map(|(x, y)| x * y)
-                        .sum()
-                })
-            })
-            .collect()
+        ref_gemm(a, (k, 1), b, (n, 1), (m, k, n))
+    }
+
+    /// The oracle itself, against hand-computed values: `A = [[1,2,3],[4,5,6]]`,
+    /// `B = [[7,8],[9,10],[11,12]]`, `A @ B = [[58,64],[139,154]]`, and the same product
+    /// read through swapped strides from buffers holding `A^T` and `B^T`.
+    #[test]
+    fn ref_gemm_matches_hand_values_and_transposes_by_strides() {
+        let a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let b = [7.0, 8.0, 9.0, 10.0, 11.0, 12.0];
+        let expected = [58.0, 64.0, 139.0, 154.0];
+        assert_eq!(ref_gemm(&a, (3, 1), &b, (2, 1), (2, 3, 2)), expected);
+        let a_t = [1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
+        let b_t = [7.0, 9.0, 11.0, 8.0, 10.0, 12.0];
+        assert_eq!(ref_gemm(&a_t, (1, 2), &b_t, (1, 3), (2, 3, 2)), expected);
+    }
+
+    /// Flat index into `in_batch` of output batch `o`, broadcasting size-1 dims.
+    fn batch_source(o: usize, out_batch: &[usize], in_batch: &[usize]) -> usize {
+        let (mut rem, mut idx, mut stride) = (o, 0, 1);
+        for (&out_dim, &in_dim) in out_batch.iter().zip(in_batch).rev() {
+            let coord = rem % out_dim;
+            rem /= out_dim;
+            if in_dim != 1 {
+                idx += coord * stride;
+            }
+            stride *= in_dim;
+        }
+        idx
+    }
+
+    /// Forward output and both gradients of `sum(w * (a @ b))`, from `ref_gemm` alone:
+    /// `dA = W @ B^T` and `dB = A^T @ W` per output batch (transposes as swapped strides),
+    /// summed into the input batch each output batch reads from.
+    fn reference_forward_backward(
+        (a, a_batch): (&[f32], &[usize]),
+        (b, b_batch): (&[f32], &[usize]),
+        w: &[f32],
+        (m, k, n): (usize, usize, usize),
+    ) -> [Vec<f32>; 3] {
+        let out_batch: Vec<usize> = a_batch
+            .iter()
+            .zip(b_batch)
+            .map(|(&x, &y)| x.max(y))
+            .collect();
+        let (size_a, size_b, size_c) = (m * k, k * n, m * n);
+        let mut c = Vec::new();
+        let (mut da, mut db) = (vec![0.0; a.len()], vec![0.0; b.len()]);
+        for o in 0..out_batch.iter().product() {
+            let a_off = batch_source(o, &out_batch, a_batch) * size_a;
+            let b_off = batch_source(o, &out_batch, b_batch) * size_b;
+            let a_o = span(a, a_off..a_off + size_a);
+            let b_o = span(b, b_off..b_off + size_b);
+            let w_o = span(w, o * size_c..(o + 1) * size_c);
+            c.extend(ref_gemm(a_o, (k, 1), b_o, (n, 1), (m, k, n)));
+            let da_o = ref_gemm(w_o, (n, 1), b_o, (1, n), (m, n, k));
+            for (i, g) in da_o.into_iter().enumerate() {
+                *slot(&mut da, a_off + i) += g;
+            }
+            let db_o = ref_gemm(a_o, (1, k), w_o, (n, 1), (k, m, n));
+            for (i, g) in db_o.into_iter().enumerate() {
+                *slot(&mut db, b_off + i) += g;
+            }
+        }
+        [c, da, db]
+    }
+
+    /// `a @ b`'s output and both gradients under a randomly weighted loss match
+    /// `reference_forward_backward`. Rank-1 operands are the `[1, k]` / `[k, 1]` matrices
+    /// the vector arms compute, with the same flat layout.
+    fn assert_matches_reference(a_dims: &[usize], b_dims: &[usize]) {
+        crate::tensor::manual_seed(0x0E7A);
+        let a = operand(a_dims);
+        let b = operand(b_dims);
+        let (a_batch, a_mat) = a_dims.split_at(a_dims.len().saturating_sub(2));
+        let (b_batch, b_mat) = b_dims.split_at(b_dims.len().saturating_sub(2));
+        let (m, k) = match *a_mat {
+            [m, k] => (m, k),
+            [k] => (1, k),
+            _ => unreachable!("rank >= 1"),
+        };
+        let n = match *b_mat {
+            [_, n] => n,
+            [_] => 1,
+            _ => unreachable!("rank >= 1"),
+        };
+        let out = a.matmul(&b);
+        let w = randn(out.shape().truncate_rank());
+        out.elem_mul(&w)
+            .sum()
+            .into_loss()
+            .expect("scalar loss")
+            .backward();
+
+        let [c, da, db] = reference_forward_backward(
+            (&a.data(), a_batch),
+            (&b.data(), b_batch),
+            &w.data(),
+            (m, k, n),
+        );
+        let what = format!("{a_dims:?} @ {b_dims:?}");
+        assert_close(&out.data(), &c, &format!("{what} forward"));
+        assert_close(&a.grad().expect("a grad"), &da, &format!("{what} dA"));
+        assert_close(&b.grad().expect("b grad"), &db, &format!("{what} dB"));
+    }
+
+    /// Past one 16x16 tile and not a multiple of 16 on any side (GEMM report §4).
+    #[test]
+    fn matmul_matches_reference_2d_past_one_tile() {
+        assert_matches_reference(&[37, 19], &[19, 23]);
+    }
+
+    #[test]
+    fn matmul_matches_reference_equal_batch() {
+        assert_matches_reference(&[3, 5, 7], &[3, 7, 4]);
+    }
+
+    #[test]
+    fn matmul_matches_reference_broadcast_batch() {
+        assert_matches_reference(&[2, 1, 5, 6], &[1, 3, 6, 4]);
+    }
+
+    #[test]
+    fn matmul_matches_reference_vector_arms() {
+        assert_matches_reference(&[5, 7], &[7]);
+        assert_matches_reference(&[7], &[7, 4]);
+        assert_matches_reference(&[7], &[7]);
     }
 
     fn assert_close(actual: &[f32], expected: &[f32], what: &str) {

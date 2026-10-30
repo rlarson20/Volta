@@ -156,8 +156,7 @@ impl Im2colGradFn {
         // out_grad has shape (B*H_out*W_out, C*K*K)
         // We need to convert it back to (B, C, H, W) using col2im
 
-        // Try GPU-accelerated col2im first (when the GPU backend is compiled in)
-        #[cfg(feature = "gpu")]
+        // Try GPU-accelerated col2im first
         let grad_storage = if out_grad.data.is_gpu() {
             if let Some(gpu_storage) = RawTensor::gpu_col2im(&out_grad.data, &self.spec) {
                 gpu_storage
@@ -172,11 +171,6 @@ impl Im2colGradFn {
             // CPU path - convert Vec<f32> to Storage
             crate::storage::Storage::cpu(Conv2d::col2im(&out_grad.data.to_host_f32(), &self.spec))
         };
-
-        #[cfg(not(feature = "gpu"))]
-        // CPU-only build: col2im always runs on the host
-        let grad_storage =
-            crate::storage::Storage::cpu(Conv2d::col2im(&out_grad.data.to_host_f32(), &self.spec));
 
         // Determine device from storage
         let device = if grad_storage.is_gpu() {
@@ -214,19 +208,14 @@ impl DirectConvGradFn {
         let weight = parents.get(1).cloned();
 
         // Determine if we can use GPU acceleration
-        #[cfg(feature = "gpu")]
-        let use_gpu = matches!(&out_grad.data, Storage::Gpu { .. })
+        let use_gpu = out_grad.data.is_gpu()
             && x.as_ref().is_some_and(|t| t.borrow().data.is_gpu())
             && weight.as_ref().is_some_and(|t| t.borrow().data.is_gpu());
-
-        #[cfg(not(feature = "gpu"))]
-        let use_gpu = false;
 
         // Compute input gradient if input requires grad
         let grad_x = if let Some(ref x_tensor) = x
             && x_tensor.borrow().requires_grad
         {
-            #[cfg(feature = "gpu")]
             if use_gpu {
                 // GPU acceleration
                 RawTensor::gpu_conv_backward_input(
@@ -249,14 +238,6 @@ impl DirectConvGradFn {
                     &weight.as_ref().unwrap().borrow().data.to_vec(),
                 ))
             }
-
-            #[cfg(not(feature = "gpu"))]
-            {
-                Some(self.compute_input_gradient_cpu(
-                    &out_grad.data.to_vec(),
-                    &weight.as_ref().unwrap().borrow().data.to_vec(),
-                ))
-            }
         } else {
             None
         };
@@ -265,7 +246,6 @@ impl DirectConvGradFn {
         let grad_w = if let Some(ref w_tensor) = weight
             && w_tensor.borrow().requires_grad
         {
-            #[cfg(feature = "gpu")]
             if use_gpu {
                 // GPU acceleration
                 RawTensor::gpu_conv_backward_weight(
@@ -283,14 +263,6 @@ impl DirectConvGradFn {
                 })
             } else {
                 // CPU fallback
-                Some(self.compute_weight_gradient_cpu(
-                    &out_grad.data.to_vec(),
-                    &x.as_ref().unwrap().borrow().data.to_vec(),
-                ))
-            }
-
-            #[cfg(not(feature = "gpu"))]
-            {
                 Some(self.compute_weight_gradient_cpu(
                     &out_grad.data.to_vec(),
                     &x.as_ref().unwrap().borrow().data.to_vec(),
@@ -500,7 +472,6 @@ impl IGEMMGradFn {
         let grad_x = if let Some(ref x_tensor) = x
             && x_tensor.borrow().requires_grad
         {
-            #[cfg(feature = "gpu")]
             let result = if is_gpu {
                 RawTensor::gpu_igemm_backward_input(
                     &out_grad.data,
@@ -518,9 +489,6 @@ impl IGEMMGradFn {
             } else {
                 None
             };
-
-            #[cfg(not(feature = "gpu"))]
-            let result = None;
 
             if let Some(r) = result {
                 Some(r)
@@ -553,7 +521,6 @@ impl IGEMMGradFn {
         let grad_w = if let Some(ref w_tensor) = weight
             && w_tensor.borrow().requires_grad
         {
-            #[cfg(feature = "gpu")]
             let result = if is_gpu {
                 RawTensor::gpu_igemm_backward_weight(
                     &out_grad.data,
@@ -571,9 +538,6 @@ impl IGEMMGradFn {
             } else {
                 None
             };
-
-            #[cfg(not(feature = "gpu"))]
-            let result = None;
 
             if let Some(r) = result {
                 Some(r)
@@ -929,19 +893,16 @@ impl Conv2d {
         let cols = channels * kh * kw;
 
         // Use GPU path if available and input is on GPU
-        #[cfg(feature = "gpu")]
+        if matches!(device, Device::GPU(_))
+            && let Some(col_data) = crate::RawTensor::gpu_im2col(&data, spec)
         {
-            if matches!(device, Device::GPU(_))
-                && let Some(col_data) = crate::RawTensor::gpu_im2col(&data, spec)
-            {
-                return edge(
-                    [x.clone()],
-                    col_data,
-                    Shape::derived(vec![rows, cols]),
-                    device,
-                    GradFn::Im2col(Im2colGradFn { spec: *spec }),
-                );
-            }
+            return edge(
+                [x.clone()],
+                col_data,
+                Shape::derived(vec![rows, cols]),
+                device,
+                GradFn::Im2col(Im2colGradFn { spec: *spec }),
+            );
         }
 
         // CPU fallback
@@ -1158,11 +1119,7 @@ impl Conv2d {
         let x_data = x.borrow().data.clone();
         let w_data = weight.borrow().data.clone();
 
-        #[cfg(feature = "gpu")]
-        let result = { RawTensor::gpu_direct_conv(&x_data, &w_data, spec) };
-
-        #[cfg(not(feature = "gpu"))]
-        let result = None;
+        let result = RawTensor::gpu_direct_conv(&x_data, &w_data, spec);
         if let Some(storage) = result {
             let device = x.borrow().device.clone();
 
@@ -1219,7 +1176,6 @@ impl Conv2d {
         } = *spec;
 
         // Try GPU path first
-        #[cfg(feature = "gpu")]
         let gpu_result = {
             let is_gpu = matches!(x_device, Device::GPU(_));
             if is_gpu {
@@ -1228,9 +1184,6 @@ impl Conv2d {
                 None
             }
         };
-
-        #[cfg(not(feature = "gpu"))]
-        let gpu_result = None;
 
         // `edge()` requires grad if *either* x or weight does — fixes a latent bug
         // where this used to check only `x_requires_grad`, ignoring the weight

@@ -194,23 +194,20 @@ impl RawTensor {
 
                 // Fast path: when all three inputs live on the same GPU device and
                 // shapes match exactly, evaluate z = x * y + w entirely on GPU.
-                #[cfg(feature = "gpu")]
-                {
-                    if dev_x.is_gpu() && dev_x == dev_y && dev_x == dev_z {
-                        if let Some(prod) = Self::gpu_mul(&data_x, &data_y) {
-                            if let Some(sum) = Self::gpu_add(&prod, &data_z) {
-                                return edge(
-                                    [x.clone(), y.clone(), z.clone()],
-                                    sum,
-                                    shape_x,
-                                    dev_x,
-                                    GradFn::MulAcc(MulAccGradFn),
-                                );
-                            }
-                            log::warn!("GPU add for MulAcc failed; falling back to CPU path");
-                        } else {
-                            log::warn!("GPU mul for MulAcc failed; falling back to CPU path");
+                if dev_x.is_gpu() && dev_x == dev_y && dev_x == dev_z {
+                    if let Some(prod) = Self::gpu_mul(&data_x, &data_y) {
+                        if let Some(sum) = Self::gpu_add(&prod, &data_z) {
+                            return edge(
+                                [x.clone(), y.clone(), z.clone()],
+                                sum,
+                                shape_x,
+                                dev_x,
+                                GradFn::MulAcc(MulAccGradFn),
+                            );
                         }
+                        log::warn!("GPU add for MulAcc failed; falling back to CPU path");
+                    } else {
+                        log::warn!("GPU mul for MulAcc failed; falling back to CPU path");
                     }
                 }
 

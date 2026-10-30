@@ -58,8 +58,9 @@ impl Device {
         crate::gpu::get_gpu_context().map(|ctx| Self::GPU(ctx.device_name().to_string()))
     }
 
-    /// When GPU feature is disabled, gpu() always returns None
+    /// When GPU feature is disabled, `gpu()` always returns `None`
     #[cfg(not(feature = "gpu"))]
+    #[must_use]
     pub fn gpu() -> Option<Self> {
         None
     }
