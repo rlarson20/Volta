@@ -1074,6 +1074,16 @@ impl RawTensor {
     ///
     /// # Returns
     /// (`max_error`, `mean_error`, passed)
+    ///
+    /// # Side effects
+    /// `tensor`'s gradient is cleared first, so a gradient left over from an earlier
+    /// `backward()` can't skew the result, and afterwards holds the analytic gradient.
+    /// Other leaves that `loss_fn` reads (layer parameters) are not cleared: the
+    /// analytic pass adds its gradient to theirs. The finite-difference evaluations run
+    /// `loss_fn` 2N more times, so stateful layers in training mode (`BatchNorm`
+    /// running statistics) keep updating; the result is unaffected because training
+    /// mode normalizes with batch statistics.
+    ///
     /// # Panics
     /// If `loss_fn` doesn't return a scalar that requires grad, or `tensor` ends up
     /// without a gradient
@@ -1692,6 +1702,23 @@ where
 #[cfg(test)]
 mod tensor_tests {
     use super::*;
+
+    /// `check_gradients` clears the input's existing gradient before its analytic pass.
+    /// Without that, the gradient left by the earlier `backward()` (and by the first
+    /// check) is added in and a correct gradient fails, the audit's "probe E".
+    #[test]
+    fn check_gradients_ignores_preexisting_input_grad() {
+        let x = RawTensor::new(vec![0.3, -1.2, 2.0, 0.7], &[4], true);
+        let w = RawTensor::new(vec![1.5, -0.5, 0.25, 2.0], &[4], true);
+        x.elem_mul(&w).sum().into_loss().unwrap().backward();
+        assert!(x.grad().is_some(), "setup: x needs a stale gradient");
+
+        let loss_fn = |t: &Tensor| t.elem_mul(&w).elem_mul(t).sum();
+        let (first_err, _, first_passed) = RawTensor::check_gradients(&x, loss_fn, 1e-2, 1e-3);
+        let (second_err, _, second_passed) = RawTensor::check_gradients(&x, loss_fn, 1e-2, 1e-3);
+        assert!(first_passed, "first check failed: max_err={first_err}");
+        assert!(second_passed, "repeat check failed: max_err={second_err}");
+    }
 
     /// A rank-1 shape is a bias vector: `n` values bounded by `sqrt(6 / (n + 1))`.
     #[test]
