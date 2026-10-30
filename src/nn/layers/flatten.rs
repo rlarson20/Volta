@@ -1,3 +1,4 @@
+use crate::index::fetch;
 use crate::io::StateDict;
 use crate::nn::{Layer, Module};
 use crate::tensor::Tensor;
@@ -44,7 +45,7 @@ impl Layer for Flatten {
             return x.clone();
         }
 
-        let batch_size = shape.first().copied().unwrap_or(1);
+        let batch_size = fetch(&shape, 0);
         let flattened_size: usize = shape.get(1..).map_or(1, |s| s.iter().product());
 
         x.reshape(&[batch_size, flattened_size])

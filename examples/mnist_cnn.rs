@@ -136,7 +136,11 @@ fn main() {
         let output = model.forward(&test_x);
         let pred_data = output.data();
         let target_data = test_y.data();
-        let batch_size = test_y.shape().first().copied().unwrap_or(1);
+        let batch_size = test_y
+            .shape()
+            .first()
+            .copied()
+            .expect("test labels have a batch dim");
 
         for i in 0..batch_size {
             let pred_class = (0..10)

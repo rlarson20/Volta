@@ -1,6 +1,6 @@
 use crate::io::StateDict;
 use crate::nn::{Layer, Module};
-use crate::shape::Axis;
+use crate::shape::{Axis, fixed_dims};
 use crate::tensor::Tensor;
 
 /// `PixelShuffle`: Rearranges elements from (B, C*r², H, W) to (B, C, H*r, W*r)
@@ -75,10 +75,7 @@ impl Layer for PixelShuffle {
             "PixelShuffle: expected 4D input (B, C, H, W), got shape {shape:?}",
         );
 
-        let batch_size = shape.first().copied().unwrap_or(1);
-        let in_channels = shape.get(1).copied().unwrap_or(1);
-        let height = shape.get(2).copied().unwrap_or(1);
-        let width = shape.get(3).copied().unwrap_or(1);
+        let [batch_size, in_channels, height, width] = fixed_dims::<4>(shape);
         let r = self.upscale_factor;
         let r_squared = r * r;
 

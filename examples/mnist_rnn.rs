@@ -16,9 +16,9 @@ use volta::{
 /// Output shape: [batch, features]
 fn extract_timestep(batch: &volta::Tensor, t: usize) -> volta::Tensor {
     let shape = batch.shape();
-    let batch_size = *shape.first().unwrap_or(&1);
-    let seq_len = *shape.get(1).unwrap_or(&1);
-    let features = *shape.get(2).unwrap_or(&1);
+    let &[batch_size, seq_len, features] = shape.as_slice() else {
+        panic!("extract_timestep expects [batch, seq_len, features], got {shape:?}");
+    };
 
     assert!(
         t < seq_len,
@@ -199,7 +199,10 @@ fn main() {
 
         let pred_data = logits.data();
         let target_data = test_y.data();
-        let batch_size = *test_y.shape().first().unwrap_or(&1);
+        let batch_size = *test_y
+            .shape()
+            .first()
+            .expect("test labels have a batch dim");
 
         for i in 0..batch_size {
             let pred_class = (0..10)
