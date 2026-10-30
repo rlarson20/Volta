@@ -216,13 +216,17 @@ impl DirectConvGradFn {
         let grad_x = if let Some(ref x_tensor) = x
             && x_tensor.borrow().requires_grad
         {
-            if use_gpu {
-                // GPU acceleration
-                RawTensor::gpu_conv_backward_input(
-                    &out_grad.data,
-                    &weight.as_ref().unwrap().borrow().data,
-                    &self.spec,
-                )
+            // GPU first; a kernel miss falls through to the CPU path, never to `None`,
+            // which would silently freeze the input's gradient.
+            use_gpu
+                .then(|| {
+                    RawTensor::gpu_conv_backward_input(
+                        &out_grad.data,
+                        &weight.as_ref().unwrap().borrow().data,
+                        &self.spec,
+                    )
+                })
+                .flatten()
                 .map(|storage| {
                     RawTensor::new_with_storage(
                         storage,
@@ -231,13 +235,15 @@ impl DirectConvGradFn {
                         false,
                     )
                 })
-            } else {
-                // CPU fallback
-                Some(self.compute_input_gradient_cpu(
-                    &out_grad.data.to_vec(),
-                    &weight.as_ref().unwrap().borrow().data.to_vec(),
-                ))
-            }
+                .or_else(|| {
+                    if use_gpu {
+                        log::warn!("GPU conv input gradient failed; falling back to CPU");
+                    }
+                    Some(self.compute_input_gradient_cpu(
+                        &out_grad.data.to_vec(),
+                        &weight.as_ref().unwrap().borrow().data.to_vec(),
+                    ))
+                })
         } else {
             None
         };
@@ -246,13 +252,15 @@ impl DirectConvGradFn {
         let grad_w = if let Some(ref w_tensor) = weight
             && w_tensor.borrow().requires_grad
         {
-            if use_gpu {
-                // GPU acceleration
-                RawTensor::gpu_conv_backward_weight(
-                    &out_grad.data,
-                    &x.as_ref().unwrap().borrow().data,
-                    &self.spec,
-                )
+            use_gpu
+                .then(|| {
+                    RawTensor::gpu_conv_backward_weight(
+                        &out_grad.data,
+                        &x.as_ref().unwrap().borrow().data,
+                        &self.spec,
+                    )
+                })
+                .flatten()
                 .map(|storage| {
                     RawTensor::new_with_storage(
                         storage,
@@ -261,13 +269,15 @@ impl DirectConvGradFn {
                         false,
                     )
                 })
-            } else {
-                // CPU fallback
-                Some(self.compute_weight_gradient_cpu(
-                    &out_grad.data.to_vec(),
-                    &x.as_ref().unwrap().borrow().data.to_vec(),
-                ))
-            }
+                .or_else(|| {
+                    if use_gpu {
+                        log::warn!("GPU conv weight gradient failed; falling back to CPU");
+                    }
+                    Some(self.compute_weight_gradient_cpu(
+                        &out_grad.data.to_vec(),
+                        &x.as_ref().unwrap().borrow().data.to_vec(),
+                    ))
+                })
         } else {
             None
         };
@@ -3485,6 +3495,71 @@ mod conv2d_gpu_tests {
                 abs_diff < 1e-4,
                 "GPU col2im stride2 mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
             );
+        }
+    }
+
+    /// Direct-conv backward on the GPU matches the CPU for all three gradients. Random
+    /// data, batch > 1, stride 2, padding, and a randomly weighted loss, so `dY` is not
+    /// all ones and a swapped index or a missing gradient cannot cancel out.
+    #[test]
+    fn test_direct_conv_backward_gpu_matches_cpu() {
+        let Some(device) = Device::gpu() else {
+            return;
+        };
+        crate::tensor::manual_seed(0xC0DE);
+
+        let conv_cpu = Conv2d::new_on_device(3, 5, 3, 2, 1, true, Device::CPU);
+        conv_cpu.set_algo(ConvAlgo::Direct);
+        let conv_gpu = Conv2d::new_on_device(3, 5, 3, 2, 1, true, device.clone());
+        conv_gpu.set_algo(ConvAlgo::Direct);
+        let weight = conv_cpu.weight.borrow().data.to_vec();
+        conv_gpu.weight.borrow_mut().data = Storage::gpu(weight);
+        let bias = conv_cpu.bias.as_ref().expect("bias").borrow().data.to_vec();
+        conv_gpu.bias.as_ref().expect("bias").borrow_mut().data = Storage::gpu(bias);
+
+        let x_cpu = RawTensor::randn(&[2, 3, 9, 7]);
+        x_cpu.set_requires_grad(true);
+        let x_gpu = x_cpu.to_device(device.clone());
+        x_gpu.set_requires_grad(true);
+
+        let y_cpu = conv_cpu.forward(&x_cpu);
+        let y_gpu = conv_gpu.forward(&x_gpu);
+        assert!(y_gpu.borrow().data.is_gpu(), "forward must run on the GPU");
+        let w_cpu = RawTensor::randn(y_cpu.shape().truncate_rank());
+        let w_gpu = w_cpu.to_device(device);
+
+        y_cpu
+            .elem_mul(&w_cpu)
+            .sum()
+            .into_loss()
+            .expect("scalar loss")
+            .backward();
+        y_gpu
+            .elem_mul(&w_gpu)
+            .sum()
+            .into_loss()
+            .expect("scalar loss")
+            .backward();
+
+        let pairs = [
+            ("dX", x_cpu.grad(), x_gpu.grad()),
+            ("dW", conv_cpu.weight.grad(), conv_gpu.weight.grad()),
+            (
+                "dBias",
+                conv_cpu.bias.as_ref().and_then(Tensor::grad),
+                conv_gpu.bias.as_ref().and_then(Tensor::grad),
+            ),
+        ];
+        for (name, cpu, gpu) in pairs {
+            let cpu = cpu.unwrap_or_else(|| panic!("CPU {name} missing"));
+            let gpu = gpu.unwrap_or_else(|| panic!("GPU {name} missing"));
+            assert_eq!(cpu.len(), gpu.len(), "{name}: length");
+            for (i, (c, g)) in cpu.iter().zip(&gpu).enumerate() {
+                assert!(
+                    (c - g).abs() < 1e-3,
+                    "{name} mismatch at index {i}: CPU={c}, GPU={g}"
+                );
+            }
         }
     }
 }
