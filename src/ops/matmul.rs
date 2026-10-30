@@ -745,6 +745,16 @@ mod tests {
     /// `reference_forward_backward`. Rank-1 operands are the `[1, k]` / `[k, 1]` matrices
     /// the vector arms compute, with the same flat layout.
     fn assert_matches_reference(a_dims: &[usize], b_dims: &[usize]) {
+        assert_matches_reference_on(a_dims, b_dims, None);
+    }
+
+    /// As [`assert_matches_reference`], running `a @ b` on `gpu` when it is `Some`. The
+    /// reference is always computed from the host operands, never from GPU data.
+    fn assert_matches_reference_on(
+        a_dims: &[usize],
+        b_dims: &[usize],
+        gpu: Option<&crate::Device>,
+    ) {
         crate::tensor::manual_seed(0x0E7A);
         let a = operand(a_dims);
         let b = operand(b_dims);
@@ -760,9 +770,17 @@ mod tests {
             [_] => 1,
             _ => unreachable!("rank >= 1"),
         };
-        let out = a.matmul(&b);
+        let to_run = |t: &Tensor| gpu.map_or_else(|| t.clone(), |d| t.to_device(d.clone()));
+        let (a_run, b_run) = (to_run(&a), to_run(&b));
+        let out = a_run.matmul(&b_run);
+        if gpu.is_some() {
+            assert!(
+                out.borrow().data.is_gpu(),
+                "matmul fell back to the CPU, so this would compare the CPU with itself"
+            );
+        }
         let w = randn(out.shape().truncate_rank());
-        out.elem_mul(&w)
+        out.elem_mul(&to_run(&w))
             .sum()
             .into_loss()
             .expect("scalar loss")
@@ -775,9 +793,13 @@ mod tests {
             (m, k, n),
         );
         let what = format!("{a_dims:?} @ {b_dims:?}");
-        assert_close(&out.data(), &c, &format!("{what} forward"));
-        assert_close(&a.grad().expect("a grad"), &da, &format!("{what} dA"));
-        assert_close(&b.grad().expect("b grad"), &db, &format!("{what} dB"));
+        assert_close(
+            &out.to_device(crate::Device::CPU).data(),
+            &c,
+            &format!("{what} forward"),
+        );
+        assert_close(&a_run.grad().expect("a grad"), &da, &format!("{what} dA"));
+        assert_close(&b_run.grad().expect("b grad"), &db, &format!("{what} dB"));
     }
 
     /// Past one 16x16 tile and not a multiple of 16 on any side (GEMM report §4).
@@ -801,6 +823,20 @@ mod tests {
         assert_matches_reference(&[5, 7], &[7]);
         assert_matches_reference(&[7], &[7, 4]);
         assert_matches_reference(&[7], &[7]);
+    }
+
+    /// The GPU kernel against the reference, on the shape that runs a second tile and a
+    /// partial edge tile in every kernel (forward, `dA`, `dB`). GPU matmul is 2D only, so
+    /// the batched and vector shapes above have no GPU kernel to compare.
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn matmul_matches_reference_gpu_past_one_tile() {
+        // No adapter: nothing to compare, the same skip the other GPU tests use.
+        let Some(device) = crate::Device::gpu() else {
+            return;
+        };
+        assert_matches_reference_on(&[37, 19], &[19, 23], Some(&device));
+        assert_matches_reference_on(&[5, 41], &[41, 3], Some(&device));
     }
 
     fn assert_close(actual: &[f32], expected: &[f32], what: &str) {
