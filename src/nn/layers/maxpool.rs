@@ -167,7 +167,11 @@ impl MaxPool2dGradFn {
             *slot(&mut grad_input, max_linear_idx) += grad_val;
         }
 
-        vec![Some(RawTensor::new(grad_input, &input_shape, false))]
+        vec![Some(RawTensor::from_shape(
+            grad_input,
+            input_shape.clone(),
+            false,
+        ))]
     }
 }
 

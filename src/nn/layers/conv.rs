@@ -185,9 +185,13 @@ impl Im2colGradFn {
             crate::Device::CPU
         };
 
-        let grad_tensor =
-            RawTensor::try_new_with_storage(grad_storage, &self.spec.input_dims(), device, false)
-                .expect("col2im gradient shape mismatch");
+        let grad_tensor = RawTensor::try_new_with_storage(
+            grad_storage,
+            Shape::derived(self.spec.input_dims()),
+            device,
+            false,
+        )
+        .expect("col2im gradient shape mismatch");
 
         vec![Some(grad_tensor)]
     }
@@ -233,7 +237,7 @@ impl DirectConvGradFn {
                 .map(|storage| {
                     RawTensor::new_with_storage(
                         storage,
-                        &self.spec.input_dims(),
+                        Shape::derived(self.spec.input_dims()),
                         out_grad.device.clone(),
                         false,
                     )
@@ -272,7 +276,7 @@ impl DirectConvGradFn {
                 .map(|storage| {
                     RawTensor::new_with_storage(
                         storage,
-                        &self.spec.weight_dims(),
+                        Shape::derived(self.spec.weight_dims()),
                         out_grad.device.clone(),
                         false,
                     )
@@ -506,7 +510,7 @@ impl IGEMMGradFn {
                 .map(|storage| {
                     RawTensor::new_with_storage(
                         storage,
-                        &self.spec.input_dims(),
+                        Shape::derived(self.spec.input_dims()),
                         out_grad.device.clone(),
                         false,
                     )
@@ -559,7 +563,7 @@ impl IGEMMGradFn {
                 .map(|storage| {
                     RawTensor::new_with_storage(
                         storage,
-                        &self.spec.weight_dims(),
+                        Shape::derived(self.spec.weight_dims()),
                         out_grad.device.clone(),
                         false,
                     )

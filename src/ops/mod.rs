@@ -45,7 +45,7 @@ impl RawTensor {
     #[must_use]
     pub fn contiguous(self_t: &Tensor) -> Tensor {
         let s = self_t.borrow();
-        Self::new(s.data.to_vec(), &s.shape, s.requires_grad)
+        Self::from_shape(s.data.to_vec(), s.shape.clone(), s.requires_grad)
     }
 }
 

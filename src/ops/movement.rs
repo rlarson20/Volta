@@ -390,7 +390,7 @@ pub enum MovementOp {
 #[derive(Clone)]
 pub(crate) struct MovementGradFn {
     op: MovementOp,
-    original_shape: Vec<usize>,
+    original_shape: Shape,
 }
 
 impl MovementGradFn {
@@ -402,7 +402,7 @@ impl MovementGradFn {
         let grad_tensor = match &self.op {
             MovementOp::Reshape { .. } => {
                 // Reshape back to original shape
-                RawTensor::new(out_grad.data.to_vec(), &self.original_shape, false)
+                RawTensor::from_shape(out_grad.data.to_vec(), self.original_shape.clone(), false)
             }
             MovementOp::Permute { axes } => {
                 // Invert the permutation to restore original order
@@ -417,14 +417,14 @@ impl MovementGradFn {
                     if out_grad.device.is_gpu()
                         && let Some(grad_storage) = RawTensor::gpu_permute_backward(
                             &out_grad.data,
-                            &self.original_shape,
-                            &out_grad.shape,
+                            self.original_shape.truncate_rank(),
+                            out_grad.shape.truncate_rank(),
                             &inverse_axes,
                         )
                     {
                         return vec![Some(RawTensor::new_with_storage(
                             grad_storage,
-                            &self.original_shape,
+                            self.original_shape.clone(),
                             out_grad.device.clone(),
                             false,
                         ))];
@@ -432,10 +432,14 @@ impl MovementGradFn {
                 }
 
                 // CPU fallback
-                let grad_t = RawTensor::new(out_grad.data.to_vec(), &out_grad.shape, false);
+                let grad_t =
+                    RawTensor::from_shape(out_grad.data.to_vec(), out_grad.shape.clone(), false);
                 let (storage, shape, device) = RawTensor::permute_impl(&grad_t, &inverse_axes);
                 return vec![Some(RawTensor::new_with_storage(
-                    storage, &shape, device, false,
+                    storage,
+                    Shape::derived(shape),
+                    device,
+                    false,
                 ))];
             }
             MovementOp::Expand { new_shape } => {
@@ -445,13 +449,13 @@ impl MovementGradFn {
                     if out_grad.device.is_gpu()
                         && let Some(grad_storage) = RawTensor::gpu_expand_backward(
                             &out_grad.data,
-                            &self.original_shape,
+                            self.original_shape.truncate_rank(),
                             new_shape,
                         )
                     {
                         return vec![Some(RawTensor::new_with_storage(
                             grad_storage,
-                            &self.original_shape,
+                            self.original_shape.clone(),
                             out_grad.device.clone(),
                             false,
                         ))];
@@ -460,7 +464,7 @@ impl MovementGradFn {
 
                 // CPU fallback: Sum gradient over dimensions that were expanded (broadcast)
                 let mut grad_data = vec![0.0; self.original_shape.iter().product()];
-                let old_strides = Strides::from_shape(&self.original_shape);
+                let old_strides = self.original_shape.strides();
                 let old_strides = old_strides.truncate_rank();
 
                 let g_host = out_grad.data.to_host_f32();
@@ -472,13 +476,13 @@ impl MovementGradFn {
                         let coord = rem % dim_size;
                         rem /= dim_size;
                         // If this dimension was size 1, don't advance the index
-                        if fetch(&self.original_shape, j) != 1 {
+                        if self.original_shape.dim_at(j) != 1 {
                             old_idx += coord * fetch(old_strides, j);
                         }
                     }
                     *slot(&mut grad_data, old_idx) += fetch(&g_host, i);
                 }
-                RawTensor::new(grad_data, &self.original_shape, false)
+                RawTensor::from_shape(grad_data, self.original_shape.clone(), false)
             }
             MovementOp::Pad { padding } => {
                 // Try GPU path
@@ -487,14 +491,14 @@ impl MovementGradFn {
                     if out_grad.device.is_gpu()
                         && let Some(grad_storage) = RawTensor::gpu_pad_backward(
                             &out_grad.data,
-                            &self.original_shape,
-                            &out_grad.shape,
+                            self.original_shape.truncate_rank(),
+                            out_grad.shape.truncate_rank(),
                             padding,
                         )
                     {
                         return vec![Some(RawTensor::new_with_storage(
                             grad_storage,
-                            &self.original_shape,
+                            self.original_shape.clone(),
                             out_grad.device.clone(),
                             false,
                         ))];
@@ -503,16 +507,16 @@ impl MovementGradFn {
 
                 // CPU fallback: Remove padding from gradient (extract center region)
                 let mut result = vec![0.0; self.original_shape.iter().product()];
-                let old_strides = Strides::from_shape(&self.original_shape);
+                let old_strides = self.original_shape.strides();
                 let old_strides = old_strides.truncate_rank();
-                let new_strides = Strides::from_shape(&out_grad.shape);
+                let new_strides = out_grad.shape.strides();
                 let new_strides = new_strides.truncate_rank();
                 let mapper = PadBackwardMapper {
                     padding: padding.clone(),
                 };
                 let ctx = MovementContext::new(
-                    &self.original_shape,
-                    &out_grad.shape,
+                    self.original_shape.truncate_rank(),
+                    out_grad.shape.truncate_rank(),
                     old_strides,
                     new_strides,
                 );
@@ -526,7 +530,7 @@ impl MovementGradFn {
                     0,
                     0,
                 );
-                RawTensor::new(result, &self.original_shape, false)
+                RawTensor::from_shape(result, self.original_shape.clone(), false)
             }
             MovementOp::Shrink { ranges } => {
                 // Try GPU path
@@ -535,14 +539,14 @@ impl MovementGradFn {
                     if out_grad.device.is_gpu()
                         && let Some(grad_storage) = RawTensor::gpu_shrink_backward(
                             &out_grad.data,
-                            &self.original_shape,
-                            &out_grad.shape,
+                            self.original_shape.truncate_rank(),
+                            out_grad.shape.truncate_rank(),
                             ranges,
                         )
                     {
                         return vec![Some(RawTensor::new_with_storage(
                             grad_storage,
-                            &self.original_shape,
+                            self.original_shape.clone(),
                             out_grad.device.clone(),
                             false,
                         ))];
@@ -551,16 +555,16 @@ impl MovementGradFn {
 
                 // CPU fallback: Pad gradient back to original size (inverse of shrink)
                 let mut result = vec![0.0; self.original_shape.iter().product()];
-                let old_strides = Strides::from_shape(&self.original_shape);
+                let old_strides = self.original_shape.strides();
                 let old_strides = old_strides.truncate_rank();
-                let new_strides = Strides::from_shape(&out_grad.shape);
+                let new_strides = out_grad.shape.strides();
                 let new_strides = new_strides.truncate_rank();
                 let mapper = ShrinkBackwardMapper {
                     ranges: ranges.clone(),
                 };
                 let ctx = MovementContext::new(
-                    &self.original_shape,
-                    &out_grad.shape,
+                    self.original_shape.truncate_rank(),
+                    out_grad.shape.truncate_rank(),
                     old_strides,
                     new_strides,
                 );
@@ -574,7 +578,7 @@ impl MovementGradFn {
                     0,
                     0,
                 );
-                RawTensor::new(result, &self.original_shape, false)
+                RawTensor::from_shape(result, self.original_shape.clone(), false)
             }
             MovementOp::Stride { strides } => {
                 // Try GPU path
@@ -583,14 +587,14 @@ impl MovementGradFn {
                     if out_grad.device.is_gpu()
                         && let Some(grad_storage) = RawTensor::gpu_stride_backward(
                             &out_grad.data,
-                            &self.original_shape,
-                            &out_grad.shape,
+                            self.original_shape.truncate_rank(),
+                            out_grad.shape.truncate_rank(),
                             strides,
                         )
                     {
                         return vec![Some(RawTensor::new_with_storage(
                             grad_storage,
-                            &self.original_shape,
+                            self.original_shape.clone(),
                             out_grad.device.clone(),
                             false,
                         ))];
@@ -599,16 +603,16 @@ impl MovementGradFn {
 
                 // CPU fallback: Upsample gradient (inverse of stride/downsampling)
                 let mut result = vec![0.0; self.original_shape.iter().product()];
-                let old_strides_mem = Strides::from_shape(&self.original_shape);
+                let old_strides_mem = self.original_shape.strides();
                 let old_strides_mem = old_strides_mem.truncate_rank();
-                let new_strides_mem = Strides::from_shape(&out_grad.shape);
+                let new_strides_mem = out_grad.shape.strides();
                 let new_strides_mem = new_strides_mem.truncate_rank();
                 let mapper = StrideBackwardMapper {
                     strides: strides.clone(),
                 };
                 let ctx = MovementContext::new(
-                    &self.original_shape,
-                    &out_grad.shape,
+                    self.original_shape.truncate_rank(),
+                    out_grad.shape.truncate_rank(),
                     old_strides_mem,
                     new_strides_mem,
                 );
@@ -622,7 +626,7 @@ impl MovementGradFn {
                     0,
                     0,
                 );
-                RawTensor::new(result, &self.original_shape, false)
+                RawTensor::from_shape(result, self.original_shape.clone(), false)
             }
         };
 
@@ -642,7 +646,7 @@ impl RawTensor {
         shape: Shape,
         device: Device,
         op: MovementOp,
-        original_shape: Vec<usize>,
+        original_shape: Shape,
     ) -> Tensor {
         edge(
             [self_t.clone()],
@@ -706,19 +710,19 @@ impl RawTensor {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone(), s.device.clone())
         };
-        assert_eq!(axes.len(), shape.len(), "Axes length must match rank");
+        assert_eq!(axes.len(), shape.rank(), "Axes length must match rank");
 
-        let new_shape: Vec<usize> = axes.iter().map(|&i| fetch(&shape, i)).collect();
+        let new_shape: Vec<usize> = axes.iter().map(|&i| shape.dim_at(i)).collect();
 
         // Try GPU path first if available
         if device.is_gpu()
-            && let Some(storage) = Self::gpu_permute(&data, &shape, &new_shape, axes)
+            && let Some(storage) = Self::gpu_permute(&data, shape.truncate_rank(), &new_shape, axes)
         {
             return (storage, new_shape, device);
         }
 
         // CPU fallback
-        let old_strides = Strides::from_shape(&shape);
+        let old_strides = shape.strides();
         let old_strides = old_strides.truncate_rank();
         let mut new_data = vec![0.0; data.len()];
 
@@ -780,12 +784,12 @@ impl RawTensor {
             (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
-        assert_eq!(old_shape.len(), new_shape.len(), "Expand: rank must match");
+        assert_eq!(old_shape.rank(), new_shape.len(), "Expand: rank must match");
 
         // Verify broadcasting rules: old dims must be 1 or equal to new
-        for (old_d, new_d) in old_shape.iter().zip(new_shape) {
+        for (old_d, &new_d) in old_shape.iter().zip(new_shape) {
             assert!(
-                *old_d == 1 || old_d == new_d,
+                old_d == 1 || old_d == new_d,
                 "Cannot expand dimension {old_d} to {new_d}"
             );
         }
@@ -796,7 +800,7 @@ impl RawTensor {
         let new_size = out_shape.numel();
 
         let gpu_storage = if device.is_gpu() {
-            Self::gpu_expand(&data, &old_shape, new_shape)
+            Self::gpu_expand(&data, old_shape.truncate_rank(), new_shape)
         } else {
             None
         };
@@ -807,7 +811,7 @@ impl RawTensor {
             let cpu_data = data.to_vec();
 
             // Broadcast by repeating values
-            let old_strides = Strides::from_shape(&old_shape);
+            let old_strides = old_shape.strides();
             let old_strides = old_strides.truncate_rank();
 
             for i in 0..new_size {
@@ -817,7 +821,7 @@ impl RawTensor {
                     let dim_size = fetch(new_shape, j);
                     let coord = rem % dim_size;
                     rem /= dim_size;
-                    if fetch(&old_shape, j) != 1 {
+                    if old_shape.dim_at(j) != 1 {
                         let stride = fetch(old_strides, j);
                         old_idx += coord * stride;
                     }
@@ -870,11 +874,11 @@ impl RawTensor {
             (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
-        if padding.len() != old_shape.len() {
+        if padding.len() != old_shape.rank() {
             return Err(VoltaError::InvalidParameter(format!(
                 "Padding length ({}) must match tensor rank ({})",
                 padding.len(),
-                old_shape.len()
+                old_shape.rank()
             )));
         }
 
@@ -888,7 +892,7 @@ impl RawTensor {
         let new_size = out_shape.numel();
 
         let gpu_storage = if device.is_gpu() {
-            Self::gpu_pad(&data, &old_shape, &new_shape, padding, value)
+            Self::gpu_pad(&data, old_shape.truncate_rank(), &new_shape, padding, value)
         } else {
             None
         };
@@ -900,14 +904,19 @@ impl RawTensor {
             let cpu_data = data.to_vec();
 
             // Copy old data into padded positions
-            let old_strides = Strides::from_shape(&old_shape);
+            let old_strides = old_shape.strides();
             let old_strides = old_strides.truncate_rank();
             let new_strides = Strides::from_shape(&new_shape);
             let new_strides = new_strides.truncate_rank();
             let mapper = PadMapper {
                 padding: padding.to_vec(),
             };
-            let ctx = MovementContext::new(&old_shape, &new_shape, old_strides, new_strides);
+            let ctx = MovementContext::new(
+                old_shape.truncate_rank(),
+                &new_shape,
+                old_strides,
+                new_strides,
+            );
 
             apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
             (Storage::cpu(result), Device::CPU)
@@ -1023,12 +1032,12 @@ impl RawTensor {
         };
 
         // Validate ranges before any computation
-        Self::validate_shrink_ranges(&old_shape, ranges)?;
+        Self::validate_shrink_ranges(old_shape.truncate_rank(), ranges)?;
 
         let new_shape: Vec<usize> = ranges.iter().map(|(start, end)| end - start).collect();
 
         let gpu_storage = if device.is_gpu() {
-            Self::gpu_shrink(&data, &old_shape, &new_shape, ranges)
+            Self::gpu_shrink(&data, old_shape.truncate_rank(), &new_shape, ranges)
         } else {
             None
         };
@@ -1039,14 +1048,19 @@ impl RawTensor {
             let mut result = vec![0.0; new_size];
             let cpu_data = data.to_vec();
 
-            let old_strides = Strides::from_shape(&old_shape);
+            let old_strides = old_shape.strides();
             let old_strides = old_strides.truncate_rank();
             let new_strides = Strides::from_shape(&new_shape);
             let new_strides = new_strides.truncate_rank();
             let mapper = ShrinkMapper {
                 ranges: ranges.to_vec(),
             };
-            let ctx = MovementContext::new(&old_shape, &new_shape, old_strides, new_strides);
+            let ctx = MovementContext::new(
+                old_shape.truncate_rank(),
+                &new_shape,
+                old_strides,
+                new_strides,
+            );
 
             apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
             (Storage::cpu(result), Device::CPU)
@@ -1078,7 +1092,7 @@ impl RawTensor {
 
         assert_eq!(
             strides.len(),
-            old_shape.len(),
+            old_shape.rank(),
             "Strides length must match rank"
         );
 
@@ -1089,7 +1103,7 @@ impl RawTensor {
             .collect();
 
         let gpu_storage = if device.is_gpu() {
-            Self::gpu_stride(&data, &old_shape, &new_shape, strides)
+            Self::gpu_stride(&data, old_shape.truncate_rank(), &new_shape, strides)
         } else {
             None
         };
@@ -1100,15 +1114,19 @@ impl RawTensor {
             let mut result = vec![0.0; new_size];
             let cpu_data = data.to_vec();
 
-            let old_strides_mem = Strides::from_shape(&old_shape);
+            let old_strides_mem = old_shape.strides();
             let old_strides_mem = old_strides_mem.truncate_rank();
             let new_strides_mem = Strides::from_shape(&new_shape);
             let new_strides_mem = new_strides_mem.truncate_rank();
             let mapper = StrideMapper {
                 strides: strides.to_vec(),
             };
-            let ctx =
-                MovementContext::new(&old_shape, &new_shape, old_strides_mem, new_strides_mem);
+            let ctx = MovementContext::new(
+                old_shape.truncate_rank(),
+                &new_shape,
+                old_strides_mem,
+                new_strides_mem,
+            );
 
             apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
             (Storage::cpu(result), Device::CPU)

@@ -70,8 +70,16 @@ impl BinaryGradFn {
 
         // CPU path: the table gives the per-element (∂a, ∂b) at the broadcast shape;
         // each is then summed back down to its operand's shape.
-        let x_bc = RawTensor::broadcast_to(&x.data.to_host_f32(), &x.shape, &out_grad.shape);
-        let y_bc = RawTensor::broadcast_to(&y.data.to_host_f32(), &y.shape, &out_grad.shape);
+        let x_bc = RawTensor::broadcast_to(
+            &x.data.to_host_f32(),
+            x.shape.truncate_rank(),
+            out_grad.shape.truncate_rank(),
+        );
+        let y_bc = RawTensor::broadcast_to(
+            &y.data.to_host_f32(),
+            y.shape.truncate_rank(),
+            out_grad.shape.truncate_rank(),
+        );
         let (grad_x, grad_y): (Vec<f32>, Vec<f32>) = out_grad
             .data
             .to_host_f32()
@@ -82,8 +90,12 @@ impl BinaryGradFn {
             .unzip();
 
         let reduce_to = |full: &[f32], operand: &RawTensor| {
-            let summed = RawTensor::sum_over_broadcast_dims(full, &out_grad.shape, &operand.shape);
-            RawTensor::new(summed, &operand.shape, false)
+            let summed = RawTensor::sum_over_broadcast_dims(
+                full,
+                out_grad.shape.truncate_rank(),
+                operand.shape.truncate_rank(),
+            );
+            RawTensor::from_shape(summed, operand.shape.clone(), false)
         };
         vec![
             x.requires_grad.then(|| reduce_to(&grad_x, &x)),
@@ -288,7 +300,7 @@ impl RawTensor {
             return edge(
                 [self_t.clone(), other.clone()],
                 storage,
-                Shape::derived(shape),
+                shape,
                 device,
                 GradFn::Binary(BinaryGradFn { op }),
             );
@@ -304,15 +316,17 @@ impl RawTensor {
         };
 
         // CPU path: compute broadcast shape and perform the operation on host data.
-        let out_shape = Self::broadcast_shape(&shape_a, &shape_b);
+        let out_shape = Self::broadcast_shape(shape_a.truncate_rank(), shape_b.truncate_rank());
 
         // Broadcast inputs to output shape
         // Check for reasonable sizes to prevent memory issues
         let out_size: usize = out_shape.iter().product();
         assert!(out_size > 0, "Invalid broadcast result size");
 
-        let bc_data_a = Self::broadcast_to(&data_a.to_host_f32(), &shape_a, &out_shape);
-        let bc_data_b = Self::broadcast_to(&data_b.to_host_f32(), &shape_b, &out_shape);
+        let bc_data_a =
+            Self::broadcast_to(&data_a.to_host_f32(), shape_a.truncate_rank(), &out_shape);
+        let bc_data_b =
+            Self::broadcast_to(&data_b.to_host_f32(), shape_b.truncate_rank(), &out_shape);
 
         let result_data: Vec<f32> = bc_data_a
             .iter()

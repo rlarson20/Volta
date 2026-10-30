@@ -84,7 +84,7 @@ impl TensorData {
         let borrowed = t.borrow();
         Self {
             data: borrowed.data.to_vec(),
-            shape: borrowed.shape.clone(),
+            shape: borrowed.shape.truncate_rank().to_vec(),
         }
     }
 

@@ -1,4 +1,3 @@
-use crate::index::fetch;
 use crate::io::StateDict;
 use crate::nn::{Layer, Module};
 use crate::tensor::Tensor;
@@ -40,13 +39,13 @@ impl Module for Flatten {
 impl Layer for Flatten {
     fn forward(&self, x: &Tensor) -> Tensor {
         let shape = x.borrow().shape.clone();
-        if shape.len() < 2 {
+        if shape.rank() < 2 {
             // Already flat or scalar
             return x.clone();
         }
 
-        let batch_size = fetch(&shape, 0);
-        let flattened_size: usize = shape.get(1..).map_or(1, |s| s.iter().product());
+        let batch_size = shape.dim_at(0);
+        let flattened_size = shape.numel_from(1);
 
         x.reshape(&[batch_size, flattened_size])
     }

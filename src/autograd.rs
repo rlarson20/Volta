@@ -128,7 +128,7 @@ pub(crate) fn edge(
         && inputs.as_ref().iter().any(Tensor::requires_grad)
         && !grad.is_trivial();
 
-    let out = RawTensor::new_with_storage(data, shape.truncate_rank(), device, requires_grad);
+    let out = RawTensor::new_with_storage(data, shape, device, requires_grad);
     if requires_grad {
         let mut o = out.borrow_mut();
         o.parents = inputs.as_ref().to_vec();
