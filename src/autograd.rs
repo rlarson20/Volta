@@ -308,7 +308,7 @@ impl Tensor {
         };
         if numel != 1 {
             return Err(VoltaError::NotScalar {
-                shape: self.shape(),
+                shape: self.shape().truncate_rank().to_vec(),
             });
         }
         if !requires_grad {

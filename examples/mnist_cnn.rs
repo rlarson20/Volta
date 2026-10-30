@@ -138,8 +138,7 @@ fn main() {
         let target_data = test_y.data();
         let batch_size = test_y
             .shape()
-            .first()
-            .copied()
+            .dim(volta::Axis(0))
             .expect("test labels have a batch dim");
 
         for i in 0..batch_size {

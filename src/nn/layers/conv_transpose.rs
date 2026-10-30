@@ -4,7 +4,6 @@ use crate::index::{fetch, slot};
 use crate::io::{StateDict, TensorData};
 use crate::nn::{Layer, Module};
 use crate::shape::Axis;
-use crate::shape::Shape;
 use crate::spec::ConvTranspose2dSpec;
 use crate::tensor::{RawTensor, Tensor};
 
@@ -335,13 +334,9 @@ impl Module for ConvTranspose2d {
 
 impl Layer for ConvTranspose2d {
     fn forward(&self, x: &Tensor) -> Tensor {
-        let spec = ConvTranspose2dSpec::new(
-            &Shape::derived(x.shape()),
-            &Shape::derived(self.weight.shape()),
-            self.stride,
-            self.padding,
-        )
-        .unwrap_or_else(|e| panic!("{e}"));
+        let spec =
+            ConvTranspose2dSpec::new(&x.shape(), &self.weight.shape(), self.stride, self.padding)
+                .unwrap_or_else(|e| panic!("{e}"));
         let ConvTranspose2dSpec {
             batch,
             in_ch: in_channels,

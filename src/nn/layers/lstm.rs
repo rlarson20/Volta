@@ -205,7 +205,7 @@ mod tests {
 
     impl crate::nn::Layer for OneStep {
         fn forward(&self, x: &Tensor) -> Tensor {
-            let batch = x.shape().first().copied().expect("batch dim");
+            let batch = x.shape().dim_at(0);
             self.0.step(x, &mut self.0.initial_state(batch))
         }
     }

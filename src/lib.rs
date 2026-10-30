@@ -4909,12 +4909,16 @@ mod linear_tests {
             .map(|b| b.borrow().data.to_vec())
             .unwrap_or_default();
         let w_shape = layer.weight.shape();
-        let b_shape = layer.bias.as_ref().map(|b| b.shape()).unwrap_or_default();
+        let b_shape = layer
+            .bias
+            .as_ref()
+            .expect("Linear::new(.., true) has a bias")
+            .shape();
         let x = RawTensor::new(vec![0.5, -1.0, 1.5, 0.25, 0.0, 2.0], &[2, 3], true);
 
         let passed = RawTensor::check_gradients_simple(&x, |t| {
-            let w = RawTensor::new(w_snapshot.clone(), &w_shape, false);
-            let b = RawTensor::new(b_snapshot.clone(), &b_shape, false);
+            let w = RawTensor::from_shape(w_snapshot.clone(), w_shape.clone(), false);
+            let b = RawTensor::from_shape(b_snapshot.clone(), b_shape.clone(), false);
             t.matmul(&w).add(&b).sum()
         });
         assert!(passed, "Linear input gradient check failed");
