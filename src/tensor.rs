@@ -1,6 +1,7 @@
 use crate::Storage;
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
+use crate::device_policy::{Pass, on_gap};
 use crate::index::{fetch, slot, span};
 use crate::ops::binary::BinaryOp;
 use crate::ops::reduce::ReduceOp;
@@ -205,14 +206,29 @@ impl Tensor {
         }
     }
 
-    /// Accumulate a gradient contribution into this tensor.
+    /// Accumulate a gradient contribution from `op`'s backward into this tensor.
     ///
     /// One of the two sanctioned writers of `grad` outside of initialization
     /// — this one adds a contribution in during `backward()`; `set_grad`
     /// overwrites directly for test seeding.
-    pub(crate) fn accumulate_grad(&self, g: Storage) {
+    ///
+    /// It is also the backward device check (`crate::device_policy`): a gradient that
+    /// `op` computed on the CPU for a GPU tensor is a gap, which panics under
+    /// `DevicePolicy::Strict` and moves to the GPU under `PreferGpu`.
+    ///
+    /// # Panics
+    /// On a backward gap under `Strict`, or if `op` produced a GPU gradient for a CPU
+    /// tensor (an op bug).
+    pub(crate) fn accumulate_grad(&self, g: Storage, op: &GradFn) {
         let mut t = self.inner.borrow_mut();
-        let g = g.to_device(&t.device);
+        let g = match (t.device.is_gpu(), g.is_gpu()) {
+            (true, false) => {
+                on_gap(&op.op_name(), Pass::Backward);
+                g.to_device(&t.device)
+            }
+            (false, true) => panic!("{}: produced a GPU gradient for a CPU tensor", op.op_name()),
+            (true, true) | (false, false) => g,
+        };
         match t.grad {
             None => t.grad = Some(g),
             Some(ref mut existing) => RawTensor::accumulate_grad(existing, &g),

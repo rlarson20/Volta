@@ -1,5 +1,5 @@
 use crate::device::Device;
-use crate::device_policy::{Pass, common_device, on_gap};
+use crate::device_policy::{Pass, common_device, kernel_failed, on_gap};
 use crate::error::{Result, VoltaError};
 use crate::nn::layers::conv::{DirectConvGradFn, IGEMMGradFn, Im2colGradFn};
 use crate::nn::layers::conv_transpose::ConvTranspose2dGradFn;
@@ -342,7 +342,7 @@ impl RawTensor {
                 for (parent_grad, parent_ref) in parent_grads.into_iter().zip(parents.iter()) {
                     if let Some(g) = parent_grad {
                         let grad_storage = g.borrow().data.clone();
-                        parent_ref.accumulate_grad(grad_storage);
+                        parent_ref.accumulate_grad(grad_storage, &grad_fn);
                     }
                 }
             }
@@ -409,17 +409,23 @@ impl ScalarLoss {
 }
 
 impl RawTensor {
-    /// Add a gradient contribution to an existing gradient storage, preferring GPU accumulation.
+    /// Add a gradient contribution to an existing gradient storage on the same device.
+    ///
+    /// # Panics
+    /// If the two are on different devices, or the GPU add kernel returns no result.
     pub(crate) fn accumulate_grad(existing: &mut Storage, new_grad: &Storage) {
-        if existing.is_gpu() && new_grad.is_gpu() {
-            if let Some(sum) = Self::gpu_add(existing, new_grad) {
-                *existing = sum;
-                return;
-            }
-            log::warn!("GPU gradient accumulation failed; falling back to CPU accumulation");
+        assert_eq!(
+            existing.is_gpu(),
+            new_grad.is_gpu(),
+            "accumulate_grad: gradient contributions on different devices"
+        );
+        if existing.is_gpu() {
+            *existing = Self::gpu_add(existing, new_grad)
+                .unwrap_or_else(|| kernel_failed("accumulate_grad"));
+            return;
         }
 
-        // CPU fallback: both storages are synced to CPU for element-wise addition.
+        // CPU: element-wise addition on host data.
         let mut accum = existing.to_vec();
         let add = new_grad.to_vec();
         assert_eq!(

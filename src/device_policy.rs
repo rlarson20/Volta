@@ -119,7 +119,6 @@ pub(crate) fn on_gap(op: &str, pass: Pass) {
 ///
 /// # Panics
 /// Always, under every policy.
-#[expect(dead_code, reason = "used by the GPU op sites in a later commit")]
 pub(crate) fn kernel_failed(op: &str) -> ! {
     panic!("{op}: GPU kernel returned no result")
 }
