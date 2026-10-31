@@ -389,7 +389,8 @@ pub fn save_safetensors_typed<P: AsRef<Path>>(
 ///
 /// let mapper = StateDictMapper::new()
 ///     .strip_prefix("model.")
-///     .transpose_pattern("weight");
+///     .transpose_linear("fc1")
+///     .transpose_linear("fc2");
 ///
 /// let state = load_state_dict_with_mapping("model.bin", &mapper)?;
 /// # Ok::<(), std::io::Error>(())

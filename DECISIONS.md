@@ -477,6 +477,14 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 
 **Tests:** `tests/device_policy.rs` (forward and backward gaps under both policies, mixed devices, unknown GPU names, layers and losses keeping constants on the GPU, `no_grad`, event order, rank-5 movement), `device_policy::tests`, and `expect_gaps` in the parity and smoke tests, which asserts the exact set of ops each GPU test runs on the CPU. All ran on a real adapter (2026-10-30).
 
+### Linear weights are transposed by name, not by key pattern
+
+**Decision:** `load_pytorch_linear_weights(state, linear_layers)` and `load_huggingface_weights(state, prefix, linear_layers)` take the `Linear` layer names and transpose exactly `{name}.weight`, through `StateDictMapper::transpose_linear`, which panics if the key is missing or not 2-D. They used to call `transpose_pattern("weight")`, which also transposed `Embedding.weight` and PyTorch's LSTM `weight_ih_l0`/`weight_hh_l0`, whose layouts already match Volta's. On a non-square matrix that failed loudly at `load_weight`; on a square one it loaded silently wrong.
+
+**Why names, not a better pattern:** PyTorch names a `Linear` weight and an `Embedding` weight the same way (`*.weight`, both 2-D), so no key pattern can separate them; skipping names containing `embed` would still be a guess. Shapes can't decide it either, for exactly the square case. The caller knows which layers are `Linear`.
+
+**Breaking change:** both helpers gained a parameter. Nothing in the repo called them outside their own tests; `examples/load_external_mnist.rs` already used explicit `transpose(key)` calls. `transpose` and `transpose_pattern` keep their lenient behavior (missing or non-2-D keys are skipped) for general use, and their docs point to `transpose_linear` for PyTorch `Linear` weights.
+
 ### `to_device` is a differentiable op (PyTorch's `.to()`)
 
 **Decision:** `to_device` builds its output through `edge()` with `GradFn::ToDevice { source }`, whose backward moves the gradient to the source device. The result is a new node whose parent is the input: it has no gradient of its own, and on a leaf it is not a leaf, so a CPU leaf moved to the GPU and used in a GPU loss gets its gradient back, on the CPU. A same-device move returns the tensor itself.
