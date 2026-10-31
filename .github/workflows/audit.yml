@@ -1,4 +1,4 @@
-name: Security Audit
+name: Dependency Audit
 on:
   schedule:
     - cron: "0 0 * * 0" # Weekly on Sunday
@@ -11,5 +11,5 @@ jobs:
       - uses: actions/checkout@v4
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-audit
-      - run: cargo audit
+          tool: cargo-deny
+      - run: cargo deny check

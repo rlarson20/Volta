@@ -93,7 +93,7 @@ Last verified: 2026-10-29.
 
 - [ ] Pedantic lint backlog (2026-10-29). `bacon`'s `pedantic` job no longer allows `cast_possible_wrap`, `cast_sign_loss`, `cast_possible_truncation`, `cast_precision_loss`, `needless_pass_by_value`, or `redundant_closure_for_method_calls`; it used to hide them behind "TEMP IMP TO FIX". The crate-wide casts were never enabled under `cargo clippy`, so the old `#[allow]`s for them were removed as no-ops. Decide per lint whether to enable it in `Cargo.toml` and fix the sites, or to leave it off for good.
 - [x] Root `CONTRIBUTING.md` and `DEVELOPMENT.md` were unchecked-box stubs, and `DEVELOPMENT.md` shared its name with `dev-docs/DEVELOPMENT.md`. Deleted; `dev-docs/DEVELOPMENT.md` is the development guide (2026-10-31).
-- [ ] Consider `cargo-deny` (`deny.toml`) in place of the weekly `cargo audit` workflow: it adds license and duplicate-version checks.
+- [x] `cargo-deny` (`deny.toml`) replaces the weekly `cargo audit` workflow (2026-10-31). `just deny` runs advisories, licenses (permissive allow-list), bans (duplicate versions warn, wildcards deny), and sources; it passes on the current lockfile. Two unmaintained-crate advisories are ignored in `deny.toml` with reasons: `bincode` (RUSTSEC-2025-0141; our own model format in `src/io.rs`, so replacing it is a file-format decision) and `paste` (RUSTSEC-2024-0436; transitive through `wgpu-hal`/`metal`). Not in `just ci`: it needs the network for the advisory db.
 
 ## Phase 2 — types for dims and ops (done)
 

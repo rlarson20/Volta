@@ -16,7 +16,7 @@ Volta's stated goals (README/CLAUDE.md): educational clarity, correctness-first,
 - **The autograd engine is correct and well-designed.** Iterative post-order DFS with proper topological ordering (`src/autograd.rs`) handles diamond graphs correctly, avoids stack overflow on deep graphs, and accumulates gradients properly. This is the heart of the project and it's solid.
 - **Gradient verification culture is real.** Central-difference gradient checking with a sensible small-magnitude fallback (`src/tensor.rs:889-971`), used pervasively across ~650 passing tests including CPU/GPU parity suites.
 - **API breadth is impressive for a solo educational project:** broadcasting, 16 layers including a working transformer stack, three conv algorithms with auto-selection, SafeTensors interop with a genuinely useful `StateDictMapper`, named-layer serialization, 16 runnable examples.
-- **Tooling hygiene:** CI on two OSes, pre-commit hooks, an unusually thorough clippy config, weekly `cargo audit`.
+- **Tooling hygiene:** CI on two OSes, pre-commit hooks, an unusually thorough clippy config, weekly `cargo deny check`.
 
 **Where the goals are undermined:**
 

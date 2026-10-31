@@ -105,6 +105,10 @@ ci:
 	cargo build --examples
 	@echo "CI check passed!"
 
+# Licenses, RustSec advisories, duplicate versions, and sources (needs network for the advisory db)
+deny:
+	cargo deny check
+
 # Comprehensive pre-release checklist
 pre-release: ci validate-shaders dead-deps coverage-summary
 	@echo "Pre-release checks complete."
