@@ -167,7 +167,7 @@ impl Module for PositionalEncoding {
         }
     }
 
-    fn load_state_dict(&mut self, state: &StateDict) {
+    fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
         if let Some(emb) = &mut self.learned_embedding {
             let mut inner_state = StateDict::new();
             let prefix = "learned_embedding.";
@@ -176,8 +176,10 @@ impl Module for PositionalEncoding {
                     inner_state.insert(stripped.to_string(), value.clone());
                 }
             }
-            emb.load_state_dict(&inner_state);
+            emb.load_state_dict(&inner_state)
+                .map_err(|e| e.with_key_prefix(prefix))?;
         }
+        Ok(())
     }
 
     /// Moves the learned weight, and also the fixed sinusoid table, which is not a parameter

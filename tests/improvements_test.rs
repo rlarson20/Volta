@@ -26,7 +26,9 @@ impl Module for CountingModule {
         state
     }
 
-    fn load_state_dict(&mut self, _state: &StateDict) {}
+    fn load_state_dict(&mut self, _state: &StateDict) -> volta::Result<()> {
+        Ok(())
+    }
 }
 
 impl Layer for CountingModule {
@@ -142,7 +144,8 @@ fn test_load_state_dict_checked_reports_differences() {
         weight.data = vec![0.0; 6];
     }
 
-    let diff = load_state_dict_checked(&mut model, &corrupted_state);
+    let diff = load_state_dict_checked(&mut model, &corrupted_state)
+        .expect("a shape mismatch is reported in the diff, not raised");
 
     assert!(
         diff.missing_keys.contains(&"0.bias".to_string()),
@@ -167,7 +170,7 @@ fn test_load_state_dict_checked_returns_empty_for_matching_state() {
     ]);
 
     let state = model.state_dict();
-    let diff = load_state_dict_checked(&mut model, &state);
+    let diff = load_state_dict_checked(&mut model, &state).expect("matching state loads");
 
     assert!(
         diff.is_empty(),

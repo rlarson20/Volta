@@ -84,7 +84,9 @@ fn main() {
 
     // Load weights into model
     println!("\nLoading weights into Volta model...");
-    model.load_state_dict(&volta_state);
+    model
+        .load_state_dict(&volta_state)
+        .expect("converted PyTorch weights should fit the model");
     println!("✓ Weights loaded successfully\n");
 
     // Try to load test data for validation

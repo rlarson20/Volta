@@ -137,11 +137,18 @@ pub fn diff_state_dict(expected: &StateDict, loaded: &StateDict) -> StateDictDif
 /// (`module.state_dict()`) and what was provided before delegating to
 /// `module.load_state_dict`. It is safe to call even when some keys are missing,
 /// since we inspect the diff up front. Entries whose shape mismatches are reported
-/// in the diff and *not* loaded (`load_state_dict` itself panics on a mismatch, H7).
+/// in the diff and *not* loaded, so a wrong shape is not an error here.
+///
+/// # Errors
+///
+/// `VoltaError::StateDataLength` if an entry whose shape matches holds the wrong
+/// number of values for it. Shape mismatches never reach the load; they are in the
+/// returned diff. As with [`Module::load_state_dict`], the module may be partly loaded
+/// on `Err`.
 pub fn load_state_dict_checked<M: Module + ?Sized>(
     module: &mut M,
     state: &StateDict,
-) -> StateDictDiff {
+) -> crate::Result<StateDictDiff> {
     let expected = module.state_dict();
     let diff = diff_state_dict(&expected, state);
     let loadable: StateDict = state
@@ -149,8 +156,8 @@ pub fn load_state_dict_checked<M: Module + ?Sized>(
         .filter(|(key, _)| !diff.shape_mismatches.iter().any(|(k, _, _)| k == *key))
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
-    module.load_state_dict(&loadable);
-    diff
+    module.load_state_dict(&loadable)?;
+    Ok(diff)
 }
 
 /// # Errors
@@ -496,7 +503,9 @@ mod io_tests {
 
         // Load
         let loaded_state = load_state_dict(path_str).unwrap();
-        model2.load_state_dict(&loaded_state);
+        model2
+            .load_state_dict(&loaded_state)
+            .expect("saved state loads");
 
         // Verify weights match
         let p1 = model.parameters();

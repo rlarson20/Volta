@@ -281,7 +281,7 @@ impl Module for MultiHeadAttention {
         state
     }
 
-    fn load_state_dict(&mut self, state: &StateDict) {
+    fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
         // Load each projection's weights by extracting prefixed sub-dicts
         let prefixes = [
             ("q_proj.", &mut self.q_proj as &mut Linear),
@@ -298,7 +298,9 @@ impl Module for MultiHeadAttention {
                 }
             }
             if !sub_state.is_empty() {
-                layer.load_state_dict(&sub_state);
+                layer
+                    .load_state_dict(&sub_state)
+                    .map_err(|e| e.with_key_prefix(prefix))?;
             }
         }
 
@@ -311,9 +313,11 @@ impl Module for MultiHeadAttention {
                 }
             }
             if !norm_state.is_empty() {
-                norm.load_state_dict(&norm_state);
+                norm.load_state_dict(&norm_state)
+                    .map_err(|e| e.with_key_prefix("norm."))?;
             }
         }
+        Ok(())
     }
 
     fn train(&mut self, _mode: bool) {

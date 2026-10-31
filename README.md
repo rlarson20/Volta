@@ -203,7 +203,7 @@ fn main() {
         .add_named("fc2", Box::new(Linear::new(8, 1, true)))
         .build();
     let loaded_state = io::load_state_dict("model.bin").expect("Failed to load");
-    new_model.load_state_dict(&loaded_state);
+    new_model.load_state_dict(&loaded_state).expect("Failed to load state");
 }
 ```
 
@@ -274,7 +274,7 @@ fn main() {
     let volta_state = mapper.map(pytorch_state);
 
     // 3. Load into model
-    model.load_state_dict(&volta_state);
+    model.load_state_dict(&volta_state).expect("converted weights should fit the model");
 
     // 4. Run inference
     let input = volta::randn(&[1, 784]);

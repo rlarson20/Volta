@@ -29,14 +29,15 @@ impl Module for Linear {
         state
     }
 
-    fn load_state_dict(&mut self, state: &StateDict) {
+    fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
         if let Some(w) = state.get("weight") {
-            self.weight.load_weight("weight", w);
+            self.weight.load_weight("weight", w)?;
         }
         // Load bias if state has it and layer has bias
         if let (Some(b), Some(bias_tensor)) = (state.get("bias"), self.bias.as_ref()) {
-            bias_tensor.load_weight("bias", b);
+            bias_tensor.load_weight("bias", b)?;
         }
+        Ok(())
     }
 }
 

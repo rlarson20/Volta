@@ -84,14 +84,15 @@ impl Module for LayerNorm {
         state
     }
 
-    fn load_state_dict(&mut self, state: &StateDict) {
+    fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
         let params = [("gamma", &self.gamma), ("beta", &self.beta)];
 
         for (key, tensor) in params {
             if let Some(t) = state.get(key) {
-                tensor.load_weight(key, t);
+                tensor.load_weight(key, t)?;
             }
         }
+        Ok(())
     }
 
     fn train(&mut self, _mode: bool) {

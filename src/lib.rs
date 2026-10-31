@@ -1642,7 +1642,7 @@ mod misc_tests {
 
         // Create new layer and load state
         let mut ln2 = LayerNorm::new(vec![8]);
-        ln2.load_state_dict(&state);
+        ln2.load_state_dict(&state).expect("state loads");
 
         // Check that parameters match
         let params1 = ln1.parameters();
@@ -1824,7 +1824,7 @@ mod edge_case_tests {
     // ===== RESHAPE INVALID SIZE TESTS =====
 
     #[test]
-    #[should_panic(expected = "Cannot reshape: size mismatch")]
+    #[should_panic(expected = "cannot reshape [6] (6 elements) to [2, 4] (8 elements)")]
     fn test_reshape_invalid_size() {
         // Attempt to reshape 6-element tensor to shape requiring 8 elements
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[6], false);
@@ -1832,7 +1832,7 @@ mod edge_case_tests {
     }
 
     #[test]
-    #[should_panic(expected = "Cannot reshape: size mismatch")]
+    #[should_panic(expected = "cannot reshape [3, 4] (12 elements) to [2, 3] (6 elements)")]
     fn test_reshape_smaller_target() {
         // Attempt to reshape 12-element tensor to shape requiring 6 elements
         let x = RawTensor::new(
@@ -1845,15 +1845,14 @@ mod edge_case_tests {
         let _ = x.reshape(&[2, 3]); // 2*3 = 6, but we have 12 elements
     }
 
-    // Note: Zero-sized reshape doesn't panic because product of [0, 6] is 0,
-    // which doesn't match the non-zero size of the tensor, so it hits the
-    // size mismatch panic instead
+    // A zero-sized target shape is rejected as an invalid shape (`Shape::from_dims`),
+    // before the element counts are compared.
     #[test]
-    #[should_panic(expected = "Cannot reshape: size mismatch")]
+    #[should_panic(expected = "shape [0, 6] has a zero dimension")]
     fn test_reshape_zero_dimension() {
         // Attempt to reshape to shape with zero dimension
         let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
-        let _ = x.reshape(&[0, 6]); // Product is 0, doesn't match 6 elements
+        let _ = x.reshape(&[0, 6]); // zero dimension: rejected as an invalid shape, not as a size mismatch
     }
 
     // ===== PERMUTE INVALID AXES TESTS =====
@@ -2021,7 +2020,9 @@ mod edge_case_tests {
             | VoltaError::Io(_)
             | VoltaError::NotScalar { .. }
             | VoltaError::NoGradRequired
-            | VoltaError::OpError(_) => {
+            | VoltaError::OpError(_)
+            | VoltaError::StateShapeMismatch { .. }
+            | VoltaError::StateDataLength { .. } => {
                 panic!("Expected InvalidParameter error, got {result:?}")
             }
         }
@@ -2057,7 +2058,9 @@ mod edge_case_tests {
             | VoltaError::Io(_)
             | VoltaError::NotScalar { .. }
             | VoltaError::NoGradRequired
-            | VoltaError::OpError(_) => {
+            | VoltaError::OpError(_)
+            | VoltaError::StateShapeMismatch { .. }
+            | VoltaError::StateDataLength { .. } => {
                 panic!("Expected InvalidParameter error, got {result:?}")
             }
         }
@@ -2083,7 +2086,9 @@ mod edge_case_tests {
             | VoltaError::NotScalar { .. }
             | VoltaError::NoGradRequired
             | VoltaError::InvalidParameter(_)
-            | VoltaError::OpError(_) => {
+            | VoltaError::OpError(_)
+            | VoltaError::StateShapeMismatch { .. }
+            | VoltaError::StateDataLength { .. } => {
                 panic!("Expected DimensionOutOfBounds error, got {result:?}")
             }
         }
@@ -2109,7 +2114,9 @@ mod edge_case_tests {
             | VoltaError::NotScalar { .. }
             | VoltaError::NoGradRequired
             | VoltaError::InvalidParameter(_)
-            | VoltaError::OpError(_) => {
+            | VoltaError::OpError(_)
+            | VoltaError::StateShapeMismatch { .. }
+            | VoltaError::StateDataLength { .. } => {
                 panic!("Expected DimensionOutOfBounds error, got {result:?}")
             }
         }
@@ -2141,7 +2148,9 @@ mod edge_case_tests {
             | VoltaError::Io(_)
             | VoltaError::NotScalar { .. }
             | VoltaError::NoGradRequired
-            | VoltaError::OpError(_) => {
+            | VoltaError::OpError(_)
+            | VoltaError::StateShapeMismatch { .. }
+            | VoltaError::StateDataLength { .. } => {
                 panic!("Expected InvalidParameter error, got {result:?}")
             }
         }
@@ -2173,7 +2182,9 @@ mod edge_case_tests {
             | VoltaError::Io(_)
             | VoltaError::NotScalar { .. }
             | VoltaError::NoGradRequired
-            | VoltaError::OpError(_) => {
+            | VoltaError::OpError(_)
+            | VoltaError::StateShapeMismatch { .. }
+            | VoltaError::StateDataLength { .. } => {
                 panic!("Expected InvalidParameter error, got {result:?}")
             }
         }
@@ -2201,7 +2212,9 @@ mod edge_case_tests {
             | VoltaError::Io(_)
             | VoltaError::NotScalar { .. }
             | VoltaError::NoGradRequired
-            | VoltaError::OpError(_) => {
+            | VoltaError::OpError(_)
+            | VoltaError::StateShapeMismatch { .. }
+            | VoltaError::StateDataLength { .. } => {
                 panic!("Expected InvalidParameter error, got {result:?}")
             }
         }
@@ -3122,7 +3135,9 @@ mod edge_case_tests {
     }
 
     #[test]
-    #[should_panic(expected = "Expand: invalid target shape")]
+    #[should_panic(
+        expected = "Expand: Invalid parameter: shape [100000000, 2] has 200000000 elements"
+    )]
     fn test_expand_over_max_numel_panics() {
         let x = RawTensor::new(vec![1.0, 2.0], &[1, 2], false);
         let _ = x.expand(&[crate::shape::MAX_NUMEL, 2]);
@@ -3143,18 +3158,18 @@ mod edge_case_tests {
     }
 
     #[test]
-    #[should_panic(expected = "Data length must match shape")]
+    #[should_panic(expected = "shape [0] has a zero dimension")]
     fn test_create_empty_tensor_with_data() {
         // Attempt to create tensor with mismatched data (empty data, non-empty shape)
         let _empty = RawTensor::new(vec![1.0], &[0], false);
     }
 
     #[test]
-    #[should_panic(expected = "Cannot reshape: size mismatch")]
+    #[should_panic(expected = "shape [0] has a zero dimension")]
     fn test_reshape_to_empty() {
         // Attempt to reshape non-empty tensor to empty shape
         let x = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], false);
-        let _empty = x.reshape(&[0]); // Product is 0, doesn't match 3 elements
+        let _empty = x.reshape(&[0]); // zero dimension: rejected as an invalid shape, not as a size mismatch
     }
 
     #[test]
@@ -3512,7 +3527,7 @@ mod axis_reduce_tests {
             .build();
 
         // Load the mapped state dict
-        model.load_state_dict(&volta_state);
+        model.load_state_dict(&volta_state).expect("state loads");
 
         // Verify forward pass works
         let input = RawTensor::new(vec![1.0, 1.0], &[1, 2], false);
@@ -5206,7 +5221,7 @@ mod batchnorm_tests {
                 shape: vec![2],
             },
         );
-        <BatchNorm1d as Module>::load_state_dict(&mut layer, &state);
+        <BatchNorm1d as Module>::load_state_dict(&mut layer, &state).expect("state loads");
         layer.train(false);
 
         // Input == running_mean => normalized output should be ~0 (then * gamma=1 + beta=0).

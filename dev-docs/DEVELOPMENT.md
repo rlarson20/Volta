@@ -51,6 +51,16 @@ To add a new neural network layer:
 
 5. **Add example** in `examples/` if the layer is complex
 
+## Errors: panic or `Result`
+
+Decide by where an argument comes from (DECISIONS.md, "Panic inside the program, `Result` where data comes from outside").
+
+- **Panic** when the calling program's own code decides every argument: a shape mismatch between two tensors it built, a wrong rank passed to a layer. Document it under `# Panics`, and put `#[track_caller]` on the public panicking function so the message points at the caller.
+- **`Result<_, VoltaError>`** when an argument can come from a file, a checkpoint, a dataset, JSON, or a UI: shapes and data for a new tensor, a state dict, labels, bytes, axes and ranges a user picks. Document it under `# Errors`.
+- **Both forms** only for those boundary arguments. Write the `try_` form, and make the panicking form `try_x(..).unwrap_or_else(|e| panic!("x: {e}"))`. Do not add a `try_` twin to an op just for symmetry.
+- **Validate before you allocate.** Run `Shape::from_dims` (or `RawTensor::checked_numel`) on a caller's shape before `product()`, `vec![..; n]`, or any buffer: an overflowing product or an oversized allocation is not an error you can catch afterwards.
+- A new error that names a state-dict entry carries its `key`; a container puts its prefix back with `VoltaError::with_key_prefix`.
+
 ## Testing Workflow Conventions
 
 - Always run `cargo test` before committing changes

@@ -94,27 +94,32 @@ impl Tensor {
     /// Keeps the tensor's shape, device, `requires_grad` and graph metadata: only the
     /// values change. A GPU-resident tensor stays on the GPU.
     ///
-    /// # Panics
-    /// If `src.shape` differs from this tensor's shape, or `src.data.len()` does not
-    /// match it. `name` is the state-dict key, used in the message.
-    pub(crate) fn load_weight(&self, name: &str, src: &crate::io::TensorData) {
+    /// # Errors
+    ///
+    /// `VoltaError::StateShapeMismatch` if `src.shape` differs from this tensor's shape,
+    /// `VoltaError::StateDataLength` if `src.data.len()` does not match it. `name` is the
+    /// state-dict key, reported in the error. Nothing is written on error.
+    pub(crate) fn load_weight(&self, name: &str, src: &crate::io::TensorData) -> Result<()> {
         let mut t = self.inner.borrow_mut();
         // `TensorData.shape` is the serialized `Vec`; compare it at the io boundary.
-        assert_eq!(
-            src.shape.as_slice(),
-            t.shape.truncate_rank(),
-            "load_state_dict: shape mismatch for '{name}'"
-        );
+        if src.shape.as_slice() != t.shape.truncate_rank() {
+            return Err(VoltaError::StateShapeMismatch {
+                key: name.to_string(),
+                expected: t.shape.truncate_rank().to_vec(),
+                actual: src.shape.clone(),
+            });
+        }
         let numel = t.shape.numel();
-        assert_eq!(
-            src.data.len(),
-            numel,
-            "load_state_dict: '{name}' has {} values but shape {:?} needs {numel}",
-            src.data.len(),
-            t.shape
-        );
+        if src.data.len() != numel {
+            return Err(VoltaError::StateDataLength {
+                key: name.to_string(),
+                expected: numel,
+                len: src.data.len(),
+            });
+        }
         let cpu = Storage::cpu(src.data.clone());
         t.data = cpu.to_device(&t.device);
+        Ok(())
     }
 
     /// This tensor's data, decoded to `f32` regardless of underlying dtype/device.
@@ -380,14 +385,16 @@ impl RawTensor {
     /// * `requires_grad` - Whether to track gradients for backpropagation
     ///
     /// # Panics
-    /// Panics if `data.len()` != `shape.product()`
+    /// If `shape` is invalid or `data.len()` != `shape.product()`. Use [`Self::try_new`]
+    /// to get an error instead.
     #[allow(
         clippy::new_ret_no_self,
         reason = "Public wrapper around private struct"
     )]
     #[must_use]
+    #[track_caller]
     pub fn new(data: Vec<f32>, shape: &[usize], requires_grad: bool) -> Tensor {
-        Self::try_new(data, shape, requires_grad).expect("Data length must match shape")
+        Self::try_new(data, shape, requires_grad).unwrap_or_else(|e| panic!("new: {e}"))
     }
 
     /// Create a new tensor from Storage and shape (internal use for GPU ops, fallible)
@@ -451,33 +458,82 @@ impl RawTensor {
         Self::new_with_storage(Storage::cpu(data), shape, Device::CPU, requires_grad)
     }
 
+    /// Element count of a shape that came from the caller, checked before anything is
+    /// allocated (zero dimension, overflow, or more than `MAX_NUMEL` elements).
+    pub(crate) fn checked_numel(shape: &[usize]) -> Result<usize> {
+        Ok(Shape::from_dims(shape)?.numel())
+    }
+
+    /// Create a tensor filled with zeros (fallible)
+    ///
+    /// # Errors
+    ///
+    /// `VoltaError::InvalidParameter` if `shape` has a zero dimension or more than
+    /// `MAX_NUMEL` elements (see [`Shape::from_dims`])
+    pub fn try_zeros(shape: &[usize]) -> Result<Tensor> {
+        Self::try_new(vec![0.0; Self::checked_numel(shape)?], shape, false)
+    }
+
     /// Create a tensor filled with zeros
+    ///
+    /// # Panics
+    ///
+    /// If `shape` is invalid. Use [`Self::try_zeros`] to get an error instead.
     #[must_use]
+    #[track_caller]
     pub fn zeros(shape: &[usize]) -> Tensor {
-        let size = shape.iter().product();
-        Self::new(vec![0.0; size], shape, false)
+        Self::try_zeros(shape).unwrap_or_else(|e| panic!("zeros: {e}"))
     }
+
+    /// Create a tensor filled with ones (fallible)
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::try_zeros`]
+    pub fn try_ones(shape: &[usize]) -> Result<Tensor> {
+        Self::try_new(vec![1.0; Self::checked_numel(shape)?], shape, false)
+    }
+
     /// Create a tensor filled with ones
+    ///
+    /// # Panics
+    ///
+    /// If `shape` is invalid. Use [`Self::try_ones`] to get an error instead.
     #[must_use]
+    #[track_caller]
     pub fn ones(shape: &[usize]) -> Tensor {
-        let size = shape.iter().product();
-        Self::new(vec![1.0; size], shape, false)
+        Self::try_ones(shape).unwrap_or_else(|e| panic!("ones: {e}"))
     }
-    /// Create a tensor with random values uniformly distributed in [0, 1)
-    #[must_use]
-    pub fn rand(shape: &[usize]) -> Tensor {
-        let size = shape.iter().product();
+
+    /// Create a tensor with random values uniformly distributed in [0, 1) (fallible)
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::try_zeros`]
+    pub fn try_rand(shape: &[usize]) -> Result<Tensor> {
+        let size = Self::checked_numel(shape)?;
         let data: Vec<f32> = with_rng(|rng| (0..size).map(|_| rng.random::<f32>()).collect());
-        Self::new(data, shape, false)
+        Self::try_new(data, shape, false)
     }
+
+    /// Create a tensor with random values uniformly distributed in [0, 1)
+    ///
+    /// # Panics
+    ///
+    /// If `shape` is invalid. Use [`Self::try_rand`] to get an error instead.
+    #[must_use]
+    #[track_caller]
+    pub fn rand(shape: &[usize]) -> Tensor {
+        Self::try_rand(shape).unwrap_or_else(|e| panic!("rand: {e}"))
+    }
+
     /// Create a tensor with values from standard normal distribution N(0, 1) (fallible)
     ///
     /// # Errors
     ///
-    /// Returns `VoltaError::InvalidParameter` if normal distribution parameters are invalid
-    /// Propagates errors from `try_new` for shape/data mismatches
+    /// Same as [`Self::try_zeros`]
     pub fn try_randn(shape: &[usize]) -> Result<Tensor> {
-        let size = shape.iter().product();
+        let size = Self::checked_numel(shape)?;
         let normal = Normal::new(0.0, 1.0).map_err(|e| {
             VoltaError::InvalidParameter(format!("Invalid normal distribution: {e}"))
         })?;
@@ -487,11 +543,14 @@ impl RawTensor {
     }
 
     /// Create a tensor with values from standard normal distribution N(0, 1)
+    ///
     /// # Panics
-    /// unwrap new `Normal` dist
+    ///
+    /// If `shape` is invalid. Use [`Self::try_randn`] to get an error instead.
     #[must_use]
+    #[track_caller]
     pub fn randn(shape: &[usize]) -> Tensor {
-        Self::try_randn(shape).expect("Failed to create random tensor")
+        Self::try_randn(shape).unwrap_or_else(|e| panic!("randn: {e}"))
     }
 
     /// Create a tensor filled with random values from N(0, 1) with the same shape as the input
@@ -501,7 +560,7 @@ impl RawTensor {
         Self::randn(shape.truncate_rank())
     }
 
-    /// Xavier uniform initialization
+    /// Xavier uniform initialization (fallible)
     ///
     /// Samples weights uniformly from [-limit, limit] where
     /// limit = sqrt(6 / (`fan_in` + `fan_out`))
@@ -509,26 +568,44 @@ impl RawTensor {
     /// This helps maintain gradient variance across layers. A rank-1 shape `[n]` is
     /// treated as `[n, 1]` (a bias vector).
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// If `shape` is not rank 1 or rank 2.
-    #[must_use]
-    pub fn xavier_uniform(shape: &[usize]) -> Tensor {
+    /// `VoltaError::InvalidParameter` if `shape` is not rank 1 or rank 2, or is invalid
+    /// as in [`Self::try_zeros`]
+    pub fn try_xavier_uniform(shape: &[usize]) -> Result<Tensor> {
         // A rank-1 shape is a bias vector: one fan-out per element. Any other rank has no
         // [in, out] reading, so it fails here instead of later as a data/shape mismatch.
         let (fan_in, fan_out) = match *shape {
             [n] => (n, 1),
             [fan_in, fan_out] => (fan_in, fan_out),
-            _ => panic!("xavier_uniform expects a rank-1 or rank-2 shape, got {shape:?}"),
+            _ => {
+                return Err(VoltaError::InvalidParameter(format!(
+                    "xavier_uniform expects a rank-1 or rank-2 shape, got {shape:?}"
+                )));
+            }
         };
+        let size = Self::checked_numel(shape)?;
         let limit = (6.0 / (fan_in + fan_out) as f32).sqrt();
-        let data: Vec<f32> = with_rng(|rng| {
-            (0..fan_in * fan_out)
-                .map(|_| rng.random_range(-limit..limit))
-                .collect()
-        });
+        let data: Vec<f32> =
+            with_rng(|rng| (0..size).map(|_| rng.random_range(-limit..limit)).collect());
 
-        Self::new(data, shape, false)
+        Self::try_new(data, shape, false)
+    }
+
+    /// Xavier uniform initialization
+    ///
+    /// Samples weights uniformly from [-limit, limit] where
+    /// limit = sqrt(6 / (`fan_in` + `fan_out`)). A rank-1 shape `[n]` is treated as
+    /// `[n, 1]` (a bias vector).
+    ///
+    /// # Panics
+    ///
+    /// If `shape` is not rank 1 or rank 2, or is invalid. Use [`Self::try_xavier_uniform`]
+    /// to get an error instead.
+    #[must_use]
+    #[track_caller]
+    pub fn xavier_uniform(shape: &[usize]) -> Tensor {
+        Self::try_xavier_uniform(shape).unwrap_or_else(|e| panic!("xavier_uniform: {e}"))
     }
 
     /// He (Kaiming) normal initialization suited for `ReLU` networks. (fallible)
@@ -538,30 +615,26 @@ impl RawTensor {
     ///
     /// # Errors
     ///
-    /// Returns `VoltaError::InvalidParameter` if shape is empty or `fan_in` is zero
-    /// Propagates errors from normal distribution creation and tensor construction
+    /// `VoltaError::InvalidParameter` if `shape` is empty, or is invalid as in
+    /// [`Self::try_zeros`]
     pub fn try_he_initialization(shape: &[usize]) -> Result<Tensor> {
         if shape.is_empty() {
             return Err(VoltaError::InvalidParameter(
                 "He initialization requires at least one dimension".to_string(),
             ));
         }
+        // After this, every dimension is non-zero, so `fan_in` below is positive.
+        let size = Self::checked_numel(shape)?;
 
         let fan_in = match shape.len() {
             1 | 2 => fetch(shape, 0), // Linear weights: [in, out]
             _ => shape.get(1..).unwrap_or(&[]).iter().product(), // Conv weights: [out, in, kH, kW, ...]
         };
-        if fan_in == 0 {
-            return Err(VoltaError::InvalidParameter(
-                "fan_in must be positive for He initialization".to_string(),
-            ));
-        }
 
         let std_val: f32 = 2.0 / fan_in as f32;
         let std = std_val.sqrt();
         let normal = Normal::new(0.0, std)
             .map_err(|e| VoltaError::InvalidParameter(format!("Invalid He std: {e}")))?;
-        let size: usize = shape.iter().product();
         let data: Vec<f32> = with_rng(|rng| (0..size).map(|_| normal.sample(rng)).collect());
 
         Self::try_new(data, shape, false)
@@ -571,11 +644,15 @@ impl RawTensor {
     ///
     /// Draws samples from `N(0, sqrt(2 / fan_in))` where `fan_in`
     /// is the number of input connections.
+    ///
     /// # Panics
-    /// empty shape
+    ///
+    /// If `shape` is empty or invalid. Use [`Self::try_he_initialization`] to get an
+    /// error instead.
     #[must_use]
+    #[track_caller]
     pub fn he_initialization(shape: &[usize]) -> Tensor {
-        Self::try_he_initialization(shape).expect("He initialization failed")
+        Self::try_he_initialization(shape).unwrap_or_else(|e| panic!("he_initialization: {e}"))
     }
 }
 
@@ -1422,9 +1499,25 @@ impl Tensor {
     }
 
     /// Reshapes to `new_shape`; the element count must match.
+    ///
+    /// # Panics
+    ///
+    /// If `new_shape` is invalid or has a different element count. Use
+    /// [`Self::try_reshape`] to get an error instead.
     #[must_use]
+    #[track_caller]
     pub fn reshape(&self, new_shape: &[usize]) -> Self {
         RawTensor::reshape(self, new_shape)
+    }
+
+    /// Reshapes to `new_shape` (fallible).
+    ///
+    /// # Errors
+    ///
+    /// `VoltaError::InvalidParameter` if `new_shape` is invalid (see [`Shape::from_dims`])
+    /// or does not have the same element count as `self`.
+    pub fn try_reshape(&self, new_shape: &[usize]) -> Result<Self> {
+        RawTensor::try_reshape(self, new_shape)
     }
 
     /// Permutes the dimensions by `axes`.
@@ -1434,9 +1527,25 @@ impl Tensor {
     }
 
     /// Broadcasts to `new_shape`.
+    ///
+    /// # Panics
+    ///
+    /// If `new_shape` is invalid or not reachable by expanding size-1 dimensions. Use
+    /// [`Self::try_expand`] to get an error instead.
     #[must_use]
+    #[track_caller]
     pub fn expand(&self, new_shape: &[usize]) -> Self {
         RawTensor::expand(self, new_shape)
+    }
+
+    /// Broadcasts to `new_shape` (fallible).
+    ///
+    /// # Errors
+    ///
+    /// `VoltaError::InvalidParameter` if `new_shape` is invalid or has a different rank,
+    /// `VoltaError::BroadcastError` if a dimension is neither `1` nor equal to the target.
+    pub fn try_expand(&self, new_shape: &[usize]) -> Result<Self> {
+        RawTensor::try_expand(self, new_shape)
     }
 
     /// Pads each dimension by `(before, after)`, filling the border with `value`.
@@ -1768,6 +1877,133 @@ mod tensor_tests {
         with_rng(|_| with_rng(|_| ()));
     }
 
+    /// Shapes that reach the library from outside (JSON, a UI, a config file) must come
+    /// back as an `Err` before anything is allocated: `[usize::MAX, 2]` used to overflow
+    /// `shape.iter().product()` and `[MAX_NUMEL + 1]` allocated first and checked later.
+    #[test]
+    fn try_constructors_reject_bad_shapes_before_allocating() {
+        use crate::shape::MAX_NUMEL;
+        let bad: [&[usize]; 3] = [&[usize::MAX, 2], &[0, 3], &[MAX_NUMEL + 1]];
+        for shape in bad {
+            let results = [
+                ("try_zeros", RawTensor::try_zeros(shape)),
+                ("try_ones", RawTensor::try_ones(shape)),
+                ("try_empty", RawTensor::try_empty(shape)),
+                ("try_constant", RawTensor::try_constant(2.0, shape)),
+                ("try_rand", RawTensor::try_rand(shape)),
+                ("try_randn", RawTensor::try_randn(shape)),
+                (
+                    "try_he_initialization",
+                    RawTensor::try_he_initialization(shape),
+                ),
+            ];
+            for (name, result) in results {
+                assert!(
+                    matches!(result, Err(VoltaError::InvalidParameter(_))),
+                    "{name}({shape:?}) should be InvalidParameter"
+                );
+            }
+        }
+        assert!(matches!(
+            RawTensor::try_xavier_uniform(&[usize::MAX, 2]),
+            Err(VoltaError::InvalidParameter(_))
+        ));
+    }
+
+    #[test]
+    fn try_xavier_uniform_rejects_unsupported_rank() {
+        assert!(matches!(
+            RawTensor::try_xavier_uniform(&[2, 3, 4]),
+            Err(VoltaError::InvalidParameter(_))
+        ));
+        assert!(matches!(
+            RawTensor::try_xavier_uniform(&[]),
+            Err(VoltaError::InvalidParameter(_))
+        ));
+    }
+
+    #[test]
+    fn try_from_vec_reports_a_length_mismatch() {
+        assert!(matches!(
+            RawTensor::try_from_vec(vec![1.0, 2.0, 3.0], &[2, 2]),
+            Err(VoltaError::ShapeDataMismatch { .. })
+        ));
+        let t = RawTensor::try_from_vec(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        assert_eq!(t.shape().truncate_rank(), &[2, 2]);
+        assert_eq!(t.data(), vec![1.0, 2.0, 3.0, 4.0]);
+    }
+
+    /// Each panicking constructor is its `try_` twin plus a panic, so a valid shape gives
+    /// the same tensor (random ones: under the same seed) from both.
+    #[test]
+    fn try_constructors_match_the_panicking_forms() {
+        type Pair = (fn(&[usize]) -> Result<Tensor>, fn(&[usize]) -> Tensor);
+        assert_eq!(RawTensor::try_zeros(&[2, 3]).unwrap().data(), vec![0.0; 6]);
+        assert_eq!(RawTensor::try_ones(&[2, 3]).unwrap().data(), vec![1.0; 6]);
+        assert_eq!(RawTensor::try_empty(&[4]).unwrap().data(), vec![0.0; 4]);
+        assert_eq!(
+            RawTensor::try_constant(2.5, &[3]).unwrap().data(),
+            vec![2.5; 3]
+        );
+
+        let pairs: [Pair; 4] = [
+            (RawTensor::try_rand, RawTensor::rand),
+            (RawTensor::try_randn, RawTensor::randn),
+            (RawTensor::try_xavier_uniform, RawTensor::xavier_uniform),
+            (
+                RawTensor::try_he_initialization,
+                RawTensor::he_initialization,
+            ),
+        ];
+        for (try_form, panicking) in pairs {
+            manual_seed(3);
+            let a = try_form(&[3, 4]).unwrap().data();
+            manual_seed(3);
+            let b = panicking(&[3, 4]).data();
+            assert_eq!(a, b);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "zero dimension")]
+    fn panicking_constructor_says_why() {
+        let _ = RawTensor::zeros(&[0, 3]);
+    }
+
+    #[test]
+    fn try_reshape_validates_the_target_shape() {
+        let t = RawTensor::try_from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]).unwrap();
+        // `[usize::MAX, 2]` wraps to `usize::MAX * 2 mod 2^64 = usize::MAX - 1`, never 6.
+        for bad in [&[4, 2][..], &[0, 6], &[usize::MAX, 2], &[]] {
+            assert!(
+                matches!(t.try_reshape(bad), Err(VoltaError::InvalidParameter(_))),
+                "try_reshape({bad:?}) should be InvalidParameter"
+            );
+        }
+        let r = t.try_reshape(&[3, 2]).unwrap();
+        assert_eq!(r.shape().truncate_rank(), &[3, 2]);
+        assert_eq!(r.data(), t.data());
+    }
+
+    #[test]
+    fn try_expand_validates_the_target_shape() {
+        let t = RawTensor::try_from_vec(vec![1.0, 2.0], &[1, 2]).unwrap();
+        assert!(matches!(
+            t.try_expand(&[3]),
+            Err(VoltaError::InvalidParameter(_))
+        ));
+        assert!(matches!(
+            t.try_expand(&[3, 5]),
+            Err(VoltaError::BroadcastError(..))
+        ));
+        assert!(matches!(
+            t.try_expand(&[0, 2]),
+            Err(VoltaError::InvalidParameter(_))
+        ));
+        let e = t.try_expand(&[3, 2]).unwrap();
+        assert_eq!(e.data(), vec![1.0, 2.0, 1.0, 2.0, 1.0, 2.0]);
+    }
+
     /// The first two epochs' sample order, from a loader built right after seeding.
     fn shuffled_orders(seed: u64) -> (Vec<f32>, Vec<f32>) {
         let n = 20;
@@ -1891,7 +2127,8 @@ mod load_weight_tests {
                 data: vals.clone(),
                 shape: vec![2, 3],
             },
-        );
+        )
+        .expect("matching entry loads");
 
         assert!(t.borrow().data.is_gpu(), "load_weight demoted GPU to CPU");
         assert_eq!(t.borrow().device, dev);

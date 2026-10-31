@@ -36,7 +36,24 @@ pub trait Module {
 
     // State dict methods
     fn state_dict(&self) -> StateDict;
-    fn load_state_dict(&mut self, state: &StateDict);
+
+    /// Loads the entries of `state` that match this module's parameters.
+    ///
+    /// Keys the module does not have are ignored, and parameters with no entry keep
+    /// their values (use [`crate::io::load_state_dict_checked`] to see which). An entry
+    /// that is present must fit: it keeps the parameter's shape, device, and
+    /// `requires_grad`, and only the values change.
+    ///
+    /// # Errors
+    ///
+    /// `VoltaError::StateShapeMismatch` if an entry's shape differs from its
+    /// parameter's, `VoltaError::StateDataLength` if an entry has the wrong number of
+    /// values for its own shape. The `key` is the entry's name in `state`. A checkpoint
+    /// is data from outside the program, so this is an `Err`, not a panic.
+    ///
+    /// On `Err` the module may be partly loaded: entries before the bad one have
+    /// already been written. Discard the module, or load into a fresh one.
+    fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()>;
 
     fn zero_grad(&mut self) {
         for p in self.parameters() {

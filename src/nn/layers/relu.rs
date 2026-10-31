@@ -12,8 +12,9 @@ impl Module for ReLU {
         StateDict::new()
     }
 
-    fn load_state_dict(&mut self, _state: &StateDict) {
+    fn load_state_dict(&mut self, _state: &StateDict) -> crate::Result<()> {
         // Stateless
+        Ok(())
     }
 }
 

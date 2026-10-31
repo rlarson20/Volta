@@ -72,7 +72,7 @@ impl Module for BatchNorm2d {
         state
     }
 
-    fn load_state_dict(&mut self, state: &StateDict) {
+    fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
         // Create a list of tuples mapping the string key to the specific tensor
         let params = [
             ("gamma", &self.gamma),
@@ -83,9 +83,10 @@ impl Module for BatchNorm2d {
 
         for (key, tensor) in params {
             if let Some(t) = state.get(key) {
-                tensor.load_weight(key, t);
+                tensor.load_weight(key, t)?;
             }
         }
+        Ok(())
     }
 }
 
@@ -265,7 +266,7 @@ impl Module for BatchNorm1d {
         state
     }
 
-    fn load_state_dict(&mut self, state: &StateDict) {
+    fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
         let params = [
             ("gamma", &self.gamma),
             ("beta", &self.beta),
@@ -275,9 +276,10 @@ impl Module for BatchNorm1d {
 
         for (key, tensor) in params {
             if let Some(t) = state.get(key) {
-                tensor.load_weight(key, t);
+                tensor.load_weight(key, t)?;
             }
         }
+        Ok(())
     }
 }
 

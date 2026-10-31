@@ -145,7 +145,7 @@ impl Module for TransformerBlock {
         state
     }
 
-    fn load_state_dict(&mut self, state: &StateDict) {
+    fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
         // Load layer norm 1
         let mut norm1_state = StateDict::new();
         for (key, value) in state {
@@ -154,7 +154,9 @@ impl Module for TransformerBlock {
             }
         }
         if !norm1_state.is_empty() {
-            self.norm1.load_state_dict(&norm1_state);
+            self.norm1
+                .load_state_dict(&norm1_state)
+                .map_err(|e| e.with_key_prefix("norm1."))?;
         }
 
         // Load layer norm 2
@@ -165,7 +167,9 @@ impl Module for TransformerBlock {
             }
         }
         if !norm2_state.is_empty() {
-            self.norm2.load_state_dict(&norm2_state);
+            self.norm2
+                .load_state_dict(&norm2_state)
+                .map_err(|e| e.with_key_prefix("norm2."))?;
         }
 
         // Load FFN
@@ -176,7 +180,9 @@ impl Module for TransformerBlock {
             }
         }
         if !ffn_state.is_empty() {
-            self.ffn.load_state_dict(&ffn_state);
+            self.ffn
+                .load_state_dict(&ffn_state)
+                .map_err(|e| e.with_key_prefix("ffn."))?;
         }
 
         // Load attention
@@ -187,8 +193,11 @@ impl Module for TransformerBlock {
             }
         }
         if !attn_state.is_empty() {
-            self.attention.load_state_dict(&attn_state);
+            self.attention
+                .load_state_dict(&attn_state)
+                .map_err(|e| e.with_key_prefix("attention."))?;
         }
+        Ok(())
     }
 
     fn train(&mut self, mode: bool) {
@@ -284,7 +293,8 @@ mod tests {
         let x = crate::macros::trainable_input(&[2, 3, 16]);
 
         let before = dst.forward(&x, false).data();
-        dst.load_state_dict(&src.state_dict());
+        dst.load_state_dict(&src.state_dict())
+            .expect("matching state loads");
         let after = dst.forward(&x, false).data();
         let expected = src.forward(&x, false).data();
 

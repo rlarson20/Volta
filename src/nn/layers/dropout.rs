@@ -34,8 +34,9 @@ impl Module for Dropout {
         StateDict::new()
     }
 
-    fn load_state_dict(&mut self, _state: &StateDict) {
+    fn load_state_dict(&mut self, _state: &StateDict) -> crate::Result<()> {
         // Stateless
+        Ok(())
     }
 
     fn train(&mut self, mode: bool) {

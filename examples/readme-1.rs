@@ -51,5 +51,7 @@ fn main() {
         .add_named("fc2", Box::new(Linear::new(8, 1, true)))
         .build();
     let loaded_state = io::load_state_dict("model.bin").expect("Failed to load");
-    new_model.load_state_dict(&loaded_state);
+    new_model
+        .load_state_dict(&loaded_state)
+        .expect("Failed to load state");
 }

@@ -663,7 +663,7 @@ mod tests {
         let mut model = SequentialBuilder::new()
             .add_named("fc", Box::new(Linear::new(2, 2, true)))
             .build();
-        model.load_state_dict(&mapped);
+        model.load_state_dict(&mapped).expect("mapped state loads");
 
         // PyTorch: y = x @ W.T + b = [1*1 + -2*2 + 0.5, 1*3 + -2*4 - 0.5] = [-2.5, -5.5].
         // Loaded untransposed, the first output would be 1*1 + -2*3 + 0.5 = -4.5.

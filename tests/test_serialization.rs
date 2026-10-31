@@ -173,7 +173,7 @@ fn test_lstm_no_bias_roundtrip() {
 
     // Load into a fresh model and verify shapes are correct
     let mut lstm2 = LSTMCell::new(5, 12, false);
-    lstm2.load_state_dict(&loaded);
+    lstm2.load_state_dict(&loaded).expect("state loads");
     let sd2 = lstm2.state_dict();
     assert_state_dicts_equal(&sd, &sd2, "lstm_nobias_reload");
 
@@ -255,7 +255,7 @@ fn test_conv_transpose2d_no_bias_roundtrip() {
 
     // Load into a fresh model and verify
     let mut ct2 = ConvTranspose2d::new(2, 4, 3, 1, 0, false);
-    ct2.load_state_dict(&loaded);
+    ct2.load_state_dict(&loaded).expect("state loads");
     let sd2 = ct2.state_dict();
     assert_state_dicts_equal(&sd, &sd2, "ct_nobias_reload");
 

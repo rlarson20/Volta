@@ -123,7 +123,7 @@ impl Module for FeedForward {
         state
     }
 
-    fn load_state_dict(&mut self, state: &StateDict) {
+    fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
         // Load expand layer
         let mut expand_state = StateDict::new();
         for (key, value) in state {
@@ -132,7 +132,9 @@ impl Module for FeedForward {
             }
         }
         if !expand_state.is_empty() {
-            self.expand.load_state_dict(&expand_state);
+            self.expand
+                .load_state_dict(&expand_state)
+                .map_err(|e| e.with_key_prefix("expand."))?;
         }
 
         // Load contract layer
@@ -143,8 +145,11 @@ impl Module for FeedForward {
             }
         }
         if !contract_state.is_empty() {
-            self.contract.load_state_dict(&contract_state);
+            self.contract
+                .load_state_dict(&contract_state)
+                .map_err(|e| e.with_key_prefix("contract."))?;
         }
+        Ok(())
     }
 
     fn train(&mut self, _mode: bool) {

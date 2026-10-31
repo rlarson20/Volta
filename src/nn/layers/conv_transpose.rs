@@ -319,16 +319,17 @@ impl Module for ConvTranspose2d {
         state
     }
 
-    fn load_state_dict(&mut self, state: &StateDict) {
+    fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
         if let Some(w) = state.get("weight") {
-            self.weight.load_weight("weight", w);
+            self.weight.load_weight("weight", w)?;
         }
         if let Some(b) = state.get("bias")
             && self.bias.is_some()
         {
             let bias_tensor = self.bias.as_ref().unwrap();
-            bias_tensor.load_weight("bias", b);
+            bias_tensor.load_weight("bias", b)?;
         }
+        Ok(())
     }
 }
 

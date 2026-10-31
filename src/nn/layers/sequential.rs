@@ -41,7 +41,7 @@ impl Module for Sequential {
         state
     }
 
-    fn load_state_dict(&mut self, state: &StateDict) {
+    fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
         for (i, entry) in self.layers.iter_mut().enumerate() {
             // Try name first, fallback to numeric index
             let possible_prefixes: Vec<String> = if let Some(ref name) = entry.name {
@@ -52,6 +52,7 @@ impl Module for Sequential {
 
             // Collect matching keys for this layer
             let mut sub_state = StateDict::new();
+            let mut matched_prefix = String::new();
 
             for prefix in possible_prefixes {
                 for (key, value) in state {
@@ -65,14 +66,19 @@ impl Module for Sequential {
 
                 // If we found keys with this prefix, stop trying others
                 if !sub_state.is_empty() {
+                    matched_prefix = prefix;
                     break;
                 }
             }
 
             if !sub_state.is_empty() {
-                entry.layer.load_state_dict(&sub_state);
+                entry
+                    .layer
+                    .load_state_dict(&sub_state)
+                    .map_err(|e| e.with_key_prefix(&matched_prefix))?;
             }
         }
+        Ok(())
     }
     fn train(&mut self, mode: bool) {
         for entry in &mut self.layers {

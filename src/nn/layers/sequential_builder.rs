@@ -188,7 +188,7 @@ mod tests {
 
         let state = source.state_dict();
         assert_eq!(state.len(), 24, "one weight and one bias per layer");
-        dest.load_state_dict(&state);
+        dest.load_state_dict(&state).expect("state loads");
         assert_eq!(param_values(&source), param_values(&dest));
     }
 

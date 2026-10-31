@@ -311,7 +311,9 @@ fn gpu_positional_encoding_stays_on_device() {
         let w = gpu_leaf(&w_cpu);
         let cpu_pe = PositionalEncoding::new(8, 16, kind);
         let mut gpu_pe = PositionalEncoding::new(8, 16, kind);
-        gpu_pe.load_state_dict(&cpu_pe.state_dict());
+        gpu_pe
+            .load_state_dict(&cpu_pe.state_dict())
+            .expect("same architecture");
         let gpu_pe = on_gpu(gpu_pe);
 
         let out_cpu = cpu_pe.forward(&x_cpu);
@@ -363,7 +365,9 @@ fn gpu_lstm_stays_on_device() {
     let w_cpu = RawTensor::randn(&[2, 3]);
     let w = gpu_leaf(&w_cpu);
     let mut gpu_cell = LSTMCell::new(4, 3, true);
-    gpu_cell.load_state_dict(&cpu_cell.state_dict());
+    gpu_cell
+        .load_state_dict(&cpu_cell.state_dict())
+        .expect("same architecture");
     let gpu_cell = on_gpu(gpu_cell);
 
     let two_steps = |cell: &LSTMCell, x: &Tensor| {

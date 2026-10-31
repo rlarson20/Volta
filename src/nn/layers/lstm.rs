@@ -149,25 +149,26 @@ impl Module for LSTMCell {
         state
     }
 
-    fn load_state_dict(&mut self, state: &StateDict) {
+    fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
         if let Some(w) = state.get("weight_ih") {
-            self.weight_ih.load_weight("weight_ih", w);
+            self.weight_ih.load_weight("weight_ih", w)?;
         }
         if let Some(w) = state.get("weight_hh") {
-            self.weight_hh.load_weight("weight_hh", w);
+            self.weight_hh.load_weight("weight_hh", w)?;
         }
         if let Some(b) = state.get("bias_ih")
             && self.bias_ih.is_some()
         {
             let bias_tensor = self.bias_ih.as_ref().unwrap();
-            bias_tensor.load_weight("bias", b);
+            bias_tensor.load_weight("bias_ih", b)?;
         }
         if let Some(b) = state.get("bias_hh")
             && self.bias_hh.is_some()
         {
             let bias_tensor = self.bias_hh.as_ref().unwrap();
-            bias_tensor.load_weight("bias", b);
+            bias_tensor.load_weight("bias_hh", b)?;
         }
+        Ok(())
     }
 }
 
@@ -187,8 +188,8 @@ mod tests {
         fn state_dict(&self) -> StateDict {
             self.0.state_dict()
         }
-        fn load_state_dict(&mut self, state: &StateDict) {
-            self.0.load_state_dict(state);
+        fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
+            self.0.load_state_dict(state)
         }
     }
 

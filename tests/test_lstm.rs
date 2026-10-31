@@ -105,7 +105,7 @@ fn test_lstm_gate_math_known_weights() {
         },
     );
 
-    lstm.load_state_dict(&state);
+    lstm.load_state_dict(&state).expect("state loads");
 
     let x = RawTensor::new(vec![2.0], &[1, 1], false);
     let mut state = lstm.initial_state(1);
@@ -245,7 +245,7 @@ fn test_lstm_forget_gate_dominance() {
         },
     );
 
-    lstm.load_state_dict(&state);
+    lstm.load_state_dict(&state).expect("state loads");
 
     let x = RawTensor::new(vec![1.0, -1.0], &[1, input_size], false);
     let c_init = RawTensor::new(vec![3.0, -2.0], &[1, hidden], false);

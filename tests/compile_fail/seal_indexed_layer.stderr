@@ -1,7 +1,7 @@
 error[E0277]: the trait bound `Outsider: nn::sealed::SealedLayer` is not satisfied
-  --> tests/compile_fail/seal_indexed_layer.rs:17:23
+  --> tests/compile_fail/seal_indexed_layer.rs:19:23
    |
-17 | impl IndexedLayer for Outsider {
+19 | impl IndexedLayer for Outsider {
    |                       ^^^^^^^^ unsatisfied trait bound
    |
 help: the trait `nn::sealed::SealedLayer` is not implemented for `Outsider`

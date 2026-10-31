@@ -55,8 +55,9 @@ impl Module for GELU {
         StateDict::new()
     }
 
-    fn load_state_dict(&mut self, _state: &StateDict) {
+    fn load_state_dict(&mut self, _state: &StateDict) -> crate::Result<()> {
         // Stateless activation, nothing to load
+        Ok(())
     }
 
     fn train(&mut self, _mode: bool) {
@@ -184,7 +185,8 @@ mod tests {
         assert!(state.is_empty(), "GELU state dict should be empty");
 
         let mut gelu = GELU::new();
-        gelu.load_state_dict(&state); // Should not panic
+        gelu.load_state_dict(&state)
+            .expect("a parameterless layer accepts any state");
     }
 
     #[test]

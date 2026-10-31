@@ -1,7 +1,7 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::device_policy::kernel_failed;
-use crate::error::Result;
+use crate::error::{Result, VoltaError};
 use crate::index::{fetch, slot};
 use crate::shape::{Axis, Shape, Strides};
 use crate::spec::PadValue;
@@ -680,30 +680,51 @@ impl RawTensor {
     }
 
     /// Reshape tensor to new shape (same number of elements)
+    ///
     /// # Panics
-    /// Size mismatch
+    ///
+    /// If `new_shape` is invalid or has a different element count. Use
+    /// [`Self::try_reshape`] to get an error instead.
     #[must_use]
+    #[track_caller]
     pub fn reshape(self_t: &Tensor, new_shape: &[usize]) -> Tensor {
+        Self::try_reshape(self_t, new_shape).unwrap_or_else(|e| panic!("Reshape: {e}"))
+    }
+
+    /// Reshape tensor to new shape (fallible)
+    ///
+    /// # Errors
+    ///
+    /// `VoltaError::InvalidParameter` if `new_shape` has a zero dimension, overflows, or
+    /// exceeds `MAX_NUMEL` (see [`Shape::from_dims`]), or has a different element count.
+    pub fn try_reshape(self_t: &Tensor, new_shape: &[usize]) -> Result<Tensor> {
+        // Validate before `product()` or any allocation: `new_shape` may be user data.
+        let target = Shape::from_dims(new_shape)?;
         let (data, old_shape, device) = {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
-        let old_size: usize = old_shape.iter().product();
-        let new_size: usize = new_shape.iter().product();
-        assert_eq!(old_size, new_size, "Cannot reshape: size mismatch");
+        if old_shape.numel() != target.numel() {
+            return Err(VoltaError::InvalidParameter(format!(
+                "cannot reshape {:?} ({} elements) to {new_shape:?} ({} elements)",
+                old_shape.truncate_rank(),
+                old_shape.numel(),
+                target.numel()
+            )));
+        }
 
         // `data` shares the input's buffer (copy-on-write storage); only the shape changes.
-        Self::movement_edge(
+        Ok(Self::movement_edge(
             self_t,
             data,
-            Shape::derived(new_shape.to_vec()),
+            target,
             device,
             MovementOp::Reshape {
                 new_shape: new_shape.to_vec(),
             },
             old_shape,
-        )
+        ))
     }
 
     /// Internal permute implementation (no gradient tracking)
@@ -797,28 +818,48 @@ impl RawTensor {
     ///
     /// Dimensions can only be expanded from size 1 to size N.
     /// Rank must remain the same.
+    ///
     /// # Panics
-    /// expand rank must match
+    ///
+    /// If `new_shape` is invalid, has a different rank, or a dimension is neither `1`
+    /// nor equal to the target. Use [`Self::try_expand`] to get an error instead.
     #[must_use]
+    #[track_caller]
     pub fn expand(self_t: &Tensor, new_shape: &[usize]) -> Tensor {
+        Self::try_expand(self_t, new_shape).unwrap_or_else(|e| panic!("Expand: {e}"))
+    }
+
+    /// Expand (broadcast) tensor to larger shape (fallible)
+    ///
+    /// # Errors
+    ///
+    /// `VoltaError::InvalidParameter` if `new_shape` is invalid (see [`Shape::from_dims`])
+    /// or has a different rank, `VoltaError::BroadcastError` if a dimension is neither
+    /// `1` nor equal to the target.
+    pub fn try_expand(self_t: &Tensor, new_shape: &[usize]) -> Result<Tensor> {
+        let out_shape = Shape::from_dims(new_shape)?;
         let (data, old_shape, device) = {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
-        assert_eq!(old_shape.rank(), new_shape.len(), "Expand: rank must match");
+        if old_shape.rank() != new_shape.len() {
+            return Err(VoltaError::InvalidParameter(format!(
+                "expand: rank must match, got {:?} -> {new_shape:?}",
+                old_shape.truncate_rank()
+            )));
+        }
 
         // Verify broadcasting rules: old dims must be 1 or equal to new
         for (old_d, &new_d) in old_shape.iter().zip(new_shape) {
-            assert!(
-                old_d == 1 || old_d == new_d,
-                "Cannot expand dimension {old_d} to {new_d}"
-            );
+            if old_d != 1 && old_d != new_d {
+                return Err(VoltaError::BroadcastError(
+                    old_shape.truncate_rank().to_vec(),
+                    new_shape.to_vec(),
+                ));
+            }
         }
 
-        let out_shape = Shape::from_dims(new_shape).unwrap_or_else(|e| {
-            panic!("Expand: invalid target shape {new_shape:?} from {old_shape:?}: {e}")
-        });
         let new_size = out_shape.numel();
 
         // GPU path when the kernel covers this case; a `None` from it is a failure.
@@ -854,7 +895,7 @@ impl RawTensor {
             (Storage::cpu(result), Device::CPU)
         };
 
-        Self::movement_edge(
+        Ok(Self::movement_edge(
             self_t,
             storage,
             out_shape,
@@ -863,7 +904,7 @@ impl RawTensor {
                 new_shape: new_shape.to_vec(),
             },
             old_shape,
-        )
+        ))
     }
 
     /// Pad a tensor, filling the new border with `value`.

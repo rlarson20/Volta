@@ -511,6 +511,28 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 
 **Tests:** the output against the sin/cos formula and against the learned weight rows; the exact input gradient (`w` for the loss `sum(out ⊙ w)`, both modes); the exact learned-weight gradient (`Σ_b w[b, p, :]` for `p < seq_len`, zero past it); `assert_trainable!` in learned mode; and GPU parity of the output and both gradients on an Apple M2. The gradient tests fail when the output is replaced by a detached copy of the same values.
 
+## Errors
+
+### Panic inside the program, `Result` where data comes from outside
+
+**Decision:** a function takes the panicking form when every argument is decided by the calling program's own code, and returns `Result` when an argument can come from outside the program: a file, a checkpoint, a dataset, JSON, a UI, a config. Ops and layers whose arguments are tensors the caller already built (`add`, `matmul`, `forward`) panic on a contract violation, documented under `# Panics`. A shape, axis, range, label, byte buffer, or state dict that a user can type is validated and reported as a `VoltaError`. Where both forms exist, the panicking one is the `try_` one plus a panic (`try_x(..).unwrap_or_else(|e| panic!("x: {e}"))`, `#[track_caller]`), so the check and the message live once. A `try_` form exists exactly when an argument can come from outside; it is not generated for every op.
+
+**Why a library cannot just panic:** the first consumer outside the repo is a browser tool built on WASM. On `wasm32` a panic traps the whole module instance, so one bad shape typed into a UI would kill the page, and `catch_unwind` is not a boundary there (`panic = "abort"`). A server or a notebook has the same problem. A library should not decide to take down its host over data it was handed.
+
+**Why not `Result` everywhere (Candle's choice):** autograd code is chains of ops, and a `?` after every `matmul`, `add`, and `relu` buries the math. `edge()`, `GradFn::backward`, and `define_ops!` are written for infallible ops, so a `Result` would run through the closed `GradFn` enum. A shape mismatch between two tensors the program built is a bug with one fix (change the code); no caller handles it. A panic also gives a backtrace at the faulting op, which a `?` chain loses. The same reasoning declined a `try_` twin of every op (tch-rs's `f_` convention): it doubles the op surface for a library this size.
+
+**Where the line was drawn:** `Tensor::new`/`from_vec` and the shape constructors (`zeros`, `ones`, `empty`, `constant`, `rand`, `randn`, `xavier_uniform`, `he_initialization`) each have a `try_` twin, and so do `reshape` and `expand`. `Module::load_state_dict` returns `Result<()>`, `load_state_dict_checked` returns `Result<StateDictDiff>`, and `to_one_hot` returns `Result<Vec<f32>>`. The existing `try_sum_dim`, `try_pad_with`, `try_shrink`, `try_broadcast_shape`, `try_from_bytes`, and `try_as_bytes` stay: `Axis(pub usize)` is not validated at construction, and padding, ranges, and bytes can come from outside. File I/O was already `Result`.
+
+**Validate, then allocate:** `zeros`, `ones`, and the others computed `shape.iter().product()` and allocated the `Vec` before `Shape::from_dims` ran. A shape such as `[usize::MAX, 2]` overflowed that product, and `[MAX_NUMEL + 1]` allocated first and checked later. An allocation failure aborts rather than unwinds, so for a user-supplied shape the check has to come first. Every `try_` constructor calls `RawTensor::checked_numel` (which is `Shape::from_dims`) before it builds anything. `reshape` used `Shape::derived`, whose panic says "op computed an invalid output shape"; that is wrong when the caller typed the shape.
+
+**State-dict errors name the entry:** `load_weight` returns `StateShapeMismatch { key, expected, actual }` or `StateDataLength { key, expected, len }`, and a container (`Sequential`, `TransformerBlock`, `MultiHeadAttention`, `FeedForward`, `PositionalEncoding`) puts its layer prefix back on the key (`VoltaError::with_key_prefix`), so a UI can say `2.weight` and not `weight`. The LSTM bias loads had been passing the name `"bias"` for the keys `bias_ih` and `bias_hh`; they pass the real keys now.
+
+**Missing keys still load nothing:** `load_state_dict` skips keys the module lacks and leaves parameters with no entry untouched. That is the old behavior, kept; `load_state_dict_checked` reports them. Strictness about missing keys is a separate decision.
+
+**Open: a failed load is not atomic.** `load_state_dict` checks each entry as it reaches it, so an `Err` can leave earlier layers overwritten. The trait doc says to discard the module. A browser tool must not rely on that. The fix has to avoid keeping a second copy of the weights, which rules out snapshot-and-rollback and a fresh model plus a swap (peak memory about twice the weights, gigabytes for a large model, in a browser tab). That leaves plan-then-apply: layers return the `(tensor, entry)` pairs they would load, one provided method validates all of them, and only then writes. Deferred until the browser tool exists, because it changes the `Module` trait again; the design and its costs are in `notes/TODO.md`.
+
+**Not changed:** ops that take an `Axis` (`max_dim`, `mean_dim`, `softmax`, `permute`, ...) and the GPU layer's `Option` returns stay as they were. A binding range-checks an axis against `shape().rank()` itself until those get a `try_` form.
+
 ## Concurrency and Async
 
 ### Stay synchronous

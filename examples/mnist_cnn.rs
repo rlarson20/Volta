@@ -24,7 +24,7 @@ fn main() {
         let labels = load_mnist_labels(&train_labels_path).expect("Failed to load MNIST labels");
 
         let num_samples = labels.len();
-        let label_data = to_one_hot(&labels, 10);
+        let label_data = to_one_hot(&labels, 10).expect("MNIST labels are digits 0-9");
 
         println!("Loaded {num_samples} training samples");
         (images, label_data, num_samples)
@@ -44,7 +44,7 @@ fn main() {
             .map(|i| (i % 255) as f32 / 255.0)
             .collect();
         let labels: Vec<u8> = (0..num_samples).map(|i| (i % 10) as u8).collect();
-        let label_data = to_one_hot(&labels, 10);
+        let label_data = to_one_hot(&labels, 10).expect("MNIST labels are digits 0-9");
 
         println!("Generated {num_samples} synthetic samples");
         (image_data, label_data, num_samples)

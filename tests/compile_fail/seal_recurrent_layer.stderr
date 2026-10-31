@@ -1,7 +1,7 @@
 error[E0277]: the trait bound `Outsider: nn::sealed::SealedLayer` is not satisfied
-  --> tests/compile_fail/seal_recurrent_layer.rs:19:5
+  --> tests/compile_fail/seal_recurrent_layer.rs:21:5
    |
-19 |     fn initial_state(&self, _batch: usize) -> Self::State {}
+21 |     fn initial_state(&self, _batch: usize) -> Self::State {}
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
    |
 help: the trait `nn::sealed::SealedLayer` is not implemented for `Outsider`
@@ -30,9 +30,9 @@ note: required by a bound in `RecurrentLayer`
              volta::LSTMCell
 
 error[E0277]: the trait bound `Outsider: nn::sealed::SealedLayer` is not satisfied
-  --> tests/compile_fail/seal_recurrent_layer.rs:20:5
+  --> tests/compile_fail/seal_recurrent_layer.rs:22:5
    |
-20 |     fn step(&self, _x: &Tensor, _state: &mut Self::State) -> Tensor {
+22 |     fn step(&self, _x: &Tensor, _state: &mut Self::State) -> Tensor {
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
    |
 help: the trait `nn::sealed::SealedLayer` is not implemented for `Outsider`
@@ -61,9 +61,9 @@ note: required by a bound in `RecurrentLayer`
              volta::LSTMCell
 
 error[E0277]: the trait bound `Outsider: nn::sealed::SealedLayer` is not satisfied
-  --> tests/compile_fail/seal_recurrent_layer.rs:17:25
+  --> tests/compile_fail/seal_recurrent_layer.rs:19:25
    |
-17 | impl RecurrentLayer for Outsider {
+19 | impl RecurrentLayer for Outsider {
    |                         ^^^^^^^^ unsatisfied trait bound
    |
 help: the trait `nn::sealed::SealedLayer` is not implemented for `Outsider`
