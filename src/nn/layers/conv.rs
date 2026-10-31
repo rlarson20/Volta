@@ -260,6 +260,30 @@ impl DirectConvGradFn {
     }
 }
 
+/// The windows along one axis that read input coordinate `i`, as `(output position,
+/// kernel offset)` pairs: those with `o * stride + k == i + pad`, `k < kernel`, and
+/// `o < out`. At most `kernel` of them exist (`ceil(kernel / stride)` when `stride`
+/// divides evenly), so the input gradient visits them instead of every output position.
+///
+/// The `checked_sub` and the `out` bound are coordinate checks, not fallbacks: a window
+/// that starts before the input, or past the last output, doesn't read `i`.
+fn covering_windows(
+    i: usize,
+    pad: usize,
+    stride: usize,
+    kernel: usize,
+    out: usize,
+) -> impl Iterator<Item = (usize, usize)> {
+    (0..kernel).filter_map(move |k| {
+        let start = (i + pad).checked_sub(k)?;
+        if start % stride != 0 {
+            return None;
+        }
+        let o = start / stride;
+        (o < out).then_some((o, k))
+    })
+}
+
 impl DirectConvGradFn {
     /// CPU implementation of input gradient computation
     fn compute_input_gradient_cpu(&self, out_grad_data: &[f32], weight_data: &[f32]) -> Tensor {
@@ -289,45 +313,26 @@ impl DirectConvGradFn {
                     for iw in 0..width {
                         let mut sum = 0.0f32;
 
-                        // Iterate over all output positions and kernel positions
-                        // to find which ones contribute to this input position
+                        // Only the windows that cover (ih, iw) contribute.
                         for oc in 0..out_ch {
-                            for oh in 0..h_out {
-                                for ow in 0..w_out {
-                                    // Get output gradient
+                            for (oh, kh) in covering_windows(ih, pad_h, stride_h, kernel_h, h_out) {
+                                for (ow, kw) in
+                                    covering_windows(iw, pad_w, stride_w, kernel_w, w_out)
+                                {
                                     let out_idx = b * (out_ch * h_out * w_out)
                                         + oc * (h_out * w_out)
                                         + oh * w_out
                                         + ow;
                                     let dout = fetch(out_grad_data, out_idx);
 
-                                    // Starting position in input for this output position
-                                    let h_start = oh * stride_h;
-                                    let w_start = ow * stride_w;
+                                    // Note: weights are indexed as (oc, ic, kh, kw)
+                                    let w_idx = oc * (in_ch * kernel_h * kernel_w)
+                                        + ic * (kernel_h * kernel_w)
+                                        + kh * kernel_w
+                                        + kw;
+                                    let w_val = fetch(weight_data, w_idx);
 
-                                    // Check if this input position (ih, iw) is in the receptive field
-                                    // of output position (oh, ow)
-                                    let h_offset = ih as isize - h_start as isize + pad_h as isize;
-                                    let w_offset = iw as isize - w_start as isize + pad_w as isize;
-
-                                    if h_offset >= 0
-                                        && w_offset >= 0
-                                        && h_offset < kernel_h as isize
-                                        && w_offset < kernel_w as isize
-                                    {
-                                        let kh = h_offset as usize;
-                                        let kw = w_offset as usize;
-
-                                        // Get the corresponding weight value
-                                        // Note: weights are indexed as (oc, ic, kh, kw)
-                                        let w_idx = oc * (in_ch * kernel_h * kernel_w)
-                                            + ic * (kernel_h * kernel_w)
-                                            + kh * kernel_w
-                                            + kw;
-                                        let w_val = fetch(weight_data, w_idx);
-
-                                        sum += dout * w_val;
-                                    }
+                                    sum += dout * w_val;
                                 }
                             }
                         }
@@ -586,41 +591,27 @@ impl IGEMMGradFn {
                     for ic in ic_start..ic_end {
                         let mut sum = 0.0;
 
-                        // Accumulate from all output positions that use this input
+                        // Accumulate from the windows that cover this input position
                         for oc in 0..out_ch {
-                            for oh in 0..h_out {
-                                for ow in 0..w_out {
-                                    // Check if this input position is in the receptive field
-                                    let h_start = oh * stride_h;
-                                    let w_start = ow * stride_w;
+                            for (oh, kh) in covering_windows(ih, pad_h, stride_h, kernel_h, h_out) {
+                                for (ow, kw) in
+                                    covering_windows(iw, pad_w, stride_w, kernel_w, w_out)
+                                {
+                                    // Output grad index: (b, oc, oh, ow)
+                                    let out_idx = b * (out_ch * spatial_out)
+                                        + oc * spatial_out
+                                        + oh * w_out
+                                        + ow;
 
-                                    let h_offset = ih as isize - h_start as isize + pad_h as isize;
-                                    let w_offset = iw as isize - w_start as isize + pad_w as isize;
+                                    // Weight index: (oc, ic, kh, kw)
+                                    let w_idx = oc * (in_ch * kernel_size)
+                                        + ic * kernel_size
+                                        + kh * kernel_w
+                                        + kw;
 
-                                    if h_offset >= 0
-                                        && h_offset < kernel_h as isize
-                                        && w_offset >= 0
-                                        && w_offset < kernel_w as isize
-                                    {
-                                        let kh = h_offset as usize;
-                                        let kw = w_offset as usize;
-
-                                        // Output grad index: (b, oc, oh, ow)
-                                        let out_idx = b * (out_ch * spatial_out)
-                                            + oc * spatial_out
-                                            + oh * w_out
-                                            + ow;
-
-                                        // Weight index: (oc, ic, kh, kw)
-                                        let w_idx = oc * (in_ch * kernel_size)
-                                            + ic * kernel_size
-                                            + kh * kernel_w
-                                            + kw;
-
-                                        let dout = fetch(out_grad, out_idx);
-                                        let w_val = fetch(weight, w_idx);
-                                        sum += dout * w_val;
-                                    }
+                                    let dout = fetch(out_grad, out_idx);
+                                    let w_val = fetch(weight, w_idx);
+                                    sum += dout * w_val;
                                 }
                             }
                         }
@@ -2358,6 +2349,129 @@ mod conv2d_tests {
     /// hidden by `if let Some` / `unwrap_or(&0.0)`, which dropped the out-of-range accesses.
     /// Seeded and backpropped through a random weighted loss, so a misplaced element cannot
     /// cancel out the way it would under a plain `.sum()`.
+    /// The input gradient the way it was computed before `covering_windows`: for every
+    /// input position, scan every output position and keep those whose window covers it.
+    /// Quadratic, so it lives only here, as the oracle for the fast paths.
+    fn input_grad_by_full_scan(out_grad: &[f32], weight: &[f32], spec: &Conv2dSpec) -> Vec<f32> {
+        let Conv2dSpec {
+            batch,
+            in_ch,
+            out_ch,
+            in_h,
+            in_w,
+            kernel_h,
+            kernel_w,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            out_h,
+            out_w,
+        } = *spec;
+        let mut grad_x = vec![0.0f32; batch * in_ch * in_h * in_w];
+        for b in 0..batch {
+            for ic in 0..in_ch {
+                for ih in 0..in_h {
+                    for iw in 0..in_w {
+                        let mut sum = 0.0f32;
+                        for oc in 0..out_ch {
+                            for oh in 0..out_h {
+                                for ow in 0..out_w {
+                                    let kh =
+                                        ih as isize + pad_h as isize - (oh * stride_h) as isize;
+                                    let kw =
+                                        iw as isize + pad_w as isize - (ow * stride_w) as isize;
+                                    if (0..kernel_h as isize).contains(&kh)
+                                        && (0..kernel_w as isize).contains(&kw)
+                                    {
+                                        let out_idx = ((b * out_ch + oc) * out_h + oh) * out_w + ow;
+                                        let w_idx = ((oc * in_ch + ic) * kernel_h + kh as usize)
+                                            * kernel_w
+                                            + kw as usize;
+                                        sum += fetch(out_grad, out_idx) * fetch(weight, w_idx);
+                                    }
+                                }
+                            }
+                        }
+                        let in_idx = ((b * in_ch + ic) * in_h + ih) * in_w + iw;
+                        *slot(&mut grad_x, in_idx) = sum;
+                    }
+                }
+            }
+        }
+        grad_x
+    }
+
+    #[test]
+    fn test_conv_input_grad_visits_only_covering_windows() {
+        // (batch, in_ch, out_ch, in_h, in_w, kernel, stride, padding)
+        type Geometry = (
+            usize,
+            usize,
+            usize,
+            usize,
+            usize,
+            (usize, usize),
+            (usize, usize),
+            (usize, usize),
+        );
+        // Direct and iGEMM input gradients against the full scan, under random output
+        // gradients (a plain `.sum()` loss gives every output the same gradient, which
+        // hides a wrong (output, kernel) pairing). Geometries the layer can't build
+        // (non-square kernel, different stride and padding per axis) are included, and
+        // so are strides that don't divide the padded extent and a stride over the kernel.
+        crate::tensor::manual_seed(0xC0DE);
+        let geometries: [Geometry; 8] = [
+            (2, 2, 3, 6, 6, (3, 3), (1, 1), (0, 0)),
+            (2, 2, 3, 6, 6, (3, 3), (1, 1), (1, 1)),
+            (2, 3, 2, 9, 7, (3, 3), (2, 2), (1, 1)),
+            (1, 2, 2, 10, 8, (5, 5), (3, 2), (2, 2)),
+            (2, 2, 3, 7, 9, (3, 2), (2, 3), (1, 0)),
+            (1, 1, 2, 8, 8, (2, 2), (3, 3), (0, 0)),
+            (2, 2, 2, 5, 5, (1, 1), (2, 2), (0, 0)),
+            (3, 2, 2, 4, 6, (2, 3), (1, 2), (2, 1)),
+        ];
+        for (batch, in_ch, out_ch, in_h, in_w, kernel, stride, padding) in geometries {
+            let input = Shape::from_dims(vec![batch, in_ch, in_h, in_w]).unwrap();
+            let weight = Shape::from_dims(vec![out_ch, in_ch, kernel.0, kernel.1]).unwrap();
+            let spec = Conv2dSpec::new(&input, &weight, stride, padding).unwrap();
+            let out_grad = crate::tensor::randn(&[batch, out_ch, spec.out_h, spec.out_w])
+                .borrow()
+                .data
+                .to_vec();
+            let w = crate::tensor::randn(&[out_ch, in_ch, kernel.0, kernel.1])
+                .borrow()
+                .data
+                .to_vec();
+            let expected = input_grad_by_full_scan(&out_grad, &w, &spec);
+            let label = format!("{spec:?}");
+
+            let direct = DirectConvGradFn { spec }
+                .compute_input_gradient_cpu(&out_grad, &w)
+                .borrow()
+                .data
+                .to_vec();
+            let mut igemm = vec![0.0f32; expected.len()];
+            IGEMMGradFn::igemm_backward_input(
+                &out_grad,
+                &w,
+                &mut igemm,
+                &spec,
+                &TileConfig::default(),
+            );
+
+            for (name, got) in [("Direct", &direct), ("iGEMM", &igemm)] {
+                assert_eq!(got.len(), expected.len(), "{name} length for {label}");
+                for (i, (g, e)) in got.iter().zip(&expected).enumerate() {
+                    assert!(
+                        (g - e).abs() < 1e-4,
+                        "{name} input grad at {i} for {label}: got {g}, want {e}"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_conv2d_igemm_batch_gt_one_matches_direct() {
         crate::tensor::manual_seed(0xB47C);
