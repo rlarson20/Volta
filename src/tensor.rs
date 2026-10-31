@@ -292,20 +292,25 @@ pub fn manual_seed(seed: u64) {
     });
 }
 
-/// Run a closure with the current RNG (`ThreadRng` or specific `StdRng`)
+/// Run a closure with the current RNG: the seeded `StdRng` after [`manual_seed`], else
+/// the thread's `ThreadRng` (not reproducible).
+///
+/// # Panics
+///
+/// If `f` itself calls `with_rng`. The inner call could not reach the seeded RNG, and
+/// falling back to the thread RNG would make a seeded run silently irreproducible.
 pub(crate) fn with_rng<F, T>(f: F) -> T
 where
     F: FnOnce(&mut dyn rand::RngCore) -> T,
 {
     GLOBAL_RNG.with(|rng_cell| {
-        if let Ok(mut borrow) = rng_cell.try_borrow_mut()
-            && let Some(rng) = borrow.as_mut()
-        {
-            return f(rng);
+        let mut borrow = rng_cell
+            .try_borrow_mut()
+            .expect("with_rng called reentrantly: the closure must not draw from the global RNG through another with_rng call");
+        match borrow.as_mut() {
+            Some(rng) => f(rng),
+            None => f(&mut rand::rng()),
         }
-
-        // Fallback to thread RNG (not reproducible but safe)
-        f(&mut rand::rng())
     })
 }
 
@@ -1549,7 +1554,7 @@ impl DataLoader {
 
         if shuffle {
             use rand::seq::SliceRandom;
-            indices.shuffle(&mut rand::rng());
+            with_rng(|rng| indices.shuffle(rng));
         }
 
         Self {
@@ -1596,7 +1601,7 @@ impl DataLoader {
         self.current = 0;
         if self.shuffle {
             use rand::seq::SliceRandom;
-            self.indices.shuffle(&mut rand::rng());
+            with_rng(|rng| self.indices.shuffle(rng));
         }
     }
 }
@@ -1753,6 +1758,40 @@ where
 #[cfg(test)]
 mod tensor_tests {
     use super::*;
+
+    /// A nested `with_rng` used to fall back to the thread RNG without a word, so a
+    /// seeded run stopped being reproducible. It is a bug in the caller and panics.
+    #[test]
+    #[should_panic(expected = "reentrant")]
+    fn with_rng_reentrant_call_panics() {
+        manual_seed(1);
+        with_rng(|_| with_rng(|_| ()));
+    }
+
+    /// The first two epochs' sample order, from a loader built right after seeding.
+    fn shuffled_orders(seed: u64) -> (Vec<f32>, Vec<f32>) {
+        let n = 20;
+        manual_seed(seed);
+        let data = (0..n).map(|i| i as f32).collect();
+        let mut loader = DataLoader::new(data, vec![0.0; n], &[1], &[1], n, true);
+        let first = loader.next().unwrap().0.data();
+        loader.reset();
+        let second = loader.next().unwrap().0.data();
+        (first, second)
+    }
+
+    /// `DataLoader` shuffles through the global RNG, so `manual_seed` fixes its order
+    /// (it used `rand::rng()` and ignored the seed).
+    #[test]
+    fn dataloader_shuffle_follows_manual_seed() {
+        let (first, second) = shuffled_orders(7);
+        assert_eq!((first.clone(), second.clone()), shuffled_orders(7));
+
+        let identity: Vec<f32> = (0..20).map(|i| i as f32).collect();
+        assert_ne!(first, identity, "the first epoch should be shuffled");
+        assert_ne!(first, second, "reset should reshuffle");
+        assert_ne!(first, shuffled_orders(8).0, "another seed, another order");
+    }
 
     /// `check_gradients` clears the input's existing gradient before its analytic pass.
     /// Without that, the gradient left by the earlier `backward()` (and by the first

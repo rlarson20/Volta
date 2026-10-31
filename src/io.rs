@@ -443,6 +443,27 @@ mod io_tests {
     use crate::nn::Module;
     use crate::{Linear, ReLU, Sequential};
 
+    /// A temp-file path unique to this process, removed on drop (also when the test
+    /// fails). A fixed name would race with another test process running at once.
+    struct TempFile(std::path::PathBuf);
+
+    impl TempFile {
+        fn new(name: &str) -> Self {
+            Self(std::env::temp_dir().join(format!("volta_{}_{name}", std::process::id())))
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            // Best effort: the file does not exist if the test failed before saving.
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
     #[test]
     fn test_save_load_sequential() {
         let model = Sequential::new(vec![
@@ -451,8 +472,8 @@ mod io_tests {
             Box::new(Linear::new(3, 1, true)),
         ]);
 
-        let path = std::env::temp_dir().join("test_seq.bin");
-        let path_str = path.to_str().unwrap();
+        let tmp = TempFile::new("test_seq.bin");
+        let path_str = tmp.path().to_str().unwrap();
 
         // Save
         let state = model.state_dict();
@@ -551,14 +572,15 @@ mod io_tests {
             Box::new(Linear::new(3, 1, true)),
         ]);
 
-        let path = std::env::temp_dir().join("test_safetensors.safetensors");
+        let tmp = TempFile::new("test_safetensors.safetensors");
+        let path = tmp.path();
 
         // Save to SafeTensors
         let state = model.state_dict();
-        save_safetensors(&state, &path).unwrap();
+        save_safetensors(&state, path).unwrap();
 
         // Load from SafeTensors
-        let loaded_state = load_safetensors(&path).unwrap();
+        let loaded_state = load_safetensors(path).unwrap();
 
         // Verify keys match
         assert_eq!(state.len(), loaded_state.len());
@@ -604,13 +626,14 @@ mod io_tests {
             },
         );
 
-        let path = std::env::temp_dir().join("test_typed.safetensors");
+        let tmp = TempFile::new("test_typed.safetensors");
+        let path = tmp.path();
 
         // Save with native dtypes
-        save_safetensors_typed(&tensors, &path).unwrap();
+        save_safetensors_typed(&tensors, path).unwrap();
 
         // Load with native dtypes
-        let loaded = load_safetensors_raw(&path).unwrap();
+        let loaded = load_safetensors_raw(path).unwrap();
 
         // Verify dtypes are preserved
         assert_eq!(loaded.get("f32_tensor").unwrap().dtype, DType::F32);

@@ -1,7 +1,7 @@
 //! Gap-filling tests: `BatchNorm2d` / `Flatten` gradient checks, `Dropout` edge cases, `SGD` momentum arithmetic, and mutable `Storage` access.
 use volta::{Dropout, Flatten, Layer};
 use volta::{
-    RawTensor, Storage, check_gradients_simple, manual_seed,
+    RawTensor, Storage, Tensor, check_gradients_simple, manual_seed,
     nn::{BatchNorm2d, SGD},
 };
 
@@ -14,10 +14,18 @@ fn test_batchnorm_gradient_check() {
     let x = RawTensor::randn(&[2, 2, 4, 4]); // B=2, C=2, H=4, W=4
     x.set_requires_grad(true);
 
-    // BatchNorm is highly sensitive to epsilon/tolerance in numerical checks
-    // due to the division by small variances.
-    let passed = check_gradients_simple(&x, |t| bn.forward(t).sum());
-    assert!(passed, "BatchNorm2d numerical gradient check failed");
+    // A randomly weighted loss, not `.sum()`: training-mode normalization makes the
+    // sum of the output independent of `x`, so its gradient is identically zero and
+    // a check against it passes for any analytic gradient. The weights are fixed
+    // outside the closure so every finite-difference evaluation sees the same loss.
+    let weights = RawTensor::randn(&[2, 2, 4, 4]);
+    let loss_fn = |t: &Tensor| bn.forward(t).elem_mul(&weights).sum();
+
+    let (max_err, mean_err, passed) = RawTensor::check_gradients(&x, loss_fn, 1e-2, 5e-2);
+    assert!(
+        passed,
+        "BatchNorm2d numerical gradient check failed: max_err={max_err:.3e}, mean_err={mean_err:.3e}"
+    );
 }
 
 #[test]
