@@ -16,6 +16,7 @@ use crate::storage::Storage;
 use crate::tensor::{MaxDimGradFn, RawTensor, SumDimGradFn, Tensor};
 use std::cell::Cell;
 use std::collections::HashSet;
+use std::marker::PhantomData;
 
 // ===== GRADIENT FUNCTIONS =====
 
@@ -229,9 +230,19 @@ pub(crate) fn is_grad_enabled() -> bool {
 #[must_use]
 pub fn no_grad() -> NoGradGuard {
     NO_GRAD_DEPTH.with(|d| d.set(d.get() + 1));
-    NoGradGuard
+    NoGradGuard {
+        _not_send: PhantomData,
+    }
 }
-pub struct NoGradGuard;
+/// Ends a [`no_grad`] scope on drop.
+///
+/// `!Send`: the depth counter is thread-local, so a guard dropped on another thread would
+/// end that thread's scope and leave this one's open. `tests/compile_fail/guards_not_send.rs`
+/// pins it.
+pub struct NoGradGuard {
+    /// Makes the guard `!Send` (and `!Sync`).
+    _not_send: PhantomData<*const ()>,
+}
 impl Drop for NoGradGuard {
     fn drop(&mut self) {
         NO_GRAD_DEPTH.with(|d| d.set(d.get() - 1));

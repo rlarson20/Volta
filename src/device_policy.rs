@@ -16,6 +16,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
+use std::marker::PhantomData;
 
 use crate::Device;
 
@@ -69,13 +70,22 @@ pub fn device_policy() -> DevicePolicy {
 #[must_use]
 pub fn with_device_policy(policy: DevicePolicy) -> DevicePolicyGuard {
     let prev = POLICY.with(|p| p.replace(policy));
-    DevicePolicyGuard { prev }
+    DevicePolicyGuard {
+        prev,
+        _not_send: PhantomData,
+    }
 }
 
 /// Restores the previous device policy on drop. Made by [`with_device_policy`].
+///
+/// `!Send`: the policy is thread-local, so a guard dropped on another thread would set
+/// that thread's policy and leave this one's changed. `tests/compile_fail/guards_not_send.rs`
+/// pins it.
 pub struct DevicePolicyGuard {
     /// The policy to restore.
     prev: DevicePolicy,
+    /// Makes the guard `!Send` (and `!Sync`).
+    _not_send: PhantomData<*const ()>,
 }
 
 impl Drop for DevicePolicyGuard {

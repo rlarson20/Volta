@@ -16,9 +16,10 @@ use volta::Axis;
 use volta::nn::{MultiHeadAttention, PositionalEncoding, PositionalEncodingType};
 use volta::{
     BatchNorm1d, BatchNorm2d, Device, DevicePolicy, Dropout, Embedding, FallbackEvent, GELU,
-    IndexedLayer, LSTMCell, Layer, LayerNorm, Linear, Module, Pass, RawTensor, RecurrentLayer,
-    Storage, Tensor, bce_loss, bce_with_logits_loss, cross_entropy_loss, kl_divergence_gaussian,
-    manual_seed, mse_loss, nll_loss, take_fallback_events, with_device_policy,
+    IndexedLayer, LSTMCell, Layer, LayerNorm, Linear, Module, PadValue, Pass, RawTensor,
+    RecurrentLayer, Storage, Tensor, bce_loss, bce_with_logits_loss, cross_entropy_loss,
+    kl_divergence_gaussian, manual_seed, mse_loss, nll_loss, take_fallback_events,
+    with_device_policy,
 };
 
 /// `to_device` moves the gradient with the data.
@@ -528,6 +529,42 @@ fn rank5_permute_prefer_gpu_matches_cpu() {
     let out = x.permute(&axes);
     assert!(out.device().is_gpu());
     assert_eq!(out.data(), x_cpu.permute(&axes).data());
+}
+
+/// The GPU `pad` kernel packs dims 2 and 3 into 16 bits per side: a wider pad there is a
+/// gap, forward and backward, and under `PreferGpu` matches the CPU instead of silently
+/// padding by the truncated width.
+#[test]
+fn pad_over_16_bits_is_a_gap() {
+    if skip_if_no_gpu() {
+        return;
+    }
+    let padding = [(0, 0), (0, 0), (70_000, 1), (0, 0)];
+    let (x_cpu, x) = leaf_pair(&[1, 1, 2, 2]);
+    let strict = with_device_policy(DevicePolicy::Strict);
+    let msg = panic_message(|| {
+        let _ = x.pad_with(&padding, PadValue::ZERO);
+    });
+    assert!(msg.contains("Movement(Pad): no GPU kernel"), "{msg}");
+    drop(strict);
+
+    manual_seed(0x16);
+    let w_cpu = RawTensor::randn(&[1, 1, 70_003, 2]);
+    let w = w_cpu.to_device(gpu_device());
+    let out_cpu = x_cpu.pad_with(&padding, PadValue::ZERO);
+    out_cpu
+        .elem_mul(&w_cpu)
+        .sum()
+        .into_loss()
+        .unwrap()
+        .backward();
+    expect_gaps(&["Movement(Pad)"], || {
+        let out = x.pad_with(&padding, PadValue::ZERO);
+        assert!(out.device().is_gpu());
+        assert_eq!(out.data(), out_cpu.data());
+        out.elem_mul(&w).sum().into_loss().unwrap().backward();
+    });
+    assert_close("x", &x_cpu.grad().unwrap(), &x.grad().unwrap(), 1e-6);
 }
 
 /// Moving a tensor between devices mid-graph is a deliberate transfer, not a gap:

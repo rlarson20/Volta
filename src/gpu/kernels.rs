@@ -1525,30 +1525,7 @@ impl GpuKernels {
         let output_size = new_shape.iter().product::<usize>();
         let result = GpuBuffer::zeros(output_size)?;
 
-        // Pack padding into op_params for all dimensions (up to 4)
-        // op_params: [left0, right0, left1, right1] for dims 0,1
-        // padding2: [left2 | right2] for dim 2 (16 bits each)
-        // _padding: [left3 | right3] for dim 3 (16 bits each)
-        let mut pad_params = [0u32; 4];
-        for (i, &(left, right)) in padding.iter().enumerate().take(2) {
-            let idx = i * 2;
-            *slot(&mut pad_params, idx) = left as u32;
-            *slot(&mut pad_params, idx + 1) = right as u32;
-        }
-
-        // Pack dim 2 into padding2 (left in upper 16 bits, right in lower 16 bits)
-        let padding2 = if let Some(&(left2, right2)) = padding.get(2) {
-            (left2 as u32) << 16 | (right2 as u32)
-        } else {
-            0
-        };
-
-        // Pack dim 3 into _padding[0] (left in upper 16 bits, right in lower 16 bits)
-        let padding3 = if let Some(&(left3, right3)) = padding.get(3) {
-            (left3 as u32) << 16 | (right3 as u32)
-        } else {
-            0
-        };
+        let (pad_params, padding2, padding3) = pack_pad_widths(padding);
 
         let params = MovementParams {
             old_shape: pad_to_u32_4(old_shape),
@@ -1675,30 +1652,7 @@ impl GpuKernels {
         let output_size = old_shape.iter().product::<usize>();
         let result = GpuBuffer::zeros(output_size)?;
 
-        // Pack padding into params (same as forward pad operation)
-        let mut op_params = [0u32; 4];
-        let mut padding2 = 0u32;
-        let mut _padding = [0u32; 2];
-
-        for (i, &(left, right)) in padding.iter().enumerate().take(4) {
-            match i {
-                0 => {
-                    op_params[0] = left as u32;
-                    op_params[1] = right as u32;
-                }
-                1 => {
-                    op_params[2] = left as u32;
-                    op_params[3] = right as u32;
-                }
-                2 => {
-                    padding2 = ((left as u32) << 16) | (right as u32);
-                }
-                3 => {
-                    _padding[0] = ((left as u32) << 16) | (right as u32);
-                }
-                _ => {}
-            }
-        }
+        let (op_params, padding2, padding3) = pack_pad_widths(padding);
 
         let params = MovementParams {
             old_shape: pad_to_u32_4(old_shape),
@@ -1706,7 +1660,7 @@ impl GpuKernels {
             op_params,
             rank: old_shape.len() as u32,
             padding2,
-            padding: _padding,
+            padding: [padding3, 0],
         };
 
         movement_op(out_grad, result, &params, &ctx.pipelines().pad_backward)
@@ -2727,13 +2681,54 @@ impl GpuKernels {
     }
 }
 
-/// Helper to pad a slice to exactly 4 u32 values
+/// Pack up to four movement-kernel values (dims, axes, strides, or offsets) into the
+/// `[u32; 4]` uniform slots, zero-filling the rest.
+///
+/// # Panics
+/// More than four values, or a value over `u32::MAX`. The movement ops route rank > 4 to
+/// the CPU (`gpu_movement_supported`), so either is a dispatch bug, not data to truncate.
 fn pad_to_u32_4(values: &[usize]) -> [u32; 4] {
+    assert!(
+        values.len() <= 4,
+        "GPU movement kernels take rank <= 4, got {values:?}"
+    );
     let mut result = [0u32; 4];
-    for (i, &v) in values.iter().take(4).enumerate() {
-        *slot(&mut result, i) = v as u32;
+    for (out, &v) in result.iter_mut().zip(values) {
+        *out = u32::try_from(v).unwrap_or_else(|_| panic!("GPU movement param {v} exceeds u32"));
     }
     result
+}
+
+/// Pack `pad`'s widths as `movement.wgsl` reads them: dims 0 and 1 as
+/// `[left0, right0, left1, right1]`, and dims 2 and 3 each as `left << 16 | right` (the
+/// second and third values).
+///
+/// # Panics
+/// Rank > 4, or a dim-2 or dim-3 width over 16 bits. `gpu_pad_supported` routes both to the
+/// CPU, so either is a dispatch bug; unchecked, the shift would silently corrupt the width.
+fn pack_pad_widths(padding: &[(usize, usize)]) -> ([u32; 4], u32, u32) {
+    assert!(
+        padding.len() <= 4,
+        "GPU pad takes rank <= 4, got {} dims",
+        padding.len()
+    );
+    let half =
+        |w: usize| {
+            u32::from(u16::try_from(w).unwrap_or_else(|_| {
+                panic!("GPU pad width {w} on dim 2 or 3 does not fit in 16 bits")
+            }))
+        };
+    let packed = |dim: usize| {
+        padding
+            .get(dim)
+            .map_or(0, |&(left, right)| half(left) << 16 | half(right))
+    };
+    let mut low = [0usize; 4];
+    for (i, &(left, right)) in padding.iter().take(2).enumerate() {
+        *slot(&mut low, 2 * i) = left;
+        *slot(&mut low, 2 * i + 1) = right;
+    }
+    (pad_to_u32_4(&low), packed(2), packed(3))
 }
 
 /// Run a movement operation with parameters
@@ -2806,6 +2801,44 @@ fn movement_op(
 }
 
 use wgpu::util::DeviceExt;
+
+#[cfg(test)]
+mod packing_tests {
+    use super::{pack_pad_widths, pad_to_u32_4};
+
+    #[test]
+    fn pad_widths_pack_as_the_shader_reads_them() {
+        let (low, dim2, dim3) = pack_pad_widths(&[(1, 2), (3, 4), (5, 6), (65535, 7)]);
+        assert_eq!(low, [1, 2, 3, 4]);
+        assert_eq!(dim2, 5 << 16 | 6);
+        assert_eq!(dim3, 65535 << 16 | 7);
+        assert_eq!(pack_pad_widths(&[(1, 2)]), ([1, 2, 0, 0], 0, 0));
+    }
+
+    #[test]
+    #[should_panic(expected = "GPU pad width 65536 on dim 2 or 3 does not fit in 16 bits")]
+    fn pad_width_over_16_bits_panics() {
+        let _ = pack_pad_widths(&[(0, 0), (0, 0), (0, 65536)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "GPU pad takes rank <= 4")]
+    fn pad_rank_5_panics() {
+        let _ = pack_pad_widths(&[(0, 0); 5]);
+    }
+
+    #[test]
+    #[should_panic(expected = "GPU movement kernels take rank <= 4")]
+    fn movement_rank_5_panics() {
+        let _ = pad_to_u32_4(&[1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    #[should_panic(expected = "exceeds u32")]
+    fn movement_param_over_u32_panics() {
+        let _ = pad_to_u32_4(&[usize::try_from(u64::from(u32::MAX) + 1).expect("64-bit usize")]);
+    }
+}
 
 #[cfg(test)]
 mod matmul_tests {
