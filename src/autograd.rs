@@ -51,6 +51,31 @@ pub(crate) enum GradFn {
     ConvTranspose2d(ConvTranspose2dGradFn),
     MaxPool2d(MaxPool2dGradFn),
     Embedding(EmbeddingGradFn),
+    ToDevice(ToDeviceGradFn),
+}
+
+/// Backward of `to_device`: the gradient goes back to the device the tensor came from. A
+/// deliberate transfer, so the device policy doesn't apply.
+#[derive(Clone)]
+pub(crate) struct ToDeviceGradFn {
+    /// The input's device.
+    pub(crate) source: Device,
+}
+
+impl ToDeviceGradFn {
+    /// Moves `out_grad` to the source device.
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        _parents: &[Tensor],
+    ) -> Vec<Option<Tensor>> {
+        vec![Some(RawTensor::new_with_storage(
+            out_grad.data.to_device(&self.source),
+            out_grad.shape.clone(),
+            self.source.clone(),
+            false,
+        ))]
+    }
 }
 
 impl GradFn {
@@ -76,6 +101,7 @@ impl GradFn {
             Self::ConvTranspose2d(_) => "ConvTranspose2d".to_string(),
             Self::MaxPool2d(_) => "MaxPool2d".to_string(),
             Self::Embedding(_) => "Embedding".to_string(),
+            Self::ToDevice(_) => "ToDevice".to_string(),
         }
     }
 
@@ -100,6 +126,7 @@ impl GradFn {
             Self::ConvTranspose2d(g) => g.backward(out_grad, parents),
             Self::MaxPool2d(g) => g.backward(out_grad, parents),
             Self::Embedding(g) => g.backward(out_grad, parents),
+            Self::ToDevice(g) => g.backward(out_grad, parents),
         }
     }
 
@@ -126,7 +153,8 @@ impl GradFn {
             | Self::Igemm(_)
             | Self::ConvTranspose2d(_)
             | Self::MaxPool2d(_)
-            | Self::Embedding(_) => false,
+            | Self::Embedding(_)
+            | Self::ToDevice(_) => false,
         }
     }
 }
@@ -148,6 +176,8 @@ impl GradFn {
 /// It is also the forward device check (`crate::device_policy`): every input must be
 /// on one device, and an output computed on the CPU for GPU inputs (an op with no GPU
 /// kernel for this case) goes through the policy, which panics or moves it to the GPU.
+/// `GradFn::ToDevice` is exempt from the input-to-output check: a transfer is the one op
+/// whose output is meant to be on another device.
 ///
 /// # Panics
 /// If the inputs are on different devices, under `DevicePolicy::Strict` when GPU inputs
@@ -163,7 +193,9 @@ pub(crate) fn edge(
         let first = first.borrow();
         let in_device = &first.device;
         check_one_device(inputs.as_ref(), in_device, &grad);
+        let transfer = matches!(grad, GradFn::ToDevice(_));
         match (in_device.is_gpu(), device.is_gpu()) {
+            _ if transfer => {}
             (true, false) => {
                 on_gap(&grad.op_name(), Pass::Forward);
                 data = data.to_device(in_device);
@@ -333,19 +365,8 @@ impl RawTensor {
             };
             // If this node has a gradient function and gradients, backpropagate
             if let Some(grad_fn) = grad_fn
-                && let Some(mut grad_out_data) = grad_data
+                && let Some(grad_out_data) = grad_data
             {
-                // `edge()` puts an op's output on its inputs' device, so a node on another
-                // device than its parents is a `to_device` copy of that output. Its
-                // gradient goes back to the parents' device: a deliberate transfer, not a
-                // gap for the device policy.
-                let mut device = device;
-                if let Some(parent_device) = parents.first().map(Tensor::device)
-                    && parent_device != device
-                {
-                    grad_out_data = grad_out_data.to_device(&parent_device);
-                    device = parent_device;
-                }
                 let grad_out = Self {
                     data: grad_out_data,
                     shape,

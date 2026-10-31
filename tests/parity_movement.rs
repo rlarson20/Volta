@@ -11,7 +11,7 @@ mod common;
 
 use common::{
     TOL_BWD_GPU, TOL_FWD_GPU, assert_close, assert_unary_parity, assert_unary_parity_backward,
-    expect_gaps, gpu_device, make_input, skip_if_no_gpu,
+    expect_gaps, gpu_leaf, make_input, skip_if_no_gpu,
 };
 use volta::Axis;
 use volta::Device;
@@ -57,7 +57,7 @@ fn reshape_parity() {
         return;
     }
     let x_cpu = make_input(&[2, 3, 4], false, (-2.0, 2.0));
-    let x_gpu = x_cpu.to_device(gpu_device());
+    let x_gpu = gpu_leaf(&x_cpu);
 
     let y_cpu = x_cpu.reshape(&[6, 4]);
     let y_gpu = x_gpu.reshape(&[6, 4]).to_device(Device::CPU);
@@ -71,7 +71,7 @@ fn reshape_backward_parity() {
         return;
     }
     let x_cpu = make_input(&[2, 3, 4], true, (-2.0, 2.0));
-    let x_gpu = x_cpu.to_device(gpu_device());
+    let x_gpu = gpu_leaf(&x_cpu);
 
     let y_cpu = x_cpu.reshape(&[6, 4]);
     y_cpu.sum().into_loss().expect("scalar loss").backward();
@@ -101,7 +101,7 @@ fn permute_parity() {
         return;
     }
     let x_cpu = make_input(&[2, 3, 4], false, (-2.0, 2.0));
-    let x_gpu = x_cpu.to_device(gpu_device());
+    let x_gpu = gpu_leaf(&x_cpu);
 
     // [2,3,4] permute [1,2,0] -> [3,4,2]
     let y_cpu = x_cpu.permute(&[Axis(1), Axis(2), Axis(0)]);
@@ -118,7 +118,7 @@ fn permute_backward_parity() {
         return;
     }
     let x_cpu = make_input(&[2, 3, 4], true, (-2.0, 2.0));
-    let x_gpu = x_cpu.to_device(gpu_device());
+    let x_gpu = gpu_leaf(&x_cpu);
 
     let y_cpu = x_cpu.permute(&[Axis(1), Axis(2), Axis(0)]);
     y_cpu.sum().into_loss().expect("scalar loss").backward();
@@ -148,7 +148,7 @@ fn flatten_parity() {
         return;
     }
     let x_cpu = make_input(&[2, 3, 4], false, (-2.0, 2.0));
-    let x_gpu = x_cpu.to_device(gpu_device());
+    let x_gpu = gpu_leaf(&x_cpu);
 
     // Flatten dims 1.. : [2, 3, 4] -> [2, 12]
     let y_cpu = x_cpu.reshape(&[2, 12]);
@@ -163,7 +163,7 @@ fn flatten_backward_parity() {
         return;
     }
     let x_cpu = make_input(&[2, 3, 4], true, (-2.0, 2.0));
-    let x_gpu = x_cpu.to_device(gpu_device());
+    let x_gpu = gpu_leaf(&x_cpu);
 
     let y_cpu = x_cpu.reshape(&[2, 12]);
     y_cpu.sum().into_loss().expect("scalar loss").backward();

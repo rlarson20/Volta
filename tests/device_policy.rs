@@ -10,7 +10,7 @@ mod common;
 
 use common::{
     TOL_BWD_GPU, TOL_FWD_GPU, TOL_MATMUL_BWD, TOL_MATMUL_FWD, assert_close, expect_gaps,
-    gpu_device, skip_if_no_gpu,
+    gpu_device, gpu_leaf, skip_if_no_gpu,
 };
 use volta::Axis;
 use volta::nn::{MultiHeadAttention, PositionalEncoding, PositionalEncodingType};
@@ -22,17 +22,84 @@ use volta::{
     with_device_policy,
 };
 
-/// `to_device` moves the gradient with the data.
+/// `to_device` is differentiable (PyTorch's `.to()`): a leaf moved to the GPU and used in
+/// a GPU loss gets its gradient back on its own device, in both directions, under
+/// `Strict` and with no device-policy gaps.
 #[test]
-fn to_device_moves_grad() {
+fn to_device_routes_grad_to_source() {
     if skip_if_no_gpu() {
         return;
     }
-    let t = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], true);
-    t.set_grad(Storage::cpu(vec![1.0; 4]));
-    let g = t.to_device(gpu_device());
-    assert!(g.grad_storage().expect("grad was set").is_gpu());
-    assert_eq!(g.grad().expect("grad was set"), vec![1.0; 4]);
+    let _strict = with_device_policy(DevicePolicy::Strict);
+    let _ = take_fallback_events();
+    manual_seed(0x70);
+    let w = RawTensor::randn(&[2, 3]);
+    for (to, from) in [(gpu_device(), Device::CPU), (Device::CPU, gpu_device())] {
+        let x = RawTensor::randn(&[2, 3]).to_device(from.clone());
+        x.set_requires_grad(true);
+        let y = x.to_device(to.clone());
+        assert_eq!(y.device(), to);
+        y.elem_mul(&w.to_device(to))
+            .sum()
+            .into_loss()
+            .unwrap()
+            .backward();
+        let g = x.grad_storage().expect("the source leaf gets the gradient");
+        assert_eq!(g.is_gpu(), from.is_gpu(), "gradient left the source device");
+        assert_close("dL/dx", &w.data(), &g.to_vec(), 1e-6);
+    }
+    assert!(take_fallback_events().is_empty(), "a transfer is not a gap");
+}
+
+/// The copy is a new node, not a leaf and not carrying the source's gradient; under
+/// `no_grad` it doesn't require grad at all; and a same-device move returns the tensor.
+#[test]
+fn to_device_copy_is_a_graph_node() {
+    if skip_if_no_gpu() {
+        return;
+    }
+    let x = RawTensor::new(vec![1.0, 2.0], &[2], true);
+    x.set_grad(Storage::cpu(vec![5.0, 5.0]));
+    let y = x.to_device(gpu_device());
+    assert!(y.requires_grad());
+    assert!(
+        y.grad().is_none(),
+        "the copy doesn't inherit the source's gradient"
+    );
+    let msg = panic_message(|| y.set_requires_grad(true));
+    assert!(msg.contains("non-leaf"), "{msg}");
+    {
+        let _ng = volta::autograd::no_grad();
+        assert!(!x.to_device(gpu_device()).requires_grad());
+    }
+    assert_eq!(x.to_device(Device::CPU).data(), x.data());
+    x.to_device(Device::CPU)
+        .sum()
+        .into_loss()
+        .unwrap()
+        .backward();
+    assert_eq!(
+        x.grad().unwrap(),
+        vec![6.0, 6.0],
+        "same-device move is the tensor itself"
+    );
+}
+
+/// Layers built on the GPU hold leaf parameters there: `new_on_device` moves, then marks
+/// trainable. In the other order each parameter would be a `to_device` copy of a hidden CPU
+/// leaf, and every backward would also send its gradient there.
+#[test]
+fn new_on_device_parameters_are_gpu_leaves() {
+    if skip_if_no_gpu() {
+        return;
+    }
+    let linear = Linear::new_on_device(3, 2, true, gpu_device());
+    let conv = volta::Conv2d::new_on_device(1, 2, 3, 1, 0, true, gpu_device());
+    for p in linear.parameters().iter().chain(&conv.parameters()) {
+        assert!(p.device().is_gpu());
+        // Panics on a non-leaf.
+        p.set_requires_grad(true);
+    }
 }
 
 /// A GPU name that isn't the adapter's is rejected, like `cuda:7` on a one-GPU machine.
@@ -241,7 +308,7 @@ fn gpu_positional_encoding_stays_on_device() {
         let (x_cpu, x) = leaf_pair(&[2, 4, 8]);
         manual_seed(0xB3);
         let w_cpu = RawTensor::randn(&[2, 4, 8]);
-        let w = w_cpu.to_device(gpu_device());
+        let w = gpu_leaf(&w_cpu);
         let cpu_pe = PositionalEncoding::new(8, 16, kind);
         let mut gpu_pe = PositionalEncoding::new(8, 16, kind);
         gpu_pe.load_state_dict(&cpu_pe.state_dict());
@@ -294,7 +361,7 @@ fn gpu_lstm_stays_on_device() {
     manual_seed(0x157);
     let cpu_cell = LSTMCell::new(4, 3, true);
     let w_cpu = RawTensor::randn(&[2, 3]);
-    let w = w_cpu.to_device(gpu_device());
+    let w = gpu_leaf(&w_cpu);
     let mut gpu_cell = LSTMCell::new(4, 3, true);
     gpu_cell.load_state_dict(&cpu_cell.state_dict());
     let gpu_cell = on_gpu(gpu_cell);
@@ -331,7 +398,7 @@ fn gpu_lstm_stays_on_device() {
 fn leaf_pair(shape: &[usize]) -> (Tensor, Tensor) {
     let (cpu, _) = pair(shape);
     cpu.set_requires_grad(true);
-    let gpu = RawTensor::new(cpu.data(), shape, true).to_device(gpu_device());
+    let gpu = gpu_leaf(&cpu);
     (cpu, gpu)
 }
 
@@ -550,7 +617,7 @@ fn pad_over_16_bits_is_a_gap() {
 
     manual_seed(0x16);
     let w_cpu = RawTensor::randn(&[1, 1, 70_003, 2]);
-    let w = w_cpu.to_device(gpu_device());
+    let w = gpu_leaf(&w_cpu);
     let out_cpu = x_cpu.pad_with(&padding, PadValue::ZERO);
     out_cpu
         .elem_mul(&w_cpu)

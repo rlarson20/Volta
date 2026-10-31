@@ -1,5 +1,5 @@
 use crate::Storage;
-use crate::autograd::{GradFn, edge};
+use crate::autograd::{GradFn, ToDeviceGradFn, edge};
 use crate::device::Device;
 use crate::device_policy::{Pass, on_gap};
 use crate::index::{fetch, slot, span};
@@ -952,12 +952,16 @@ impl RawTensor {
         Self::try_sum_dim(self_t, dim, keepdim).expect("Dimension out of bounds")
     }
 
-    /// Move tensor data to a different device.
+    /// Copy the tensor to `device`, as a differentiable op (PyTorch's `.to(device)`).
     ///
-    /// - `data` is moved via `Storage::to_device`.
-    /// - The gradient, if any, moves with the data.
-    /// - Autograd metadata (`requires_grad`, `grad_fn`, `parents`) is preserved,
-    ///   so the returned tensor participates in the same computation graph.
+    /// The result is a new node whose parent is `self_t`, so backward moves its gradient
+    /// to `self_t`'s device and into `self_t`'s gradient. It carries no gradient of its
+    /// own, and on a leaf it is not a leaf. To make a leaf on another device, move a
+    /// tensor that doesn't require grad and then set it:
+    /// `RawTensor::new(data, shape, false).to_device(d)` followed by `set_requires_grad(true)`.
+    /// To move a layer's parameters in place, use `Module::to_device`.
+    ///
+    /// Returns `self_t` itself when it is already on `device`.
     ///
     /// # Panics
     /// If `device` is a GPU and no GPU is available, or it names a GPU other than this
@@ -981,23 +985,17 @@ impl RawTensor {
             panic!("to_device({device}): no such GPU; the available GPU is {real}");
         }
 
-        let t = self_t.borrow();
-
-        let new_data = t.data.to_device(&device);
-        let new_grad = t.grad.as_ref().map(|g| g.to_device(&device));
-
-        let new_tensor = Self {
-            data: new_data,
-            shape: t.shape.clone(),
-            grad: new_grad,
-            requires_grad: t.requires_grad,
-            grad_fn: t.grad_fn.clone(),
-            parents: t.parents.clone(),
-            device,
+        let (data, shape, source) = {
+            let t = self_t.borrow();
+            (t.data.to_device(&device), t.shape.clone(), t.device.clone())
         };
-        Tensor {
-            inner: Rc::new(RefCell::new(new_tensor)),
-        }
+        edge(
+            [self_t.clone()],
+            data,
+            shape,
+            device,
+            GradFn::ToDevice(ToDeviceGradFn { source }),
+        )
     }
 
     /// Max along a specific axis
@@ -1454,7 +1452,8 @@ impl Tensor {
         RawTensor::stride_op(self, strides)
     }
 
-    /// Moves the tensor and its gradient to `device`, keeping its autograd metadata.
+    /// Copies the tensor to `device` as a differentiable op: backward moves the gradient
+    /// back to this tensor. See [`RawTensor::to_device`].
     ///
     /// # Panics
     /// If `device` is a GPU and no GPU is available, or it names a GPU other than this

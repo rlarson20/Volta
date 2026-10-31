@@ -20,8 +20,10 @@ fn test_tensor_gpu_unary_add_binary_smoke() {
     }
 
     let dev = Device::gpu().expect("GPU availability checked above");
-    let x = RawTensor::new(vec![1.0, -2.0], &[2], true).to_device(dev.clone());
-    let y = RawTensor::new(vec![3.0, 4.0], &[2], true).to_device(dev.clone());
+    let x = RawTensor::new(vec![1.0, -2.0], &[2], false).to_device(dev.clone());
+    x.set_requires_grad(true);
+    let y = RawTensor::new(vec![3.0, 4.0], &[2], false).to_device(dev.clone());
+    y.set_requires_grad(true);
 
     let z = x.add(&y); // may take GPU path
     let w = z.relu(); // may take GPU path
@@ -45,7 +47,8 @@ fn test_tensor_gpu_sum_output_device_and_grad_on_gpu() {
     }
 
     let dev = Device::gpu().expect("GPU availability checked above");
-    let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], true).to_device(dev.clone());
+    let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], false).to_device(dev.clone());
+    x.set_requires_grad(true);
 
     let loss = x.sum();
     assert!(
@@ -117,8 +120,10 @@ fn test_tensor_gpu_matmul_backward_consistent_with_cpu() {
     let w_cpu = RawTensor::new(vec![0.5, -1.0, 1.0, 2.0], &[2, 2], true);
 
     // GPU copies
-    let x_gpu = x_cpu.to_device(dev.clone());
-    let w_gpu = w_cpu.to_device(dev.clone());
+    let x_gpu = x_cpu.detach().to_device(dev.clone());
+    x_gpu.set_requires_grad(x_cpu.requires_grad());
+    let w_gpu = w_cpu.detach().to_device(dev.clone());
+    w_gpu.set_requires_grad(w_cpu.requires_grad());
 
     // GPU forward/backward
     let y_gpu = x_gpu.matmul(&w_gpu);
@@ -171,9 +176,12 @@ fn test_tensor_gpu_mulacc_matches_cpu_and_grad() {
         let y_cpu = RawTensor::new(vec![0.5, -1.0, 4.0], &[3], true);
         let z_cpu = RawTensor::new(vec![0.1, 0.2, 0.3], &[3], true);
 
-        let x_gpu = x_cpu.to_device(dev.clone());
-        let y_gpu = y_cpu.to_device(dev.clone());
-        let z_gpu = z_cpu.to_device(dev.clone());
+        let x_gpu = x_cpu.detach().to_device(dev.clone());
+        x_gpu.set_requires_grad(x_cpu.requires_grad());
+        let y_gpu = y_cpu.detach().to_device(dev.clone());
+        y_gpu.set_requires_grad(y_cpu.requires_grad());
+        let z_gpu = z_cpu.detach().to_device(dev.clone());
+        z_gpu.set_requires_grad(z_cpu.requires_grad());
 
         // Forward: out = x * y + z
         let out_cpu = x_cpu.mulacc(&y_cpu, &z_cpu);
@@ -336,7 +344,8 @@ fn test_tensor_gpu_sum_dim_device_and_grad_on_gpu() {
         }
 
         let dev = Device::gpu().expect("GPU availability checked above");
-        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], true).to_device(dev.clone());
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false).to_device(dev.clone());
+        x.set_requires_grad(true);
 
         // Sum over last dim: [[1,2],[3,4]] -> [3,7]
         let y = x.sum_dim(Axis(1), false);
@@ -372,8 +381,9 @@ fn test_tensor_gpu_max_dim_device_and_grad_on_gpu() {
 
         let dev = Device::gpu().expect("GPU availability checked above");
         // Shape [2,3]
-        let x = RawTensor::new(vec![1.0, 5.0, 3.0, 2.0, 8.0, 4.0], &[2, 3], true)
+        let x = RawTensor::new(vec![1.0, 5.0, 3.0, 2.0, 8.0, 4.0], &[2, 3], false)
             .to_device(dev.clone());
+        x.set_requires_grad(true);
 
         let y = x.max_dim(Axis(1), false);
         assert!(
@@ -406,8 +416,10 @@ fn test_binary_add_backward_simple() {
     }
 
     let dev = Device::gpu().expect("GPU availability checked above");
-    let x = RawTensor::new(vec![1.0, 2.0], &[2], true).to_device(dev.clone());
-    let y = RawTensor::new(vec![3.0, 4.0], &[2], true).to_device(dev.clone());
+    let x = RawTensor::new(vec![1.0, 2.0], &[2], false).to_device(dev.clone());
+    x.set_requires_grad(true);
+    let y = RawTensor::new(vec![3.0, 4.0], &[2], false).to_device(dev.clone());
+    y.set_requires_grad(true);
 
     let z = x.add(&y);
     let loss = z.sum();

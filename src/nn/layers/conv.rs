@@ -795,14 +795,16 @@ impl Conv2d {
         use_bias: bool,
         device: Device,
     ) -> Self {
-        let w = RawTensor::he_initialization(&[out_ch, in_ch, kernel, kernel]);
-        w.borrow_mut().requires_grad = true;
-        let w = w.to_device(device.clone());
+        // Move, then mark trainable: `to_device` of a tensor that requires grad is a
+        // differentiable copy, not a leaf, so the parameters must be leaves on `device`.
+        let w = RawTensor::he_initialization(&[out_ch, in_ch, kernel, kernel])
+            .to_device(device.clone());
+        w.set_requires_grad(true);
 
         let b = if use_bias {
-            let b = RawTensor::zeros(&[out_ch]);
-            b.borrow_mut().requires_grad = true;
-            Some(b.to_device(device))
+            let b = RawTensor::zeros(&[out_ch]).to_device(device);
+            b.set_requires_grad(true);
+            Some(b)
         } else {
             None
         };
@@ -3381,7 +3383,8 @@ mod conv2d_gpu_tests {
         loss_cpu.into_loss().expect("scalar loss").backward();
 
         // Create GPU conv with im2col algorithm
-        let x_gpu = RawTensor::new(x_data, &[1, 4, 8, 8], true).to_device(device.clone());
+        let x_gpu = RawTensor::new(x_data, &[1, 4, 8, 8], false).to_device(device.clone());
+        x_gpu.set_requires_grad(true);
         let conv_gpu = Conv2d::new_on_device(4, 8, 3, 1, 0, true, device.clone());
         conv_gpu.weight.borrow_mut().data = crate::storage::Storage::gpu(vec![1.0; weight_size]);
         conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
@@ -3475,7 +3478,8 @@ mod conv2d_gpu_tests {
         loss_cpu.into_loss().expect("scalar loss").backward();
 
         // GPU version
-        let x_gpu = RawTensor::new(x_data, &[1, 3, 16, 16], true).to_device(device.clone());
+        let x_gpu = RawTensor::new(x_data, &[1, 3, 16, 16], false).to_device(device.clone());
+        x_gpu.set_requires_grad(true);
         let conv_gpu = Conv2d::new_on_device(3, 8, 3, 2, 1, true, device.clone());
         conv_gpu.weight.borrow_mut().data = crate::storage::Storage::gpu(vec![1.0; weight_size]);
         conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
@@ -3525,7 +3529,7 @@ mod conv2d_gpu_tests {
 
         let x_cpu = RawTensor::randn(&[2, 3, 9, 7]);
         x_cpu.set_requires_grad(true);
-        let x_gpu = x_cpu.to_device(device.clone());
+        let x_gpu = x_cpu.detach().to_device(device.clone());
         x_gpu.set_requires_grad(true);
 
         let y_cpu = conv_cpu.forward(&x_cpu);

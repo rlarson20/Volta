@@ -90,14 +90,15 @@ impl Linear {
         use_bias: bool,
         device: Device,
     ) -> Self {
-        let w = RawTensor::xavier_uniform(&[in_features, out_features]);
-        w.borrow_mut().requires_grad = true;
-        let w = w.to_device(device.clone());
+        // Move, then mark trainable: `to_device` of a tensor that requires grad is a
+        // differentiable copy, not a leaf, so the parameters must be leaves on `device`.
+        let w = RawTensor::xavier_uniform(&[in_features, out_features]).to_device(device.clone());
+        w.set_requires_grad(true);
 
         let b = if use_bias {
-            let b = RawTensor::zeros(&[out_features]);
-            b.borrow_mut().requires_grad = true;
-            Some(b.to_device(device))
+            let b = RawTensor::zeros(&[out_features]).to_device(device);
+            b.set_requires_grad(true);
+            Some(b)
         } else {
             None
         };

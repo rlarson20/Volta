@@ -75,8 +75,10 @@ mod gpu_tests {
         let device = Device::gpu().expect("GPU availability checked above");
 
         // a and b live on GPU
-        let a = RawTensor::new(vec![1.0], &[1], true).to_device(device.clone());
-        let b = RawTensor::new(vec![2.0], &[1], true).to_device(device.clone());
+        let a = RawTensor::new(vec![1.0], &[1], false).to_device(device.clone());
+        a.set_requires_grad(true);
+        let b = RawTensor::new(vec![2.0], &[1], false).to_device(device.clone());
+        b.set_requires_grad(true);
 
         // Build a small graph where 'a' is used twice:
         // c1 = a + b

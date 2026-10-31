@@ -464,7 +464,7 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 
 **Device equality compares names.** `GPU("a") != GPU("b")`, so the check is already correct for more than one GPU. To make that safe with one context, `to_device(GPU(name))` panics unless `name` is the adapter's (`Device::gpu()`), as PyTorch rejects `cuda:7` on a one-GPU machine. Test helpers stopped inventing names (`"TestDevice"`, `"ParityTest"`).
 
-**Device labels never lie:** `to_device`, `Storage::gpu`, and `Storage::new_zeros` panic without a GPU instead of returning CPU storage under a GPU label, and `new_with_storage` asserts the two agree. `to_device` moves the gradient too.
+**Device labels never lie:** `to_device`, `Storage::gpu`, and `Storage::new_zeros` panic without a GPU instead of returning CPU storage under a GPU label, and `new_with_storage` asserts the two agree. (`to_device` moved the gradient too until it became differentiable; see "`to_device` is a differentiable op".)
 
 **Departures from the §2.1 sketch:**
 - No `CpuOnly`: keeping tensors on the CPU already gives it.
@@ -476,6 +476,20 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 **Also fixed on the way:** the GPU movement kernels pack shapes into `[u32; 4]`, so a rank-5 permute returned zeros (H5's truncation). Movement ops above rank 4, or with a pad width over 16 bits on dims 2–3, are now gaps. GPU binary backward with differing shapes is a gap too: its kernels are broken (`notes/TODO.md`), and the forward check made them reachable.
 
 **Tests:** `tests/device_policy.rs` (forward and backward gaps under both policies, mixed devices, unknown GPU names, layers and losses keeping constants on the GPU, `no_grad`, event order, rank-5 movement), `device_policy::tests`, and `expect_gaps` in the parity and smoke tests, which asserts the exact set of ops each GPU test runs on the CPU. All ran on a real adapter (2026-10-30).
+
+### `to_device` is a differentiable op (PyTorch's `.to()`)
+
+**Decision:** `to_device` builds its output through `edge()` with `GradFn::ToDevice { source }`, whose backward moves the gradient to the source device. The result is a new node whose parent is the input: it has no gradient of its own, and on a leaf it is not a leaf, so a CPU leaf moved to the GPU and used in a GPU loss gets its gradient back, on the CPU. A same-device move returns the tensor itself.
+
+**Before:** `to_device` copied the tensor with its `grad`, `requires_grad`, `grad_fn`, and `parents`. On a leaf that made a new, independent leaf, so the original never got a gradient. On a non-leaf it made a second node sharing the first's parents, and the backward loop special-cased "a node on another device than its parents" to move its gradient back. That special case is gone: the transfer is an ordinary `GradFn`.
+
+**`edge()` exemption:** a transfer is the one op whose output is meant to be on another device than its input, so `edge()` skips its input-to-output device check for `GradFn::ToDevice` (the check would call GPU-to-CPU a gap and panic on CPU-to-GPU). The mixed-input check still runs, and nothing else may use the exemption.
+
+**Making a leaf on another device:** move a tensor that doesn't require grad, then mark it: `RawTensor::new(data, shape, false).to_device(d)` and `set_requires_grad(true)` (PyTorch's `x.to(d).requires_grad_()`). `set_requires_grad(true)` panics on a non-leaf, so a half-migrated call site fails loudly. `Module::to_device` still moves parameters in place, so a model moved to the GPU keeps leaf parameters. `Linear::new_on_device` and `Conv2d::new_on_device` used the old idiom (mark, then move), which would have made every GPU parameter a copy of a hidden CPU leaf; they move first now.
+
+**Migration:** about 60 test sites built GPU leaves as `RawTensor::new(.., true).to_device(gpu)` or copied a `requires_grad` CPU input to the GPU for a parity check. The parity copies now go through `tests/common::gpu_leaf` (`t.detach().to_device(gpu)` plus `set_requires_grad`); left alone, the GPU loss would have flowed back into the CPU input and doubled its gradient, which is how they failed. One test overwrote each parameter in place with its own `to_device` copy, which made each parameter its own parent; it uses `Module::to_device` now.
+
+**Tests:** `tests/device_policy.rs`: `to_device_routes_grad_to_source` (both directions, under `Strict`, no gaps), `to_device_copy_is_a_graph_node` (no inherited gradient, not a leaf, untracked under `no_grad`, same-device identity), `backward_through_to_device_is_not_a_gap`, and `new_on_device_parameters_are_gpu_leaves` (fails if `Linear::new_on_device` marks before moving). All ran on an Apple M2.
 
 ### `PositionalEncoding` is a `Layer`, and its rows are a `shrink` (B3)
 

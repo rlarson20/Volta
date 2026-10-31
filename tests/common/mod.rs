@@ -50,6 +50,16 @@ pub fn gpu_device() -> Device {
     Device::gpu().expect("call skip_if_no_gpu() first")
 }
 
+/// An independent GPU leaf with `t`'s values and `requires_grad`: PyTorch's
+/// `t.detach().to(gpu).requires_grad_(..)`. `t.to_device(gpu)` alone is a differentiable
+/// copy, so its gradient would flow back into `t` instead of staying on the GPU tensor.
+#[must_use]
+pub fn gpu_leaf(t: &Tensor) -> Tensor {
+    let leaf = t.detach().to_device(gpu_device());
+    leaf.set_requires_grad(t.requires_grad());
+    leaf
+}
+
 /// Build a deterministic CPU tensor with values linearly spaced over `range`.
 /// Avoids zero-magnitude inputs that would blow up `log`/`recip`/`sqrt` etc.
 #[must_use]
@@ -91,7 +101,7 @@ where
         return;
     }
     let x_cpu = make_input(shape, false, range);
-    let x_gpu = x_cpu.to_device(gpu_device());
+    let x_gpu = gpu_leaf(&x_cpu);
 
     let y_cpu = op(&x_cpu);
     let y_gpu = op(&x_gpu).to_device(Device::CPU);
@@ -114,7 +124,7 @@ pub fn assert_unary_parity_backward<F>(
         return;
     }
     let x_cpu = make_input(shape, true, range);
-    let x_gpu = x_cpu.to_device(gpu_device());
+    let x_gpu = gpu_leaf(&x_cpu);
 
     let y_cpu = op(&x_cpu);
     y_cpu.sum().into_loss().expect("scalar loss").backward();
@@ -144,8 +154,8 @@ where
     let a_cpu = make_input(shape, false, range);
     // Slightly different value space for `b` to avoid degenerate cases.
     let b_cpu = make_input(shape, false, (range.0 + 0.1, range.1 - 0.1));
-    let a_gpu = a_cpu.to_device(gpu_device());
-    let b_gpu = b_cpu.to_device(gpu_device());
+    let a_gpu = gpu_leaf(&a_cpu);
+    let b_gpu = gpu_leaf(&b_cpu);
 
     let c_cpu = op(&a_cpu, &b_cpu);
     let c_gpu = op(&a_gpu, &b_gpu).to_device(Device::CPU);
@@ -169,8 +179,8 @@ pub fn assert_binary_parity_backward<F>(
     }
     let a_cpu = make_input(shape, true, range);
     let b_cpu = make_input(shape, true, (range.0 + 0.1, range.1 - 0.1));
-    let a_gpu = a_cpu.to_device(gpu_device());
-    let b_gpu = b_cpu.to_device(gpu_device());
+    let a_gpu = gpu_leaf(&a_cpu);
+    let b_gpu = gpu_leaf(&b_cpu);
 
     let c_cpu = op(&a_cpu, &b_cpu);
     c_cpu.sum().into_loss().expect("scalar loss").backward();
@@ -202,7 +212,7 @@ where
         return;
     }
     let x_cpu = make_input(shape, false, (-2.0, 2.0));
-    let x_gpu = x_cpu.to_device(gpu_device());
+    let x_gpu = gpu_leaf(&x_cpu);
     let y_cpu = op(&x_cpu);
     let y_gpu = op(&x_gpu).to_device(Device::CPU);
     assert_close(op_name, &y_cpu.data(), &y_gpu.data(), tol);
@@ -216,8 +226,8 @@ pub fn assert_matmul_parity(a_shape: &[usize], b_shape: &[usize], tol_fwd: f32, 
     }
     let a_cpu = make_input(a_shape, true, (-1.0, 1.0));
     let b_cpu = make_input(b_shape, true, (-1.0, 1.0));
-    let a_gpu = a_cpu.to_device(gpu_device());
-    let b_gpu = b_cpu.to_device(gpu_device());
+    let a_gpu = gpu_leaf(&a_cpu);
+    let b_gpu = gpu_leaf(&b_cpu);
 
     let c_cpu = a_cpu.matmul(&b_cpu);
     let c_gpu = a_gpu.matmul(&b_gpu);
@@ -234,7 +244,7 @@ pub fn assert_matmul_parity(a_shape: &[usize], b_shape: &[usize], tol_fwd: f32, 
     // from dA = dC @ B (or a swapped k/n) on shapes where the two agree.
     volta::manual_seed(0x0A7B);
     let w_cpu = volta::randn(c_cpu.shape().truncate_rank());
-    let w_gpu = w_cpu.to_device(gpu_device());
+    let w_gpu = gpu_leaf(&w_cpu);
     c_cpu
         .elem_mul(&w_cpu)
         .sum()

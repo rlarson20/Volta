@@ -12,7 +12,8 @@ fn test_new_unary_ops_gpu_autograd() {
     let dev = Device::gpu().expect("GPU availability checked above");
 
     // Test each new unary operation with gradients
-    let x = RawTensor::new(vec![2.0, 4.0], &[2], true).to_device(dev.clone());
+    let x = RawTensor::new(vec![2.0, 4.0], &[2], false).to_device(dev.clone());
+    x.set_requires_grad(true);
 
     // Recip
     let y_recip = x.recip();
@@ -54,7 +55,8 @@ fn test_new_unary_ops_gpu_autograd() {
     x.zero_grad();
 
     // Log2 (using positive inputs)
-    let x_log2 = RawTensor::new(vec![1.0, 2.0], &[2], true).to_device(dev.clone());
+    let x_log2 = RawTensor::new(vec![1.0, 2.0], &[2], false).to_device(dev.clone());
+    x_log2.set_requires_grad(true);
     let y_log2 = x_log2.log2();
     let loss_log2 = y_log2.sum();
     loss_log2.into_loss().expect("scalar loss").backward();
