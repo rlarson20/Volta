@@ -158,12 +158,15 @@ pub(crate) fn edge(
     mut device: Device,
     grad: GradFn,
 ) -> Tensor {
-    if let Some(in_device) = input_device(inputs.as_ref(), &grad) {
+    if let Some(first) = inputs.as_ref().first() {
+        let first = first.borrow();
+        let in_device = &first.device;
+        check_one_device(inputs.as_ref(), in_device, &grad);
         match (in_device.is_gpu(), device.is_gpu()) {
             (true, false) => {
                 on_gap(&grad.op_name(), Pass::Forward);
-                data = data.to_device(&in_device);
-                device = in_device;
+                data = data.to_device(in_device);
+                device = in_device.clone();
             }
             (false, true) => panic!("{}: CPU inputs produced a {device} output", grad.op_name()),
             (true, true) | (false, false) => {}
@@ -183,20 +186,18 @@ pub(crate) fn edge(
     out
 }
 
-/// The one device all `inputs` are on, or `None` for no inputs.
+/// Check that every input is on `first`, the first input's device.
 ///
-/// Compares first and names the op only on a mismatch, so the common case builds no
-/// strings.
+/// Compares borrowed devices (`==` on `Device` compares the GPU name too) and builds the
+/// op name only on a mismatch, so the common case allocates nothing.
 ///
 /// # Panics
 /// If two inputs are on different devices.
-fn input_device(inputs: &[Tensor], grad: &GradFn) -> Option<Device> {
-    let first = inputs.first()?.borrow().device.clone();
-    if inputs.iter().skip(1).any(|t| t.borrow().device != first) {
+fn check_one_device(inputs: &[Tensor], first: &Device, grad: &GradFn) {
+    if inputs.iter().skip(1).any(|t| t.borrow().device != *first) {
         let devices: Vec<Device> = inputs.iter().map(Tensor::device).collect();
         let _ = common_device(&grad.op_name(), &devices);
     }
-    Some(first)
 }
 
 // Reentrant depth counter, not a bool: a plain on/off flag (as ADDENDUM.md §1.5
