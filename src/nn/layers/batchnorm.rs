@@ -168,15 +168,17 @@ impl Layer for BatchNorm2d {
         } else {
             // Use running stats
             // Must reshape to (C, 1) to broadcast correctly against (C, N)
-            let rm_reshaped = self.running_mean.reshape(&[self.num_features, 1]);
-            let rv_reshaped = self.running_var.reshape(&[self.num_features, 1]);
+            // Running stats are host-side layer state (updated in place above), so copy
+            // them onto the input's device.
+            let rm_reshaped = x.constant_like(self.running_mean.data(), &[self.num_features, 1]);
+            let rv_reshaped = x.constant_like(self.running_var.data(), &[self.num_features, 1]);
             (rm_reshaped, rv_reshaped)
         };
 
         // Normalize: (x - mean) / sqrt(var + eps)
         // Broadcast happens automatically on the last dim (B*H*W)
         let diff = x_flat.sub(&mean);
-        let eps_tensor = RawTensor::constant(self.eps, &[1]);
+        let eps_tensor = x.constant_like(vec![self.eps], &[1]);
         let denom = var.add(&eps_tensor).sqrt();
         let x_norm = diff.div(&denom);
 
@@ -338,14 +340,16 @@ impl Layer for BatchNorm1d {
             (batch_mean, batch_var)
         } else {
             // Use running stats, reshaped to [1, C] for broadcasting
-            let rm_reshaped = self.running_mean.reshape(&[1, self.num_features]);
-            let rv_reshaped = self.running_var.reshape(&[1, self.num_features]);
+            // Running stats are host-side layer state (updated in place above), so copy
+            // them onto the input's device.
+            let rm_reshaped = x.constant_like(self.running_mean.data(), &[1, self.num_features]);
+            let rv_reshaped = x.constant_like(self.running_var.data(), &[1, self.num_features]);
             (rm_reshaped, rv_reshaped)
         };
 
         // Normalize: (x - mean) / sqrt(var + eps)
         let diff = x.sub(&mean);
-        let eps_tensor = RawTensor::constant(self.eps, &[1]);
+        let eps_tensor = x.constant_like(vec![self.eps], &[1]);
         let denom = var.add(&eps_tensor).sqrt();
         let x_norm = diff.div(&denom);
 

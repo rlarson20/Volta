@@ -113,7 +113,7 @@ impl ScaledDotProductAttention {
         let scores = query.matmul(&key_t); // [batch, seq_len, seq_len]
 
         // Scale by sqrt(d_k)
-        let scale = RawTensor::new(vec![(d_k as f32).sqrt()], &[1], false);
+        let scale = query.constant_like(vec![(d_k as f32).sqrt()], &[1]);
         let scores = scores.div(&scale);
 
         // Apply causal mask if requested

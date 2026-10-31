@@ -158,6 +158,15 @@ impl Tensor {
         self.inner.borrow().grad.clone()
     }
 
+    /// A constant (no grad) on this tensor's device, for layers that combine a fixed value
+    /// with their input. Building it on the CPU instead would trip the mixed-device check.
+    ///
+    /// # Panics
+    /// If `data.len()` != the product of `shape`.
+    pub(crate) fn constant_like(&self, data: Vec<f32>, shape: &[usize]) -> Self {
+        RawTensor::new(data, shape, false).to_device(self.device())
+    }
+
     /// Set `requires_grad` on a leaf tensor.
     ///
     /// # Panics
@@ -639,7 +648,8 @@ impl RawTensor {
     #[must_use]
     pub fn kl_divergence_gaussian(mu: &Tensor, logvar: &Tensor) -> Tensor {
         // 1 + logvar
-        let one = Self::ones(mu.borrow().shape.truncate_rank());
+        let mu_shape = mu.borrow().shape.clone();
+        let one = mu.constant_like(vec![1.0; mu_shape.numel()], mu_shape.truncate_rank());
         let term1 = one.add(logvar);
 
         // mu^2
@@ -652,7 +662,7 @@ impl RawTensor {
         let sum_terms = term1.sub(&mu_sq).sub(&var);
 
         // -0.5 * sum(...)
-        let half = Self::new(vec![0.5], &[1], false);
+        let half = mu.constant_like(vec![0.5], &[1]);
         sum_terms.sum().elem_mul(&half).neg()
     }
 
@@ -674,9 +684,12 @@ impl RawTensor {
         let term1 = target.elem_mul(&log_pred);
 
         // (1-y) * log(1-y_hat)
-        let one = Self::ones(target.borrow().shape.truncate_rank());
-        let one_minus_target = one.sub(target);
-        let one_minus_pred = Self::ones(pred.borrow().shape.truncate_rank()).sub(pred);
+        let ones_like = |t: &Tensor| {
+            let shape = t.borrow().shape.clone();
+            t.constant_like(vec![1.0; shape.numel()], shape.truncate_rank())
+        };
+        let one_minus_target = ones_like(target).sub(target);
+        let one_minus_pred = ones_like(pred).sub(pred);
         let log_one_minus_pred = one_minus_pred.log();
         let term2 = one_minus_target.elem_mul(&log_one_minus_pred);
 
@@ -697,8 +710,8 @@ impl RawTensor {
     #[must_use]
     pub fn bce_with_logits_loss(logits: &Tensor, target: &Tensor) -> Tensor {
         let shape = logits.borrow().shape.clone();
-        let zeros = Self::zeros(shape.truncate_rank());
-        let one = Self::ones(shape.truncate_rank());
+        let zeros = logits.constant_like(vec![0.0; shape.numel()], shape.truncate_rank());
+        let one = logits.constant_like(vec![1.0; shape.numel()], shape.truncate_rank());
 
         // max(x, 0); ties at x == 0 route gradient to `logits`, giving relu'(0) = 1.
         let pos_part = logits.max_elem(&zeros);
@@ -1062,18 +1075,11 @@ impl RawTensor {
     /// dim out of bounds
     #[must_use]
     pub fn mean_dim(self_t: &Tensor, dim: Axis, keepdim: bool) -> Tensor {
-        let (shape, device) = {
-            let t = self_t.borrow();
-            (t.shape.clone(), t.device.clone())
-        };
+        let shape = self_t.borrow().shape.clone();
 
         let n = shape.dim(dim).unwrap_or_else(|e| panic!("mean_dim: {e}")) as f32;
         let sum = Self::sum_dim(self_t, dim, keepdim);
-        let div_tensor = Self::new(vec![n], &[1], false);
-
-        let mean = sum.div(&div_tensor);
-        // Keep mean result on same device as input
-        Self::to_device(&mean, device)
+        sum.div(&self_t.constant_like(vec![n], &[1]))
     }
 }
 

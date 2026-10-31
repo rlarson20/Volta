@@ -231,7 +231,7 @@ fn test_tensor_gpu_unary_relu_matches_cpu() {
 
 #[test]
 #[cfg(feature = "gpu")]
-fn test_tensor_gpu_mixed_device_binary_fallbacks_to_cpu() {
+fn test_tensor_gpu_mixed_device_binary_panics() {
     use volta::RawTensor;
     use volta::{Device, is_gpu_available};
 
@@ -240,15 +240,13 @@ fn test_tensor_gpu_mixed_device_binary_fallbacks_to_cpu() {
     }
 
     let dev = Device::gpu().expect("GPU availability checked above");
-    let a = RawTensor::new(vec![1.0, 2.0], &[2], false).to_device(dev.clone());
+    let a = RawTensor::new(vec![1.0, 2.0], &[2], false).to_device(dev);
     let b = RawTensor::new(vec![3.0, 4.0], &[2], false);
 
-    let z = a.add(&b);
-    assert!(
-        z.device().is_cpu(),
-        "Mixed device binary ops should fall back to CPU storage"
-    );
-    assert_eq!(z.data(), vec![4.0, 6.0]);
+    let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| a.add(&b)))
+        .expect_err("mixed-device binary op must panic, not fall back to the CPU");
+    let msg = err.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert!(msg.contains("expected all inputs on one device"), "{msg}");
 }
 
 #[test]

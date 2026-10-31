@@ -1,4 +1,5 @@
 use crate::device::Device;
+use crate::device_policy::{Pass, common_device, on_gap};
 use crate::error::{Result, VoltaError};
 use crate::nn::layers::conv::{DirectConvGradFn, IGEMMGradFn, Im2colGradFn};
 use crate::nn::layers::conv_transpose::ConvTranspose2dGradFn;
@@ -52,6 +53,31 @@ pub(crate) enum GradFn {
 }
 
 impl GradFn {
+    /// The op's name in device errors and fallback events: the variant, plus the inner
+    /// op where there is one (`"Binary(Add)"`, `"Movement(Permute)"`, `"MatMul"`).
+    pub(crate) fn op_name(&self) -> String {
+        match self {
+            Self::Unary(g) => g.op_name(),
+            Self::Binary(g) => g.op_name(),
+            Self::Movement(g) => g.op_name(),
+            Self::MatMul(_) => "MatMul".to_string(),
+            Self::Transpose(_) => "Transpose".to_string(),
+            Self::Sum(_) => "Sum".to_string(),
+            Self::MaxReduce(_) => "MaxReduce".to_string(),
+            Self::Mean(_) => "Mean".to_string(),
+            Self::SumDim(_) => "SumDim".to_string(),
+            Self::MaxDim(_) => "MaxDim".to_string(),
+            Self::MulAcc(_) => "MulAcc".to_string(),
+            Self::Where(_) => "Where".to_string(),
+            Self::Im2col(_) => "Im2col".to_string(),
+            Self::DirectConv(_) => "DirectConv".to_string(),
+            Self::Igemm(_) => "Igemm".to_string(),
+            Self::ConvTranspose2d(_) => "ConvTranspose2d".to_string(),
+            Self::MaxPool2d(_) => "MaxPool2d".to_string(),
+            Self::Embedding(_) => "Embedding".to_string(),
+        }
+    }
+
     /// Compute gradients for parent tensors given output gradient.
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         match self {
@@ -117,13 +143,33 @@ impl GradFn {
 /// either, but is required in practice: `Storage` doesn't uniquely determine a
 /// `Device` value, and every real call site (GPU vs CPU op paths) already tracks
 /// device separately from the data it produced.
+///
+/// It is also the forward device check (`crate::device_policy`): every input must be
+/// on one device, and an output computed on the CPU for GPU inputs (an op with no GPU
+/// kernel for this case) goes through the policy, which panics or moves it to the GPU.
+///
+/// # Panics
+/// If the inputs are on different devices, under `DevicePolicy::Strict` when GPU inputs
+/// produced a CPU output, or if CPU inputs produced a GPU output (an op bug).
 pub(crate) fn edge(
     inputs: impl AsRef<[Tensor]>,
-    data: Storage,
+    mut data: Storage,
     shape: Shape,
-    device: Device,
+    mut device: Device,
     grad: GradFn,
 ) -> Tensor {
+    if let Some(in_device) = input_device(inputs.as_ref(), &grad) {
+        match (in_device.is_gpu(), device.is_gpu()) {
+            (true, false) => {
+                on_gap(&grad.op_name(), Pass::Forward);
+                data = data.to_device(&in_device);
+                device = in_device;
+            }
+            (false, true) => panic!("{}: CPU inputs produced a {device} output", grad.op_name()),
+            (true, true) | (false, false) => {}
+        }
+    }
+
     let requires_grad = is_grad_enabled()
         && inputs.as_ref().iter().any(Tensor::requires_grad)
         && !grad.is_trivial();
@@ -135,6 +181,22 @@ pub(crate) fn edge(
         o.grad_fn = Some(grad);
     }
     out
+}
+
+/// The one device all `inputs` are on, or `None` for no inputs.
+///
+/// Compares first and names the op only on a mismatch, so the common case builds no
+/// strings.
+///
+/// # Panics
+/// If two inputs are on different devices.
+fn input_device(inputs: &[Tensor], grad: &GradFn) -> Option<Device> {
+    let first = inputs.first()?.borrow().device.clone();
+    if inputs.iter().skip(1).any(|t| t.borrow().device != first) {
+        let devices: Vec<Device> = inputs.iter().map(Tensor::device).collect();
+        let _ = common_device(&grad.op_name(), &devices);
+    }
+    Some(first)
 }
 
 // Reentrant depth counter, not a bool: a plain on/off flag (as ADDENDUM.md §1.5

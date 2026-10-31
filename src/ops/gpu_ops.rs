@@ -231,11 +231,13 @@ impl RawTensor {
         if !(out_grad.device.is_gpu() && x.device.is_gpu() && y.device.is_gpu()) {
             return None;
         }
-        let grads = if out_grad.shape == x.shape && out_grad.shape == y.shape {
-            Self::gpu_binary_backward_same_shape(op, out_grad, x, y)
-        } else {
-            Self::gpu_binary_backward_broadcast_shapes(op, out_grad, x, y)
-        };
+        // Gap until the broadcast backward bind groups are fixed (TODO.md, "GPU broadcast
+        // backward is broken"): `None` sends differing shapes to the CPU path, and the
+        // device policy applies when the gradient reaches its GPU parameter.
+        if !(out_grad.shape == x.shape && out_grad.shape == y.shape) {
+            return None;
+        }
+        let grads = Self::gpu_binary_backward_same_shape(op, out_grad, x, y);
         if grads.is_none() {
             log::warn!("GPU backward for {op:?} failed; falling back to CPU");
         }
@@ -288,6 +290,10 @@ impl RawTensor {
 
     /// Broadcasting binary backward via the race-free two-pass kernels.
     #[cfg(feature = "gpu")]
+    #[expect(
+        dead_code,
+        reason = "unreachable until the broadcast backward bind groups are fixed (TODO.md)"
+    )]
     fn gpu_binary_backward_broadcast_shapes(
         op: BinaryOp,
         out_grad: &Self,

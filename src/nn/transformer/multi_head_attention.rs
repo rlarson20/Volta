@@ -187,7 +187,7 @@ impl MultiHeadAttention {
         let scores = q.matmul(&k_t); // [batch, num_heads, seq_len, seq_len]
 
         // Scale by sqrt(head_dim)
-        let scale = RawTensor::new(vec![(self.head_dim as f32).sqrt()], &[1, 1, 1, 1], false);
+        let scale = q.constant_like(vec![(self.head_dim as f32).sqrt()], &[1, 1, 1, 1]);
         let scores = scores.div(&scale);
 
         // Apply causal mask if requested

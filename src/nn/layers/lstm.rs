@@ -90,9 +90,13 @@ impl RecurrentLayer for LSTMCell {
     type State = (Tensor, Tensor);
 
     fn initial_state(&self, batch: usize) -> Self::State {
+        // On the parameters' device, so a GPU cell starts from GPU state.
+        let zeros = vec![0.0; batch * self.hidden_size];
         (
-            RawTensor::zeros(&[batch, self.hidden_size]),
-            RawTensor::zeros(&[batch, self.hidden_size]),
+            self.weight_ih
+                .constant_like(zeros.clone(), &[batch, self.hidden_size]),
+            self.weight_ih
+                .constant_like(zeros, &[batch, self.hidden_size]),
         )
     }
 

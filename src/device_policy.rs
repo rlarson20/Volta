@@ -95,10 +95,6 @@ pub fn take_fallback_events() -> Vec<FallbackEvent> {
 ///
 /// # Panics
 /// Under [`DevicePolicy::Strict`].
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired into edge() in the next commit")
-)]
 pub(crate) fn on_gap(op: &str, pass: Pass) {
     match device_policy() {
         DevicePolicy::Strict => panic!(
@@ -133,10 +129,6 @@ pub(crate) fn kernel_failed(op: &str) -> ! {
 /// # Panics
 /// If two devices differ. GPU names count, so this stays correct once there is more
 /// than one GPU.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired into edge() in the next commit")
-)]
 pub(crate) fn common_device<'a>(
     op: &str,
     devices: impl IntoIterator<Item = &'a Device>,

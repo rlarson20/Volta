@@ -1,6 +1,6 @@
 use crate::io::StateDict;
 use crate::nn::{Layer, Module};
-use crate::tensor::{RawTensor, Tensor};
+use crate::tensor::Tensor;
 
 /// Gaussian Error Linear Unit (GELU) activation function.
 ///
@@ -67,9 +67,9 @@ impl Module for GELU {
 impl Layer for GELU {
     fn forward(&self, x: &Tensor) -> Tensor {
         // gelu(x) = 0.5 * x * (1 + erf(x / sqrt(2)))
-        let sqrt2 = RawTensor::new(vec![(2.0_f32).sqrt()], &[1], false);
-        let one = RawTensor::new(vec![1.0], &[1], false);
-        let half = RawTensor::new(vec![0.5], &[1], false);
+        let sqrt2 = x.constant_like(vec![(2.0_f32).sqrt()], &[1]);
+        let one = x.constant_like(vec![1.0], &[1]);
+        let half = x.constant_like(vec![0.5], &[1]);
 
         x.div(&sqrt2).erf().add(&one).elem_mul(x).elem_mul(&half)
     }

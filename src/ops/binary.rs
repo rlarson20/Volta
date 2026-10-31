@@ -57,6 +57,11 @@ pub(crate) struct BinaryGradFn {
 }
 
 impl BinaryGradFn {
+    /// The op's name in device errors and fallback events, e.g. `"Binary(Add)"`.
+    pub(crate) fn op_name(&self) -> String {
+        format!("Binary({:?})", self.op)
+    }
+
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let [x_ref, y_ref] = parents else {
             panic!("binary ops require 2 parents, got {}", parents.len());

@@ -394,6 +394,19 @@ pub(crate) struct MovementGradFn {
 }
 
 impl MovementGradFn {
+    /// The op's name in device errors and fallback events, e.g. `"Movement(Permute)"`.
+    pub(crate) fn op_name(&self) -> String {
+        let op = match self.op {
+            MovementOp::Reshape { .. } => "Reshape",
+            MovementOp::Permute { .. } => "Permute",
+            MovementOp::Expand { .. } => "Expand",
+            MovementOp::Pad { .. } => "Pad",
+            MovementOp::Shrink { .. } => "Shrink",
+            MovementOp::Stride { .. } => "Stride",
+        };
+        format!("Movement({op})")
+    }
+
     pub(crate) fn backward(
         &self,
         out_grad: &RawTensor,

@@ -145,7 +145,7 @@ impl Layer for LayerNorm {
         let var = sq_diff.mean_dim(Axis(1), true); // (leading_dims, 1)
 
         // Normalize: (x - mean) / sqrt(var + eps)
-        let eps_tensor = RawTensor::constant(self.eps, &[1]);
+        let eps_tensor = x.constant_like(vec![self.eps], &[1]);
         let denom = var.add(&eps_tensor).sqrt();
         let x_norm = diff.div(&denom); // (leading_dims, trailing_dims)
 

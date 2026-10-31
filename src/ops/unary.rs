@@ -66,6 +66,11 @@ pub(crate) struct UnaryGradFn {
 }
 
 impl UnaryGradFn {
+    /// The op's name in device errors and fallback events, e.g. `"Unary(Exp)"`.
+    pub(crate) fn op_name(&self) -> String {
+        format!("Unary({:?})", self.op)
+    }
+
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let x = parents
             .first()
