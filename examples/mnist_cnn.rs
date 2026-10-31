@@ -1,6 +1,6 @@
 //! MNIST CNN training: two `Conv2d` + `ReLU` layers, `MaxPool2d`, dropout, and two `Linear` layers, fed by a shuffling `DataLoader` and trained with `SGD`.
 //!
-//! If the MNIST files under `data/mnist` are missing it falls back to synthetic data and prints how to download the real set.
+//! Needs the MNIST files under `data/mnist`; if they are missing it prints how to download them and exits, rather than train on made-up data.
 use std::path::Path;
 use volta::{
     Conv2d, DataLoader, Dropout, Flatten, Layer, Linear, MaxPool2d, Module, ProgressBar, RawTensor,
@@ -29,25 +29,14 @@ fn main() {
         println!("Loaded {num_samples} training samples");
         (images, label_data, num_samples)
     } else {
-        println!("MNIST data not found. Using synthetic data for demonstration.");
-        println!("\nTo download MNIST data:");
-        println!("  mkdir -p data/mnist");
-        println!("  cd data/mnist");
-        println!("  curl -O http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz");
-        println!("  curl -O http://yann.lecun.com/exdb/mnist/train-labels-idx1-ubyte.gz");
-        println!("  gunzip *.gz");
-        println!();
-
-        // Generate synthetic data
-        let num_samples = 1024;
-        let image_data: Vec<f32> = (0..num_samples * 28 * 28)
-            .map(|i| (i % 255) as f32 / 255.0)
-            .collect();
-        let labels: Vec<u8> = (0..num_samples).map(|i| (i % 10) as u8).collect();
-        let label_data = to_one_hot(&labels, 10).expect("MNIST labels are digits 0-9");
-
-        println!("Generated {num_samples} synthetic samples");
-        (image_data, label_data, num_samples)
+        eprintln!("MNIST data not found in {mnist_dir}.");
+        eprintln!("\nTo download MNIST data:");
+        eprintln!("  mkdir -p data/mnist");
+        eprintln!("  cd data/mnist");
+        eprintln!("  curl -O http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz");
+        eprintln!("  curl -O http://yann.lecun.com/exdb/mnist/train-labels-idx1-ubyte.gz");
+        eprintln!("  gunzip *.gz");
+        std::process::exit(1);
     };
 
     // Create DataLoader

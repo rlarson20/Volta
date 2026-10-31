@@ -70,7 +70,7 @@ Last verified: 2026-10-29.
 - [x] Add a gradient test for `PositionalEncoding` (B3).
 - [ ] Remove example workarounds for broken components once the components are fixed.
   - `examples/load_external_mnist.rs::run_validation` does not compare against PyTorch outputs; it skips the JSON parse and runs the demo inference.
-  - `examples/vae.rs` falls back to constant synthetic data (0.5) when MNIST is missing.
+  - `examples/dcgan.rs` falls back to constant synthetic data (0.5) when MNIST is missing. `vae`, `mnist_cnn`, and `mnist_rnn` now print the download steps and exit 1 instead (2026-10-31). `vae` also read `data/train-images-idx3-ubyte` rather than `data/mnist/...`, so it trained on constant data even with MNIST present.
 
 ## Rust / API (OPUS §7–14)
 

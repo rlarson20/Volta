@@ -1,6 +1,6 @@
 //! Variational autoencoder on MNIST: a `Linear` encoder producing `mu` and `logvar`, reparameterized sampling, and a `Linear` decoder, trained with `SGD` on reconstruction (MSE) plus KL divergence.
 //!
-//! If the MNIST files are missing it falls back to constant synthetic data, which only exercises the code path and does not train a meaningful model.
+//! Needs the MNIST training images in `data/mnist/`; it exits with download instructions if they are missing, rather than train on made-up data.
 use volta::{
     Linear, Module, ProgressBar, RawTensor, SGD, kl_divergence_gaussian, load_mnist_images,
     mse_loss, normalize, randn_like,
@@ -18,18 +18,20 @@ fn main() {
     let learning_rate = 0.001;
 
     // Load MNIST data
-    let (train_images, num_train) =
-        if let Ok(images) = load_mnist_images("data/train-images-idx3-ubyte") {
-            let n = images.len() / input_dim;
-            println!("Loaded {n} MNIST training images");
-            (images, n)
-        } else {
-            println!("Could not load MNIST data from data/ directory");
-            println!("Generating synthetic data for demonstration...\n");
-            let n = 1000;
-            let images = vec![0.5; n * input_dim];
-            (images, n)
-        };
+    let train_images_path = "data/mnist/train-images-idx3-ubyte";
+    let train_images = match load_mnist_images(train_images_path) {
+        Ok(images) => images,
+        Err(err) => {
+            eprintln!("Could not load MNIST images from {train_images_path}: {err}");
+            eprintln!("\nTo download MNIST data:");
+            eprintln!("  mkdir -p data/mnist && cd data/mnist");
+            eprintln!("  curl -O http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz");
+            eprintln!("  gunzip *.gz");
+            std::process::exit(1);
+        }
+    };
+    let num_train = train_images.len() / input_dim;
+    println!("Loaded {num_train} MNIST training images");
 
     // Normalize to [0, 1]
     let mut train_data = train_images;
