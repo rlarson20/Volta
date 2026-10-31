@@ -44,6 +44,7 @@ The shell is zsh on macOS, and a Claude Code hook rewrites commands through `rtk
 - BSD `sed`: `sed -i '2i text'` fails. Use the Edit tool or a short `python3` script.
 - Don't chain a `VAR=...` assignment and its use across `&&` where an earlier command can fail; the next command runs with `VAR` unset (this happened with a scratchpad path). Set it inside the same command.
 - `rtk` filters `cargo` output and can drop compiler error bodies (you get only `could not compile`). Use `rtk proxy cargo ...` to see the real error.
+- A `cargo test ... | grep` pipeline can come out empty (the hook rewrites the `cargo` side). To capture `--list` output or anything you will diff, redirect: `rtk proxy cargo test --lib -- --list > file`, then grep the file. Don't hide stderr with `2>/dev/null` while checking that the build worked.
 - Format single files with `rustfmt --edition 2024 <file>`. `cargo fmt` rewrites unrelated, already-dirty files.
 - For a mechanical signature change that touches many call sites, change the signature and wrap the spans from `cargo check --message-format=json` (E0308 spans) with a script instead of hand-editing each site.
 
