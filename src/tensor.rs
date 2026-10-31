@@ -879,9 +879,9 @@ impl RawTensor {
     ///
     /// Returns `VoltaError::DimensionOutOfBounds` if dim is >= tensor rank
     pub fn try_sum_dim(self_t: &Tensor, dim: Axis, keepdim: bool) -> Result<Tensor> {
-        let (data, shape, device) = {
+        let (data, shape) = {
             let s = self_t.borrow();
-            (s.data.clone(), s.shape.clone(), s.device.clone())
+            (s.data.clone(), s.shape.clone())
         };
 
         let dim_size = shape.dim(dim)?;
@@ -916,14 +916,15 @@ impl RawTensor {
             out_shape.squeeze(dim)
         };
 
-        // Place the reduction result on the same logical device as the input.
-        let storage = Storage::cpu(result).to_device(&device);
+        // Computed on the CPU (there is no GPU kernel): `edge()` applies the device
+        // policy when the input is on the GPU.
+        let storage = Storage::cpu(result);
 
         Ok(edge(
             [self_t.clone()],
             storage,
             final_shape,
-            device,
+            Device::CPU,
             GradFn::SumDim(SumDimGradFn {
                 input_shape: shape,
                 dim,
@@ -1005,9 +1006,9 @@ impl RawTensor {
     /// dim out of bounds
     #[must_use]
     pub fn max_dim(self_t: &Tensor, dim: Axis, keepdim: bool) -> Tensor {
-        let (data, shape, device) = {
+        let (data, shape) = {
             let s = self_t.borrow();
-            (s.data.clone(), s.shape.clone(), s.device.clone())
+            (s.data.clone(), s.shape.clone())
         };
 
         let dim_size = shape.dim(dim).unwrap_or_else(|e| panic!("max_dim: {e}"));
@@ -1045,14 +1046,15 @@ impl RawTensor {
             out_shape.squeeze(dim)
         };
 
-        // Ensure the max result lives on the same logical device as the input.
-        let storage = Storage::cpu(result).to_device(&device);
+        // Computed on the CPU (there is no GPU kernel): `edge()` applies the device
+        // policy when the input is on the GPU.
+        let storage = Storage::cpu(result);
 
         edge(
             [self_t.clone()],
             storage,
             final_shape,
-            device,
+            Device::CPU,
             GradFn::MaxDim(MaxDimGradFn {
                 input_shape: shape,
                 max_indices,

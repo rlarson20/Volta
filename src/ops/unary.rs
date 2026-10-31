@@ -1,5 +1,6 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
+use crate::device_policy::kernel_failed;
 use crate::macros::define_ops;
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
@@ -77,12 +78,11 @@ impl UnaryGradFn {
             .map(|p| p.borrow())
             .expect("unary ops require 1 parent");
 
-        // Check GPU path - if both out_grad and x are on GPU, use GPU backward
-        if out_grad.device.is_gpu()
-            && x.device.is_gpu()
-            && let Some(grad_storage) =
-                RawTensor::gpu_unary_backward(&out_grad.data, &x.data, self.op)
-        {
+        // GPU path when both are on the GPU and the op has a kernel. A `None` from the
+        // kernel is then a failure, not a reason to compute on the CPU.
+        if out_grad.device.is_gpu() && x.device.is_gpu() && self.op.has_gpu_kernel() {
+            let grad_storage = RawTensor::gpu_unary_backward(&out_grad.data, &x.data, self.op)
+                .unwrap_or_else(|| kernel_failed(&self.op_name()));
             return vec![Some(RawTensor::new_with_storage(
                 grad_storage,
                 x.shape.clone(),
@@ -91,7 +91,7 @@ impl UnaryGradFn {
             ))];
         }
 
-        // CPU fallback. Chain rule: ∂L/∂x = ∂L/∂y · ∂y/∂x, with the derivative from
+        // CPU path (CPU tensors, or a `cpu_only` op). Chain rule: ∂L/∂x = ∂L/∂y · ∂y/∂x, with the derivative from
         // the `UnaryOp` table.
         let grad_data: Vec<f32> = out_grad
             .data
@@ -121,11 +121,11 @@ impl RawTensor {
             (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
-        // Fast path: if the tensor already lives on GPU and the op has a kernel
-        // (`gpu_unary` returns `None` for `cpu_only` ops), run it there.
-        if Self::common_gpu_device(&[t]).is_some()
-            && let Some(storage) = Self::gpu_unary(&data, op)
-        {
+        // GPU path when the tensor is on the GPU and the op has a kernel. A `None` from
+        // the kernel is then a failure, not a reason to compute on the CPU.
+        if device.is_gpu() && op.has_gpu_kernel() {
+            let storage = Self::gpu_unary(&data, op)
+                .unwrap_or_else(|| kernel_failed(&UnaryGradFn { op }.op_name()));
             return edge(
                 [t.clone()],
                 storage,
@@ -135,7 +135,7 @@ impl RawTensor {
             );
         }
 
-        // CPU fallback (or when GPU feature is disabled / the op is `cpu_only`).
+        // CPU path (CPU tensor, or a `cpu_only` op on the GPU: `edge()` applies the policy).
         let host_data = data.to_vec();
         let result: Vec<f32> = host_data.iter().map(|&x| op.forward(x)).collect();
 

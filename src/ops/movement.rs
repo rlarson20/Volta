@@ -1,5 +1,6 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
+use crate::device_policy::kernel_failed;
 use crate::error::Result;
 use crate::index::{fetch, slot};
 use crate::shape::{Axis, Shape, Strides};
@@ -248,6 +249,24 @@ impl<'a> MovementContext<'a> {
     }
 }
 
+/// Whether the GPU movement kernels cover a tensor of this rank. They pack shapes into
+/// `[u32; 4]`, so a higher rank has no GPU kernel: a gap for the device policy, not a
+/// kernel to run on silently truncated shapes (H5).
+const fn gpu_movement_supported(rank: usize) -> bool {
+    rank <= 4
+}
+
+/// Whether the GPU `pad` kernels cover this padding: rank <= 4, and dims 2 and 3 are packed
+/// as two 16-bit halves of one `u32` each, so their pad widths must fit in 16 bits.
+fn gpu_pad_supported(padding: &[(usize, usize)]) -> bool {
+    let fits = |w: usize| u16::try_from(w).is_ok();
+    gpu_movement_supported(padding.len())
+        && padding
+            .iter()
+            .skip(2)
+            .all(|&(left, right)| fits(left) && fits(right))
+}
+
 /// Unified recursive index transformation for backward movement operations
 ///
 /// This function consolidates `unpad_recursive`, `unshrink_recursive`, and `unstride_recursive`.
@@ -414,8 +433,13 @@ impl MovementGradFn {
     ) -> Vec<Option<Tensor>> {
         let grad_tensor = match &self.op {
             MovementOp::Reshape { .. } => {
-                // Reshape back to original shape
-                RawTensor::from_shape(out_grad.data.to_vec(), self.original_shape.clone(), false)
+                // Reshape back to original shape: same data, same device, new shape.
+                return vec![Some(RawTensor::new_with_storage(
+                    out_grad.data.clone(),
+                    self.original_shape.clone(),
+                    out_grad.device.clone(),
+                    false,
+                ))];
             }
             MovementOp::Permute { axes } => {
                 // Invert the permutation to restore original order
@@ -424,15 +448,15 @@ impl MovementGradFn {
                     *slot(&mut inverse_axes, ax) = i;
                 }
 
-                // Try GPU path
-                if out_grad.device.is_gpu()
-                    && let Some(grad_storage) = RawTensor::gpu_permute_backward(
+                // GPU path when the kernel covers this rank; a `None` from it is a failure.
+                if out_grad.device.is_gpu() && gpu_movement_supported(self.original_shape.rank()) {
+                    let grad_storage = RawTensor::gpu_permute_backward(
                         &out_grad.data,
                         self.original_shape.truncate_rank(),
                         out_grad.shape.truncate_rank(),
                         &inverse_axes,
                     )
-                {
+                    .unwrap_or_else(|| kernel_failed("Movement(Permute)"));
                     return vec![Some(RawTensor::new_with_storage(
                         grad_storage,
                         self.original_shape.clone(),
@@ -441,7 +465,7 @@ impl MovementGradFn {
                     ))];
                 }
 
-                // CPU fallback
+                // CPU path
                 let grad_t =
                     RawTensor::from_shape(out_grad.data.to_vec(), out_grad.shape.clone(), false);
                 let (storage, shape, device) = RawTensor::permute_impl(&grad_t, &inverse_axes);
@@ -453,14 +477,14 @@ impl MovementGradFn {
                 ))];
             }
             MovementOp::Expand { new_shape } => {
-                // Try GPU path
-                if out_grad.device.is_gpu()
-                    && let Some(grad_storage) = RawTensor::gpu_expand_backward(
+                // GPU path when the kernel covers this rank; a `None` from it is a failure.
+                if out_grad.device.is_gpu() && gpu_movement_supported(self.original_shape.rank()) {
+                    let grad_storage = RawTensor::gpu_expand_backward(
                         &out_grad.data,
                         self.original_shape.truncate_rank(),
                         new_shape,
                     )
-                {
+                    .unwrap_or_else(|| kernel_failed("Movement(Expand)"));
                     return vec![Some(RawTensor::new_with_storage(
                         grad_storage,
                         self.original_shape.clone(),
@@ -469,7 +493,7 @@ impl MovementGradFn {
                     ))];
                 }
 
-                // CPU fallback: Sum gradient over dimensions that were expanded (broadcast)
+                // CPU path: Sum gradient over dimensions that were expanded (broadcast)
                 let mut grad_data = vec![0.0; self.original_shape.iter().product()];
                 let old_strides = self.original_shape.strides();
                 let old_strides = old_strides.truncate_rank();
@@ -492,15 +516,15 @@ impl MovementGradFn {
                 RawTensor::from_shape(grad_data, self.original_shape.clone(), false)
             }
             MovementOp::Pad { padding } => {
-                // Try GPU path
-                if out_grad.device.is_gpu()
-                    && let Some(grad_storage) = RawTensor::gpu_pad_backward(
+                // GPU path when the kernel covers this rank; a `None` from it is a failure.
+                if out_grad.device.is_gpu() && gpu_pad_supported(padding) {
+                    let grad_storage = RawTensor::gpu_pad_backward(
                         &out_grad.data,
                         self.original_shape.truncate_rank(),
                         out_grad.shape.truncate_rank(),
                         padding,
                     )
-                {
+                    .unwrap_or_else(|| kernel_failed("Movement(Pad)"));
                     return vec![Some(RawTensor::new_with_storage(
                         grad_storage,
                         self.original_shape.clone(),
@@ -509,7 +533,7 @@ impl MovementGradFn {
                     ))];
                 }
 
-                // CPU fallback: Remove padding from gradient (extract center region)
+                // CPU path: Remove padding from gradient (extract center region)
                 let mut result = vec![0.0; self.original_shape.iter().product()];
                 let old_strides = self.original_shape.strides();
                 let old_strides = old_strides.truncate_rank();
@@ -537,15 +561,15 @@ impl MovementGradFn {
                 RawTensor::from_shape(result, self.original_shape.clone(), false)
             }
             MovementOp::Shrink { ranges } => {
-                // Try GPU path
-                if out_grad.device.is_gpu()
-                    && let Some(grad_storage) = RawTensor::gpu_shrink_backward(
+                // GPU path when the kernel covers this rank; a `None` from it is a failure.
+                if out_grad.device.is_gpu() && gpu_movement_supported(self.original_shape.rank()) {
+                    let grad_storage = RawTensor::gpu_shrink_backward(
                         &out_grad.data,
                         self.original_shape.truncate_rank(),
                         out_grad.shape.truncate_rank(),
                         ranges,
                     )
-                {
+                    .unwrap_or_else(|| kernel_failed("Movement(Shrink)"));
                     return vec![Some(RawTensor::new_with_storage(
                         grad_storage,
                         self.original_shape.clone(),
@@ -554,7 +578,7 @@ impl MovementGradFn {
                     ))];
                 }
 
-                // CPU fallback: Pad gradient back to original size (inverse of shrink)
+                // CPU path: Pad gradient back to original size (inverse of shrink)
                 let mut result = vec![0.0; self.original_shape.iter().product()];
                 let old_strides = self.original_shape.strides();
                 let old_strides = old_strides.truncate_rank();
@@ -582,15 +606,15 @@ impl MovementGradFn {
                 RawTensor::from_shape(result, self.original_shape.clone(), false)
             }
             MovementOp::Stride { strides } => {
-                // Try GPU path
-                if out_grad.device.is_gpu()
-                    && let Some(grad_storage) = RawTensor::gpu_stride_backward(
+                // GPU path when the kernel covers this rank; a `None` from it is a failure.
+                if out_grad.device.is_gpu() && gpu_movement_supported(self.original_shape.rank()) {
+                    let grad_storage = RawTensor::gpu_stride_backward(
                         &out_grad.data,
                         self.original_shape.truncate_rank(),
                         out_grad.shape.truncate_rank(),
                         strides,
                     )
-                {
+                    .unwrap_or_else(|| kernel_failed("Movement(Stride)"));
                     return vec![Some(RawTensor::new_with_storage(
                         grad_storage,
                         self.original_shape.clone(),
@@ -599,7 +623,7 @@ impl MovementGradFn {
                     ))];
                 }
 
-                // CPU fallback: Upsample gradient (inverse of stride/downsampling)
+                // CPU path: Upsample gradient (inverse of stride/downsampling)
                 let mut result = vec![0.0; self.original_shape.iter().product()];
                 let old_strides_mem = self.original_shape.strides();
                 let old_strides_mem = old_strides_mem.truncate_rank();
@@ -712,14 +736,14 @@ impl RawTensor {
 
         let new_shape: Vec<usize> = axes.iter().map(|&i| shape.dim_at(i)).collect();
 
-        // Try GPU path first if available
-        if device.is_gpu()
-            && let Some(storage) = Self::gpu_permute(&data, shape.truncate_rank(), &new_shape, axes)
-        {
+        // GPU path when the kernel covers this rank; a `None` from it is a failure.
+        if device.is_gpu() && gpu_movement_supported(shape.rank()) {
+            let storage = Self::gpu_permute(&data, shape.truncate_rank(), &new_shape, axes)
+                .unwrap_or_else(|| kernel_failed("Movement(Permute)"));
             return (storage, new_shape, device);
         }
 
-        // CPU fallback
+        // CPU path (`movement_edge` applies the device policy to a GPU input)
         let old_strides = shape.strides();
         let old_strides = old_strides.truncate_rank();
         let mut new_data = vec![0.0; data.len()];
@@ -797,11 +821,12 @@ impl RawTensor {
         });
         let new_size = out_shape.numel();
 
-        let gpu_storage = if device.is_gpu() {
-            Self::gpu_expand(&data, old_shape.truncate_rank(), new_shape)
-        } else {
-            None
-        };
+        // GPU path when the kernel covers this case; a `None` from it is a failure.
+        let gpu_storage =
+            (device.is_gpu() && gpu_movement_supported(old_shape.rank())).then(|| {
+                Self::gpu_expand(&data, old_shape.truncate_rank(), new_shape)
+                    .unwrap_or_else(|| kernel_failed("Movement(Expand)"))
+            });
         let (storage, out_device) = if let Some(storage) = gpu_storage {
             (storage, device)
         } else {
@@ -889,15 +914,15 @@ impl RawTensor {
         let out_shape = Shape::from_dims(new_shape.clone())?;
         let new_size = out_shape.numel();
 
-        let gpu_storage = if device.is_gpu() {
+        // GPU path when the kernel covers this case; a `None` from it is a failure.
+        let gpu_storage = (device.is_gpu() && gpu_pad_supported(padding)).then(|| {
             Self::gpu_pad(&data, old_shape.truncate_rank(), &new_shape, padding, value)
-        } else {
-            None
-        };
+                .unwrap_or_else(|| kernel_failed("Movement(Pad)"))
+        });
         let (storage, out_device) = if let Some(storage) = gpu_storage {
             (storage, device)
         } else {
-            // CPU fallback. `PadMapper` only writes the interior, so the fill is the border.
+            // CPU path. `PadMapper` only writes the interior, so the fill is the border.
             let mut result = vec![value.get(); new_size];
             let cpu_data = data.to_vec();
 
@@ -1034,11 +1059,12 @@ impl RawTensor {
 
         let new_shape: Vec<usize> = ranges.iter().map(|(start, end)| end - start).collect();
 
-        let gpu_storage = if device.is_gpu() {
-            Self::gpu_shrink(&data, old_shape.truncate_rank(), &new_shape, ranges)
-        } else {
-            None
-        };
+        // GPU path when the kernel covers this case; a `None` from it is a failure.
+        let gpu_storage =
+            (device.is_gpu() && gpu_movement_supported(old_shape.rank())).then(|| {
+                Self::gpu_shrink(&data, old_shape.truncate_rank(), &new_shape, ranges)
+                    .unwrap_or_else(|| kernel_failed("Movement(Shrink)"))
+            });
         let (storage, out_device) = if let Some(storage) = gpu_storage {
             (storage, device)
         } else {
@@ -1100,11 +1126,12 @@ impl RawTensor {
             .map(|(d, s)| d.div_ceil(*s))
             .collect();
 
-        let gpu_storage = if device.is_gpu() {
-            Self::gpu_stride(&data, old_shape.truncate_rank(), &new_shape, strides)
-        } else {
-            None
-        };
+        // GPU path when the kernel covers this case; a `None` from it is a failure.
+        let gpu_storage =
+            (device.is_gpu() && gpu_movement_supported(old_shape.rank())).then(|| {
+                Self::gpu_stride(&data, old_shape.truncate_rank(), &new_shape, strides)
+                    .unwrap_or_else(|| kernel_failed("Movement(Stride)"))
+            });
         let (storage, out_device) = if let Some(storage) = gpu_storage {
             (storage, device)
         } else {

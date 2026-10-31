@@ -400,6 +400,64 @@ fn events_ordered_and_drained() {
     assert!(take_fallback_events().is_empty());
 }
 
+/// `sum_dim` has no GPU kernel: it used to compute on the CPU and upload silently.
+#[test]
+fn sum_dim_is_a_gap() {
+    if skip_if_no_gpu() {
+        return;
+    }
+    let (_, x) = pair(&[2, 3]);
+    let _strict = with_device_policy(DevicePolicy::Strict);
+    let msg = panic_message(|| {
+        let _ = x.sum_dim(Axis(1), false);
+    });
+    assert!(msg.contains("SumDim: no GPU kernel"), "{msg}");
+}
+
+/// `max_dim` has no GPU kernel either.
+#[test]
+fn max_dim_is_a_gap() {
+    if skip_if_no_gpu() {
+        return;
+    }
+    let (_, x) = pair(&[2, 3]);
+    let _strict = with_device_policy(DevicePolicy::Strict);
+    let msg = panic_message(|| {
+        let _ = x.max_dim(Axis(1), false);
+    });
+    assert!(msg.contains("MaxDim: no GPU kernel"), "{msg}");
+}
+
+/// The GPU movement kernels hold at most four dims: rank 5 is a gap, not a silently
+/// truncated kernel (H5).
+#[test]
+fn rank5_permute_is_a_gap() {
+    if skip_if_no_gpu() {
+        return;
+    }
+    let (_, x) = pair(&[2, 1, 3, 1, 2]);
+    let axes = [Axis(4), Axis(3), Axis(2), Axis(1), Axis(0)];
+    let _strict = with_device_policy(DevicePolicy::Strict);
+    let msg = panic_message(|| {
+        let _ = x.permute(&axes);
+    });
+    assert!(msg.contains("Movement(Permute): no GPU kernel"), "{msg}");
+}
+
+/// Under `PreferGpu`, a rank-5 permute on the GPU matches the CPU.
+#[test]
+fn rank5_permute_prefer_gpu_matches_cpu() {
+    if skip_if_no_gpu() {
+        return;
+    }
+    let (x_cpu, x) = pair(&[2, 1, 3, 1, 2]);
+    let axes = [Axis(4), Axis(3), Axis(2), Axis(1), Axis(0)];
+    let _prefer = with_device_policy(DevicePolicy::PreferGpu);
+    let out = x.permute(&axes);
+    assert!(out.device().is_gpu());
+    assert_eq!(out.data(), x_cpu.permute(&axes).data());
+}
+
 /// Run `f`, which must panic, and return its panic message.
 ///
 /// GPU tests can't use `#[should_panic]`: without an adapter they return early, which

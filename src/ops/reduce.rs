@@ -1,4 +1,5 @@
 use crate::autograd::{GradFn, edge};
+use crate::device_policy::kernel_failed;
 use crate::index::{fetch, slot};
 use crate::shape::Shape;
 use crate::storage::Storage;
@@ -32,10 +33,10 @@ impl SumGradFn {
         let size: usize = self.input_shape.iter().product();
         let grad_val: f32 = fetch(&out_grad.data.to_host_f32(), 0);
 
-        // Check if we can do GPU backward
-        if out_grad.device.is_gpu()
-            && let Some(storage) = crate::RawTensor::gpu_sum_backward(grad_val, size)
-        {
+        // GPU path for a GPU gradient; a `None` from the kernel is a failure.
+        if out_grad.device.is_gpu() {
+            let storage = crate::RawTensor::gpu_sum_backward(grad_val, size)
+                .unwrap_or_else(|| kernel_failed("Sum"));
             return vec![Some(RawTensor::new_with_storage(
                 storage,
                 self.input_shape.clone(),
@@ -44,7 +45,7 @@ impl SumGradFn {
             ))];
         }
 
-        // CPU fallback
+        // CPU path
         vec![Some(RawTensor::new(
             vec![grad_val; size],
             self.input_shape.truncate_rank(),
@@ -71,11 +72,10 @@ impl MaxReduceGradFn {
         let size: usize = self.input_shape.iter().product();
         let grad_val: f32 = fetch(&out_grad.data.to_host_f32(), 0);
 
-        // Check if we can do GPU backward
-        if out_grad.device.is_gpu()
-            && let Some(storage) =
-                crate::RawTensor::gpu_max_backward(grad_val, size, self.max_index)
-        {
+        // GPU path for a GPU gradient; a `None` from the kernel is a failure.
+        if out_grad.device.is_gpu() {
+            let storage = crate::RawTensor::gpu_max_backward(grad_val, size, self.max_index)
+                .unwrap_or_else(|| kernel_failed("MaxReduce"));
             return vec![Some(RawTensor::new_with_storage(
                 storage,
                 self.input_shape.clone(),
@@ -84,7 +84,7 @@ impl MaxReduceGradFn {
             ))];
         }
 
-        // CPU fallback
+        // CPU path
         let mut grad_data = vec![0.0; size];
         *slot(&mut grad_data, self.max_index) = grad_val;
         vec![Some(RawTensor::from_shape(
@@ -112,10 +112,10 @@ impl MeanGradFn {
         let size: usize = self.input_shape.iter().product();
         let grad_val: f32 = fetch(&out_grad.data.to_host_f32(), 0);
 
-        // Check if we can do GPU backward
-        if out_grad.device.is_gpu()
-            && let Some(storage) = crate::RawTensor::gpu_mean_backward(grad_val, size)
-        {
+        // GPU path for a GPU gradient; a `None` from the kernel is a failure.
+        if out_grad.device.is_gpu() {
+            let storage = crate::RawTensor::gpu_mean_backward(grad_val, size)
+                .unwrap_or_else(|| kernel_failed("Mean"));
             return vec![Some(RawTensor::new_with_storage(
                 storage,
                 self.input_shape.clone(),
@@ -124,7 +124,7 @@ impl MeanGradFn {
             ))];
         }
 
-        // CPU fallback
+        // CPU path
         let grad_val_cpu = grad_val / (size as f32);
         vec![Some(RawTensor::new(
             vec![grad_val_cpu; size],
@@ -151,22 +151,18 @@ impl RawTensor {
 
         let (result_val, grad_fn): (f32, GradFn) = match op {
             ReduceOp::Sum => {
-                // Try GPU first if available
-                let sum: f32 = if device.is_gpu()
-                    && let Some(result) = Self::gpu_sum_reduce(&data)
-                {
-                    result
+                // On the GPU, a `None` from the kernel is a failure.
+                let sum: f32 = if device.is_gpu() {
+                    Self::gpu_sum_reduce(&data).unwrap_or_else(|| kernel_failed("Sum"))
                 } else {
                     data.to_host_f32().iter().sum()
                 };
                 (sum, GradFn::Sum(SumGradFn { input_shape: shape }))
             }
             ReduceOp::Max => {
-                // Try GPU first if available
-                let (max_val, max_idx) = if device.is_gpu()
-                    && let Some(result) = Self::gpu_max_reduce(&data)
-                {
-                    result
+                // On the GPU, a `None` from the kernel is a failure.
+                let (max_val, max_idx) = if device.is_gpu() {
+                    Self::gpu_max_reduce(&data).unwrap_or_else(|| kernel_failed("MaxReduce"))
                 } else {
                     let (max_val, max_idx) = data
                         .to_host_f32()
@@ -186,11 +182,9 @@ impl RawTensor {
                 )
             }
             ReduceOp::Mean => {
-                // Try GPU first if available
-                let mean_val: f32 = if device.is_gpu()
-                    && let Some(result) = Self::gpu_mean_reduce(&data)
-                {
-                    result
+                // On the GPU, a `None` from the kernel is a failure.
+                let mean_val: f32 = if device.is_gpu() {
+                    Self::gpu_mean_reduce(&data).unwrap_or_else(|| kernel_failed("Mean"))
                 } else {
                     let sum: f32 = data.to_host_f32().iter().sum();
                     sum / (data.len() as f32)
@@ -199,8 +193,8 @@ impl RawTensor {
             }
         };
 
-        // Start with a CPU scalar and then place it on the same logical device
-        // as the input tensor. The reduction computation may have happened on GPU.
+        // The kernels return a host scalar; put it back on the input's device. This is
+        // not a fallback: on the GPU the reduction itself ran there.
         let storage = Storage::cpu(vec![result_val]).to_device(&device);
 
         edge(

@@ -1,5 +1,6 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
+use crate::device_policy::{common_device, kernel_failed};
 use crate::index::slot;
 use crate::shape::Shape;
 use crate::storage::Storage;
@@ -194,24 +195,21 @@ impl RawTensor {
 
                 // Fast path: when all three inputs live on the same GPU device and
                 // shapes match exactly, evaluate z = x * y + w entirely on GPU.
+                // A `None` from either kernel is a failure, not a reason to use the CPU.
                 if dev_x.is_gpu() && dev_x == dev_y && dev_x == dev_z {
-                    if let Some(prod) = Self::gpu_mul(&data_x, &data_y) {
-                        if let Some(sum) = Self::gpu_add(&prod, &data_z) {
-                            return edge(
-                                [x.clone(), y.clone(), z.clone()],
-                                sum,
-                                shape_x,
-                                dev_x,
-                                GradFn::MulAcc(MulAccGradFn),
-                            );
-                        }
-                        log::warn!("GPU add for MulAcc failed; falling back to CPU path");
-                    } else {
-                        log::warn!("GPU mul for MulAcc failed; falling back to CPU path");
-                    }
+                    let sum = Self::gpu_mul(&data_x, &data_y)
+                        .and_then(|prod| Self::gpu_add(&prod, &data_z))
+                        .unwrap_or_else(|| kernel_failed("MulAcc"));
+                    return edge(
+                        [x.clone(), y.clone(), z.clone()],
+                        sum,
+                        shape_x,
+                        dev_x,
+                        GradFn::MulAcc(MulAccGradFn),
+                    );
                 }
 
-                // CPU fallback.
+                // CPU path (CPU inputs; mixed devices panic in `edge()`).
                 let result_data = data_x
                     .to_host_f32()
                     .iter()
@@ -228,7 +226,9 @@ impl RawTensor {
                 )
             }
             TernaryOp::Where => {
-                // x = condition, y = true branch, z = false branch
+                // x = condition, y = true branch, z = false branch. The condition is not a
+                // graph input, so `edge()` can't check its device: do it here.
+                let _ = common_device("Where", [&x.device(), &y.device(), &z.device()]);
                 let (cond_data, cond_shape) = {
                     let s = x.borrow();
                     (s.data.clone(), s.shape.clone())

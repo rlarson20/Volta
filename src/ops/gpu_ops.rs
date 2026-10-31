@@ -5,6 +5,8 @@
 
 use crate::device::Device;
 #[cfg(feature = "gpu")]
+use crate::device_policy::kernel_failed;
+#[cfg(feature = "gpu")]
 use crate::gpu::GpuKernels;
 use crate::ops::BinaryOp;
 use crate::ops::UnaryOp;
@@ -178,8 +180,12 @@ impl RawTensor {
 
     /// Run a binary op on the GPU when both inputs sit on the same GPU with equal shapes.
     ///
-    /// Returns `(shape, storage, device)`, or `None` to fall back to the CPU path. The GPU
-    /// forward kernels don't broadcast, so differing shapes also return `None`.
+    /// Returns `(shape, storage, device)`, or `None` for the CPU path: CPU inputs, mixed
+    /// devices (`edge()` panics on those), or differing shapes, since the GPU forward
+    /// kernels don't broadcast (a gap, which `edge()` hands to the device policy).
+    ///
+    /// # Panics
+    /// If the kernel runs for a supported case and returns no result.
     #[cfg(feature = "gpu")]
     pub(crate) fn gpu_binary_forward(
         self_t: &Tensor,
@@ -202,7 +208,8 @@ impl RawTensor {
             return None;
         }
 
-        let storage = Self::gpu_binary(&storage_a, &storage_b, op)?;
+        let storage = Self::gpu_binary(&storage_a, &storage_b, op)
+            .unwrap_or_else(|| kernel_failed(&format!("Binary({op:?})")));
         Some((shape_a, storage, device_a))
     }
 
@@ -218,9 +225,12 @@ impl RawTensor {
 
     /// GPU backward for a binary op, one gradient per parent.
     ///
-    /// `None` means "use the CPU path": the tensors aren't all on a GPU, or a *required*
-    /// gradient couldn't be computed. A partial result is never returned, since a `None`
-    /// gradient for a parameter that needs one silently freezes it.
+    /// `None` means "use the CPU path": the tensors aren't all on a GPU, or the shapes
+    /// differ (a gap). A partial result is never returned, since a `None` gradient for a
+    /// parameter that needs one silently freezes it.
+    ///
+    /// # Panics
+    /// If a same-shape kernel returns no result for a gradient that is required.
     #[cfg(feature = "gpu")]
     pub(crate) fn gpu_binary_backward(
         op: BinaryOp,
@@ -237,11 +247,10 @@ impl RawTensor {
         if !(out_grad.shape == x.shape && out_grad.shape == y.shape) {
             return None;
         }
-        let grads = Self::gpu_binary_backward_same_shape(op, out_grad, x, y);
-        if grads.is_none() {
-            log::warn!("GPU backward for {op:?} failed; falling back to CPU");
-        }
-        grads
+        Some(
+            Self::gpu_binary_backward_same_shape(op, out_grad, x, y)
+                .unwrap_or_else(|| kernel_failed(&format!("Binary({op:?})"))),
+        )
     }
 
     /// Not-gpu stub: the CPU path always runs.

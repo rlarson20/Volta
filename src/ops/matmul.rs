@@ -1,5 +1,6 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
+use crate::device_policy::kernel_failed;
 use crate::index::{fetch, slot};
 use crate::shape::{Shape, fixed_dims};
 use crate::spec::MatmulSpec;
@@ -242,22 +243,21 @@ impl RawTensor {
                 if !spec.is_batched() {
                     // Standard 2D matmul: (m,k) @ (k,n) -> (m,n)
                     //
-                    // If both inputs live on the same GPU device, try the GPU path first.
-                    // Fallback to the existing CPU implementation if anything fails.
+                    // If both inputs live on the same GPU device, run the GPU kernel. A
+                    // `None` from it is a failure, not a reason to use the CPU.
                     if let Some(device) = Self::common_gpu_device(&[self_t, other]) {
-                        if let Some(storage) = Self::gpu_matmul(&data_a, &data_b, &spec) {
-                            return edge(
-                                [self_t.clone(), other.clone()],
-                                storage,
-                                Shape::derived(spec.out_dims()),
-                                device,
-                                GradFn::MatMul(MatMulGradFn::matrix(spec)),
-                            );
-                        }
-                        log::warn!("GPU matmul requested but failed; falling back to CPU");
+                        let storage = Self::gpu_matmul(&data_a, &data_b, &spec)
+                            .unwrap_or_else(|| kernel_failed("MatMul"));
+                        return edge(
+                            [self_t.clone(), other.clone()],
+                            storage,
+                            Shape::derived(spec.out_dims()),
+                            device,
+                            GradFn::MatMul(MatMulGradFn::matrix(spec)),
+                        );
                     }
 
-                    // CPU fallback: BLAS/Accelerate or matrixmultiply on host data.
+                    // CPU path: BLAS/Accelerate or matrixmultiply on host data.
                     let result_data = Self::matmul_raw(
                         &data_a.to_host_f32(),
                         &data_b.to_host_f32(),
@@ -431,38 +431,25 @@ impl MatMulGradFn {
             .map(|p| p.borrow())
             .expect("matmul requires 2 parents");
 
-        // Check if we can do GPU backward (same pattern as unary/binary)
-        // For GPU backward, we need:
-        // - out_grad on GPU
-        // - The corresponding input (x for grad_x, y for grad_y) on GPU
-        // - Same device for all involved tensors
-        let gpu_available = out_grad.device.is_gpu()
-            && ((x.device.is_gpu() && y.device.is_gpu()) || (!x.requires_grad || !y.requires_grad));
-
-        // Only the plain 2D×2D case runs on GPU; everything else uses the CPU path below.
-        if gpu_available && let Some(spec) = self.spec.as_ref().filter(|s| !s.is_batched()) {
-            let grad_x = if x.requires_grad {
-                RawTensor::gpu_matmul_backward_a(&out_grad.data, &y.data, spec).map(|storage| {
-                    RawTensor::new_with_storage(storage, x.shape.clone(), x.device.clone(), false)
-                })
-            } else {
-                None
-            };
-
-            let grad_y = if y.requires_grad {
-                RawTensor::gpu_matmul_backward_b(&x.data, &out_grad.data, spec).map(|storage| {
-                    RawTensor::new_with_storage(storage, y.shape.clone(), y.device.clone(), false)
-                })
-            } else {
-                None
-            };
-
-            // Return early only if *every* required gradient was computed. A `None` for a
-            // tensor that needs one would silently freeze that parameter.
-            if (!x.requires_grad || grad_x.is_some()) && (!y.requires_grad || grad_y.is_some()) {
-                return vec![grad_x, grad_y];
-            }
-            log::warn!("GPU matmul backward failed for a required gradient; falling back to CPU");
+        // Only the plain 2D×2D case has GPU backward kernels. `edge()` put both inputs on
+        // the output's device, so a GPU `out_grad` means GPU inputs. Every other form is a
+        // gap and uses the CPU path below (the device policy applies in `accumulate_grad`).
+        // A `None` from a kernel is a failure: computing every required gradient or
+        // panicking means no parameter is silently left without one.
+        if out_grad.device.is_gpu()
+            && let Some(spec) = self.spec.as_ref().filter(|s| !s.is_batched())
+        {
+            let grad_x = x.requires_grad.then(|| {
+                let storage = RawTensor::gpu_matmul_backward_a(&out_grad.data, &y.data, spec)
+                    .unwrap_or_else(|| kernel_failed("MatMul"));
+                RawTensor::new_with_storage(storage, x.shape.clone(), x.device.clone(), false)
+            });
+            let grad_y = y.requires_grad.then(|| {
+                let storage = RawTensor::gpu_matmul_backward_b(&x.data, &out_grad.data, spec)
+                    .unwrap_or_else(|| kernel_failed("MatMul"));
+                RawTensor::new_with_storage(storage, y.shape.clone(), y.device.clone(), false)
+            });
+            return vec![grad_x, grad_y];
         }
 
         // For z = x @ y where x: (m,n), y: (n,p), z: (m,p)

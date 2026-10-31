@@ -40,7 +40,7 @@ pub fn get_gpu_context() -> Option<&'static GpuContext> {
                 Some(ctx)
             }
             Err(e) => {
-                log::warn!("GPU initialization failed: {e}. Falling back to CPU.");
+                log::warn!("GPU initialization failed: {e}. No GPU is available; to_device(GPU) will panic.");
                 None
             }
         })

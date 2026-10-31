@@ -1,6 +1,7 @@
 use crate::Storage;
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
+use crate::device_policy::kernel_failed;
 use crate::index::{fetch, slot};
 use crate::io::{StateDict, TensorData};
 use crate::nn::{Layer, Module};
@@ -156,27 +157,14 @@ impl Im2colGradFn {
         // out_grad has shape (B*H_out*W_out, C*K*K)
         // We need to convert it back to (B, C, H, W) using col2im
 
-        // Try GPU-accelerated col2im first
-        let grad_storage = if out_grad.data.is_gpu() {
-            if let Some(gpu_storage) = RawTensor::gpu_col2im(&out_grad.data, &self.spec) {
-                gpu_storage
-            } else {
-                // Fallback to CPU - convert Vec<f32> to Storage
-                crate::storage::Storage::cpu(Conv2d::col2im(
-                    &out_grad.data.to_host_f32(),
-                    &self.spec,
-                ))
-            }
+        // GPU col2im for a GPU gradient; a `None` from the kernel is a failure.
+        let (grad_storage, device) = if out_grad.device.is_gpu() {
+            let storage = RawTensor::gpu_col2im(&out_grad.data, &self.spec)
+                .unwrap_or_else(|| kernel_failed("Im2col"));
+            (storage, out_grad.device.clone())
         } else {
-            // CPU path - convert Vec<f32> to Storage
-            crate::storage::Storage::cpu(Conv2d::col2im(&out_grad.data.to_host_f32(), &self.spec))
-        };
-
-        // Determine device from storage
-        let device = if grad_storage.is_gpu() {
-            crate::Device::gpu().unwrap_or(crate::Device::CPU)
-        } else {
-            crate::Device::CPU
+            let col = Conv2d::col2im(&out_grad.data.to_host_f32(), &self.spec);
+            (crate::storage::Storage::cpu(col), crate::Device::CPU)
         };
 
         let grad_tensor = RawTensor::try_new_with_storage(
@@ -216,34 +204,27 @@ impl DirectConvGradFn {
         let grad_x = if let Some(ref x_tensor) = x
             && x_tensor.borrow().requires_grad
         {
-            // GPU first; a kernel miss falls through to the CPU path, never to `None`,
-            // which would silently freeze the input's gradient.
-            use_gpu
-                .then(|| {
-                    RawTensor::gpu_conv_backward_input(
-                        &out_grad.data,
-                        &weight.as_ref().unwrap().borrow().data,
-                        &self.spec,
-                    )
-                })
-                .flatten()
-                .map(|storage| {
-                    RawTensor::new_with_storage(
-                        storage,
-                        Shape::derived(self.spec.input_dims()),
-                        out_grad.device.clone(),
-                        false,
-                    )
-                })
-                .or_else(|| {
-                    if use_gpu {
-                        log::warn!("GPU conv input gradient failed; falling back to CPU");
-                    }
-                    Some(self.compute_input_gradient_cpu(
-                        &out_grad.data.to_vec(),
-                        &weight.as_ref().unwrap().borrow().data.to_vec(),
-                    ))
-                })
+            // On the GPU, a `None` from the kernel is a failure: never a `None` gradient
+            // (which would silently freeze the input) and never a silent CPU fallback.
+            Some(if use_gpu {
+                let storage = RawTensor::gpu_conv_backward_input(
+                    &out_grad.data,
+                    &weight.as_ref().unwrap().borrow().data,
+                    &self.spec,
+                )
+                .unwrap_or_else(|| kernel_failed("DirectConv"));
+                RawTensor::new_with_storage(
+                    storage,
+                    Shape::derived(self.spec.input_dims()),
+                    out_grad.device.clone(),
+                    false,
+                )
+            } else {
+                self.compute_input_gradient_cpu(
+                    &out_grad.data.to_vec(),
+                    &weight.as_ref().unwrap().borrow().data.to_vec(),
+                )
+            })
         } else {
             None
         };
@@ -252,32 +233,25 @@ impl DirectConvGradFn {
         let grad_w = if let Some(ref w_tensor) = weight
             && w_tensor.borrow().requires_grad
         {
-            use_gpu
-                .then(|| {
-                    RawTensor::gpu_conv_backward_weight(
-                        &out_grad.data,
-                        &x.as_ref().unwrap().borrow().data,
-                        &self.spec,
-                    )
-                })
-                .flatten()
-                .map(|storage| {
-                    RawTensor::new_with_storage(
-                        storage,
-                        Shape::derived(self.spec.weight_dims()),
-                        out_grad.device.clone(),
-                        false,
-                    )
-                })
-                .or_else(|| {
-                    if use_gpu {
-                        log::warn!("GPU conv weight gradient failed; falling back to CPU");
-                    }
-                    Some(self.compute_weight_gradient_cpu(
-                        &out_grad.data.to_vec(),
-                        &x.as_ref().unwrap().borrow().data.to_vec(),
-                    ))
-                })
+            Some(if use_gpu {
+                let storage = RawTensor::gpu_conv_backward_weight(
+                    &out_grad.data,
+                    &x.as_ref().unwrap().borrow().data,
+                    &self.spec,
+                )
+                .unwrap_or_else(|| kernel_failed("DirectConv"));
+                RawTensor::new_with_storage(
+                    storage,
+                    Shape::derived(self.spec.weight_dims()),
+                    out_grad.device.clone(),
+                    false,
+                )
+            } else {
+                self.compute_weight_gradient_cpu(
+                    &out_grad.data.to_vec(),
+                    &x.as_ref().unwrap().borrow().data.to_vec(),
+                )
+            })
         } else {
             None
         };
@@ -482,28 +456,22 @@ impl IGEMMGradFn {
         let grad_x = if let Some(ref x_tensor) = x
             && x_tensor.borrow().requires_grad
         {
-            let result = if is_gpu {
-                RawTensor::gpu_igemm_backward_input(
+            // On the GPU, a `None` from the kernel is a failure, not a CPU fallback.
+            if is_gpu {
+                let storage = RawTensor::gpu_igemm_backward_input(
                     &out_grad.data,
                     &weight.as_ref().unwrap().borrow().data,
                     &self.spec,
                 )
-                .map(|storage| {
-                    RawTensor::new_with_storage(
-                        storage,
-                        Shape::derived(self.spec.input_dims()),
-                        out_grad.device.clone(),
-                        false,
-                    )
-                })
+                .unwrap_or_else(|| kernel_failed("Igemm"));
+                Some(RawTensor::new_with_storage(
+                    storage,
+                    Shape::derived(self.spec.input_dims()),
+                    out_grad.device.clone(),
+                    false,
+                ))
             } else {
-                None
-            };
-
-            if let Some(r) = result {
-                Some(r)
-            } else {
-                // CPU fallback
+                // CPU path
                 let mut grad_x_data = vec![0.0f32; batch * in_ch * height * width];
                 let out_grad_data = out_grad.data.to_vec();
                 let weight_data = weight.as_ref().map(|w| w.borrow().data.to_vec());
@@ -531,28 +499,22 @@ impl IGEMMGradFn {
         let grad_w = if let Some(ref w_tensor) = weight
             && w_tensor.borrow().requires_grad
         {
-            let result = if is_gpu {
-                RawTensor::gpu_igemm_backward_weight(
+            // On the GPU, a `None` from the kernel is a failure, not a CPU fallback.
+            if is_gpu {
+                let storage = RawTensor::gpu_igemm_backward_weight(
                     &out_grad.data,
                     &x.as_ref().unwrap().borrow().data,
                     &self.spec,
                 )
-                .map(|storage| {
-                    RawTensor::new_with_storage(
-                        storage,
-                        Shape::derived(self.spec.weight_dims()),
-                        out_grad.device.clone(),
-                        false,
-                    )
-                })
+                .unwrap_or_else(|| kernel_failed("Igemm"));
+                Some(RawTensor::new_with_storage(
+                    storage,
+                    Shape::derived(self.spec.weight_dims()),
+                    out_grad.device.clone(),
+                    false,
+                ))
             } else {
-                None
-            };
-
-            if let Some(r) = result {
-                Some(r)
-            } else {
-                // CPU fallback
+                // CPU path
                 let mut grad_w_data = vec![0.0f32; out_ch * in_ch * kernel_h * kernel_w];
                 let out_grad_data = out_grad.data.to_vec();
                 let x_data = x.as_ref().map(|x| x.borrow().data.to_vec());
@@ -902,10 +864,10 @@ impl Conv2d {
         let rows = batch * h_out * w_out;
         let cols = channels * kh * kw;
 
-        // Use GPU path if available and input is on GPU
-        if matches!(device, Device::GPU(_))
-            && let Some(col_data) = crate::RawTensor::gpu_im2col(&data, spec)
-        {
+        // GPU path for a GPU input; a `None` from the kernel is a failure.
+        if device.is_gpu() {
+            let col_data = crate::RawTensor::gpu_im2col(&data, spec)
+                .unwrap_or_else(|| kernel_failed("Im2col"));
             return edge(
                 [x.clone()],
                 col_data,
@@ -915,7 +877,7 @@ impl Conv2d {
             );
         }
 
-        // CPU fallback
+        // CPU path
         let total_elements = rows * cols;
         assert!(
             total_elements <= MAX_ALLOC,
@@ -1129,21 +1091,17 @@ impl Conv2d {
         let x_data = x.borrow().data.clone();
         let w_data = weight.borrow().data.clone();
 
-        let result = RawTensor::gpu_direct_conv(&x_data, &w_data, spec);
-        if let Some(storage) = result {
-            let device = x.borrow().device.clone();
-
-            edge(
-                [x.clone(), weight.clone()],
-                storage,
-                Shape::derived(spec.output_dims()),
-                device,
-                GradFn::DirectConv(DirectConvGradFn { spec: *spec }),
-            )
-        } else {
-            log::warn!("GPU direct convolution failed, falling back to CPU");
-            Self::direct_conv(x, weight, spec)
-        }
+        // A `None` from the kernel is a failure, not a reason to use the CPU.
+        let storage = RawTensor::gpu_direct_conv(&x_data, &w_data, spec)
+            .unwrap_or_else(|| kernel_failed("DirectConv"));
+        let device = x.borrow().device.clone();
+        edge(
+            [x.clone(), weight.clone()],
+            storage,
+            Shape::derived(spec.output_dims()),
+            device,
+            GradFn::DirectConv(DirectConvGradFn { spec: *spec }),
+        )
     }
 
     /// Implicit GEMM (iGEMM) convolution - performs GEMM without materializing im2col matrix
@@ -1185,15 +1143,10 @@ impl Conv2d {
             ..
         } = *spec;
 
-        // Try GPU path first
-        let gpu_result = {
-            let is_gpu = matches!(x_device, Device::GPU(_));
-            if is_gpu {
-                RawTensor::gpu_igemm(&x_data, &w_data, spec)
-            } else {
-                None
-            }
-        };
+        // GPU path for a GPU input; a `None` from the kernel is a failure.
+        let gpu_result = x_device.is_gpu().then(|| {
+            RawTensor::gpu_igemm(&x_data, &w_data, spec).unwrap_or_else(|| kernel_failed("Igemm"))
+        });
 
         // `edge()` requires grad if *either* x or weight does — fixes a latent bug
         // where this used to check only `x_requires_grad`, ignoring the weight
@@ -1210,7 +1163,7 @@ impl Conv2d {
                 }),
             )
         } else {
-            // Fall back to CPU path
+            // CPU path
             let x_data_cpu = x_data.to_vec();
             let w_data_cpu = w_data.to_vec();
 
@@ -1382,7 +1335,7 @@ impl Conv2d {
                 }
             }
             ConvAlgo::IGEMM => {
-                // Implicit GEMM convolution (CPU only for now)
+                // Implicit GEMM convolution
                 Self::igemm_forward(x, &self.weight, &spec, IGEMMVariant::default())
             }
             ConvAlgo::Im2col | ConvAlgo::Auto => {

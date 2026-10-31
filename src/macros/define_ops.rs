@@ -113,6 +113,15 @@ macro_rules! define_ops {
                     ),)*
                 }
             }
+
+            /// Whether the op has GPU kernels: `false` for a `cpu_only` row, which is a
+            /// gap for the device policy rather than a kernel failure.
+            #[must_use]
+            pub(crate) const fn has_gpu_kernel(self) -> bool {
+                match self {
+                    $(Self::$variant => $crate::macros::define_ops!(@unary_has $kind),)*
+                }
+            }
         }
     };
 
@@ -233,6 +242,12 @@ macro_rules! define_ops {
         }
     };
 
+    (@unary_has cpu_only) => {
+        false
+    };
+    (@unary_has gpu) => {
+        true
+    };
     (@unary_pipes $p:ident; cpu_only) => {
         None
     };
