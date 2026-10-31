@@ -321,8 +321,19 @@ impl RawTensor {
             };
             // If this node has a gradient function and gradients, backpropagate
             if let Some(grad_fn) = grad_fn
-                && let Some(grad_out_data) = grad_data
+                && let Some(mut grad_out_data) = grad_data
             {
+                // `edge()` puts an op's output on its inputs' device, so a node on another
+                // device than its parents is a `to_device` copy of that output. Its
+                // gradient goes back to the parents' device: a deliberate transfer, not a
+                // gap for the device policy.
+                let mut device = device;
+                if let Some(parent_device) = parents.first().map(Tensor::device)
+                    && parent_device != device
+                {
+                    grad_out_data = grad_out_data.to_device(&parent_device);
+                    device = parent_device;
+                }
                 let grad_out = Self {
                     data: grad_out_data,
                     shape,

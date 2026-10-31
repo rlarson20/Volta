@@ -241,9 +241,10 @@ impl Tensor {
     /// `accumulate_grad` (used by `backward()`) adds a contribution in; this one
     /// replaces it outright. Intended for tests that need to seed a specific
     /// gradient without running a full forward+backward pass (e.g. verifying
-    /// optimizer arithmetic in isolation). Normalizes `grad` onto this tensor's
-    /// device first, same as `accumulate_grad`, so a mismatched-device grad
-    /// doesn't silently desync.
+    /// optimizer arithmetic in isolation). Moves `grad` onto this tensor's device
+    /// first, so a gradient never sits on another device than its tensor. This is an
+    /// explicit transfer, so the device policy doesn't apply (unlike `accumulate_grad`,
+    /// where a CPU gradient for a GPU tensor is a gap).
     pub fn set_grad(&self, grad: Storage) {
         let mut t = self.inner.borrow_mut();
         let device = t.device.clone();

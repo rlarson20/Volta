@@ -458,6 +458,26 @@ fn rank5_permute_prefer_gpu_matches_cpu() {
     assert_eq!(out.data(), x_cpu.permute(&axes).data());
 }
 
+/// Moving a tensor between devices mid-graph is a deliberate transfer, not a gap:
+/// backward through `to_device` brings the gradient back to the source device under
+/// `Strict`, with no fallback recorded.
+#[test]
+fn backward_through_to_device_is_not_a_gap() {
+    if skip_if_no_gpu() {
+        return;
+    }
+    let (x_cpu, x) = leaf_pair(&[2, 3]);
+    x_cpu.exp().sum().into_loss().unwrap().backward();
+
+    let _strict = with_device_policy(DevicePolicy::Strict);
+    let _ = take_fallback_events();
+    let y = x.exp().to_device(Device::CPU);
+    y.sum().into_loss().unwrap().backward();
+    assert!(x.grad_storage().unwrap().is_gpu());
+    assert_close("x", &x_cpu.grad().unwrap(), &x.grad().unwrap(), 1e-5);
+    assert!(take_fallback_events().is_empty());
+}
+
 /// Run `f`, which must panic, and return its panic message.
 ///
 /// GPU tests can't use `#[should_panic]`: without an adapter they return early, which
