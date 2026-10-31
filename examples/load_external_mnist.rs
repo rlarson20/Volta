@@ -1,4 +1,4 @@
-//! Loads `PyTorch` weights (a `SafeTensors` file) into a Volta `Sequential` through `StateDictMapper`, transposing the `fc1` and `fc2` weights from the `[out, in]` layout `PyTorch` uses, then runs a demo inference.
+//! Loads PyTorch weights (a `SafeTensors` file) into a Volta `Sequential` through `StateDictMapper`, transposing the `fc1` and `fc2` weights from the `[out, in]` layout PyTorch uses, then runs a demo inference.
 use std::path::Path;
 use volta::{
     Layer, Linear, Module, RawTensor, ReLU, Sequential,
@@ -104,7 +104,7 @@ fn main() {
     println!("✓ Model ready for inference");
 }
 
-/// Intended to compare Volta's outputs against `PyTorch` reference outputs read from `test_data_path`.
+/// Intended to compare Volta's outputs against PyTorch reference outputs read from `test_data_path`.
 ///
 /// It does not do so yet: it reads the file, skips the JSON parsing (no `serde_json` dependency), and runs `run_demo_inference` instead.
 fn run_validation(model: &Sequential, test_data_path: &str) {

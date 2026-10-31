@@ -9,11 +9,11 @@ use crate::shape::fixed_dims;
 ///
 /// # Weight layouts
 ///
-/// Only Volta's `Linear` differs from `PyTorch`, so only `Linear` weights need a transpose.
+/// Only Volta's `Linear` differs from PyTorch, so only `Linear` weights need a transpose.
 /// Transposing anything else corrupts it, and on a square matrix the shape check in
 /// `load_state_dict` can't tell.
 ///
-/// | Layer | Volta | `PyTorch` |
+/// | Layer | Volta | PyTorch |
 /// | --- | --- | --- |
 /// | `Linear.weight` | `[in, out]` | `[out, in]` (transpose) |
 /// | `Embedding.weight` | `[vocab, dim]` | `[vocab, dim]` |
@@ -141,7 +141,7 @@ impl StateDictMapper {
 
     /// Transpose a specific 2D tensor (for Linear weight conversion)
     ///
-    /// `PyTorch` Linear layers store weights as [`out_features`, `in_features`],
+    /// PyTorch Linear layers store weights as [`out_features`, `in_features`],
     /// while Volta stores them as [`in_features`, `out_features`].
     ///
     /// This operation only affects 2D tensors. Non-2D tensors are left unchanged.
@@ -160,7 +160,7 @@ impl StateDictMapper {
     }
 
     /// Transpose the `Linear` layer `name`'s weight (`{name}.weight`, or `weight` when
-    /// `name` is empty) from `PyTorch`'s `[out, in]` to Volta's `[in, out]`.
+    /// `name` is empty) from PyTorch's `[out, in]` to Volta's `[in, out]`.
     ///
     /// Unlike [`StateDictMapper::transpose`], a missing key or a non-2-D tensor is an
     /// error, not a no-op: the caller said this layer is a `Linear`.
@@ -196,7 +196,7 @@ impl StateDictMapper {
     /// Example: `transpose_pattern("weight")` transposes all keys containing "weight".
     /// That includes `Embedding` and `LSTMCell` weights, which must not be transposed (see
     /// the layout table on [`StateDictMapper`]); use [`StateDictMapper::transpose_linear`]
-    /// to convert `PyTorch` `Linear` weights.
+    /// to convert PyTorch `Linear` weights.
     pub fn transpose_pattern(mut self, pattern: impl Into<String>) -> Self {
         let pattern = pattern.into();
 
@@ -286,11 +286,11 @@ impl Default for StateDictMapper {
     }
 }
 
-/// Convert a `PyTorch` state dict for Volta by transposing the weights of the named
+/// Convert a PyTorch state dict for Volta by transposing the weights of the named
 /// `Linear` layers
 ///
-/// `PyTorch` Linear layers store weights as [`out_features`, `in_features`], while Volta
-/// stores them as [`in_features`, `out_features`]. Other layers share `PyTorch`'s layout
+/// PyTorch Linear layers store weights as [`out_features`, `in_features`], while Volta
+/// stores them as [`in_features`, `out_features`]. Other layers share PyTorch's layout
 /// (see the table on [`StateDictMapper`]), and key names can't tell a `Linear` weight from
 /// an `Embedding` weight, so the caller names the `Linear` layers: `&["fc1", "fc2"]`
 /// transposes `fc1.weight` and `fc2.weight` and nothing else.

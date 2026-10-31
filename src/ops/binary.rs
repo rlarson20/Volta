@@ -115,7 +115,7 @@ impl BinaryGradFn {
 
 // ===== BINARY OPERATIONS =====
 impl RawTensor {
-    /// Compute broadcast shape following `NumPy` broadcasting rules
+    /// Compute broadcast shape following NumPy broadcasting rules
     ///
     /// Rules:
     /// 1. Align shapes from the right (trailing dimensions)

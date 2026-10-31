@@ -174,7 +174,7 @@ impl Tensor {
     /// Panics if called on a tensor that already has a `grad_fn` attached —
     /// flipping the flag on a non-leaf tensor would contradict the invariant
     /// `edge()` maintains (`requires_grad` is derived from inputs, not hand-set,
-    /// on anything that isn't a leaf). This is the same rule `PyTorch` enforces on
+    /// on anything that isn't a leaf). This is the same rule PyTorch enforces on
     /// `.requires_grad = ...` for non-leaf tensors, and it's an unconditional
     /// `assert!` rather than `debug_assert!` deliberately: if this method is public,
     /// the check needs to actually hold in release builds too, or it's the same

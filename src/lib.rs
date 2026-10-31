@@ -3382,7 +3382,7 @@ mod axis_reduce_tests {
         }
     }
 
-    /// Integration test: Simulated `PyTorch` model → Volta loading workflow
+    /// Integration test: Simulated PyTorch model → Volta loading workflow
     ///
     /// This test demonstrates the full end-to-end workflow of:
     /// 1. Creating a "PyTorch-style" state dict (weights stored as [out, in])
