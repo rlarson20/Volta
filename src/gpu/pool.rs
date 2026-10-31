@@ -18,9 +18,9 @@ use std::sync::Mutex;
 #[derive(Debug, Clone)]
 pub struct BufferPoolConfig {
     /// Maximum number of buffers per size bucket
-    pub max_buffers_per_bucket: usize,
+    pub bucket_capacity: usize,
     /// Maximum total buffers across all buckets
-    pub max_total_buffers: usize,
+    pub total_capacity: usize,
     /// Maximum buffer size (in bytes) to pool (larger buffers are not pooled)
     pub max_pooled_size: usize,
 }
@@ -28,8 +28,8 @@ pub struct BufferPoolConfig {
 impl Default for BufferPoolConfig {
     fn default() -> Self {
         Self {
-            max_buffers_per_bucket: 8,         // Keep up to 8 buffers of each size
-            max_total_buffers: 64,             // Total pool capacity
+            bucket_capacity: 8,                // Keep up to 8 buffers of each size
+            total_capacity: 64,                // Total pool capacity
             max_pooled_size: 64 * 1024 * 1024, // Pool buffers up to 64MB
         }
     }
@@ -164,14 +164,14 @@ impl BufferPool {
         let mut count = self.total_count.lock().unwrap();
 
         // Check total capacity
-        if *count >= self.config.max_total_buffers {
+        if *count >= self.config.total_capacity {
             return false; // Pool full
         }
 
         let queue = buckets.entry(bucket).or_default();
 
         // Check per-bucket capacity
-        if queue.len() >= self.config.max_buffers_per_bucket {
+        if queue.len() >= self.config.bucket_capacity {
             return false; // Bucket full
         }
 
@@ -269,8 +269,8 @@ mod tests {
     #[test]
     fn test_config_limits() {
         let config = BufferPoolConfig {
-            max_buffers_per_bucket: 2,
-            max_total_buffers: 4,
+            bucket_capacity: 2,
+            total_capacity: 4,
             max_pooled_size: 1024,
         };
         let pool = BufferPool::new(config);

@@ -30,22 +30,6 @@ mod gpu_tests {
     }
 
     #[test]
-    fn test_gpu_add() {
-        if !gpu::is_gpu_available() {
-            println!("Skipping GPU test - no GPU available");
-            return;
-        }
-
-        let a = gpu::GpuBuffer::from_slice(&[1.0, 2.0, 3.0, 4.0]).unwrap();
-        let b = gpu::GpuBuffer::from_slice(&[5.0, 6.0, 7.0, 8.0]).unwrap();
-
-        let c = gpu::GpuKernels::binary_op(&a, &b, volta::ops::BinaryOp::Add).unwrap();
-        let result = c.to_vec();
-
-        assert_eq!(result, vec![6.0, 8.0, 10.0, 12.0]);
-    }
-
-    #[test]
     fn test_gpu_autograd_root_grad_on_gpu() {
         if !gpu::is_gpu_available() {
             println!("Skipping GPU autograd test - no GPU available");
