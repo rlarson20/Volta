@@ -67,7 +67,7 @@ pub use nn::layers::Dropout;
 pub use nn::layers::flatten::Flatten;
 pub use nn::{
     Adam, BatchNorm1d, BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, Embedding, GELU,
-    IndexedLayer, LSTMCell, Layer, LayerNorm, Linear, MaxPool2d, Module, PixelShuffle, ReLU,
+    IndexedLayer, LSTMCell, Layer, LayerNorm, Linear, MaxPool2d, Module, Muon, PixelShuffle, ReLU,
     RecurrentLayer, SGD, Sequential, SequentialBuilder, Sigmoid, Tanh,
 };
 pub use tensor::{RawTensor, Tensor};

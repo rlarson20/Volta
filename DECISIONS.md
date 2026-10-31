@@ -533,6 +533,20 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 
 **Not changed:** ops that take an `Axis` (`max_dim`, `mean_dim`, `softmax`, `permute`, ...) and the GPU layer's `Option` returns stay as they were. A binding range-checks an axis against `shape().rank()` itself until those get a `try_` form.
 
+## Optimizers
+
+### Muon follows the reference iteration and runs on the CPU only
+
+**Decision:** `Muon` orthogonalizes with the reference quintic Newton-Schulz (`a, b, c = 3.4445, -4.7750, 2.0315`), scales the step by `sqrt(max(1, rows / cols))`, and panics in `Muon::new` on a GPU parameter. It is exported from the crate root with `Adam` and `SGD`.
+
+**Why the quintic:** the old code iterated `0.5·X·(3I - XᵀX)`, the classic cubic. It converges to exactly orthogonal on a well-conditioned matrix, so a Gram-matrix check cannot tell the two apart (measured: the cubic scores better on random 8x12 and 6x24 inputs). The quintic's point is the slope at zero, 3.44 against 1.5: a singular value around 5e-3 (a direction the gradient has nearly lost) reaches the band in five steps, where the cubic leaves it near 0.04. `muon::tests::newton_schulz_recovers_a_nearly_vanished_direction` pins that, and the cubic fails it. The quintic settles in about `[0.7, 1.2]` rather than at 1, which is what the reference accepts.
+
+**Shape scale and orientation:** the reference multiplies by `sqrt(max(1, out / in))` for PyTorch's `[out, in]` weights. Volta treats a parameter as `[dim0, rest]`, which matches that for conv weights (`[out, in·kh·kw]`) and is the transpose for `Linear`, which stores `[in, out]`. The orthogonalization is transpose-equivariant (a test pins it), so only this factor differs: for a `Linear` it is `sqrt(max(1, in / out))`. Making Muon aware of each parameter's layout would need per-parameter metadata the optimizer API does not carry; documented on `Muon` instead. The old `* 0.1` "stability" constant is gone.
+
+**Non-matrices:** a parameter of rank below 2, or with one row or column, gets plain momentum with no orthogonalization and no scale. The reference sends those to Adam; here the caller can put them in an `Adam`.
+
+**Why a panic in `new`:** Muon's momentum and Newton-Schulz run on host buffers, and there is no GPU kernel. The failure used to come from `step`, at the first update, after training had begun. A parameter's device is something the program chose when it built the model, so it is a contract violation between tensors the program built (invariant 8): a panic, documented under `# Panics`. A GPU Muon would be a kernel, not a conversion.
+
 ## Concurrency and Async
 
 ### Stay synchronous

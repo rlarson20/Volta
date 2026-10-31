@@ -1,11 +1,29 @@
-use crate::index::{fetch, slot};
 use crate::tensor::{RawTensor, Tensor};
 
-/// Muon: Momentum Orthogonal Optimizer
+/// Coefficients of the quintic `p(x) = a·x + b·x³ + c·x⁵` that Muon iterates on the
+/// singular values (Jordan et al.'s reference implementation). They are tuned for the
+/// slope at zero, not for convergence to 1: after five steps the singular values land
+/// roughly in `[0.7, 1.2]`, which is close enough to orthogonal for an optimizer.
+const NS_A: f32 = 3.4445;
+const NS_B: f32 = -4.7750;
+const NS_C: f32 = 2.0315;
+
+/// Muon: momentum, then an approximately orthogonalized update.
 ///
-/// Uses Newton-Schulz iteration to orthogonalize the update steps,
-/// useful for large-scale training where standard adaptive methods usually struggle
-/// or for specific architectures.
+/// Each matrix-shaped parameter's momentum is pushed through a few Newton-Schulz
+/// iterations that drive its singular values toward 1, and the result (scaled by
+/// `sqrt(max(1, rows / cols))`) is the step. This follows the reference implementation's
+/// quintic iteration and shape scaling.
+///
+/// A parameter is treated as the matrix `[dim0, product of the other dims]`, so a conv
+/// weight `[out, in, kh, kw]` is `out × (in·kh·kw)`, as in the reference. Volta's
+/// `Linear` stores `[in, out]`, the transpose of PyTorch, so for it the shape scale is
+/// `sqrt(max(1, in / out))` (the orthogonalization itself does not depend on the
+/// orientation). A parameter that is not a matrix (rank below 2, or one row or column)
+/// is updated with plain momentum and no orthogonalization or scaling; the reference
+/// optimizes such parameters with Adam instead.
+///
+/// Parameters must live on the CPU: see [`Muon::new`].
 pub struct Muon {
     params: Vec<Tensor>,
     lr: f32,
@@ -16,6 +34,20 @@ pub struct Muon {
 }
 
 impl Muon {
+    /// Create a Muon optimizer.
+    ///
+    /// # Arguments
+    /// * `params` - Parameters to optimize (CPU, f32)
+    /// * `lr` - Learning rate. The step is orthogonalized, so its size does not follow the
+    ///   gradient's; the reference uses about 0.02
+    /// * `momentum` - Momentum coefficient (typical: 0.95)
+    /// * `nesterov` - Use the Nesterov update `momentum·v + g` instead of `v`
+    /// * `ns_steps` - Newton-Schulz iterations (typical: 5)
+    ///
+    /// # Panics
+    /// If a parameter is on the GPU. Muon's momentum and Newton-Schulz run on host
+    /// buffers and there is no GPU kernel for them, so a GPU parameter would otherwise
+    /// fail at the first `step`, after training had started.
     #[must_use]
     pub fn new(
         params: Vec<Tensor>,
@@ -24,6 +56,12 @@ impl Muon {
         nesterov: bool,
         ns_steps: usize,
     ) -> Self {
+        for (i, p) in params.iter().enumerate() {
+            assert!(
+                !p.borrow().device.is_gpu(),
+                "Muon: parameter {i} is on the GPU, but Muon runs on the CPU only (H8)"
+            );
+        }
         let velocity = params
             .iter()
             .map(|p| vec![0.0; p.borrow().data.len()])
@@ -38,125 +76,113 @@ impl Muon {
         }
     }
 
+    /// Clear every parameter's gradient.
     pub fn zero_grad(&self) {
         for param in &self.params {
-            param.borrow_mut().grad = None;
+            param.zero_grad();
         }
     }
 
-    /// Newton-Schulz iteration: X_{k+1} = 0.5 * `X_k` * (3I - `X_k^T` * `X_k`)
+    /// Approximately orthogonalize the `rows × cols` row-major matrix `g` in place with
+    /// `steps` quintic Newton-Schulz iterations.
     ///
-    /// Operated on flattened (M, N) matrices.
-    fn newton_schulz(&self, g: &mut [f32], rows: usize, cols: usize) {
-        let steps = self.ns_steps;
+    /// `g` is normalized by its Frobenius norm first (`‖g‖_F ≥ ‖g‖₂`, so every singular
+    /// value starts in `[0, 1]`, inside the basin of the iteration). A tall matrix is
+    /// transposed so the Gram matrix `X Xᵀ` is on the smaller side, and transposed back.
+    fn newton_schulz(g: &mut [f32], rows: usize, cols: usize, steps: usize) {
+        let transposed = rows > cols;
+        let (m, n) = if transposed {
+            (cols, rows)
+        } else {
+            (rows, cols)
+        };
 
-        // Helper for inplace: X = A * B
-        // We re-use matmul logic from RawTensor
+        let mut x = if transposed {
+            RawTensor::transpose_2d(g, &[rows, cols])
+        } else {
+            g.to_vec()
+        };
 
-        // Normalize first: x /= x.norm() + epsilon (approx spectral norm)
-        // Simple Frobenius norm as proxy or just standard deviation scaling generally used in simple implementations
-        // For Muon, usually we assume the inputs are somewhat regulated, but let's compute Frobenius for stability
-        let sum_sq: f32 = g.iter().map(|x| x * x).sum();
-        let norm = (sum_sq + 1e-8).sqrt();
-        if norm > 1e-8 {
-            for x in g.iter_mut() {
-                *x /= norm;
-            }
+        let norm = x.iter().map(|v| v * v).sum::<f32>().sqrt();
+        let inv = 1.0 / (norm + 1e-7);
+        for v in &mut x {
+            *v *= inv;
         }
 
-        // Iteration
         for _ in 0..steps {
-            // A = X^T
-            let xt = RawTensor::transpose_2d(g, &[rows, cols]);
-
-            // B = X^T * X
-            // (Cols, Rows) * (Rows, Cols) -> (Cols, Cols)
-            let xt_x = RawTensor::matmul_raw(&xt, g, cols, rows, cols);
-
-            // C = 3I - B
-            let mut c = vec![0.0; cols * cols];
-            for i in 0..cols {
-                for j in 0..cols {
-                    let idx = i * cols + j;
-                    let val = fetch(&xt_x, idx);
-                    *slot(&mut c, idx) = if i == j { 3.0 - val } else { -val };
-                }
-            }
-
-            // New X = 0.5 * X * C
-            // (Rows, Cols) * (Cols, Cols) -> (Rows, Cols)
-            let next_x = RawTensor::matmul_raw(g, &c, rows, cols, cols);
-
-            for (i, val) in next_x.iter().enumerate() {
-                *slot(g, i) = val * 0.5;
-            }
+            // A = X Xᵀ (m×m), B = b·A + c·A², X ← a·X + B·X
+            let xt = RawTensor::transpose_2d(&x, &[m, n]);
+            let a = RawTensor::matmul_raw(&x, &xt, m, n, m);
+            let a2 = RawTensor::matmul_raw(&a, &a, m, m, m);
+            let b: Vec<f32> = a
+                .iter()
+                .zip(&a2)
+                .map(|(&a, &a2)| NS_B * a + NS_C * a2)
+                .collect();
+            let bx = RawTensor::matmul_raw(&b, &x, m, m, n);
+            x = x.iter().zip(&bx).map(|(&x, &bx)| NS_A * x + bx).collect();
         }
 
-        // Rescale? Usually Muon keeps it normalized, acting as "normalized update".
-        // We apply LR outside.
+        let result = if transposed {
+            RawTensor::transpose_2d(&x, &[m, n])
+        } else {
+            x
+        };
+        g.copy_from_slice(&result);
     }
 
+    /// Perform one optimization step on every parameter that has a gradient.
+    ///
     /// # Panics
-    /// unwrap params
+    /// If a parameter's data is not CPU f32.
     pub fn step(&mut self) {
-        for (i, param) in self.params.iter().enumerate() {
+        for (param, velocity) in self.params.iter().zip(self.velocity.iter_mut()) {
             let mut p = param.borrow_mut();
-            if let Some(grad) = &p.grad {
-                let shape = &p.shape;
+            let Some(grad) = p.grad.as_ref().map(|g| g.to_host_f32().into_owned()) else {
+                continue;
+            };
 
-                // Muon logic:
-                // 1. Flatten params to 2D (keeping output dim as row usually)
-                // If vector (1D), treat as (Rows, 1)
-                let (rows, cols) = if shape.rank() < 2 {
-                    // A vector is (n, 1). A rank-0 parameter is a single value: (1, 1).
-                    if shape.rank() == 1 {
-                        (shape.dim_at(0), 1)
-                    } else {
-                        (1, 1)
-                    }
-                } else {
-                    // For Linear: [In, Out] -> Muon treats as [In, Out] usually or [Out, In]
-                    // For Conv2d: [Out, In, K, K] -> flatten to [Out, In*K*K]
-                    let rows = shape.dim_at(0);
-                    let cols = shape.numel_from(1);
-                    (rows, cols)
-                };
+            // The matrix view: [dim0, everything else]. A vector is (n, 1) and a scalar
+            // is (1, 1).
+            let (rows, cols) = match p.shape.rank() {
+                0 => (1, 1),
+                1 => (p.shape.dim_at(0), 1),
+                _ => (p.shape.dim_at(0), p.shape.numel_from(1)),
+            };
 
-                // Update buffer
-                let velocity = self.velocity.get_mut(i).unwrap();
-                for (v, &g) in velocity.iter_mut().zip(grad.to_host_f32().iter()) {
-                    *v = self.momentum.mul_add(*v, g);
-                }
+            // v ← momentum·v + g
+            for (v, &g) in velocity.iter_mut().zip(&grad) {
+                *v = self.momentum.mul_add(*v, g);
+            }
 
-                // Prepare update: Nesterov or standard momentum
-                let mut update = if self.nesterov {
-                    // v = mu * v + g
-                    // update = mu * v + g
-                    // Here we approximate the update target
-                    velocity
-                        .iter()
-                        .zip(grad.to_host_f32().iter())
-                        .map(|(v, g)| self.momentum * v + g)
-                        .collect::<Vec<f32>>()
-                } else {
-                    velocity.clone()
-                };
+            // Nesterov looks one momentum step ahead: update = momentum·v + g
+            let mut update: Vec<f32> = if self.nesterov {
+                velocity
+                    .iter()
+                    .zip(&grad)
+                    .map(|(&v, &g)| self.momentum * v + g)
+                    .collect()
+            } else {
+                velocity.clone()
+            };
 
-                // Orthogonalize update
-                if rows > 1 && cols > 1 {
-                    self.newton_schulz(&mut update, rows, cols);
-                }
+            // Only a real matrix is orthogonalized and shape-scaled.
+            let scale = if rows > 1 && cols > 1 {
+                Self::newton_schulz(&mut update, rows, cols, self.ns_steps);
+                (rows as f32 / cols as f32).max(1.0).sqrt()
+            } else {
+                1.0
+            };
 
-                // Apply to weights: w -= lr * update
-                for (w, u) in p
-                    .data
-                    .as_host_f32_mut()
-                    .expect("Muon update: CPU F32 parameter (H8: GPU params are unsupported)")
-                    .iter_mut()
-                    .zip(update.iter())
-                {
-                    *w -= self.lr * u * 0.1; // Scaling factor often needed for Muon stability vs Adam
-                }
+            // w -= lr · scale · update
+            for (w, u) in p
+                .data
+                .as_host_f32_mut()
+                .expect("Muon update: CPU F32 parameter")
+                .iter_mut()
+                .zip(&update)
+            {
+                *w -= self.lr * scale * u;
             }
         }
     }
@@ -165,8 +191,34 @@ impl Muon {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RawTensor;
     use crate::Storage;
+    use crate::index::fetch;
+
+    /// A seeded random `rows × cols` matrix as a flat row-major vector.
+    fn random_matrix(rows: usize, cols: usize) -> Vec<f32> {
+        crate::tensor::randn(&[rows, cols]).borrow().data.to_vec()
+    }
+
+    /// Largest `|(X Xᵀ − I)[i][j]|` over the Gram matrix of the smaller side of `x`
+    /// (`rows × cols`). It bounds the spectral norm of `X Xᵀ − I` from below by the
+    /// entries, and is 0 for exactly orthonormal rows (or columns).
+    fn gram_deviation(x: &[f32], rows: usize, cols: usize) -> f32 {
+        let (m, n, x) = if rows > cols {
+            (cols, rows, RawTensor::transpose_2d(x, &[rows, cols]))
+        } else {
+            (rows, cols, x.to_vec())
+        };
+        let xt = RawTensor::transpose_2d(&x, &[m, n]);
+        let gram = RawTensor::matmul_raw(&x, &xt, m, n, m);
+        let mut worst = 0.0f32;
+        for i in 0..m {
+            for j in 0..m {
+                let want = if i == j { 1.0 } else { 0.0 };
+                worst = worst.max((fetch(&gram, i * m + j) - want).abs());
+            }
+        }
+        worst
+    }
 
     #[test]
     fn test_muon_step() {
@@ -188,5 +240,169 @@ mod tests {
         for v in data_after.to_host_f32().iter() {
             assert!(v.abs() < 2.0);
         }
+    }
+
+    #[test]
+    fn newton_schulz_makes_rectangular_matrices_nearly_orthonormal() {
+        // A random gradient is far from orthogonal: normalized by its Frobenius norm, the
+        // Gram matrix's diagonal is about 1/m. Five quintic steps bring every singular
+        // value near 1, so X Xᵀ is near the identity in both orientations. (The quintic
+        // settles in about [0.7, 1.2] rather than at 1, so the bound is loose; the test
+        // below is the one that tells it from the classic cubic iteration.)
+        crate::tensor::manual_seed(0x5EED);
+        for (rows, cols) in [(8, 12), (12, 8), (6, 24), (24, 6), (16, 16)] {
+            let mut g = random_matrix(rows, cols);
+            let before = {
+                let norm = g.iter().map(|v| v * v).sum::<f32>().sqrt();
+                let unit: Vec<f32> = g.iter().map(|v| v / norm).collect();
+                gram_deviation(&unit, rows, cols)
+            };
+            Muon::newton_schulz(&mut g, rows, cols, 5);
+            let after = gram_deviation(&g, rows, cols);
+            assert!(
+                before > 0.5,
+                "{rows}x{cols}: the unorthogonalized matrix should be far from orthonormal, got {before}"
+            );
+            assert!(
+                after < 0.6,
+                "{rows}x{cols}: X Xᵀ should be near I after Newton-Schulz, worst entry off by {after}"
+            );
+        }
+    }
+
+    #[test]
+    fn newton_schulz_recovers_a_nearly_vanished_direction() {
+        // One row shrunk 20x: after the Frobenius normalization its singular value is
+        // about 5e-3. The quintic's slope at zero (3.44) lifts it into the band within
+        // five steps; the classic iteration 1.5x - 0.5 x xᵀx grows it by only 1.5 per step
+        // (about 0.04 after five) and leaves X Xᵀ[0][0] near 0.
+        crate::tensor::manual_seed(0xD1CE);
+        for (rows, cols) in [(8, 12), (12, 8)] {
+            let mut g = random_matrix(rows, cols);
+            // Shrink the first row of a wide matrix, or the first column of a tall one: the
+            // short side's index 0.
+            if rows <= cols {
+                for j in 0..cols {
+                    *crate::index::slot(&mut g, j) *= 0.05;
+                }
+            } else {
+                for i in 0..rows {
+                    *crate::index::slot(&mut g, i * cols) *= 0.05;
+                }
+            }
+            Muon::newton_schulz(&mut g, rows, cols, 5);
+            let deviation = gram_deviation(&g, rows, cols);
+            assert!(
+                deviation < 0.6,
+                "{rows}x{cols}: the shrunken direction was not recovered, worst entry off by {deviation}"
+            );
+        }
+    }
+
+    #[test]
+    fn newton_schulz_is_transpose_equivariant() {
+        // NS(Gᵀ) = NS(G)ᵀ: the tall case runs the wide computation on the transpose.
+        crate::tensor::manual_seed(0x7A11);
+        let (rows, cols) = (5, 9);
+        let wide = random_matrix(rows, cols);
+        let mut tall = RawTensor::transpose_2d(&wide, &[rows, cols]);
+        let mut wide_out = wide;
+        Muon::newton_schulz(&mut wide_out, rows, cols, 5);
+        Muon::newton_schulz(&mut tall, cols, rows, 5);
+        let wide_t = RawTensor::transpose_2d(&wide_out, &[rows, cols]);
+        assert_eq!(wide_t.len(), tall.len());
+        for (a, b) in wide_t.iter().zip(&tall) {
+            assert!((a - b).abs() < 1e-6, "tall {b} vs wide transposed {a}");
+        }
+    }
+
+    #[test]
+    fn newton_schulz_leaves_a_zero_gradient_at_zero() {
+        // 0 / (0 + 1e-7) = 0, and the quintic maps 0 to 0: no NaN from the normalization.
+        let mut g = vec![0.0; 12];
+        Muon::newton_schulz(&mut g, 3, 4, 5);
+        assert!(g.iter().all(|&v| v == 0.0));
+    }
+
+    /// One step with `lr = 1`, no momentum, and no Nesterov, returning how far each entry
+    /// moved (`before - after`, which is the update).
+    fn one_step_delta(shape: &[usize], grad: &[f32]) -> Vec<f32> {
+        let numel: usize = shape.iter().product();
+        let p = RawTensor::new(vec![0.0; numel], shape, true);
+        p.set_grad(Storage::cpu(grad.to_vec()));
+        let mut opt = Muon::new(vec![p.clone()], 1.0, 0.0, false, 5);
+        opt.step();
+        let after = p.borrow().data.to_vec();
+        after.iter().map(|w| -w).collect()
+    }
+
+    #[test]
+    fn step_applies_an_orthogonalized_update() {
+        // lr = 1 and no momentum, so the movement is the update itself: for a wide matrix
+        // (scale 1) its rows are near orthonormal, which the raw gradient's are not.
+        crate::tensor::manual_seed(0x0A7B);
+        let grad = random_matrix(4, 8);
+        let delta = one_step_delta(&[4, 8], &grad);
+        assert!(
+            gram_deviation(&delta, 4, 8) < 0.6,
+            "the step should move along near-orthonormal rows"
+        );
+        // The gradient direction itself is nowhere near orthonormal, so this isn't a
+        // property of the input.
+        let norm = grad.iter().map(|v| v * v).sum::<f32>().sqrt();
+        let unit: Vec<f32> = grad.iter().map(|v| v / norm).collect();
+        assert!(gram_deviation(&unit, 4, 8) > 0.5);
+    }
+
+    #[test]
+    fn tall_matrix_update_is_scaled_by_sqrt_of_the_aspect_ratio() {
+        // The same gradient as a wide [4, 8] and as a tall [8, 4] (its transpose): the
+        // orthogonalized directions are transposes of each other, and the tall one is
+        // scaled by sqrt(8 / 4). The wide one has scale 1.
+        crate::tensor::manual_seed(0xA5C1);
+        let wide_grad = random_matrix(4, 8);
+        let tall_grad = RawTensor::transpose_2d(&wide_grad, &[4, 8]);
+        let wide = one_step_delta(&[4, 8], &wide_grad);
+        let tall = one_step_delta(&[8, 4], &tall_grad);
+        let wide_t = RawTensor::transpose_2d(&wide, &[4, 8]);
+        assert_eq!(wide_t.len(), tall.len());
+        for (w, t) in wide_t.iter().zip(&tall) {
+            assert!(
+                (w * 2.0_f32.sqrt() - t).abs() < 1e-5,
+                "tall update {t} should be sqrt(2) x wide update {w}"
+            );
+        }
+    }
+
+    #[test]
+    fn vector_parameters_get_plain_momentum() {
+        // A vector is not orthogonalized and not scaled: w -= lr * g.
+        let delta = one_step_delta(&[3], &[0.5, -2.0, 4.0]);
+        assert_eq!(delta, vec![0.5, -2.0, 4.0]);
+        // A single-column matrix is a vector too.
+        let delta = one_step_delta(&[3, 1], &[0.5, -2.0, 4.0]);
+        assert_eq!(delta, vec![0.5, -2.0, 4.0]);
+    }
+
+    #[test]
+    fn parameters_without_a_gradient_are_untouched() {
+        let p = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], true);
+        let mut opt = Muon::new(vec![p.clone()], 0.1, 0.9, false, 5);
+        opt.step();
+        assert_eq!(p.borrow().data.to_vec(), vec![1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn new_rejects_gpu_parameters() {
+        let Some(gpu) = crate::Device::gpu() else {
+            return;
+        };
+        let p = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false).to_device(gpu);
+        p.set_requires_grad(true);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = Muon::new(vec![p.clone()], 0.1, 0.9, false, 5);
+        }));
+        assert!(result.is_err(), "Muon::new must panic on a GPU parameter");
     }
 }
