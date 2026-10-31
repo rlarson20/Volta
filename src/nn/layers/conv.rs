@@ -2672,6 +2672,166 @@ mod conv2d_gpu_tests {
     use super::*;
     use crate::Device;
 
+    /// `|cpu - gpu| <= tol * (1 + |cpu|)` for every element, after checking the lengths
+    /// match (`zip` would stop at the shorter side).
+    fn assert_close(what: &str, cpu: &[f32], gpu: &[f32], tol: f32) {
+        assert_eq!(cpu.len(), gpu.len(), "{what}: length");
+        for (i, (c, g)) in cpu.iter().zip(gpu).enumerate() {
+            assert!(
+                (c - g).abs() <= tol * (1.0 + c.abs()),
+                "{what} mismatch at index {i}: CPU={c}, GPU={g}"
+            );
+        }
+    }
+
+    /// One CPU-versus-GPU run of a `Conv2d`: both layers get the same random weight and
+    /// bias (the default bias is zero, which would hide a bias bug) and see the same
+    /// random input, and the outputs must agree. With `backward`, a randomly weighted
+    /// loss is backpropagated on both and `dX`, `dW`, and `dBias` must agree too; a
+    /// plain `.sum()` would give every output the same gradient and let a swapped index
+    /// cancel out. Does nothing without a GPU.
+    #[derive(Clone, Copy)]
+    struct Parity {
+        out_ch: usize,
+        kernel: usize,
+        stride: usize,
+        padding: usize,
+        bias: bool,
+        algo: ConvAlgo,
+        input: [usize; 4],
+        backward: bool,
+    }
+
+    impl Parity {
+        /// Stride 1, no padding, a bias, automatic algorithm, forward only.
+        fn new(out_ch: usize, kernel: usize, input: [usize; 4]) -> Self {
+            Self {
+                out_ch,
+                kernel,
+                stride: 1,
+                padding: 0,
+                bias: true,
+                algo: ConvAlgo::Auto,
+                input,
+                backward: false,
+            }
+        }
+
+        fn stride(self, stride: usize) -> Self {
+            Self { stride, ..self }
+        }
+
+        fn padding(self, padding: usize) -> Self {
+            Self { padding, ..self }
+        }
+
+        fn no_bias(self) -> Self {
+            Self {
+                bias: false,
+                ..self
+            }
+        }
+
+        fn algo(self, algo: ConvAlgo) -> Self {
+            Self { algo, ..self }
+        }
+
+        fn with_backward(self) -> Self {
+            Self {
+                backward: true,
+                ..self
+            }
+        }
+
+        fn run(self, label: &str) {
+            let Some(device) = Device::gpu() else {
+                return;
+            };
+            crate::tensor::manual_seed(0x6C0DE);
+            let [_, in_ch, _, _] = self.input;
+            let make = |device: Device| {
+                let conv = Conv2d::new_on_device(
+                    in_ch,
+                    self.out_ch,
+                    self.kernel,
+                    self.stride,
+                    self.padding,
+                    self.bias,
+                    device,
+                );
+                conv.set_algo(self.algo);
+                conv
+            };
+            let conv_cpu = make(Device::CPU);
+            let conv_gpu = make(device.clone());
+
+            let weight = conv_cpu.weight.borrow().data.to_vec();
+            conv_gpu.weight.borrow_mut().data = Storage::gpu(weight);
+            if let (Some(b_cpu), Some(b_gpu)) = (&conv_cpu.bias, &conv_gpu.bias) {
+                let bias = crate::tensor::randn(&[self.out_ch]).borrow().data.to_vec();
+                b_cpu.borrow_mut().data = Storage::cpu(bias.clone());
+                b_gpu.borrow_mut().data = Storage::gpu(bias);
+            }
+
+            let x_cpu = crate::tensor::randn(&self.input);
+            let x_gpu = x_cpu.detach().to_device(device.clone());
+            if self.backward {
+                x_cpu.set_requires_grad(true);
+                x_gpu.set_requires_grad(true);
+            }
+
+            let y_cpu = conv_cpu.forward(&x_cpu);
+            let y_gpu = conv_gpu.forward(&x_gpu);
+            assert!(
+                y_gpu.borrow().data.is_gpu(),
+                "{label}: forward must run on the GPU"
+            );
+            assert_eq!(y_cpu.borrow().shape, y_gpu.borrow().shape, "{label}: shape");
+            assert_close(
+                &format!("{label} output"),
+                &y_cpu.borrow().data.to_vec(),
+                &y_gpu.borrow().data.to_vec(),
+                1e-3,
+            );
+
+            if !self.backward {
+                return;
+            }
+            let w_cpu = crate::tensor::randn(y_cpu.shape().truncate_rank());
+            let w_gpu = w_cpu.to_device(device);
+            y_cpu
+                .elem_mul(&w_cpu)
+                .sum()
+                .into_loss()
+                .expect("scalar loss")
+                .backward();
+            y_gpu
+                .elem_mul(&w_gpu)
+                .sum()
+                .into_loss()
+                .expect("scalar loss")
+                .backward();
+
+            let pairs = [
+                ("dX", x_cpu.grad(), x_gpu.grad()),
+                ("dW", conv_cpu.weight.grad(), conv_gpu.weight.grad()),
+                (
+                    "dBias",
+                    conv_cpu.bias.as_ref().and_then(Tensor::grad),
+                    conv_gpu.bias.as_ref().and_then(Tensor::grad),
+                ),
+            ];
+            for (name, cpu, gpu) in pairs {
+                if name == "dBias" && !self.bias {
+                    continue;
+                }
+                let cpu = cpu.unwrap_or_else(|| panic!("{label}: CPU {name} missing"));
+                let gpu = gpu.unwrap_or_else(|| panic!("{label}: GPU {name} missing"));
+                assert_close(&format!("{label} {name}"), &cpu, &gpu, 1e-3);
+            }
+        }
+    }
+
     #[test]
     fn test_conv2d_gpu_forward_shape() {
         if Device::gpu().is_none() {
@@ -2691,50 +2851,7 @@ mod conv2d_gpu_tests {
 
     #[test]
     fn test_conv2d_gpu_forward_match_cpu() {
-        if Device::gpu().is_none() {
-            return;
-        }
-
-        let device = Device::gpu().unwrap();
-
-        // Create CPU conv with deterministic weights (all ones)
-        let conv_cpu = Conv2d::new_on_device(2, 4, 3, 1, 1, true, Device::CPU);
-        // Set weights to all ones
-        let weight_size = 2 * 4 * 3 * 3; // in_channels * out_channels * kernel_h * kernel_w
-        conv_cpu.weight.borrow_mut().data = crate::storage::Storage::cpu(vec![1.0; weight_size]);
-        // Set bias to zeros
-        conv_cpu.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::cpu(vec![0.0; 4]);
-
-        // Create deterministic input (all ones)
-        let x_cpu = RawTensor::new(vec![1.0; 128], &[1, 2, 8, 8], false);
-        let y_cpu = conv_cpu.forward(&x_cpu);
-
-        // Move entire conv layer to GPU
-        let conv_gpu = Conv2d::new_on_device(2, 4, 3, 1, 1, true, device.clone());
-        conv_gpu.weight.borrow_mut().data = crate::storage::Storage::gpu(vec![1.0; weight_size]);
-        conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::gpu(vec![0.0; 4]);
-
-        let x_gpu = x_cpu.to_device(device.clone());
-        let y_gpu = conv_gpu.forward(&x_gpu);
-
-        // Compare shapes
-        assert_eq!(y_cpu.borrow().shape, y_gpu.borrow().shape);
-
-        // Compare values (allow for floating point differences)
-        let y_cpu_data = y_cpu.borrow().data.to_vec();
-        let y_gpu_data = y_gpu.borrow().data.to_vec();
-
-        assert_eq!(y_cpu_data.len(), y_gpu_data.len());
-
-        for (i, (cpu_val, gpu_val)) in y_cpu_data.iter().zip(y_gpu_data.iter()).enumerate() {
-            let abs_diff = (cpu_val - gpu_val).abs();
-            assert!(
-                abs_diff < 1e-4,
-                "Mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, abs_diff={abs_diff}"
-            );
-        }
+        Parity::new(4, 3, [1, 2, 8, 8]).padding(1).run("forward");
     }
 
     #[test]
@@ -2835,7 +2952,7 @@ mod conv2d_gpu_tests {
         let device = Device::gpu().unwrap();
 
         // Test with padding to ensure pad operation works on GPU
-        let x_cpu = RawTensor::new(vec![1.0; 16], &[1, 1, 4, 4], false);
+        let x_cpu = RawTensor::randn(&[1, 1, 4, 4]);
         let x_padded_cpu = x_cpu.pad_with(&[(0, 0), (0, 0), (1, 1), (1, 1)], PadValue::ZERO);
 
         let x_gpu = x_cpu.to_device(device.clone());
@@ -2845,7 +2962,7 @@ mod conv2d_gpu_tests {
         assert_eq!(x_padded_cpu.borrow().shape, vec![1, 1, 6, 6]);
         assert_eq!(x_padded_gpu.borrow().shape, vec![1, 1, 6, 6]);
 
-        // Check values - center should be 1.0, edges should be 0.0
+        // Check values: the random interior is copied and the border is zero
         let padded_cpu_data = x_padded_cpu.borrow().data.to_vec();
         let padded_gpu_data = x_padded_gpu.borrow().data.to_vec();
 
@@ -2866,380 +2983,70 @@ mod conv2d_gpu_tests {
 
     #[test]
     fn test_conv2d_gpu_cpu_consistency_1x1_kernel() {
-        if Device::gpu().is_none() {
-            return;
-        }
-
-        let device = Device::gpu().unwrap();
-
-        // Test 1x1 kernel consistency with deterministic values
-        let x_cpu = RawTensor::new(vec![1.0; 256], &[1, 4, 8, 8], false);
-
-        // Create CPU conv with deterministic weights
-        let conv_cpu = Conv2d::new_on_device(4, 8, 1, 1, 0, true, Device::CPU);
-        #[expect(clippy::identity_op, reason = "kernel dims are spelled out as factors")]
-        let weight_size = 4 * 8 * 1 * 1;
-        conv_cpu.weight.borrow_mut().data = crate::storage::Storage::cpu(vec![1.0; weight_size]);
-        conv_cpu.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::cpu(vec![0.0; 8]);
-
-        let y_cpu = conv_cpu.forward(&x_cpu);
-
-        // Create GPU conv with same weights
-        let x_gpu = x_cpu.to_device(device.clone());
-        let conv_gpu = Conv2d::new_on_device(4, 8, 1, 1, 0, true, device.clone());
-        conv_gpu.weight.borrow_mut().data = crate::storage::Storage::gpu(vec![1.0; weight_size]);
-        conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::gpu(vec![0.0; 8]);
-
-        let y_gpu = conv_gpu.forward(&x_gpu);
-
-        assert_eq!(y_cpu.borrow().shape, y_gpu.borrow().shape);
-
-        let y_cpu_data = y_cpu.borrow().data.to_vec();
-        let y_gpu_data = y_gpu.borrow().data.to_vec();
-
-        for (i, (cpu_val, gpu_val)) in y_cpu_data.iter().zip(y_gpu_data.iter()).enumerate() {
-            let abs_diff = (cpu_val - gpu_val).abs();
-            assert!(
-                abs_diff < 1e-4,
-                "1x1 kernel mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
-            );
-        }
+        Parity::new(8, 1, [1, 4, 8, 8]).run("1x1 kernel");
     }
 
     #[test]
     fn test_conv2d_gpu_cpu_consistency_5x5_kernel() {
-        if Device::gpu().is_none() {
-            return;
-        }
-
-        let device = Device::gpu().unwrap();
-
-        // Test 5x5 kernel consistency
-        let x_cpu = RawTensor::new(vec![1.0; 768], &[1, 3, 16, 16], false);
-
-        let conv_cpu = Conv2d::new_on_device(3, 8, 5, 1, 2, true, Device::CPU);
-        let weight_size = 3 * 8 * 5 * 5;
-        conv_cpu.weight.borrow_mut().data = crate::storage::Storage::cpu(vec![1.0; weight_size]);
-        conv_cpu.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::cpu(vec![0.0; 8]);
-
-        let y_cpu = conv_cpu.forward(&x_cpu);
-
-        let x_gpu = x_cpu.to_device(device.clone());
-        let conv_gpu = Conv2d::new_on_device(3, 8, 5, 1, 2, true, device.clone());
-        conv_gpu.weight.borrow_mut().data = crate::storage::Storage::gpu(vec![1.0; weight_size]);
-        conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::gpu(vec![0.0; 8]);
-
-        let y_gpu = conv_gpu.forward(&x_gpu);
-
-        assert_eq!(y_cpu.borrow().shape, y_gpu.borrow().shape);
-
-        let y_cpu_data = y_cpu.borrow().data.to_vec();
-        let y_gpu_data = y_gpu.borrow().data.to_vec();
-
-        for (i, (cpu_val, gpu_val)) in y_cpu_data.iter().zip(y_gpu_data.iter()).enumerate() {
-            let abs_diff = (cpu_val - gpu_val).abs();
-            assert!(
-                abs_diff < 1e-4,
-                "5x5 kernel mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
-            );
-        }
+        Parity::new(8, 5, [1, 3, 16, 16])
+            .padding(2)
+            .run("5x5 kernel");
     }
 
     #[test]
     fn test_conv2d_gpu_cpu_consistency_stride2() {
-        if Device::gpu().is_none() {
-            return;
-        }
-
-        let device = Device::gpu().unwrap();
-
-        // Test stride 2 consistency
-        let x_cpu = RawTensor::new(vec![1.0; 768], &[1, 3, 16, 16], false);
-
-        let conv_cpu = Conv2d::new_on_device(3, 8, 3, 2, 1, true, Device::CPU);
-        let weight_size = 3 * 8 * 3 * 3;
-        conv_cpu.weight.borrow_mut().data = crate::storage::Storage::cpu(vec![1.0; weight_size]);
-        conv_cpu.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::cpu(vec![0.0; 8]);
-
-        let y_cpu = conv_cpu.forward(&x_cpu);
-
-        let x_gpu = x_cpu.to_device(device.clone());
-        let conv_gpu = Conv2d::new_on_device(3, 8, 3, 2, 1, true, device.clone());
-        conv_gpu.weight.borrow_mut().data = crate::storage::Storage::gpu(vec![1.0; weight_size]);
-        conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::gpu(vec![0.0; 8]);
-
-        let y_gpu = conv_gpu.forward(&x_gpu);
-
-        assert_eq!(y_cpu.borrow().shape, y_gpu.borrow().shape);
-
-        let y_cpu_data = y_cpu.borrow().data.to_vec();
-        let y_gpu_data = y_gpu.borrow().data.to_vec();
-
-        for (i, (cpu_val, gpu_val)) in y_cpu_data.iter().zip(y_gpu_data.iter()).enumerate() {
-            let abs_diff = (cpu_val - gpu_val).abs();
-            assert!(
-                abs_diff < 1e-4,
-                "Stride2 mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
-            );
-        }
+        Parity::new(8, 3, [1, 3, 16, 16])
+            .stride(2)
+            .padding(1)
+            .run("stride 2");
     }
 
     #[test]
     fn test_conv2d_gpu_cpu_consistency_stride4() {
-        if Device::gpu().is_none() {
-            return;
-        }
-
-        let device = Device::gpu().unwrap();
-
-        // Test stride 4 consistency
-        let x_cpu = RawTensor::new(vec![1.0; 3072], &[1, 3, 32, 32], false);
-
-        let conv_cpu = Conv2d::new_on_device(3, 8, 3, 4, 1, true, Device::CPU);
-        let weight_size = 3 * 8 * 3 * 3;
-        conv_cpu.weight.borrow_mut().data = crate::storage::Storage::cpu(vec![1.0; weight_size]);
-        conv_cpu.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::cpu(vec![0.0; 8]);
-
-        let y_cpu = conv_cpu.forward(&x_cpu);
-
-        let x_gpu = x_cpu.to_device(device.clone());
-        let conv_gpu = Conv2d::new_on_device(3, 8, 3, 4, 1, true, device.clone());
-        conv_gpu.weight.borrow_mut().data = crate::storage::Storage::gpu(vec![1.0; weight_size]);
-        conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::gpu(vec![0.0; 8]);
-
-        let y_gpu = conv_gpu.forward(&x_gpu);
-
-        assert_eq!(y_cpu.borrow().shape, y_gpu.borrow().shape);
-
-        let y_cpu_data = y_cpu.borrow().data.to_vec();
-        let y_gpu_data = y_gpu.borrow().data.to_vec();
-
-        for (i, (cpu_val, gpu_val)) in y_cpu_data.iter().zip(y_gpu_data.iter()).enumerate() {
-            let abs_diff = (cpu_val - gpu_val).abs();
-            assert!(
-                abs_diff < 1e-4,
-                "Stride4 mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
-            );
-        }
+        Parity::new(8, 3, [1, 3, 32, 32])
+            .stride(4)
+            .padding(1)
+            .run("stride 4");
     }
 
     #[test]
     fn test_conv2d_gpu_cpu_consistency_large_padding() {
-        if Device::gpu().is_none() {
-            return;
-        }
-
-        let device = Device::gpu().unwrap();
-
-        // Test large padding consistency
-        let x_cpu = RawTensor::new(vec![1.0; 192], &[1, 3, 8, 8], false);
-
-        let conv_cpu = Conv2d::new_on_device(3, 8, 3, 1, 3, true, Device::CPU);
-        let weight_size = 3 * 8 * 3 * 3;
-        conv_cpu.weight.borrow_mut().data = crate::storage::Storage::cpu(vec![1.0; weight_size]);
-        conv_cpu.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::cpu(vec![0.0; 8]);
-
-        let y_cpu = conv_cpu.forward(&x_cpu);
-
-        let x_gpu = x_cpu.to_device(device.clone());
-        let conv_gpu = Conv2d::new_on_device(3, 8, 3, 1, 3, true, device.clone());
-        conv_gpu.weight.borrow_mut().data = crate::storage::Storage::gpu(vec![1.0; weight_size]);
-        conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::gpu(vec![0.0; 8]);
-
-        let y_gpu = conv_gpu.forward(&x_gpu);
-
-        assert_eq!(y_cpu.borrow().shape, y_gpu.borrow().shape);
-
-        let y_cpu_data = y_cpu.borrow().data.to_vec();
-        let y_gpu_data = y_gpu.borrow().data.to_vec();
-
-        for (i, (cpu_val, gpu_val)) in y_cpu_data.iter().zip(y_gpu_data.iter()).enumerate() {
-            let abs_diff = (cpu_val - gpu_val).abs();
-            assert!(
-                abs_diff < 1e-4,
-                "Large padding mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
-            );
-        }
+        Parity::new(8, 3, [1, 3, 8, 8])
+            .padding(3)
+            .run("large padding");
     }
 
     #[test]
     fn test_conv2d_gpu_cpu_consistency_no_bias() {
-        if Device::gpu().is_none() {
-            return;
-        }
-
-        let device = Device::gpu().unwrap();
-
-        // Test without bias
-        let x_cpu = RawTensor::new(vec![1.0; 768], &[1, 3, 16, 16], false);
-
-        let conv_cpu = Conv2d::new_on_device(3, 8, 3, 1, 1, false, Device::CPU);
-        let weight_size = 3 * 8 * 3 * 3;
-        conv_cpu.weight.borrow_mut().data = crate::storage::Storage::cpu(vec![1.0; weight_size]);
-
-        let y_cpu = conv_cpu.forward(&x_cpu);
-
-        let x_gpu = x_cpu.to_device(device.clone());
-        let conv_gpu = Conv2d::new_on_device(3, 8, 3, 1, 1, false, device.clone());
-        conv_gpu.weight.borrow_mut().data = crate::storage::Storage::gpu(vec![1.0; weight_size]);
-
-        let y_gpu = conv_gpu.forward(&x_gpu);
-
-        assert_eq!(y_cpu.borrow().shape, y_gpu.borrow().shape);
-
-        let y_cpu_data = y_cpu.borrow().data.to_vec();
-        let y_gpu_data = y_gpu.borrow().data.to_vec();
-
-        for (i, (cpu_val, gpu_val)) in y_cpu_data.iter().zip(y_gpu_data.iter()).enumerate() {
-            let abs_diff = (cpu_val - gpu_val).abs();
-            assert!(
-                abs_diff < 1e-4,
-                "No bias mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
-            );
-        }
+        Parity::new(8, 3, [1, 3, 16, 16])
+            .padding(1)
+            .no_bias()
+            .run("no bias");
     }
 
     #[test]
     fn test_conv2d_gpu_cpu_consistency_batch_processing() {
-        if Device::gpu().is_none() {
-            return;
-        }
-
-        let device = Device::gpu().unwrap();
-
-        // Test different batch sizes
         for batch in [1, 2, 4, 8] {
-            let size = batch * 3 * 16 * 16;
-            let x_cpu = RawTensor::new(vec![1.0; size], &[batch, 3, 16, 16], false);
-
-            let conv_cpu = Conv2d::new_on_device(3, 8, 3, 1, 1, true, Device::CPU);
-            let weight_size = 3 * 8 * 3 * 3;
-            conv_cpu.weight.borrow_mut().data =
-                crate::storage::Storage::cpu(vec![1.0; weight_size]);
-            conv_cpu.bias.as_ref().unwrap().borrow_mut().data =
-                crate::storage::Storage::cpu(vec![0.0; 8]);
-
-            let y_cpu = conv_cpu.forward(&x_cpu);
-
-            let x_gpu = x_cpu.to_device(device.clone());
-            let conv_gpu = Conv2d::new_on_device(3, 8, 3, 1, 1, true, device.clone());
-            conv_gpu.weight.borrow_mut().data =
-                crate::storage::Storage::gpu(vec![1.0; weight_size]);
-            conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
-                crate::storage::Storage::gpu(vec![0.0; 8]);
-
-            let y_gpu = conv_gpu.forward(&x_gpu);
-
-            assert_eq!(y_cpu.borrow().shape, y_gpu.borrow().shape);
-
-            let y_cpu_data = y_cpu.borrow().data.to_vec();
-            let y_gpu_data = y_gpu.borrow().data.to_vec();
-
-            for (i, (cpu_val, gpu_val)) in y_cpu_data.iter().zip(y_gpu_data.iter()).enumerate() {
-                let abs_diff = (cpu_val - gpu_val).abs();
-                assert!(
-                    abs_diff < 1e-4,
-                    "Batch {batch} mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
-                );
-            }
+            Parity::new(8, 3, [batch, 3, 16, 16])
+                .padding(1)
+                .run(&format!("batch {batch}"));
         }
     }
 
     #[test]
     fn test_conv2d_gpu_cpu_consistency_asymmetric_dimensions() {
-        if Device::gpu().is_none() {
-            return;
-        }
-
-        let device = Device::gpu().unwrap();
-
-        // Test non-square spatial dimensions
-        let x_cpu = RawTensor::new(vec![1.0; 1536], &[1, 3, 16, 32], false);
-
-        let conv_cpu = Conv2d::new_on_device(3, 8, 3, 2, 1, true, Device::CPU);
-        let weight_size = 3 * 8 * 3 * 3;
-        conv_cpu.weight.borrow_mut().data = crate::storage::Storage::cpu(vec![1.0; weight_size]);
-        conv_cpu.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::cpu(vec![0.0; 8]);
-
-        let y_cpu = conv_cpu.forward(&x_cpu);
-
-        let x_gpu = x_cpu.to_device(device.clone());
-        let conv_gpu = Conv2d::new_on_device(3, 8, 3, 2, 1, true, device.clone());
-        conv_gpu.weight.borrow_mut().data = crate::storage::Storage::gpu(vec![1.0; weight_size]);
-        conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::gpu(vec![0.0; 8]);
-
-        let y_gpu = conv_gpu.forward(&x_gpu);
-
-        assert_eq!(y_cpu.borrow().shape, y_gpu.borrow().shape);
-
-        let y_cpu_data = y_cpu.borrow().data.to_vec();
-        let y_gpu_data = y_gpu.borrow().data.to_vec();
-
-        for (i, (cpu_val, gpu_val)) in y_cpu_data.iter().zip(y_gpu_data.iter()).enumerate() {
-            let abs_diff = (cpu_val - gpu_val).abs();
-            assert!(
-                abs_diff < 1e-4,
-                "Asymmetric dimensions mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
-            );
-        }
+        Parity::new(8, 3, [1, 3, 16, 32])
+            .stride(2)
+            .padding(1)
+            .run("asymmetric dimensions");
     }
 
     #[test]
     fn test_conv2d_gpu_cpu_consistency_multiple_channels() {
-        if Device::gpu().is_none() {
-            return;
-        }
-
-        let device = Device::gpu().unwrap();
-
-        // Test various channel configurations
-        let test_cases = vec![(1, 1, 8, 8, 64), (3, 16, 16, 16, 768), (16, 32, 8, 8, 1024)];
-
-        for (in_ch, out_ch, h, w, size) in test_cases {
-            let x_cpu = RawTensor::new(vec![1.0; size], &[1, in_ch, h, w], false);
-
-            let conv_cpu = Conv2d::new_on_device(in_ch, out_ch, 3, 1, 1, true, Device::CPU);
-            let weight_size = in_ch * out_ch * 3 * 3;
-            conv_cpu.weight.borrow_mut().data =
-                crate::storage::Storage::cpu(vec![1.0; weight_size]);
-            conv_cpu.bias.as_ref().unwrap().borrow_mut().data =
-                crate::storage::Storage::cpu(vec![0.0; out_ch]);
-
-            let y_cpu = conv_cpu.forward(&x_cpu);
-
-            let x_gpu = x_cpu.to_device(device.clone());
-            let conv_gpu = Conv2d::new_on_device(in_ch, out_ch, 3, 1, 1, true, device.clone());
-            conv_gpu.weight.borrow_mut().data =
-                crate::storage::Storage::gpu(vec![1.0; weight_size]);
-            conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
-                crate::storage::Storage::gpu(vec![0.0; out_ch]);
-
-            let y_gpu = conv_gpu.forward(&x_gpu);
-
-            assert_eq!(y_cpu.borrow().shape, y_gpu.borrow().shape);
-
-            let y_cpu_data = y_cpu.borrow().data.to_vec();
-            let y_gpu_data = y_gpu.borrow().data.to_vec();
-
-            for (i, (cpu_val, gpu_val)) in y_cpu_data.iter().zip(y_gpu_data.iter()).enumerate() {
-                let abs_diff = (cpu_val - gpu_val).abs();
-                assert!(
-                    abs_diff < 1e-4,
-                    "Channel configuration ({in_ch},{out_ch}) mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
-                );
-            }
+        for (in_ch, out_ch, h, w) in [(1, 1, 8, 8), (3, 16, 16, 16), (16, 32, 8, 8)] {
+            Parity::new(out_ch, 3, [1, in_ch, h, w])
+                .padding(1)
+                .run(&format!("channels ({in_ch},{out_ch})"));
         }
     }
 
@@ -3285,65 +3092,18 @@ mod conv2d_gpu_tests {
 
     #[test]
     fn test_conv2d_gpu_direct_conv_cpu_consistency() {
-        if Device::gpu().is_none() {
-            return;
-        }
-
-        let device = Device::gpu().unwrap();
-
-        // Test various kernel sizes
-        for kernel_size in [1, 3, 5, 7] {
-            let x_cpu = RawTensor::new(vec![1.0; 768], &[1, 3, 16, 16], false);
-
-            let conv_cpu =
-                Conv2d::new_on_device(3, 8, kernel_size, 1, kernel_size / 2, true, Device::CPU);
-            let weight_size = 3 * 8 * kernel_size * kernel_size;
-            conv_cpu.weight.borrow_mut().data =
-                crate::storage::Storage::cpu(vec![1.0; weight_size]);
-            conv_cpu.bias.as_ref().unwrap().borrow_mut().data =
-                crate::storage::Storage::cpu(vec![0.0; 8]);
-
-            conv_cpu.set_algo(ConvAlgo::Direct);
-            let y_cpu = conv_cpu.forward(&x_cpu);
-
-            // GPU version
-            let x_gpu = x_cpu.to_device(device.clone());
-            let conv_gpu =
-                Conv2d::new_on_device(3, 8, kernel_size, 1, kernel_size / 2, true, device.clone());
-            conv_gpu.weight.borrow_mut().data =
-                crate::storage::Storage::gpu(vec![1.0; weight_size]);
-            conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
-                crate::storage::Storage::gpu(vec![0.0; 8]);
-            conv_gpu.set_algo(ConvAlgo::Direct);
-
-            let y_gpu = conv_gpu.forward(&x_gpu);
-
-            // Compare results
-            let y_cpu_data = y_cpu.borrow().data.to_vec();
-            let y_gpu_data = y_gpu.borrow().data.to_vec();
-
-            assert_eq!(y_cpu_data.len(), y_gpu_data.len());
-            for (i, (cpu_val, gpu_val)) in y_cpu_data.iter().zip(y_gpu_data.iter()).enumerate() {
-                let abs_diff = (cpu_val - gpu_val).abs();
-                assert!(
-                    abs_diff < 1e-4,
-                    "Kernel {kernel_size} mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
-                );
-            }
+        for kernel in [1, 3, 5, 7] {
+            Parity::new(8, kernel, [1, 3, 16, 16])
+                .padding(kernel / 2)
+                .algo(ConvAlgo::Direct)
+                .run(&format!("direct kernel {kernel}"));
         }
     }
 
     #[test]
     fn test_conv2d_gpu_direct_conv_parameter_variants() {
-        if Device::gpu().is_none() {
-            return;
-        }
-
-        let device = Device::gpu().unwrap();
-
-        // Test different parameter combinations
-        let test_cases = vec![
-            // (kernel, stride, padding, batch, in_ch, out_ch, h, w)
+        // (kernel, stride, padding, batch, in_ch, out_ch, h, w)
+        let cases = [
             (3, 1, 1, 1, 2, 4, 8, 8),
             (3, 2, 1, 2, 3, 6, 16, 16),
             (5, 1, 2, 1, 4, 8, 12, 12),
@@ -3351,49 +3111,12 @@ mod conv2d_gpu_tests {
             (7, 1, 3, 1, 2, 4, 16, 16),
             (1, 1, 0, 8, 4, 8, 8, 8), // 1x1 kernel
         ];
-
-        for (kernel, stride, padding, batch, in_ch, out_ch, h, w) in test_cases {
-            let x_cpu = RawTensor::new(
-                vec![1.0; batch * in_ch * h * w],
-                &[batch, in_ch, h, w],
-                false,
-            );
-
-            let conv_cpu =
-                Conv2d::new_on_device(in_ch, out_ch, kernel, stride, padding, true, Device::CPU);
-            let weight_size = in_ch * out_ch * kernel * kernel;
-            conv_cpu.weight.borrow_mut().data =
-                crate::storage::Storage::cpu(vec![1.0; weight_size]);
-            conv_cpu.bias.as_ref().unwrap().borrow_mut().data =
-                crate::storage::Storage::cpu(vec![0.0; out_ch]);
-
-            conv_cpu.set_algo(ConvAlgo::Direct);
-            let y_cpu = conv_cpu.forward(&x_cpu);
-
-            // GPU version
-            let x_gpu = x_cpu.to_device(device.clone());
-            let conv_gpu =
-                Conv2d::new_on_device(in_ch, out_ch, kernel, stride, padding, true, device.clone());
-            conv_gpu.weight.borrow_mut().data =
-                crate::storage::Storage::gpu(vec![1.0; weight_size]);
-            conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
-                crate::storage::Storage::gpu(vec![0.0; out_ch]);
-            conv_gpu.set_algo(ConvAlgo::Direct);
-
-            let y_gpu = conv_gpu.forward(&x_gpu);
-
-            // Compare results
-            let y_cpu_data = y_cpu.borrow().data.to_vec();
-            let y_gpu_data = y_gpu.borrow().data.to_vec();
-
-            assert_eq!(y_cpu_data.len(), y_gpu_data.len());
-            for (i, (cpu_val, gpu_val)) in y_cpu_data.iter().zip(y_gpu_data.iter()).enumerate() {
-                let abs_diff = (cpu_val - gpu_val).abs();
-                assert!(
-                    abs_diff < 1e-4,
-                    "Params k={kernel} s={stride} p={padding} b={batch} mismatch at {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
-                );
-            }
+        for (kernel, stride, padding, batch, in_ch, out_ch, h, w) in cases {
+            Parity::new(out_ch, kernel, [batch, in_ch, h, w])
+                .stride(stride)
+                .padding(padding)
+                .algo(ConvAlgo::Direct)
+                .run(&format!("k={kernel} s={stride} p={padding} b={batch}"));
         }
     }
 
@@ -3429,103 +3152,20 @@ mod conv2d_gpu_tests {
 
     #[test]
     fn test_conv2d_gpu_direct_conv_non_square() {
-        if Device::gpu().is_none() {
-            return;
-        }
-
-        let device = Device::gpu().unwrap();
-
-        // Test non-square spatial dimensions
-        let x_cpu = RawTensor::new(vec![1.0; 1536], &[1, 3, 16, 32], false);
-
-        let conv_cpu = Conv2d::new_on_device(3, 8, 3, 1, 1, true, Device::CPU);
-        let weight_size = 3 * 8 * 3 * 3;
-        conv_cpu.weight.borrow_mut().data = crate::storage::Storage::cpu(vec![1.0; weight_size]);
-        conv_cpu.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::cpu(vec![0.0; 8]);
-
-        conv_cpu.set_algo(ConvAlgo::Direct);
-        let y_cpu = conv_cpu.forward(&x_cpu);
-
-        // GPU version
-        let x_gpu = x_cpu.to_device(device.clone());
-        let conv_gpu = Conv2d::new_on_device(3, 8, 3, 1, 1, true, device.clone());
-        conv_gpu.weight.borrow_mut().data = crate::storage::Storage::gpu(vec![1.0; weight_size]);
-        conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::gpu(vec![0.0; 8]);
-        conv_gpu.set_algo(ConvAlgo::Direct);
-
-        let y_gpu = conv_gpu.forward(&x_gpu);
-
-        // Compare results
-        let y_cpu_data = y_cpu.borrow().data.to_vec();
-        let y_gpu_data = y_gpu.borrow().data.to_vec();
-
-        assert_eq!(y_cpu_data.len(), y_gpu_data.len());
-        for (i, (cpu_val, gpu_val)) in y_cpu_data.iter().zip(y_gpu_data.iter()).enumerate() {
-            let abs_diff = (cpu_val - gpu_val).abs();
-            assert!(
-                abs_diff < 1e-4,
-                "Non-square mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
-            );
-        }
+        Parity::new(8, 3, [1, 3, 16, 32])
+            .padding(1)
+            .algo(ConvAlgo::Direct)
+            .run("non-square");
     }
 
     // ===== GPU col2im Tests =====
 
     #[test]
     fn test_conv2d_gpu_col2im_cpu_consistency() {
-        if Device::gpu().is_none() {
-            return;
-        }
-
-        let device = Device::gpu().unwrap();
-
-        // Create input data (use same values for fair comparison)
-        let x_data: Vec<f32> = (0..256).map(|i| i as f32).collect();
-
-        // Create CPU conv with im2col algorithm
-        let x_cpu = RawTensor::new(x_data.clone(), &[1, 4, 8, 8], true);
-        let conv_cpu = Conv2d::new_on_device(4, 8, 3, 1, 0, true, Device::CPU);
-        let weight_size = 4 * 8 * 3 * 3;
-        conv_cpu.weight.borrow_mut().data = crate::storage::Storage::cpu(vec![1.0; weight_size]);
-        conv_cpu.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::cpu(vec![0.0; 8]);
-        conv_cpu.set_algo(ConvAlgo::Im2col);
-
-        let y_cpu = conv_cpu.forward(&x_cpu);
-        let loss_cpu = y_cpu.sum();
-        loss_cpu.into_loss().expect("scalar loss").backward();
-
-        // Create GPU conv with im2col algorithm
-        let x_gpu = RawTensor::new(x_data, &[1, 4, 8, 8], false).to_device(device.clone());
-        x_gpu.set_requires_grad(true);
-        let conv_gpu = Conv2d::new_on_device(4, 8, 3, 1, 0, true, device.clone());
-        conv_gpu.weight.borrow_mut().data = crate::storage::Storage::gpu(vec![1.0; weight_size]);
-        conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::gpu(vec![0.0; 8]);
-        conv_gpu.set_algo(ConvAlgo::Im2col);
-
-        let y_gpu = conv_gpu.forward(&x_gpu);
-        let loss_gpu = y_gpu.sum();
-        loss_gpu.into_loss().expect("scalar loss").backward();
-
-        // Compare input gradients (this tests col2im)
-        let grad_cpu = x_cpu.grad().expect("CPU input should have gradient");
-        let grad_gpu = x_gpu.grad().expect("GPU input should have gradient");
-
-        let grad_cpu_data = grad_cpu.clone();
-        let grad_gpu_data = grad_gpu.clone();
-
-        assert_eq!(grad_cpu_data.len(), grad_gpu_data.len());
-
-        for (i, (cpu_val, gpu_val)) in grad_cpu_data.iter().zip(grad_gpu_data.iter()).enumerate() {
-            let abs_diff = (cpu_val - gpu_val).abs();
-            assert!(
-                abs_diff < 1e-4,
-                "GPU col2im mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
-            );
-        }
+        Parity::new(8, 3, [1, 4, 8, 8])
+            .algo(ConvAlgo::Im2col)
+            .with_backward()
+            .run("col2im");
     }
 
     #[test]
@@ -3570,57 +3210,12 @@ mod conv2d_gpu_tests {
 
     #[test]
     fn test_conv2d_gpu_col2im_3x3_stride2() {
-        if Device::gpu().is_none() {
-            return;
-        }
-
-        let device = Device::gpu().unwrap();
-
-        // Test with stride 2 (more challenging case)
-        let x_data: Vec<f32> = (0..768).map(|i| i as f32).collect();
-
-        // CPU version
-        let x_cpu = RawTensor::new(x_data.clone(), &[1, 3, 16, 16], true);
-        let conv_cpu = Conv2d::new_on_device(3, 8, 3, 2, 1, true, Device::CPU);
-        let weight_size = 3 * 8 * 3 * 3;
-        conv_cpu.weight.borrow_mut().data = crate::storage::Storage::cpu(vec![1.0; weight_size]);
-        conv_cpu.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::cpu(vec![0.0; 8]);
-        conv_cpu.set_algo(ConvAlgo::Im2col);
-
-        let y_cpu = conv_cpu.forward(&x_cpu);
-        let loss_cpu = y_cpu.sum();
-        loss_cpu.into_loss().expect("scalar loss").backward();
-
-        // GPU version
-        let x_gpu = RawTensor::new(x_data, &[1, 3, 16, 16], false).to_device(device.clone());
-        x_gpu.set_requires_grad(true);
-        let conv_gpu = Conv2d::new_on_device(3, 8, 3, 2, 1, true, device.clone());
-        conv_gpu.weight.borrow_mut().data = crate::storage::Storage::gpu(vec![1.0; weight_size]);
-        conv_gpu.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::gpu(vec![0.0; 8]);
-        conv_gpu.set_algo(ConvAlgo::Im2col);
-
-        let y_gpu = conv_gpu.forward(&x_gpu);
-        let loss_gpu = y_gpu.sum();
-        loss_gpu.into_loss().expect("scalar loss").backward();
-
-        // Compare gradients (col2im with stride 2)
-        let grad_cpu = x_cpu.grad().expect("CPU input should have gradient");
-        let grad_gpu = x_gpu.grad().expect("GPU input should have gradient");
-
-        let grad_cpu_data = grad_cpu.clone();
-        let grad_gpu_data = grad_gpu.clone();
-
-        assert_eq!(grad_cpu_data.len(), grad_gpu_data.len());
-
-        for (i, (cpu_val, gpu_val)) in grad_cpu_data.iter().zip(grad_gpu_data.iter()).enumerate() {
-            let abs_diff = (cpu_val - gpu_val).abs();
-            assert!(
-                abs_diff < 1e-4,
-                "GPU col2im stride2 mismatch at index {i}: CPU={cpu_val}, GPU={gpu_val}, diff={abs_diff}"
-            );
-        }
+        Parity::new(8, 3, [1, 3, 16, 16])
+            .stride(2)
+            .padding(1)
+            .algo(ConvAlgo::Im2col)
+            .with_backward()
+            .run("col2im stride 2");
     }
 
     /// Direct-conv backward on the GPU matches the CPU for all three gradients. Random
