@@ -887,6 +887,7 @@ impl Conv2d {
         );
 
         let mut result = vec![0.0; total_elements];
+        let cpu_data = data.to_vec();
 
         // For each output position, extract and flatten the receptive field
         for b in 0..batch {
@@ -912,7 +913,6 @@ impl Conv2d {
 
                                 let col_idx = c * (kh * kw) + kh_idx * kw + kw_idx;
                                 let result_idx = row_idx * cols + col_idx;
-                                let cpu_data = data.to_vec();
                                 let src_val = fetch(&cpu_data, in_idx);
                                 *slot(&mut result, result_idx) = src_val;
                             }
