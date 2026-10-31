@@ -1462,21 +1462,19 @@ mod conv2d_tests {
     }
 
     #[test]
-    //CARE: can sometimes fail as well, need to fix
     fn test_conv2d_gradient() {
-        // Use smaller input for more stable numerical gradient checking
+        // Seeded, with `eps = 0.5`, for the reason given in
+        // `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels`: conv is
+        // linear in `x`, so the step only affects f32 roundoff.
+        crate::tensor::manual_seed(0xC2D0);
         let conv = Conv2d::new(2, 4, 3, 1, 1, true);
         let x = RawTensor::randn(&[1, 2, 6, 6]);
         x.borrow_mut().requires_grad = true;
 
-        // Convolution is affine in its inputs, but each loss evaluation sums tens of thousands
-        // of f32 multiply-adds (im2col + GEMM). With ε=1e-2 the central-difference estimator
-        // was dominated by round-off (~1e-5) and produced ~3% relative error. Increasing ε
-        // lowers that amplification without changing the true derivative.
         let (max_err, mean_err, passed) = RawTensor::check_gradients(
             &x,
             |t| conv.forward(t).sum(),
-            5e-2, // epsilon, less cancellation noise for heavy Conv2d graphs
+            0.5,  // epsilon
             2e-2, // tolerance (relaxed for conv's numerical complexity)
         );
 
@@ -1716,12 +1714,16 @@ mod conv2d_tests {
     #[test]
     fn test_conv2d_gradient_1x1() {
         // Gradient check for 1x1 convolution
+        // Seeded, with `eps = 0.5`, for the reason given in
+        // `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels`: conv is
+        // linear in `x`, so the step only affects f32 roundoff.
+        crate::tensor::manual_seed(0xC2D1);
         let conv = Conv2d::new(2, 4, 1, 1, 0, true);
         let x = RawTensor::randn(&[1, 2, 4, 4]);
         x.borrow_mut().requires_grad = true;
 
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
 
         assert!(
             passed,
@@ -1732,12 +1734,16 @@ mod conv2d_tests {
     #[test]
     fn test_conv2d_gradient_5x5() {
         // Gradient check for 5x5 convolution
+        // Seeded, with `eps = 0.5`, for the reason given in
+        // `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels`: conv is
+        // linear in `x`, so the step only affects f32 roundoff.
+        crate::tensor::manual_seed(0xC2D5);
         let conv = Conv2d::new(2, 4, 5, 1, 2, true);
         let x = RawTensor::randn(&[1, 2, 8, 8]);
         x.borrow_mut().requires_grad = true;
 
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
 
         assert!(
             passed,
@@ -1748,12 +1754,16 @@ mod conv2d_tests {
     #[test]
     fn test_conv2d_gradient_stride2() {
         // Gradient check with stride 2
+        // Seeded, with `eps = 0.5`, for the reason given in
+        // `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels`: conv is
+        // linear in `x`, so the step only affects f32 roundoff.
+        crate::tensor::manual_seed(0xC2D2);
         let conv = Conv2d::new(2, 4, 3, 2, 1, true);
         let x = RawTensor::randn(&[1, 2, 8, 8]);
         x.borrow_mut().requires_grad = true;
 
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
 
         assert!(
             passed,
@@ -1764,12 +1774,16 @@ mod conv2d_tests {
     #[test]
     fn test_conv2d_gradient_no_bias() {
         // Gradient check without bias
+        // Seeded, with `eps = 0.5`, for the reason given in
+        // `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels`: conv is
+        // linear in `x`, so the step only affects f32 roundoff.
+        crate::tensor::manual_seed(0xC2DB);
         let conv = Conv2d::new(2, 4, 3, 1, 1, false);
         let x = RawTensor::randn(&[1, 2, 6, 6]);
         x.borrow_mut().requires_grad = true;
 
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
 
         assert!(
             passed,
@@ -1780,12 +1794,16 @@ mod conv2d_tests {
     #[test]
     fn test_conv2d_gradient_multiple_channels() {
         // Gradient check with more channels
+        // Seeded, with `eps = 0.5`, for the reason given in
+        // `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels`: conv is
+        // linear in `x`, so the step only affects f32 roundoff.
+        crate::tensor::manual_seed(0xC2DC);
         let conv = Conv2d::new(4, 8, 3, 1, 1, true);
         let x = RawTensor::randn(&[1, 4, 8, 8]);
         x.borrow_mut().requires_grad = true;
 
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 5e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 5e-2);
 
         assert!(
             passed,
@@ -1865,7 +1883,13 @@ mod conv2d_tests {
 
     #[test]
     fn test_conv2d_direct_conv_with_padding() {
-        // Test direct convolution with padding
+        // Test direct convolution with padding.
+        //
+        // Seeded, with an absolute tolerance of 1e-4. Each output sums 18 products of inputs
+        // up to 31, so outputs reach the tens and the two algorithms' different summation
+        // orders differ by up to 1.5e-5 (worst of 2000 seeds; 17 exceeded the old 1e-5).
+        // A wrong tap or weight is off by O(1).
+        crate::tensor::manual_seed(0xD1BAD);
         let conv = Conv2d::new(2, 4, 3, 1, 2, true);
         conv.algo.set(ConvAlgo::Direct);
 
@@ -1883,13 +1907,14 @@ mod conv2d_tests {
 
         let y_direct_data = y_direct.borrow().data.to_vec();
         let y_im2col_data = y_im2col.borrow().data.to_vec();
+        assert_eq!(y_direct_data.len(), y_im2col_data.len());
 
         for (i, (direct_val, im2col_val)) in
             y_direct_data.iter().zip(y_im2col_data.iter()).enumerate()
         {
             let abs_diff = (direct_val - im2col_val).abs();
             assert!(
-                abs_diff < 1e-5,
+                abs_diff < 1e-4,
                 "Padding test mismatch at index {i}: direct={direct_val}, im2col={im2col_val}, diff={abs_diff}"
             );
         }
@@ -1914,6 +1939,10 @@ mod conv2d_tests {
     #[test]
     fn test_direct_conv_gradient_no_padding() {
         // Test direct conv gradient with no padding
+        // Seeded, with `eps = 0.5`, for the reason given in
+        // `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels`: conv is
+        // linear in `x`, so the step only affects f32 roundoff.
+        crate::tensor::manual_seed(0xD100);
         let conv = Conv2d::new(2, 4, 3, 1, 0, true);
         conv.set_algo(ConvAlgo::Direct);
 
@@ -1921,7 +1950,7 @@ mod conv2d_tests {
         x.borrow_mut().requires_grad = true;
 
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
 
         assert!(
             passed,
@@ -1932,6 +1961,10 @@ mod conv2d_tests {
     #[test]
     fn test_direct_conv_gradient_with_padding() {
         // Test direct conv gradient with padding
+        // Seeded, with `eps = 0.5`, for the reason given in
+        // `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels`: conv is
+        // linear in `x`, so the step only affects f32 roundoff.
+        crate::tensor::manual_seed(0xD101);
         let conv = Conv2d::new(2, 4, 3, 1, 1, true);
         conv.set_algo(ConvAlgo::Direct);
 
@@ -1939,7 +1972,7 @@ mod conv2d_tests {
         x.borrow_mut().requires_grad = true;
 
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
 
         assert!(
             passed,
@@ -1950,6 +1983,10 @@ mod conv2d_tests {
     #[test]
     fn test_direct_conv_gradient_stride2() {
         // Test direct conv gradient with stride 2
+        // Seeded, with `eps = 0.5`, for the reason given in
+        // `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels`: conv is
+        // linear in `x`, so the step only affects f32 roundoff.
+        crate::tensor::manual_seed(0xD102);
         let conv = Conv2d::new(2, 4, 3, 2, 1, true);
         conv.set_algo(ConvAlgo::Direct);
 
@@ -1957,7 +1994,7 @@ mod conv2d_tests {
         x.borrow_mut().requires_grad = true;
 
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
 
         assert!(
             passed,
@@ -1968,6 +2005,10 @@ mod conv2d_tests {
     #[test]
     fn test_direct_conv_gradient_1x1_kernel() {
         // Test direct conv gradient with 1x1 kernel
+        // Seeded, with `eps = 0.5`, for the reason given in
+        // `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels`: conv is
+        // linear in `x`, so the step only affects f32 roundoff.
+        crate::tensor::manual_seed(0xD111);
         let conv = Conv2d::new(2, 4, 1, 1, 0, true);
         conv.set_algo(ConvAlgo::Direct);
 
@@ -1975,7 +2016,7 @@ mod conv2d_tests {
         x.borrow_mut().requires_grad = true;
 
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
 
         assert!(
             passed,
@@ -1986,6 +2027,10 @@ mod conv2d_tests {
     #[test]
     fn test_direct_conv_gradient_no_bias() {
         // Test direct conv gradient without bias
+        // Seeded, with `eps = 0.5`, for the reason given in
+        // `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels`: conv is
+        // linear in `x`, so the step only affects f32 roundoff.
+        crate::tensor::manual_seed(0xD10B);
         let conv = Conv2d::new(2, 4, 3, 1, 1, false);
         conv.set_algo(ConvAlgo::Direct);
 
@@ -1993,7 +2038,7 @@ mod conv2d_tests {
         x.borrow_mut().requires_grad = true;
 
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
 
         assert!(
             passed,
@@ -2221,6 +2266,10 @@ mod conv2d_tests {
     #[test]
     fn test_conv2d_igemm_gradient() {
         // Test iGEMM gradient computation
+        // Seeded, with `eps = 0.5`, for the reason given in
+        // `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels`: conv is
+        // linear in `x`, so the step only affects f32 roundoff.
+        crate::tensor::manual_seed(0x16E0);
         let conv = Conv2d::new(2, 4, 3, 1, 1, true);
         conv.set_algo(ConvAlgo::IGEMM);
 
@@ -2228,7 +2277,7 @@ mod conv2d_tests {
         x.borrow_mut().requires_grad = true;
 
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
 
         assert!(
             passed,
@@ -2413,6 +2462,10 @@ mod conv2d_tests {
     #[test]
     fn test_conv2d_igemm_gradient_no_bias() {
         // Test iGEMM gradient without bias
+        // Seeded, with `eps = 0.5`, for the reason given in
+        // `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels`: conv is
+        // linear in `x`, so the step only affects f32 roundoff.
+        crate::tensor::manual_seed(0x16EB);
         let conv = Conv2d::new(2, 4, 3, 1, 1, false);
         conv.set_algo(ConvAlgo::IGEMM);
 
@@ -2420,7 +2473,7 @@ mod conv2d_tests {
         x.borrow_mut().requires_grad = true;
 
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
 
         assert!(
             passed,

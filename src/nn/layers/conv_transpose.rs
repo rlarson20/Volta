@@ -662,18 +662,18 @@ mod tests {
 
     #[test]
     fn test_conv_transpose2d_gradient() {
-        // Use smaller input for more stable numerical gradient checking
+        // Seeded, with `eps = 0.5`, for the reason given in
+        // `test_conv_transpose2d_gradient_multiple_channels`: the layer is linear in `x`,
+        // so the step only affects f32 roundoff.
+        crate::tensor::manual_seed(0xC7D0);
         let conv = ConvTranspose2d::new(2, 4, 3, 1, 1, true);
         let x = RawTensor::randn(&[1, 2, 6, 6]);
         x.borrow_mut().requires_grad = true;
 
-        // Transposed convolution is affine in its inputs, but each loss evaluation sums
-        // thousands of f32 multiply-adds (col2im + GEMM). Using larger epsilon to reduce
-        // cancellation noise from the complex computation graph.
         let (max_err, mean_err, passed) = RawTensor::check_gradients(
             &x,
             |t| conv.forward(t).sum(),
-            5e-2, // epsilon (less cancellation noise)
+            0.5,  // epsilon
             2e-2, // tolerance (relaxed for numerical complexity)
         );
 
@@ -686,12 +686,16 @@ mod tests {
     #[test]
     fn test_conv_transpose2d_gradient_stride2() {
         // Test gradient correctness with stride 2
+        // Seeded, with `eps = 0.5`, for the reason given in
+        // `test_conv_transpose2d_gradient_multiple_channels`: the layer is linear in `x`,
+        // so the step only affects f32 roundoff.
+        crate::tensor::manual_seed(0xC7D2);
         let conv = ConvTranspose2d::new(2, 4, 3, 2, 1, true);
         let x = RawTensor::randn(&[1, 2, 4, 4]);
         x.borrow_mut().requires_grad = true;
 
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
 
         assert!(
             passed,
@@ -702,12 +706,16 @@ mod tests {
     #[test]
     fn test_conv_transpose2d_gradient_no_bias() {
         // Test gradient correctness without bias
+        // Seeded, with `eps = 0.5`, for the reason given in
+        // `test_conv_transpose2d_gradient_multiple_channels`: the layer is linear in `x`,
+        // so the step only affects f32 roundoff.
+        crate::tensor::manual_seed(0xC7DB);
         let conv = ConvTranspose2d::new(2, 4, 3, 1, 0, false);
         let x = RawTensor::randn(&[1, 2, 5, 5]);
         x.borrow_mut().requires_grad = true;
 
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
 
         assert!(
             passed,
@@ -718,12 +726,16 @@ mod tests {
     #[test]
     fn test_conv_transpose2d_gradient_1x1() {
         // Test gradient correctness with 1x1 kernel
+        // Seeded, with `eps = 0.5`, for the reason given in
+        // `test_conv_transpose2d_gradient_multiple_channels`: the layer is linear in `x`,
+        // so the step only affects f32 roundoff.
+        crate::tensor::manual_seed(0xC7D1);
         let conv = ConvTranspose2d::new(2, 4, 1, 1, 0, true);
         let x = RawTensor::randn(&[1, 2, 8, 8]);
         x.borrow_mut().requires_grad = true;
 
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 5e-2, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
 
         assert!(
             passed,

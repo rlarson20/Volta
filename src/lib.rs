@@ -4924,7 +4924,10 @@ mod linear_tests {
 
     #[test]
     fn backward_gradcheck_input() {
-        // Use a fixed weight tensor so the gradient check is deterministic.
+        // Seeded, with `eps = 0.5`: unseeded, about 1 in 130 weight draws failed at
+        // `check_gradients_simple`'s `eps = 1e-2`, and none of the same 400 seeds fail at
+        // 0.5. `x @ w + b` is linear in `x`, so the step only affects f32 roundoff.
+        crate::tensor::manual_seed(0x11E);
         let layer = Linear::new(3, 2, true);
         // Snapshot the (random) weight so the closure captures stable values.
         let w_snapshot = layer.weight.borrow().data.to_vec();
@@ -4941,12 +4944,20 @@ mod linear_tests {
             .shape();
         let x = RawTensor::new(vec![0.5, -1.0, 1.5, 0.25, 0.0, 2.0], &[2, 3], true);
 
-        let passed = RawTensor::check_gradients_simple(&x, |t| {
-            let w = RawTensor::from_shape(w_snapshot.clone(), w_shape.clone(), false);
-            let b = RawTensor::from_shape(b_snapshot.clone(), b_shape.clone(), false);
-            t.matmul(&w).add(&b).sum()
-        });
-        assert!(passed, "Linear input gradient check failed");
+        let (max_err, mean_err, passed) = RawTensor::check_gradients(
+            &x,
+            |t| {
+                let w = RawTensor::from_shape(w_snapshot.clone(), w_shape.clone(), false);
+                let b = RawTensor::from_shape(b_snapshot.clone(), b_shape.clone(), false);
+                t.matmul(&w).add(&b).sum()
+            },
+            0.5,
+            1e-3,
+        );
+        assert!(
+            passed,
+            "Linear input gradient check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
+        );
     }
 
     #[test]

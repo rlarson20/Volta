@@ -1,7 +1,7 @@
 //! Gap-filling tests: `BatchNorm2d` / `Flatten` gradient checks, `Dropout` edge cases, `SGD` momentum arithmetic, and mutable `Storage` access.
 use volta::{Dropout, Flatten, Layer};
 use volta::{
-    RawTensor, Storage, check_gradients_simple,
+    RawTensor, Storage, check_gradients_simple, manual_seed,
     nn::{BatchNorm2d, SGD},
 };
 
@@ -9,6 +9,7 @@ use volta::{
 fn test_batchnorm_gradient_check() {
     // Report indicated BatchNorm gradient paths were uncovered.
     // Use a small batch > 1 to ensure statistics calculation is non-trivial.
+    manual_seed(0xB2);
     let bn = BatchNorm2d::new(2);
     let x = RawTensor::randn(&[2, 2, 4, 4]); // B=2, C=2, H=4, W=4
     x.set_requires_grad(true);
@@ -32,6 +33,7 @@ fn test_dropout_edge_cases() {
 #[test]
 fn test_flatten_gradient_check() {
     // Ensure Flatten correctly propagates gradients back to original shape
+    manual_seed(0xF1);
     let flatten = Flatten::new();
     let x = RawTensor::randn(&[2, 3, 4]); // 2x3x4
     x.set_requires_grad(true);
