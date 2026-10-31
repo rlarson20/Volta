@@ -49,6 +49,7 @@ pub use gpu::{
 pub mod autograd;
 pub mod data;
 pub mod device;
+pub mod device_policy;
 pub mod io;
 mod macros;
 pub mod nn;
@@ -58,6 +59,10 @@ pub mod utils;
 
 // Re-export main types for easy access
 pub use device::Device;
+pub use device_policy::{
+    DevicePolicy, DevicePolicyGuard, FallbackEvent, Pass, device_policy, take_fallback_events,
+    with_device_policy,
+};
 pub use nn::layers::Dropout;
 pub use nn::layers::flatten::Flatten;
 pub use nn::{
