@@ -394,6 +394,45 @@ impl RawTensor {
     }
 }
 
+/// The gradients of every tensor reachable from a loss, saved so that
+/// [`GradSnapshot::restore`] can put them back after a `backward()` that was only a
+/// measurement (`check_gradients`).
+///
+/// CPU and GPU storage are copy-on-write, so holding a gradient here doesn't copy it,
+/// and the accumulation in `backward` can't write through to the saved value.
+pub(crate) struct GradSnapshot(Vec<(Tensor, Option<Storage>)>);
+
+impl GradSnapshot {
+    /// Saves the gradient (or its absence) of every tensor reachable from `root`
+    /// through `parents`, `root` included, except `exempt`.
+    pub(crate) fn take(root: &Tensor, exempt: &Tensor) -> Self {
+        let mut seen = HashSet::new();
+        let mut stack = vec![root.clone()];
+        let mut saved = Vec::new();
+        while let Some(t) = stack.pop() {
+            if !seen.insert(t.as_ptr()) {
+                continue;
+            }
+            stack.extend(t.borrow().parents.iter().cloned());
+            if t.as_ptr() != exempt.as_ptr() {
+                let grad = t.grad_storage();
+                saved.push((t, grad));
+            }
+        }
+        Self(saved)
+    }
+
+    /// Puts every saved gradient back: a tensor that had none has none again.
+    pub(crate) fn restore(self) {
+        for (t, grad) in self.0 {
+            match grad {
+                Some(grad) => t.set_grad(grad),
+                None => t.zero_grad(),
+            }
+        }
+    }
+}
+
 /// A tensor that has been checked to be a single element that requires grad.
 ///
 /// This is the only type with a `backward` method, so backward can't start from a

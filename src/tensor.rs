@@ -1206,11 +1206,13 @@ impl RawTensor {
     /// # Side effects
     /// `tensor`'s gradient is cleared first, so a gradient left over from an earlier
     /// `backward()` can't skew the result, and afterwards holds the analytic gradient.
-    /// Other leaves that `loss_fn` reads (layer parameters) are not cleared: the
-    /// analytic pass adds its gradient to theirs. The finite-difference evaluations run
-    /// `loss_fn` 2N more times, so stateful layers in training mode (`BatchNorm`
-    /// running statistics) keep updating; the result is unaffected because training
-    /// mode normalizes with batch statistics.
+    /// Every other tensor the loss reaches (layer parameters) gets its gradient back
+    /// as it was before the call, including having none. The one thing not restored
+    /// is layer state that `loss_fn` updates: the finite-difference evaluations run
+    /// `loss_fn` 2N more times, so `BatchNorm` in training mode keeps updating its
+    /// running statistics. The result is unaffected, because training mode normalizes
+    /// with batch statistics; put the layer in eval mode, or rebuild it, if the
+    /// statistics matter afterwards.
     ///
     /// # Panics
     /// If `loss_fn` doesn't return a scalar that requires grad, or `tensor` ends up
@@ -1224,12 +1226,16 @@ impl RawTensor {
     where
         F: Fn(&Tensor) -> Tensor,
     {
-        // Compute analytical gradient
+        // Compute analytical gradient. The backward pass adds into every tensor the loss
+        // reaches (a layer's parameters among them), so save theirs first and put them
+        // back; only `tensor` keeps the result.
         Self::zero_grad(tensor);
-        let loss = loss_fn(tensor)
-            .into_loss()
-            .expect("loss_fn must return a scalar that requires grad");
-        loss.backward();
+        let loss = loss_fn(tensor);
+        let saved = crate::autograd::GradSnapshot::take(&loss, tensor);
+        loss.into_loss()
+            .expect("loss_fn must return a scalar that requires grad")
+            .backward();
+        saved.restore();
 
         let analytical_grad = tensor.grad().expect("Tensor must have gradient");
         let mut numerical_grad = vec![0.0; analytical_grad.len()];
@@ -2044,6 +2050,35 @@ mod tensor_tests {
         let (second_err, _, second_passed) = RawTensor::check_gradients(&x, loss_fn, 1e-2, 1e-3);
         assert!(first_passed, "first check failed: max_err={first_err}");
         assert!(second_passed, "repeat check failed: max_err={second_err}");
+    }
+
+    /// The analytic pass of `check_gradients` used to add its gradient into every other
+    /// leaf the loss reads, so checking an input through a layer changed the layer's
+    /// parameter gradients. They are put back: a preset gradient is unchanged, and a
+    /// parameter with none still has none.
+    #[test]
+    fn check_gradients_leaves_other_leaf_grads_alone() {
+        manual_seed(0x6A4D);
+        let x = RawTensor::randn(&[4, 3]);
+        x.set_requires_grad(true);
+        let weight = RawTensor::randn(&[3, 2]);
+        weight.set_requires_grad(true);
+        let bias = RawTensor::randn(&[2]);
+        bias.set_requires_grad(true);
+        let preset = vec![0.5, -1.0, 2.0, 0.25, -0.75, 1.5];
+        weight.set_grad(Storage::cpu(preset.clone()));
+        let loss_weights = RawTensor::randn(&[4, 2]);
+
+        let loss_fn = |t: &Tensor| t.matmul(&weight).add(&bias).elem_mul(&loss_weights).sum();
+        let (max_err, _, passed) = RawTensor::check_gradients(&x, loss_fn, 0.5, 2e-2);
+        assert!(passed, "the check itself should pass: max_err={max_err}");
+
+        assert_eq!(weight.grad(), Some(preset), "preset gradient was changed");
+        assert!(
+            bias.grad().is_none(),
+            "a parameter with no gradient got one"
+        );
+        assert!(x.grad().is_some(), "the input keeps the analytic gradient");
     }
 
     /// A rank-1 shape is a bias vector: `n` values bounded by `sqrt(6 / (n + 1))`.
