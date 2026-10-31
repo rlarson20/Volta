@@ -53,7 +53,7 @@ mod gpu_tests {
         }
 
         let x = RawTensor::new(vec![2.0], &[1], true);
-        let x_gpu = x.to_device(Device::GPU("TestDevice".to_string()));
+        let x_gpu = x.to_device(Device::gpu().expect("GPU availability checked above"));
 
         x_gpu.clone().into_loss().expect("scalar loss").backward();
 
@@ -72,7 +72,7 @@ mod gpu_tests {
             return;
         }
 
-        let device = Device::GPU("TestDevice".to_string());
+        let device = Device::gpu().expect("GPU availability checked above");
 
         // a and b live on GPU
         let a = RawTensor::new(vec![1.0], &[1], true).to_device(device.clone());
@@ -105,7 +105,7 @@ mod gpu_tests {
             return;
         }
 
-        let device = Device::GPU("TestDevice".to_string());
+        let device = Device::gpu().expect("GPU availability checked above");
 
         // Note: GPU movement kernels are in progress (shader debugging needed)
         // For now, these work via CPU fallback which is correct (memory-bound ops)

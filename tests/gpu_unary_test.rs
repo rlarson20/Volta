@@ -9,7 +9,7 @@ fn test_new_unary_ops_gpu_autograd() {
         return;
     }
 
-    let dev = Device::GPU("TestDevice".to_string());
+    let dev = Device::gpu().expect("GPU availability checked above");
 
     // Test each new unary operation with gradients
     let x = RawTensor::new(vec![2.0, 4.0], &[2], true).to_device(dev.clone());

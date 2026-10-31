@@ -13,7 +13,7 @@ fn test_tensor_gpu_unary_add_binary_smoke() {
         return;
     }
 
-    let dev = Device::GPU("TestDevice".to_string());
+    let dev = Device::gpu().expect("GPU availability checked above");
     let x = RawTensor::new(vec![1.0, -2.0], &[2], true).to_device(dev.clone());
     let y = RawTensor::new(vec![3.0, 4.0], &[2], true).to_device(dev.clone());
 
@@ -38,7 +38,7 @@ fn test_tensor_gpu_sum_output_device_and_grad_on_gpu() {
         return;
     }
 
-    let dev = Device::GPU("TestDevice".to_string());
+    let dev = Device::gpu().expect("GPU availability checked above");
     let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], true).to_device(dev.clone());
 
     let loss = x.sum();
@@ -67,7 +67,7 @@ fn test_tensor_gpu_matmul_matches_cpu() {
         return;
     }
 
-    let dev = Device::GPU("TestDevice".to_string());
+    let dev = Device::gpu().expect("GPU availability checked above");
 
     // 2x3 @ 3x2 -> 2x2
     let a_cpu = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
@@ -104,7 +104,7 @@ fn test_tensor_gpu_matmul_backward_consistent_with_cpu() {
         return;
     }
 
-    let dev = Device::GPU("TestDevice".to_string());
+    let dev = Device::gpu().expect("GPU availability checked above");
 
     // Simple 2x2 matmul with gradients on both operands.
     let x_cpu = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], true);
@@ -157,7 +157,7 @@ fn test_tensor_gpu_mulacc_matches_cpu_and_grad() {
         return;
     }
 
-    let dev = Device::GPU("TestDevice".to_string());
+    let dev = Device::gpu().expect("GPU availability checked above");
 
     // Simple 1D tensors with requires_grad = true so we can compare gradients.
     let x_cpu = RawTensor::new(vec![1.0, 2.0, -3.0], &[3], true);
@@ -209,7 +209,7 @@ fn test_tensor_gpu_unary_relu_matches_cpu() {
         return;
     }
 
-    let dev = Device::GPU("TestDevice".to_string());
+    let dev = Device::gpu().expect("GPU availability checked above");
 
     let x_cpu = RawTensor::randn(&[16]);
     let x_gpu = x_cpu.to_device(dev.clone());
@@ -239,7 +239,7 @@ fn test_tensor_gpu_mixed_device_binary_fallbacks_to_cpu() {
         return;
     }
 
-    let dev = Device::GPU("TestDevice".to_string());
+    let dev = Device::gpu().expect("GPU availability checked above");
     let a = RawTensor::new(vec![1.0, 2.0], &[2], false).to_device(dev.clone());
     let b = RawTensor::new(vec![3.0, 4.0], &[2], false);
 
@@ -261,7 +261,7 @@ fn test_tensor_gpu_binary_basic_matches_cpu() {
         return;
     }
 
-    let dev = Device::GPU("TestDevice".to_string());
+    let dev = Device::gpu().expect("GPU availability checked above");
 
     let a_cpu = RawTensor::new(vec![1.0, -2.0, 3.5, 4.0], &[4], false);
     let b_cpu = RawTensor::new(vec![0.5, 2.0, -1.0, 8.0], &[4], false);
@@ -328,7 +328,7 @@ fn test_tensor_gpu_sum_dim_device_and_grad_on_gpu() {
         return;
     }
 
-    let dev = Device::GPU("TestDevice".to_string());
+    let dev = Device::gpu().expect("GPU availability checked above");
     let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], true).to_device(dev.clone());
 
     // Sum over last dim: [[1,2],[3,4]] -> [3,7]
@@ -361,7 +361,7 @@ fn test_tensor_gpu_max_dim_device_and_grad_on_gpu() {
         return;
     }
 
-    let dev = Device::GPU("TestDevice".to_string());
+    let dev = Device::gpu().expect("GPU availability checked above");
     // Shape [2,3]
     let x =
         RawTensor::new(vec![1.0, 5.0, 3.0, 2.0, 8.0, 4.0], &[2, 3], true).to_device(dev.clone());
@@ -395,7 +395,7 @@ fn test_binary_add_backward_simple() {
         return;
     }
 
-    let dev = Device::GPU("Test".to_string());
+    let dev = Device::gpu().expect("GPU availability checked above");
     let x = RawTensor::new(vec![1.0, 2.0], &[2], true).to_device(dev.clone());
     let y = RawTensor::new(vec![3.0, 4.0], &[2], true).to_device(dev.clone());
 

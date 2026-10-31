@@ -143,25 +143,32 @@ impl Storage {
         })
     }
 
-    /// Create new GPU storage from f32 data (falls back to CPU if GPU unavailable)
+    /// Create new GPU storage from f32 data.
     ///
     /// The host copy is read lazily - data is only copied back from GPU
     /// when read via `to_host_f32()` or similar methods. This avoids
     /// duplicating data in CPU memory unnecessarily.
+    ///
+    /// # Panics
+    /// If no GPU is available, or the buffer can't be allocated. It never returns CPU
+    /// storage in place of GPU storage.
     #[cfg(feature = "gpu")]
     #[must_use]
     pub fn gpu(data: Vec<f32>) -> Self {
-        if let Some(buffer) = GpuBuffer::from_slice(&data) {
-            Self::from_gpu_buffer(buffer)
-        } else {
-            Self::cpu(data)
-        }
+        assert!(is_gpu_available(), "Storage::gpu: no GPU is available");
+        let buffer = GpuBuffer::from_slice(&data)
+            .unwrap_or_else(|| panic!("Storage::gpu: GPU buffer allocation failed"));
+        Self::from_gpu_buffer(buffer)
     }
 
+    /// Not-gpu stub.
+    ///
+    /// # Panics
+    /// Always: there is no GPU without the `gpu` feature.
     #[cfg(not(feature = "gpu"))]
     #[must_use]
-    pub fn gpu(data: Vec<f32>) -> Self {
-        Self::cpu(data)
+    pub fn gpu(_data: Vec<f32>) -> Self {
+        panic!("Storage::gpu: no GPU is available (built without the `gpu` feature)")
     }
 
     /// Wrap a freshly computed device buffer as unshared GPU storage with an empty host copy.
@@ -184,6 +191,9 @@ impl Storage {
     }
 
     /// Create new zero-filled storage on the specified device
+    ///
+    /// # Panics
+    /// If `device` is a GPU and no GPU is available, or the buffer can't be allocated.
     #[must_use]
     pub fn new_zeros(len: usize, device: &Device) -> Self {
         match device {
@@ -191,18 +201,20 @@ impl Storage {
             Device::GPU(_) => {
                 #[cfg(feature = "gpu")]
                 {
-                    if is_gpu_available() {
-                        // Create GPU zeros
-                        if let Some(buffer) = GpuBuffer::zeros(len) {
-                            return Self::from_gpu_buffer(buffer);
-                        }
-                    }
-                    // Fall back to CPU
-                    Self::cpu(vec![0.0; len])
+                    assert!(
+                        is_gpu_available(),
+                        "new_zeros({device}): no GPU is available"
+                    );
+                    let buffer = GpuBuffer::zeros(len).unwrap_or_else(|| {
+                        panic!("new_zeros({device}): GPU buffer allocation failed")
+                    });
+                    Self::from_gpu_buffer(buffer)
                 }
                 #[cfg(not(feature = "gpu"))]
                 {
-                    Self::cpu(vec![0.0; len])
+                    panic!(
+                        "new_zeros({device}): no GPU is available (built without the `gpu` feature)"
+                    )
                 }
             }
         }
@@ -499,6 +511,10 @@ impl Storage {
     }
 
     /// Move to a specific device
+    ///
+    /// # Panics
+    /// If `device` is a GPU and no GPU is available. It never returns CPU storage for a
+    /// GPU request.
     #[must_use]
     pub fn to_device(&self, device: &Device) -> Self {
         match device {
@@ -514,18 +530,22 @@ impl Storage {
             Device::GPU(_) => {
                 #[cfg(feature = "gpu")]
                 {
-                    if is_gpu_available() {
+                    assert!(
+                        is_gpu_available(),
+                        "to_device({device}): no GPU is available"
+                    );
+                    match self {
+                        // Already on the (only) GPU: share the buffer.
+                        Self::Gpu(_) => self.clone(),
                         // Convert to f32 for GPU (GPU ops are f32 only for now)
-                        Self::gpu(self.to_f32_vec())
-                    } else {
-                        log::warn!("GPU requested but not available, using CPU");
-                        self.clone()
+                        Self::Cpu { .. } => Self::gpu(self.to_f32_vec()),
                     }
                 }
                 #[cfg(not(feature = "gpu"))]
                 {
-                    log::warn!("GPU feature not enabled, using CPU");
-                    self.clone()
+                    panic!(
+                        "to_device({device}): no GPU is available (built without the `gpu` feature)"
+                    )
                 }
             }
         }
@@ -772,5 +792,17 @@ mod tests {
             Err(VoltaError::DeviceError(_))
         ));
         assert_eq!(&*s.to_host_f32(), &[1.0, 2.0]);
+    }
+}
+
+#[cfg(all(test, not(feature = "gpu")))]
+mod no_gpu_tests {
+    use super::*;
+
+    /// Without a GPU, asking for one panics instead of returning CPU storage.
+    #[test]
+    #[should_panic(expected = "no GPU is available")]
+    fn to_device_gpu_without_gpu_panics() {
+        let _ = Storage::cpu(vec![1.0]).to_device(&Device::GPU("x".to_string()));
     }
 }

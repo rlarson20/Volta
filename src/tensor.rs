@@ -390,6 +390,10 @@ impl RawTensor {
     }
 
     /// Create a new tensor from Storage and shape (internal use for GPU ops)
+    ///
+    /// # Panics
+    /// If `data.len()` != `shape.numel()`, or if the storage isn't where `device` says
+    /// it is (a device label is a promise; see `crate::device_policy`).
     #[allow(dead_code)]
     pub(crate) fn new_with_storage(
         data: crate::storage::Storage,
@@ -397,6 +401,12 @@ impl RawTensor {
         device: Device,
         requires_grad: bool,
     ) -> Tensor {
+        assert_eq!(
+            data.is_gpu(),
+            device.is_gpu(),
+            "tensor labeled {device} but its storage is on the {}",
+            if data.is_gpu() { "GPU" } else { "CPU" }
+        );
         Self::try_new_with_storage(data, shape, device, requires_grad)
             .expect("Data length must match shape")
     }
@@ -914,10 +924,13 @@ impl RawTensor {
     /// Move tensor data to a different device.
     ///
     /// - `data` is moved via `Storage::to_device`.
-    /// - Gradients remain on CPU storage for now, since the autograd engine and
-    ///   all gradient accumulation logic are CPU-only.
+    /// - The gradient, if any, moves with the data.
     /// - Autograd metadata (`requires_grad`, `grad_fn`, `parents`) is preserved,
     ///   so the returned tensor participates in the same computation graph.
+    ///
+    /// # Panics
+    /// If `device` is a GPU and no GPU is available, or it names a GPU other than this
+    /// machine's adapter (`Device::gpu()`).
     #[must_use]
     pub fn to_device(self_t: &Tensor, device: Device) -> Tensor {
         // Fast path: already on requested device
@@ -928,11 +941,19 @@ impl RawTensor {
             }
         }
 
+        // A GPU that isn't this machine's adapter is an error, like `cuda:7` on a one-GPU
+        // machine, so device equality can compare names (multi-GPU-ready).
+        if device.is_gpu()
+            && let Some(real) = Device::gpu()
+            && real != device
+        {
+            panic!("to_device({device}): no such GPU; the available GPU is {real}");
+        }
+
         let t = self_t.borrow();
 
         let new_data = t.data.to_device(&device);
-        // Keep gradients on CPU for now – backward and accumulation are CPU-only.
-        let new_grad = t.grad.clone();
+        let new_grad = t.grad.as_ref().map(|g| g.to_device(&device));
 
         let new_tensor = Self {
             data: new_data,
@@ -1408,7 +1429,11 @@ impl Tensor {
         RawTensor::stride_op(self, strides)
     }
 
-    /// Moves the tensor to `device`, keeping its autograd metadata.
+    /// Moves the tensor and its gradient to `device`, keeping its autograd metadata.
+    ///
+    /// # Panics
+    /// If `device` is a GPU and no GPU is available, or it names a GPU other than this
+    /// machine's adapter (`Device::gpu()`).
     #[must_use]
     pub fn to_device(&self, device: Device) -> Self {
         RawTensor::to_device(self, device)
@@ -1792,7 +1817,7 @@ mod load_weight_tests {
             eprintln!("SKIPPED: no GPU available");
             return;
         }
-        let dev = Device::GPU("TestDevice".to_string());
+        let dev = Device::gpu().expect("GPU availability checked above");
         let t = RawTensor::new(vec![0.0; 6], &[2, 3], true).to_device(dev.clone());
         assert!(t.borrow().data.is_gpu(), "precondition: tensor on GPU");
 

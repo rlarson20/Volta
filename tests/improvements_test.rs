@@ -204,12 +204,15 @@ fn test_tensor_to_device_updates_device_and_preserves_data() {
     assert_eq!(t_cpu.shape(), vec![2]);
     assert_eq!(t_cpu.data(), vec![1.0, 2.0]);
 
-    // Move to a GPU device name; storage may or may not actually become GPU
-    // backed depending on feature flags and runtime availability, but:
-    // - device field must reflect the requested Device
-    // - data must be numerically preserved.
-    let t_gpu = t.to_device(Device::GPU("CUDA".to_string()));
+    // Move to the GPU, when there is one: the device field reflects it, the storage is
+    // really on the GPU, and the data is preserved. Without a GPU, `to_device` panics
+    // (`device_policy` tests), so there is nothing more to check here.
+    let Some(gpu) = Device::gpu() else {
+        return;
+    };
+    let t_gpu = t.to_device(gpu.clone());
     assert_eq!(t_gpu.shape(), vec![2]);
     assert_eq!(t_gpu.data(), vec![1.0, 2.0]);
-    assert_eq!(t_gpu.device(), Device::GPU("CUDA".to_string()));
+    assert_eq!(t_gpu.device(), gpu);
+    assert!(t_gpu.grad_storage().is_none_or(|g| g.is_gpu()));
 }

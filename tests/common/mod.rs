@@ -29,7 +29,7 @@ pub fn skip_if_no_gpu() -> bool {
 
 #[must_use]
 pub fn gpu_device() -> Device {
-    Device::GPU("ParityTest".to_string())
+    Device::gpu().expect("call skip_if_no_gpu() first")
 }
 
 /// Build a deterministic CPU tensor with values linearly spaced over `range`.
