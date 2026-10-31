@@ -10,7 +10,7 @@ Last verified: 2026-10-29.
 
 - [x] **B1** ConvTranspose2d weights get no gradient. Fixed by `edge()`; `test_conv_transpose2d_assert_trainable` passes.
 - [x] **B2** LSTMCell `slice_gate` severed the graph (gate slice copied into `RawTensor::new`, on the CPU). It is a `shrink` now (2026-10-30). Evidence: `lstm::tests::test_lstmcell_assert_trainable` (un-ignored; its wrapper takes two steps, because one step from zero state gives `weight_hh` an exactly zero gradient), and `test_lstmcell_step_gradcheck` (finite differences for `x`, `h`, `c` from a random state under a weighted loss of `h_next` and `c_next`; 0 of 900 checks over 300 seeds fail at its 3e-2 tolerance, the worst 1.6e-2). Both fail on the old `slice_gate`, and the gradcheck fails with the analytic gradient scaled by 1.1. `tests/device_policy.rs::gpu_lstm_stays_on_device` (un-ignored) now runs two steps on an Apple M2 and matches the CPU in `h` and every parameter gradient.
-- [ ] **B3** `PositionalEncoding::forward` rebuilds its output from raw data in both modes (`positional_encoding.rs:163,196`). It has no trainability test. The fix composes it from graph ops and adds `assert_trainable!` for learned mode. `examples/char_transformer_model.rs` hand-rolls positional encoding around this bug. Its output is also built on the CPU for GPU input, and the layer has no `to_device` (it is not a `Module`); un-ignore `tests/device_policy.rs::gpu_positional_encoding_stays_on_device` with the fix.
+- [x] **B3** `PositionalEncoding::forward` rebuilt its output from host data in both modes, on the CPU, and the layer had no `to_device`. It is a `Module` + `Layer` now, and adds a `shrink` of its table, expanded over the batch, with a same-shape `add` (DECISIONS.md, "`PositionalEncoding` is a `Layer`") (2026-10-30). Evidence: exact input and learned-weight gradient tests, value tests against the formula, `assert_trainable!` in learned mode (all fail on a detached output), and `tests/device_policy.rs::gpu_positional_encoding_stays_on_device` (un-ignored: CPU parity of the output and both gradients, no device-policy gaps, on an Apple M2). `examples/char_transformer_model.rs` uses the layer instead of its hand-rolled copy.
 - [x] **B4** Unequal-rank batched matmul backward. Fixed by `MatmulSpec`: matrix operands of unequal rank are rejected in forward (the audit's `[2,3,4] @ [2,1,4,6]` and 3D@2D both panic with "equal rank"), so the bad backward is unreachable. Evidence: `ops::matmul::tests::test_matmul_rejects_unequal_rank_b4_repro`, plus finite-difference checks of both operands for 2D, equal-batch, and broadcast-batch shapes. NumPy-style unequal-rank broadcasting is not supported (DECISIONS.md, "MatmulSpec").
 - [x] **B5** The CPU-only build failed to compile. Fixed in `c8a5006`; `--no-default-features` builds and tests (2026-10-26).
 
@@ -67,9 +67,8 @@ Last verified: 2026-10-29.
 
 - [x] `assert_trainable!` exists for every parameterized layer, with a weighted loss and seeded random inputs (2026-10-26).
 - [x] Add a regression test for multi-consumer (diamond) gradient accumulation: `autograd::tests::diamond_accumulates_both_paths` (`x*x + x`, random input, grad `2x + 1`).
-- [ ] Add a gradient test for `PositionalEncoding` (B3).
+- [x] Add a gradient test for `PositionalEncoding` (B3).
 - [ ] Remove example workarounds for broken components once the components are fixed.
-  - `examples/char_transformer_model.rs` hand-rolls positional encoding (B3).
   - `examples/load_external_mnist.rs::run_validation` does not compare against PyTorch outputs; it skips the JSON parse and runs the demo inference.
   - `examples/vae.rs` falls back to constant synthetic data (0.5) when MNIST is missing.
 

@@ -8,7 +8,10 @@
 #[path = "common/mod.rs"]
 mod common;
 
-use common::{TOL_MATMUL_BWD, TOL_MATMUL_FWD, assert_close, gpu_device, skip_if_no_gpu};
+use common::{
+    TOL_BWD_GPU, TOL_FWD_GPU, TOL_MATMUL_BWD, TOL_MATMUL_FWD, assert_close, expect_gaps,
+    gpu_device, skip_if_no_gpu,
+};
 use volta::Axis;
 use volta::nn::{MultiHeadAttention, PositionalEncoding, PositionalEncodingType};
 use volta::{
@@ -221,21 +224,59 @@ fn gpu_losses_stay_on_device() {
     }
 }
 
-/// `PositionalEncoding` keeps a GPU input on the GPU.
+/// `PositionalEncoding` moved to the GPU keeps a GPU input there, with no device-policy
+/// gaps, and matches the CPU in the output and in the input and weight gradients (B3: the
+/// forward used to rebuild its output from host data on the CPU, and the layer had no
+/// `to_device`).
 #[test]
-#[ignore = "B3: PositionalEncoding::forward rebuilds its output from raw host data on the CPU, and the layer has no to_device"]
 fn gpu_positional_encoding_stays_on_device() {
     if skip_if_no_gpu() {
         return;
     }
-    let _prefer = with_device_policy(DevicePolicy::PreferGpu);
-    let (_, x3) = pair(&[2, 4, 8]);
     for kind in [
         PositionalEncodingType::Sinusoidal,
         PositionalEncodingType::Learned,
     ] {
-        let pe = PositionalEncoding::new(8, 16, kind);
-        assert!(pe.forward(&x3).device().is_gpu());
+        let (x_cpu, x) = leaf_pair(&[2, 4, 8]);
+        manual_seed(0xB3);
+        let w_cpu = RawTensor::randn(&[2, 4, 8]);
+        let w = w_cpu.to_device(gpu_device());
+        let cpu_pe = PositionalEncoding::new(8, 16, kind);
+        let mut gpu_pe = PositionalEncoding::new(8, 16, kind);
+        gpu_pe.load_state_dict(&cpu_pe.state_dict());
+        let gpu_pe = on_gpu(gpu_pe);
+
+        let out_cpu = cpu_pe.forward(&x_cpu);
+        out_cpu
+            .elem_mul(&w_cpu)
+            .sum()
+            .into_loss()
+            .unwrap()
+            .backward();
+        expect_gaps(&[], || {
+            let out = gpu_pe.forward(&x);
+            assert!(out.device().is_gpu(), "{kind:?} output left the GPU");
+            assert_close("output", &out_cpu.data(), &out.data(), TOL_FWD_GPU);
+            out.elem_mul(&w).sum().into_loss().unwrap().backward();
+        });
+        assert!(
+            x.grad_storage().unwrap().is_gpu(),
+            "{kind:?} x grad left the GPU"
+        );
+        assert_close(
+            "x grad",
+            &x_cpu.grad().unwrap(),
+            &x.grad().unwrap(),
+            TOL_BWD_GPU,
+        );
+        for (cpu, gpu) in cpu_pe.parameters().iter().zip(&gpu_pe.parameters()) {
+            assert_close(
+                "weight grad",
+                &cpu.grad().unwrap(),
+                &gpu.grad().unwrap(),
+                TOL_BWD_GPU,
+            );
+        }
     }
 }
 

@@ -13,8 +13,8 @@
 // MultiHeadAttention::forward internally does x.add(&output) — so calling norm1.forward(mha.forward(x)) is Pre-LN applied to the post-residual output, which is slightly non-standard (Post-LN).
 // That's fine for a smoke test but worth fixing later by refactoring MHA to not embed the residual.
 //
-// The positional encoding is added outside the graph (no requires_grad), which is correct for sinusoidal PE but means the model can't learn positional weights.
-// If you want learned PE later, PositionalEncoding::new(embed_dim, max_len, PositionalEncodingType::Learned) is wired up.
+// The positional encoding is sinusoidal (fixed). For learned positions, construct it with
+// PositionalEncodingType::Learned and add its parameters to the model's.
 //
 // If loss doesn't move at all, the most likely culprit is the FeedForward::forward reshape — it expects exactly 3D input [batch, seq_len, embed_dim].
 // A shape panic there would silently corrupt the graph on some code paths.
@@ -24,7 +24,9 @@ use volta::{
     Adam, Embedding, LayerNorm, RawTensor,
     nn::{
         IndexedLayer, Layer, Module,
-        transformer::{FeedForward, MultiHeadAttention},
+        transformer::{
+            FeedForward, MultiHeadAttention, PositionalEncoding, PositionalEncodingType,
+        },
     },
     tensor::cross_entropy_loss,
 };
@@ -117,6 +119,8 @@ impl TransformerLayer {
 struct TinyTransformerLM {
     /// Token index to `embed_dim` vector.
     embedding: Embedding,
+    /// Fixed sinusoidal positional encoding for up to `max_len` positions.
+    pos_enc: PositionalEncoding,
     /// The single transformer layer.
     layer: TransformerLayer,
     /// Projects `embed_dim` to `vocab_size` logits.
@@ -128,10 +132,16 @@ struct TinyTransformerLM {
 }
 
 impl TinyTransformerLM {
-    /// Builds a model with the given vocabulary size, embedding width, and head count.
-    fn new(vocab_size: usize, embed_dim: usize, num_heads: usize) -> Self {
+    /// Builds a model with the given vocabulary size, embedding width, head count, and
+    /// maximum sequence length.
+    fn new(vocab_size: usize, embed_dim: usize, num_heads: usize, max_len: usize) -> Self {
         Self {
             embedding: Embedding::new(vocab_size, embed_dim),
+            pos_enc: PositionalEncoding::new(
+                embed_dim,
+                max_len,
+                PositionalEncodingType::Sinusoidal,
+            ),
             layer: TransformerLayer::new(embed_dim, num_heads),
             head: volta::nn::Linear::new(embed_dim, vocab_size, true),
             embed_dim,
@@ -155,11 +165,10 @@ impl TinyTransformerLM {
         // Embed: [seq_len, embed_dim]
         let emb = self.embedding.forward_indices(indices);
 
-        // PosEnc: sinusoidal, added manually (not tracked, fine for inference quality)
-        let emb = self.add_positional_encoding(emb, seq_len);
-
-        // Reshape to [1, seq_len, embed_dim] for transformer layers
-        let x = emb.reshape(&[1, seq_len, self.embed_dim]);
+        // Reshape to [1, seq_len, embed_dim], then add the positional encoding
+        let x = self
+            .pos_enc
+            .forward(&emb.reshape(&[1, seq_len, self.embed_dim]));
 
         // Transformer layer
         let x = self.layer.forward(&x);
@@ -169,23 +178,6 @@ impl TinyTransformerLM {
 
         // Linear head: [seq_len, vocab_size]
         self.head.forward(&x)
-    }
-
-    /// Adds fixed sinusoidal positional encodings to `x` (`[seq_len, embed_dim]`).
-    ///
-    /// This hand-rolls what `PositionalEncoding` should do: that layer severs the graph (defect B3 in `notes/TODO.md`), so the encoding is built here as a constant without `requires_grad`. Remove this workaround once B3 is fixed.
-    fn add_positional_encoding(&self, x: volta::Tensor, seq_len: usize) -> volta::Tensor {
-        let d = self.embed_dim;
-        let mut pe_data = vec![0.0f32; seq_len * d];
-        for pos in 0..seq_len {
-            for i in 0..(d / 2) {
-                let angle = pos as f32 / 10000_f32.powf(2.0 * i as f32 / d as f32);
-                *pe_data.get_mut(pos * d + 2 * i).unwrap() = angle.sin();
-                *pe_data.get_mut(pos * d + 2 * i + 1).unwrap() = angle.cos();
-            }
-        }
-        let pe = RawTensor::new(pe_data, &[seq_len, d], false);
-        x.add(&pe)
     }
 }
 
@@ -212,7 +204,7 @@ fn main() {
     let epochs = 150;
     let lr = 3e-3;
 
-    let model = TinyTransformerLM::new(vocab.size(), embed_dim, num_heads);
+    let model = TinyTransformerLM::new(vocab.size(), embed_dim, num_heads, seq_len);
     let params = model.parameters();
     let total_params: usize = params.iter().map(|p| p.data().len()).sum();
     println!("Parameters:  {total_params}");

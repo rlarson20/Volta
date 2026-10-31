@@ -25,7 +25,6 @@ Work that a Linux CPU can verify, and that reviews as a PR. Current candidates f
 
 - Test fixes from `notes/TODO.md`: the blind BatchNorm gradcheck in `tests/coverage_fill.rs`, and the io tests' fixed temp paths.
 - Docs toward the merge gate (the undocumented items behind the `lib.rs` allow). Read the code for every claim you write. Don't remove the allow until nothing is left.
-- CPU defects: B3 (`PositionalEncoding`).
 - Comment-only fixes (for example the `BackwardParams` comments in `matmul_backward.wgsl`).
 - Investigations that end in a `notes/TODO.md` or `DECISIONS.md` entry.
 - Phase 3 work (storage, the `Shape` flip) and later architecture, on the same terms as locally: ask before choosing a design. Any GPU-touching part can't be verified here (below).

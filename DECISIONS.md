@@ -477,6 +477,18 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 
 **Tests:** `tests/device_policy.rs` (forward and backward gaps under both policies, mixed devices, unknown GPU names, layers and losses keeping constants on the GPU, `no_grad`, event order, rank-5 movement), `device_policy::tests`, and `expect_gaps` in the parity and smoke tests, which asserts the exact set of ops each GPU test runs on the CPU. All ran on a real adapter (2026-10-30).
 
+### `PositionalEncoding` is a `Layer`, and its rows are a `shrink` (B3)
+
+**Decision:** `PositionalEncoding` implements `Module` and `Layer`, like every other tensor-to-tensor layer, and `forward` adds `table.shrink(rows 0..seq_len) → reshape [1, S, D] → expand [B, S, D]` to `x` with a same-shape `add`. `table` is the fixed sinusoid buffer or, in learned mode, the `Embedding`'s weight. Before, both modes copied `x` and the encoding to the host and built the sum with `RawTensor::new`, so no gradient reached `x` or the learned weight, and a GPU input came back on the CPU.
+
+**Why a `shrink`, not `Embedding::forward_indices(0..seq_len)`:** the positions are always `0..seq_len`, so the lookup is a contiguous row slice. `shrink` has a GPU kernel and `Embedding` has none, and its backward writes only the used rows.
+
+**Why expand, not a broadcast `add`:** GPU binary ops with differing shapes are a device-policy gap (no kernel), and `expand` plus a same-shape add are not. A GPU `PositionalEncoding` runs forward and backward with no gaps, so it works under `Strict` (`tests/device_policy.rs::gpu_positional_encoding_stays_on_device` asserts an empty `expect_gaps`).
+
+**API change:** the inherent `forward`, `parameters`, `state_dict`, and `load_state_dict` are gone; they are the trait methods now, so callers import `Layer`/`Module`. `to_device` is overridden: the sinusoid table is not a parameter, so the default would leave it behind and the next forward would hit the mixed-device panic. `forward` now asserts the input's last dim equals `embed_dim`; the old code shrank the table to the input's width, so a narrower input was silently given a truncated encoding.
+
+**Tests:** the output against the sin/cos formula and against the learned weight rows; the exact input gradient (`w` for the loss `sum(out ⊙ w)`, both modes); the exact learned-weight gradient (`Σ_b w[b, p, :]` for `p < seq_len`, zero past it); `assert_trainable!` in learned mode; and GPU parity of the output and both gradients on an Apple M2. The gradient tests fail when the output is replaced by a detached copy of the same values.
+
 ## Concurrency and Async
 
 ### Stay synchronous
