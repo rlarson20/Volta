@@ -574,10 +574,9 @@ Ordered by prevention-per-risk; each phase compiles and ships independently.
 
 | Phase                      | Contents                                                                                                                                                 | Prevents                                               | Size                |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | ------------------- |
-| 3 — traits and storage     | Sealed + split traits w/ trybuild (§3); `DevicePolicy` (§2.1); storage `Arc`/`OnceCell`/no-Deref (§7), the matmul layout contract (§7), and the `RawTensor.shape` → `Shape` flip; indexing policy + `fetch` (§8) | H3/H6/H8, silent fallback, clone economy, silent zeros | ~2 weeks            |
 | 4 — endgame, optional      | Arena graph (§6); `Backend` trait (§3.5); proptest DAG checks (§10.2) if not already in phase 2                                                          | cycles, `Send`, memory determinism                     | multi-week, do last |
 
-Phases 0–2 (done) retire every prevention target that maps to a Part I blocker.
+Phases 0–3 (done) retire every prevention target that maps to a Part I blocker.
 The arena (§6) is the only genuinely architectural bet,
 and it gets cheaper every phase that lands before it.
 
@@ -586,6 +585,7 @@ and it gets cheaper every phase that lands before it.
 | 0 — mechanical, do immediately | `#[non_exhaustive]` on public enums; `approx`→dev-dep; drop `statrs` (20-line erf); CI `--no-default-features` fix + cargo-hack; cfg-at-definition consolidation (§9); `log` facade for prints | B5 recurrence, dependency bloat, print pollution | 1 day, near-zero risk |
 | 1 — the invariant wall | Opaque `Tensor` + §1.4 `edge()` constructor + `NoGrad` (§1.1, 1.4, 1.5); `assert_trainable!` across all layers (§5.3) | B1/B2/B3 class, graph surgery | ~1 week, mechanical churn |
 | 2 — types for dims and ops | `Shape`/`Axis`/`Strides` (§1.2); specs replace positional args (§1.3); `GradFn` enum (§2.5); `define_ops!` (§5.1); `PadValue` (§2.4); `into_loss` (§2.2) | B4 class, forward/backward/kernel drift, H1            | ~1–2 weeks          |
+| 3 — traits and storage | Sealed + split traits w/ trybuild (§3); `DevicePolicy` (§2.1); storage `Arc`/`OnceCell`/no-Deref (§7), the matmul layout contract (§7), and the `RawTensor.shape` → `Shape` flip; indexing policy + `fetch` (§8) | H3/H6/H8, silent fallback, clone economy, silent zeros | ~2 weeks |
 
 **Phase 1 deviations from this document's original sketch** (all deliberate, made while implementing rather than while planning):
 
@@ -614,6 +614,13 @@ and it gets cheaper every phase that lands before it.
 - Split layer traits (§3.1, §3.2) landed (DECISIONS.md, "Split layer traits"). Differences from the sketch: `Module` stays as the base trait and `Layer: Module` carries `forward`; only `IndexedLayer` and `RecurrentLayer` are sealed, because `Module`/`Layer` are the only way for users to write a layer (no `GradFn::Custom`); `IndexedLayer::forward_indices` takes `&[usize]`, not `&[u32]`; `load_state_dict` still returns `()`. `TransformerBlock` holds a concrete `MultiHeadAttention` (H6).
 - The `RecurrentLayer`/`IndexedLayer` seal and `Embedding`-in-`Sequential` are pinned by trybuild (`tests/compile_fail/`).
 - The `RawTensor.shape` → `Shape` flip moved to Phase 3. It rewrites the same ~440 kernel reads as the storage change (§7), so doing it separately would touch those sites twice.
+
+**Phase 3 deviations** (Phase 3 is done; the split traits, storage, shape flip, matmul layout, and indexing deviations are recorded above and in DECISIONS.md):
+
+- `DevicePolicy` (§2.1) landed (DECISIONS.md, "`DevicePolicy`: the device label is a promise"). It has no `CpuOnly` variant; the policy is set with a scoped guard, `with_device_policy`, instead of `set_device_policy()`; and fallbacks are drained from a thread-local log (`take_fallback_events`) rather than returned from each op. Device errors are panics until the H4 decision.
+- §2.1's "fall back to CPU on kernel miss" is narrower in practice: `PreferGpu` covers only gaps (no kernel for the case). A kernel that exists and returns `None` panics under every policy.
+- Device equality compares GPU names, and `to_device` rejects a GPU name other than the adapter's, so the check needs no change for more than one GPU.
+- Movement ops above rank 4 (or with a pad width over 16 bits on dims 2–3) became gaps, which fixes H5's silent truncation for movement ops only.
 
 ---
 

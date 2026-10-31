@@ -9,7 +9,7 @@
 #[path = "common/mod.rs"]
 mod common;
 
-use common::{TOL_FWD_GPU, assert_reduce_parity};
+use common::{TOL_FWD_GPU, assert_reduce_parity, expect_gaps};
 use volta::Axis;
 
 #[test]
@@ -29,52 +29,62 @@ fn max_reduce_whole_tensor_parity() {
 
 #[test]
 fn sum_dim_keepdim_parity() {
-    assert_reduce_parity(
-        "sum_dim keepdim",
-        |t| t.sum_dim(Axis(1), true),
-        &[4, 5],
-        TOL_FWD_GPU,
-    );
+    expect_gaps(&["SumDim"], || {
+        assert_reduce_parity(
+            "sum_dim keepdim",
+            |t| t.sum_dim(Axis(1), true),
+            &[4, 5],
+            TOL_FWD_GPU,
+        );
+    });
 }
 
 #[test]
 fn sum_dim_no_keepdim_parity() {
-    assert_reduce_parity(
-        "sum_dim",
-        |t| t.sum_dim(Axis(0), false),
-        &[4, 5],
-        TOL_FWD_GPU,
-    );
+    expect_gaps(&["SumDim"], || {
+        assert_reduce_parity(
+            "sum_dim",
+            |t| t.sum_dim(Axis(0), false),
+            &[4, 5],
+            TOL_FWD_GPU,
+        );
+    });
 }
 
 #[test]
 fn mean_dim_keepdim_parity() {
-    assert_reduce_parity(
-        "mean_dim keepdim",
-        |t| t.mean_dim(Axis(1), true),
-        &[4, 5],
-        TOL_FWD_GPU,
-    );
+    expect_gaps(&["Binary(Div)", "SumDim"], || {
+        assert_reduce_parity(
+            "mean_dim keepdim",
+            |t| t.mean_dim(Axis(1), true),
+            &[4, 5],
+            TOL_FWD_GPU,
+        );
+    });
 }
 
 #[test]
 fn mean_dim_no_keepdim_parity() {
-    assert_reduce_parity(
-        "mean_dim",
-        |t| t.mean_dim(Axis(0), false),
-        &[4, 5],
-        TOL_FWD_GPU,
-    );
+    expect_gaps(&["Binary(Div)", "SumDim"], || {
+        assert_reduce_parity(
+            "mean_dim",
+            |t| t.mean_dim(Axis(0), false),
+            &[4, 5],
+            TOL_FWD_GPU,
+        );
+    });
 }
 
 #[test]
 fn max_dim_keepdim_parity() {
-    assert_reduce_parity(
-        "max_dim keepdim",
-        |t| t.max_dim(Axis(1), true),
-        &[4, 5],
-        TOL_FWD_GPU,
-    );
+    expect_gaps(&["MaxDim"], || {
+        assert_reduce_parity(
+            "max_dim keepdim",
+            |t| t.max_dim(Axis(1), true),
+            &[4, 5],
+            TOL_FWD_GPU,
+        );
+    });
 }
 
 #[test]

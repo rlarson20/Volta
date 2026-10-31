@@ -7,10 +7,17 @@
 //! - Full training loop staying on GPU
 //! - Performance comparison with CPU training
 use std::time::Instant;
-use volta::{Adam, Device, Layer, Linear, Module, RawTensor, ReLU, Sequential, Tensor, mse_loss};
+use volta::{
+    Adam, Device, DevicePolicy, Layer, Linear, Module, RawTensor, ReLU, Sequential, Tensor,
+    mse_loss, take_fallback_events, with_device_policy,
+};
 
 fn main() {
     println!("=== Volta GPU Training Example ===\n");
+
+    // `Linear`'s bias add broadcasts, and the GPU has no broadcasting kernel yet, so opt
+    // into running those ops on the CPU. Under the default `Strict` policy they panic.
+    let _prefer = with_device_policy(DevicePolicy::PreferGpu);
 
     // Check GPU availability
     #[cfg(feature = "gpu")]
@@ -42,6 +49,11 @@ fn main() {
     println!("\n--- Performance Comparison ---");
     compare_cpu_vs_gpu(x_data, y_data);
 
+    let fallbacks = take_fallback_events();
+    println!(
+        "\n{} op call(s) ran on the CPU for GPU inputs (no GPU kernel yet)",
+        fallbacks.len()
+    );
     println!("\n=== GPU Training Example Complete ===");
 }
 

@@ -446,6 +446,33 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 
 **Departure from §10:** no `insta`. The defects are key collisions, which `assert_eq!` on a short key list catches just as well (`test_state_dict_keys`), without a dev-dependency and the `cargo-insta` review step. Revisit if snapshot coverage grows to many layers' key sets.
 
+### `DevicePolicy`: the device label is a promise (ADDENDUM §2.1)
+
+**Decision:** an op's output is on its inputs' device, and nothing moves a tensor silently. Three cases break that, and each is handled in one place (`src/device_policy.rs`):
+
+- **Mixed devices** (inputs on different devices) panic under every policy. `edge()` checks it for every op; `Where` checks its condition, which is not a graph input.
+- **A gap** (a GPU input reaching an op, or a case of an op, with no GPU kernel) goes through the policy. `DevicePolicy::Strict`, the default, panics with the op's name and the opt-in. `DevicePolicy::PreferGpu` runs the op on the CPU, moves the result to the GPU, and records a `FallbackEvent`. `edge()` is the forward check (a CPU output for GPU inputs is a gap) and `Tensor::accumulate_grad` the backward one (a CPU gradient for a GPU tensor is a gap), so an op that is never edited is still covered.
+- **A failure** (a kernel that covers the case returns `None`) panics under every policy via `kernel_failed`, at the op site. Only the op knows whether a kernel covers the case: `UnaryOp::has_gpu_kernel()` (from `define_ops!`), differing binary shapes, batched and vector matmul, movement ops above rank 4.
+
+**Why `Strict` by default:** it is PyTorch's behavior (mixed devices raise; a missing kernel raises `NotImplementedError`; the only fallback, `PYTORCH_ENABLE_MPS_FALLBACK`, is opt-in), and invariant 5: a silent fallback is how a "GPU test" passed with nothing on the GPU. No one depends on the old behavior, so GPU models that hit gaps (`Linear`'s bias add, attention's batched matmuls) now opt in, and the panics are the list of missing kernels (`notes/TODO.md`).
+
+**Why `PreferGpu` never covers failures:** a kernel that exists and returns nothing is a bug or a broken device. Retrying it on the CPU is the silent fallback this replaces. PyTorch does not retry a CUDA OOM on the CPU either.
+
+**Device equality compares names.** `GPU("a") != GPU("b")`, so the check is already correct for more than one GPU. To make that safe with one context, `to_device(GPU(name))` panics unless `name` is the adapter's (`Device::gpu()`), as PyTorch rejects `cuda:7` on a one-GPU machine. Test helpers stopped inventing names (`"TestDevice"`, `"ParityTest"`).
+
+**Device labels never lie:** `to_device`, `Storage::gpu`, and `Storage::new_zeros` panic without a GPU instead of returning CPU storage under a GPU label, and `new_with_storage` asserts the two agree. `to_device` moves the gradient too.
+
+**Departures from the §2.1 sketch:**
+- No `CpuOnly`: keeping tensors on the CPU already gives it.
+- A scoped guard, `with_device_policy(p)`, instead of a bare `set_device_policy()`: it restores the previous policy on drop and on unwind, so scopes nest (the `no_grad()` shape).
+- Fallbacks are recorded in a thread-local log drained by `take_fallback_events()`, not returned from each op: ops return `Tensor`. `PreferGpu` also logs a `warn` the first time each op falls back on a thread, not on every call.
+- No CPU-scalar exception. PyTorch lets a 0-dim CPU tensor meet a CUDA tensor; Volta's scalars are shape `[1]`, and the exception would reopen the mixed-device hole. Library code builds constants on its input's device (`Tensor::constant_like`).
+- Errors are panics, not `Result`. Ops return `Tensor`; the H4 error-policy decision revisits this.
+
+**Also fixed on the way:** the GPU movement kernels pack shapes into `[u32; 4]`, so a rank-5 permute returned zeros (H5's truncation). Movement ops above rank 4, or with a pad width over 16 bits on dims 2–3, are now gaps. GPU binary backward with differing shapes is a gap too: its kernels are broken (`notes/TODO.md`), and the forward check made them reachable.
+
+**Tests:** `tests/device_policy.rs` (forward and backward gaps under both policies, mixed devices, unknown GPU names, layers and losses keeping constants on the GPU, `no_grad`, event order, rank-5 movement), `device_policy::tests`, and `expect_gaps` in the parity and smoke tests, which asserts the exact set of ops each GPU test runs on the CPU. All ran on a real adapter (2026-10-30).
+
 ## Concurrency and Async
 
 ### Stay synchronous

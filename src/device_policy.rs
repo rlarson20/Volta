@@ -50,8 +50,7 @@ pub struct FallbackEvent {
 }
 
 thread_local! {
-    // FIXME(Task 6): start at Strict.
-    static POLICY: Cell<DevicePolicy> = const { Cell::new(DevicePolicy::PreferGpu) };
+    static POLICY: Cell<DevicePolicy> = const { Cell::new(DevicePolicy::Strict) };
     static EVENTS: RefCell<Vec<FallbackEvent>> = const { RefCell::new(Vec::new()) };
     // Ops that have already logged a fallback warning on this thread.
     static WARNED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
@@ -148,6 +147,13 @@ mod tests {
     #[test]
     fn default_is_strict() {
         assert_eq!(DevicePolicy::default(), DevicePolicy::Strict);
+    }
+
+    /// A thread with no guard runs under `Strict`.
+    #[test]
+    fn thread_starts_strict() {
+        let policy = std::thread::spawn(device_policy).join().unwrap();
+        assert_eq!(policy, DevicePolicy::Strict);
     }
 
     /// Dropping an inner guard restores the outer scope's policy.

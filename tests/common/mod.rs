@@ -12,8 +12,9 @@
 #![cfg(feature = "gpu")]
 #![allow(dead_code)] // each test file uses only a subset
 
+use std::collections::BTreeSet;
 use volta::gpu::is_gpu_available;
-use volta::{Device, RawTensor, Tensor};
+use volta::{Device, DevicePolicy, RawTensor, Tensor, take_fallback_events, with_device_policy};
 
 pub const TOL_FWD_GPU: f32 = 1e-5;
 pub const TOL_BWD_GPU: f32 = 1e-4;
@@ -25,6 +26,23 @@ pub const TOL_MATMUL_BWD: f32 = 1e-3;
 #[must_use]
 pub fn skip_if_no_gpu() -> bool {
     !is_gpu_available()
+}
+
+/// Run `f` under `DevicePolicy::PreferGpu` and assert that the ops it ran on the CPU for
+/// GPU inputs (the device-policy gaps) are exactly `ops`, compared as a set of op names.
+///
+/// For tests of ops with no GPU kernel: the assertion changes when a kernel lands (the
+/// name drops out) or when a new gap appears. Without a GPU it does nothing.
+pub fn expect_gaps(ops: &[&str], f: impl FnOnce()) {
+    if skip_if_no_gpu() {
+        return;
+    }
+    let _prefer = with_device_policy(DevicePolicy::PreferGpu);
+    let _ = take_fallback_events();
+    f();
+    let got: BTreeSet<String> = take_fallback_events().into_iter().map(|e| e.op).collect();
+    let want: BTreeSet<String> = ops.iter().map(ToString::to_string).collect();
+    assert_eq!(got, want, "ops that ran on the CPU for GPU inputs");
 }
 
 #[must_use]

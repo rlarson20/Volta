@@ -3540,6 +3540,20 @@ mod gpu_tests {
     #[cfg(feature = "gpu")]
     use approx::assert_abs_diff_eq;
 
+    /// Run `f` under `DevicePolicy::PreferGpu` and assert that the ops it ran on the CPU
+    /// for GPU inputs are exactly `ops`, as a set of names (`tests/common::expect_gaps`).
+    #[cfg(feature = "gpu")]
+    fn expect_gaps(ops: &[&str], f: impl FnOnce()) {
+        let _prefer = with_device_policy(DevicePolicy::PreferGpu);
+        let _ = take_fallback_events();
+        f();
+        let got: std::collections::BTreeSet<String> =
+            take_fallback_events().into_iter().map(|e| e.op).collect();
+        let want: std::collections::BTreeSet<String> =
+            ops.iter().map(ToString::to_string).collect();
+        assert_eq!(got, want, "ops that ran on the CPU for GPU inputs");
+    }
+
     #[test]
     fn test_device_gpu_returns_none_when_disabled() {
         // When gpu feature is disabled, Device::gpu() should return None
@@ -3716,38 +3730,40 @@ mod gpu_tests {
     #[cfg(feature = "gpu")]
     #[test]
     fn test_linear_layer_backward_gpu() {
-        use crate::nn::{Linear, Module};
-        if !is_gpu_available() {
-            return; // Skip test if GPU not available
-        }
-        let gpu_device = Device::gpu().expect("GPU should be available");
-
-        let layer = Linear::new(4, 3, true);
-
-        // Move layer parameters to GPU
-        let params = layer.parameters();
-        for param in &params {
-            let p = RawTensor::to_device(param, gpu_device.clone());
-            *param.borrow_mut() = p.borrow().clone();
-        }
-
-        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 4], true)
-            .to_device(gpu_device);
-        let out = layer.forward(&x);
-        let loss = out.sum();
-
-        loss.into_loss().expect("scalar loss").backward();
-
-        // Check gradients exist and are on GPU
-        let params = layer.parameters();
-        assert!(!params.is_empty());
-
-        for param in params {
-            let param_ref = param.borrow();
-            if let Some(grad) = &param_ref.grad {
-                assert!(grad.is_gpu(), "Gradient should be on GPU");
+        expect_gaps(&["Binary(Add)"], || {
+            use crate::nn::{Linear, Module};
+            if !is_gpu_available() {
+                return; // Skip test if GPU not available
             }
-        }
+            let gpu_device = Device::gpu().expect("GPU should be available");
+
+            let layer = Linear::new(4, 3, true);
+
+            // Move layer parameters to GPU
+            let params = layer.parameters();
+            for param in &params {
+                let p = RawTensor::to_device(param, gpu_device.clone());
+                *param.borrow_mut() = p.borrow().clone();
+            }
+
+            let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 4], true)
+                .to_device(gpu_device);
+            let out = layer.forward(&x);
+            let loss = out.sum();
+
+            loss.into_loss().expect("scalar loss").backward();
+
+            // Check gradients exist and are on GPU
+            let params = layer.parameters();
+            assert!(!params.is_empty());
+
+            for param in params {
+                let param_ref = param.borrow();
+                if let Some(grad) = &param_ref.grad {
+                    assert!(grad.is_gpu(), "Gradient should be on GPU");
+                }
+            }
+        });
     }
 
     #[cfg(feature = "gpu")]
@@ -4158,129 +4174,137 @@ mod gpu_tests {
     #[cfg(feature = "gpu")]
     #[test]
     fn test_gpu_binary_backward_broadcast_add() {
-        if !is_gpu_available() {
-            return;
-        }
+        expect_gaps(&["Binary(Add)"], || {
+            if !is_gpu_available() {
+                return;
+            }
 
-        let gpu_device = Device::gpu().expect("GPU should be available");
+            let gpu_device = Device::gpu().expect("GPU should be available");
 
-        // Test case: (3, 1) + (1, 4) -> (3, 4)
-        // a_grad should sum over dim 1: (3, 1)
-        // b_grad should sum over dim 0: (1, 4)
-        let a = RawTensor::new(vec![1.0, 2.0, 3.0], &[3, 1], true).to_device(gpu_device.clone());
-        let b = RawTensor::new(vec![10.0, 20.0, 30.0, 40.0], &[1, 4], true)
-            .to_device(gpu_device.clone());
+            // Test case: (3, 1) + (1, 4) -> (3, 4)
+            // a_grad should sum over dim 1: (3, 1)
+            // b_grad should sum over dim 0: (1, 4)
+            let a =
+                RawTensor::new(vec![1.0, 2.0, 3.0], &[3, 1], true).to_device(gpu_device.clone());
+            let b = RawTensor::new(vec![10.0, 20.0, 30.0, 40.0], &[1, 4], true)
+                .to_device(gpu_device.clone());
 
-        let c = a.add(&b);
-        c.sum().into_loss().expect("scalar loss").backward();
+            let c = a.add(&b);
+            c.sum().into_loss().expect("scalar loss").backward();
 
-        // Verify gradients exist
-        assert!(a.grad().is_some());
-        assert!(b.grad().is_some());
+            // Verify gradients exist
+            assert!(a.grad().is_some());
+            assert!(b.grad().is_some());
 
-        let a_grad = a.grad().unwrap();
-        let b_grad = b.grad().unwrap();
+            let a_grad = a.grad().unwrap();
+            let b_grad = b.grad().unwrap();
 
-        // Each a element received gradient from 4 b elements
-        assert_abs_diff_eq!(
-            a_grad.first().copied().expect("tensor data should exist"),
-            4.0,
-            epsilon = 1e-3
-        );
-        assert_abs_diff_eq!(
-            a_grad.get(1).copied().expect("tensor data should exist"),
-            4.0,
-            epsilon = 1e-3
-        );
-        assert_abs_diff_eq!(
-            a_grad.get(2).copied().expect("tensor data should exist"),
-            4.0,
-            epsilon = 1e-3
-        );
+            // Each a element received gradient from 4 b elements
+            assert_abs_diff_eq!(
+                a_grad.first().copied().expect("tensor data should exist"),
+                4.0,
+                epsilon = 1e-3
+            );
+            assert_abs_diff_eq!(
+                a_grad.get(1).copied().expect("tensor data should exist"),
+                4.0,
+                epsilon = 1e-3
+            );
+            assert_abs_diff_eq!(
+                a_grad.get(2).copied().expect("tensor data should exist"),
+                4.0,
+                epsilon = 1e-3
+            );
 
-        // Each b element received gradient from 3 a elements
-        assert_abs_diff_eq!(
-            b_grad.first().copied().expect("tensor data should exist"),
-            3.0,
-            epsilon = 1e-3
-        );
-        assert_abs_diff_eq!(
-            b_grad.get(1).copied().expect("tensor data should exist"),
-            3.0,
-            epsilon = 1e-3
-        );
-        assert_abs_diff_eq!(
-            b_grad.get(2).copied().expect("tensor data should exist"),
-            3.0,
-            epsilon = 1e-3
-        );
-        assert_abs_diff_eq!(
-            b_grad.get(3).copied().expect("tensor data should exist"),
-            3.0,
-            epsilon = 1e-3
-        );
+            // Each b element received gradient from 3 a elements
+            assert_abs_diff_eq!(
+                b_grad.first().copied().expect("tensor data should exist"),
+                3.0,
+                epsilon = 1e-3
+            );
+            assert_abs_diff_eq!(
+                b_grad.get(1).copied().expect("tensor data should exist"),
+                3.0,
+                epsilon = 1e-3
+            );
+            assert_abs_diff_eq!(
+                b_grad.get(2).copied().expect("tensor data should exist"),
+                3.0,
+                epsilon = 1e-3
+            );
+            assert_abs_diff_eq!(
+                b_grad.get(3).copied().expect("tensor data should exist"),
+                3.0,
+                epsilon = 1e-3
+            );
+        });
     }
 
     #[cfg(feature = "gpu")]
     #[test]
     fn test_gpu_binary_backward_broadcast_mul() {
-        if !is_gpu_available() {
-            return;
-        }
+        expect_gaps(&["Binary(Mul)"], || {
+            if !is_gpu_available() {
+                return;
+            }
 
-        let gpu_device = Device::gpu().expect("GPU should be available");
+            let gpu_device = Device::gpu().expect("GPU should be available");
 
-        // Test broadcasting multiplication
-        let a = RawTensor::new(vec![1.0, 2.0], &[2, 1], true).to_device(gpu_device.clone());
-        let b = RawTensor::new(vec![10.0, 20.0, 30.0], &[1, 3], true).to_device(gpu_device.clone());
+            // Test broadcasting multiplication
+            let a = RawTensor::new(vec![1.0, 2.0], &[2, 1], true).to_device(gpu_device.clone());
+            let b =
+                RawTensor::new(vec![10.0, 20.0, 30.0], &[1, 3], true).to_device(gpu_device.clone());
 
-        let c = a.elem_mul(&b);
-        c.sum().into_loss().expect("scalar loss").backward();
+            let c = a.elem_mul(&b);
+            c.sum().into_loss().expect("scalar loss").backward();
 
-        // Verify gradients exist and are finite
-        assert!(a.grad().is_some());
-        assert!(b.grad().is_some());
+            // Verify gradients exist and are finite
+            assert!(a.grad().is_some());
+            assert!(b.grad().is_some());
 
-        let a_grad = a.grad().unwrap();
-        let b_grad = b.grad().unwrap();
+            let a_grad = a.grad().unwrap();
+            let b_grad = b.grad().unwrap();
 
-        // All gradients should be finite
-        for g in &a_grad {
-            assert!(g.is_finite(), "a_grad contains non-finite value");
-        }
-        for g in &b_grad {
-            assert!(g.is_finite(), "b_grad contains non-finite value");
-        }
+            // All gradients should be finite
+            for g in &a_grad {
+                assert!(g.is_finite(), "a_grad contains non-finite value");
+            }
+            for g in &b_grad {
+                assert!(g.is_finite(), "b_grad contains non-finite value");
+            }
+        });
     }
 
     #[cfg(feature = "gpu")]
     #[test]
     fn test_gpu_binary_backward_broadcast_stress() {
-        if !is_gpu_available() {
-            return;
-        }
+        expect_gaps(&["Binary(Add)"], || {
+            if !is_gpu_available() {
+                return;
+            }
 
-        let gpu_device = Device::gpu().expect("GPU should be available");
+            let gpu_device = Device::gpu().expect("GPU should be available");
 
-        // Stress test with many output positions mapping to same input
-        let a = RawTensor::new(vec![1.0], &[1], true).to_device(gpu_device.clone());
-        let b = RawTensor::new(
-            (0..1000).map(|i| i as f32).collect::<Vec<_>>(),
-            &[1000],
-            true,
-        )
-        .to_device(gpu_device.clone());
+            // Stress test with many output positions mapping to same input
+            let a = RawTensor::new(vec![1.0], &[1], true).to_device(gpu_device.clone());
+            let b = RawTensor::new(
+                (0..1000).map(|i| i as f32).collect::<Vec<_>>(),
+                &[1000],
+                true,
+            )
+            .to_device(gpu_device.clone());
 
-        let c = a.add(&b);
-        c.sum().into_loss().expect("scalar loss").backward();
+            let c = a.add(&b);
+            c.sum().into_loss().expect("scalar loss").backward();
 
-        // a should accumulate gradient from all 1000 positions
-        let a_grad = a.grad().unwrap();
-        assert_abs_diff_eq!(
-            a_grad.first().copied().expect("tensor data should exist"),
-            1000.0,
-            epsilon = 1e-2
-        );
+            // a should accumulate gradient from all 1000 positions
+            let a_grad = a.grad().unwrap();
+            assert_abs_diff_eq!(
+                a_grad.first().copied().expect("tensor data should exist"),
+                1000.0,
+                epsilon = 1e-2
+            );
+        });
     }
 }
 

@@ -11,7 +11,7 @@ mod common;
 
 use common::{
     TOL_BWD_GPU, TOL_FWD_GPU, assert_close, assert_unary_parity, assert_unary_parity_backward,
-    gpu_device, make_input, skip_if_no_gpu,
+    expect_gaps, gpu_device, make_input, skip_if_no_gpu,
 };
 use volta::Axis;
 use volta::Device;
@@ -22,25 +22,29 @@ use volta::Device;
 
 #[test]
 fn transpose_parity() {
-    assert_unary_parity(
-        "transpose",
-        |t| t.transpose(),
-        &[4, 5],
-        (-2.0, 2.0),
-        TOL_FWD_GPU,
-    );
+    expect_gaps(&["Transpose"], || {
+        assert_unary_parity(
+            "transpose",
+            |t| t.transpose(),
+            &[4, 5],
+            (-2.0, 2.0),
+            TOL_FWD_GPU,
+        );
+    });
 }
 
 #[test]
 fn transpose_backward_parity() {
-    assert_unary_parity_backward(
-        "transpose",
-        |t| t.transpose(),
-        &[4, 5],
-        (-2.0, 2.0),
-        TOL_FWD_GPU,
-        TOL_BWD_GPU,
-    );
+    expect_gaps(&["Transpose"], || {
+        assert_unary_parity_backward(
+            "transpose",
+            |t| t.transpose(),
+            &[4, 5],
+            (-2.0, 2.0),
+            TOL_FWD_GPU,
+            TOL_BWD_GPU,
+        );
+    });
 }
 
 // ---------------------------------------------------------------------------
