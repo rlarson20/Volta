@@ -92,7 +92,7 @@ Last verified: 2026-10-29.
 - [ ] Merge gate: remove `#![allow(missing_docs, clippy::missing_docs_in_private_items)]` in `src/lib.rs` before merging into `main`. About 643 library items are undocumented (2026-10-31 recount with the allow removed: `gpu/kernels.rs` 140, `gpu/context.rs` 83, `spec.rs` 56, `tensor.rs` 50, `ops/movement.rs` 26, `nn/layers/batchnorm.rs` 21, `error.rs` 20, `autograd.rs` 19, the rest spread over about 35 files). By kind: 419 fields, 50 modules, 49 methods, 42 variants. The earlier "`tensor.rs` 91" was not reproducible. `examples/`, `benches/`, and `tests/` are done.
 
 - [ ] Pedantic lint backlog (2026-10-29). `bacon`'s `pedantic` job no longer allows `cast_possible_wrap`, `cast_sign_loss`, `cast_possible_truncation`, `cast_precision_loss`, `needless_pass_by_value`, or `redundant_closure_for_method_calls`; it used to hide them behind "TEMP IMP TO FIX". The crate-wide casts were never enabled under `cargo clippy`, so the old `#[allow]`s for them were removed as no-ops. Decide per lint whether to enable it in `Cargo.toml` and fix the sites, or to leave it off for good.
-- [ ] Root `CONTRIBUTING.md` and `DEVELOPMENT.md` are unchecked-box stubs, and `DEVELOPMENT.md` shares its name with `dev-docs/DEVELOPMENT.md`. Fill them in or delete the stubs.
+- [x] Root `CONTRIBUTING.md` and `DEVELOPMENT.md` were unchecked-box stubs, and `DEVELOPMENT.md` shared its name with `dev-docs/DEVELOPMENT.md`. Deleted; `dev-docs/DEVELOPMENT.md` is the development guide (2026-10-31).
 - [ ] Consider `cargo-deny` (`deny.toml`) in place of the weekly `cargo audit` workflow: it adds license and duplicate-version checks.
 
 ## Phase 2 — types for dims and ops (done)

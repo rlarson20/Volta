@@ -1,5 +1,0 @@
-- [ ] **Create DEVELOPMENT.md**
-  - Quick start guide
-  - Common development tasks
-  - Troubleshooting common issues
-  - How to run different test suites
