@@ -239,19 +239,50 @@ fn gpu_positional_encoding_stays_on_device() {
     }
 }
 
-/// `LSTMCell` keeps a GPU input and state on the GPU.
+/// `LSTMCell` keeps a GPU input and state on the GPU, and two steps match the CPU in the
+/// output and in every parameter gradient (B2: the gate slice used to copy to the CPU and
+/// cut the graph).
 #[test]
-#[ignore = "B2: LSTMCell::slice_gate copies gate values into a fresh CPU tensor"]
 fn gpu_lstm_stays_on_device() {
     if skip_if_no_gpu() {
         return;
     }
     let _prefer = with_device_policy(DevicePolicy::PreferGpu);
-    let (_, x) = pair(&[2, 4]);
-    let cell = on_gpu(LSTMCell::new(4, 3, true));
-    let mut state = cell.initial_state(2);
-    let h = cell.step(&x, &mut state);
+    let (x_cpu, x) = pair(&[2, 4]);
+    manual_seed(0x157);
+    let cpu_cell = LSTMCell::new(4, 3, true);
+    let w_cpu = RawTensor::randn(&[2, 3]);
+    let w = w_cpu.to_device(gpu_device());
+    let mut gpu_cell = LSTMCell::new(4, 3, true);
+    gpu_cell.load_state_dict(&cpu_cell.state_dict());
+    let gpu_cell = on_gpu(gpu_cell);
+
+    let two_steps = |cell: &LSTMCell, x: &Tensor| {
+        let mut state = cell.initial_state(2);
+        let _ = cell.step(x, &mut state);
+        cell.step(x, &mut state)
+    };
+    let h_cpu = two_steps(&cpu_cell, &x_cpu);
+    let h = two_steps(&gpu_cell, &x);
     assert!(h.device().is_gpu());
+    assert_close("h", &h_cpu.data(), &h.data(), TOL_MATMUL_FWD);
+
+    h_cpu.elem_mul(&w_cpu).sum().into_loss().unwrap().backward();
+    h.elem_mul(&w).sum().into_loss().unwrap().backward();
+    for (i, (cpu, gpu)) in cpu_cell
+        .parameters()
+        .iter()
+        .zip(&gpu_cell.parameters())
+        .enumerate()
+    {
+        let g_cpu = cpu.grad().expect("CPU parameter has a gradient");
+        assert!(
+            g_cpu.iter().any(|v| *v != 0.0),
+            "parameter {i}: zero CPU gradient"
+        );
+        let g = gpu.grad().expect("GPU parameter has a gradient");
+        assert_close(&format!("parameter {i} grad"), &g_cpu, &g, TOL_MATMUL_BWD);
+    }
 }
 
 /// Seeded random leaves requiring grad: a CPU tensor and its GPU copy.

@@ -206,6 +206,8 @@ A bool breaks as soon as one `no_grad()` scope nests inside another, for example
 
 **Revision (2026-10-26):** the macro first backpropped a plain `.sum()` of the output, and the tests fed all-ones inputs. That produced five false failures. Under a plain sum, BatchNorm's gamma gradient is exactly zero for any input, because the normalized activations sum to zero. Constant inputs also make LayerNorm's normalized values and attention's scores constant, which zeroes their gradients mathematically. The macro now backprops `(output ⊙ randn_like(output)).sum()`, and the tests take seeded random inputs from `macros::trainable_input`. After the fix, only LSTMCell (B2) fails; it is `#[ignore]`d with the defect ID until fixed.
 
+**Revision (2026-10-30):** B2 is fixed (`slice_gate` is a `shrink`), and the LSTMCell test passes un-ignored. It drives the cell through a test-only wrapper that takes two steps, not one. One step from the zero initial state gives `weight_hh` an exactly zero gradient (`dgatesᵀ · h` with `h = 0`), so a one-step wrapper fails the macro on a correct cell. The same holds for any layer whose initial state zeroes a parameter's gradient: drive it past that state, and don't loosen the macro.
+
 ## Types for Dims and Ops (ADDENDUM Phase 2)
 
 ### Shape boundary: signatures, not the field
@@ -353,6 +355,8 @@ Choke points for whoever lands views: the operand reads in `RawTensor::matmul` (
 **Departure from §3.1:** only `IndexedLayer` and `RecurrentLayer` are sealed. `Module` and `Layer` are open. There is no `GradFn::Custom` and `edge()` is `pub(crate)`, so a user-written `impl Layer` that composes built-in layers is the one extension path the library has, and it is how PyTorch users build models. Sealing it would also have broken `tests/improvements_test.rs` (`CountingModule`), which is outside code and now doubles as the proof that the open traits stay open. The cost is that we can't add a required method to `Module` or `Layer` without a breaking change; provided methods are still free. The two sealed traits have no outside use case, and sealing them lets `State` and the step signature change within 0.x. Trybuild cases `seal_indexed_layer` and `seal_recurrent_layer` pin the seal. The marker is named `SealedLayer`, not `Sealed`: with the `gpu` feature a dependency (`unicode_width`) has its own private `Sealed`, and rustc adds a "similarly named trait" note that made the pinned `.stderr` differ by feature set.
 
 **LSTM:** `forward_step(x, Option<(&h, &c)>) -> (h, c)` was deleted rather than kept beside `step`. `State = (Tensor, Tensor)` carries `c`, which `Module::forward` used to drop. `step` still goes through `slice_gate`, so B2 (the severed graph) is untouched and its `assert_trainable!` test stays `#[ignore]`d, driven through a test-only one-step `Layer` wrapper.
+
+**Update (2026-10-30):** B2 is fixed: `slice_gate` is a `shrink`, so the gates keep their gradient and their device. The test wrapper takes two steps (see the `assert_trainable!` revision), and `test_lstmcell_step_gradcheck` checks one step's gradients for `x`, `h`, and `c` against finite differences.
 
 **H6:** `TransformerBlock` holds a real `MultiHeadAttention`; `SimpleAttention` and the `Rc<dyn Module>` are gone. `causal` reaches the attention, and `load_state_dict` now loads the `attention.*` keys (it silently skipped them before). Tests: `test_block_causal_changes_output`, `test_block_attention_state_dict_roundtrip`, and the existing `assert_trainable!` now covers the attention projections.
 

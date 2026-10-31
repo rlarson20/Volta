@@ -1,4 +1,3 @@
-use crate::index::span;
 use crate::io::{StateDict, TensorData};
 use crate::nn::{Module, RecurrentLayer, SealedLayer};
 use crate::tensor::{RawTensor, Tensor};
@@ -58,28 +57,12 @@ impl LSTMCell {
         }
     }
 
-    /// Helper to extract a gate from the combined gates tensor
+    /// Gate `gate_idx`'s columns of the combined `[batch, 4*hidden_size]` gates tensor.
+    /// A `shrink`, so the gradient flows back into `gates` and the result stays on its device.
     fn slice_gate(&self, gates: &Tensor, gate_idx: usize) -> Tensor {
         let start = gate_idx * self.hidden_size;
-        let end = (gate_idx + 1) * self.hidden_size;
-
-        // Extract columns [start:end] for all rows
-        // gates shape: [batch, 4*hidden_size]
-        let batch_size = gates.borrow().shape.dim_at(0);
-        let gates_ref = gates.borrow();
-        let data = &*gates_ref.data.to_host_f32();
-
-        let mut gate_data = Vec::with_capacity(batch_size * self.hidden_size);
-        for i in 0..batch_size {
-            let row_start = i * 4 * self.hidden_size;
-            gate_data.extend_from_slice(span(data, row_start + start..row_start + end));
-        }
-
-        RawTensor::new(
-            gate_data,
-            &[batch_size, self.hidden_size],
-            gates.borrow().requires_grad,
-        )
+        let batch_size = gates.shape().dim_at(0);
+        gates.shrink(&[(0, batch_size), (start, start + self.hidden_size)])
     }
 }
 
@@ -192,10 +175,12 @@ impl Module for LSTMCell {
 mod tests {
     use super::*;
 
-    /// One step from zero state, so `assert_trainable!` (which needs `Layer`) can drive the cell.
-    struct OneStep(LSTMCell);
+    /// Two steps from zero state on the same input, so `assert_trainable!` (which needs `Layer`)
+    /// can drive the cell. One step is not enough: with `h = 0`, `weight_hh`'s gradient
+    /// (`dgatesᵀ · h`) is exactly zero, and with `c = 0` the forget gate gets none.
+    struct TwoSteps(LSTMCell);
 
-    impl Module for OneStep {
+    impl Module for TwoSteps {
         fn parameters(&self) -> Vec<Tensor> {
             self.0.parameters()
         }
@@ -207,18 +192,57 @@ mod tests {
         }
     }
 
-    impl crate::nn::Layer for OneStep {
+    impl crate::nn::Layer for TwoSteps {
         fn forward(&self, x: &Tensor) -> Tensor {
-            let batch = x.shape().dim_at(0);
-            self.0.step(x, &mut self.0.initial_state(batch))
+            let mut state = self.0.initial_state(x.shape().dim_at(0));
+            let _ = self.0.step(x, &mut state);
+            self.0.step(x, &mut state)
         }
     }
 
     #[test]
-    #[ignore = "B2: slice_gate copies gate data into a fresh RawTensor, severing the graph; remove when fixed"]
     fn test_lstmcell_assert_trainable() {
-        let cell = OneStep(LSTMCell::new(4, 8, true));
+        let cell = TwoSteps(LSTMCell::new(4, 8, true));
         let x = crate::macros::trainable_input(&[2, 4]);
         crate::assert_trainable!(cell, x);
+    }
+
+    /// Finite-difference check of one step's gradient with respect to `x`, `h`, and `c`, from a
+    /// random nonzero state under a random weighted loss of both `h_next` and `c_next`. A gate
+    /// slice at the wrong offset, or one that drops its gradient (B2), fails it.
+    #[test]
+    fn test_lstmcell_step_gradcheck() {
+        crate::tensor::manual_seed(0x157);
+        let cell = LSTMCell::new(3, 4, true);
+        let x = RawTensor::randn(&[2, 3]);
+        let h = RawTensor::randn(&[2, 4]);
+        let c = RawTensor::randn(&[2, 4]);
+        let w_h = RawTensor::randn(&[2, 4]);
+        let w_c = RawTensor::randn(&[2, 4]);
+        let loss = |x: &Tensor, h: &Tensor, c: &Tensor| {
+            let mut state = (h.clone(), c.clone());
+            let h_next = cell.step(x, &mut state);
+            h_next.elem_mul(&w_h).add(&state.1.elem_mul(&w_c)).sum()
+        };
+
+        for (name, input) in [("x", &x), ("h", &h), ("c", &c)] {
+            input.set_requires_grad(true);
+            let (max_err, mean_err, passed) = RawTensor::check_gradients(
+                input,
+                |t| match name {
+                    "x" => loss(t, &h, &c),
+                    "h" => loss(&x, t, &c),
+                    _ => loss(&x, &h, t),
+                },
+                1e-2,
+                // Worst of 900 checks (300 seeds x 3 inputs) was 1.6e-2; a 1.1x-scaled
+                // gradient is off by 0.1.
+                3e-2,
+            );
+            assert!(
+                passed,
+                "LSTMCell d/d{name} check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
+            );
+        }
     }
 }

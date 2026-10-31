@@ -23,9 +23,9 @@ A cloud run is the GitHub `cpu-only` lane in `.github/workflows/ci.yml`, not the
 
 Work that a Linux CPU can verify, and that reviews as a PR. Current candidates from `notes/TODO.md` (check it for live status):
 
-- Seeding the flaky gradient tests (`linear_tests::backward_gradcheck_input` and the conv list). Use the recipe in `notes/TODO.md`: seed, `eps=0.5`, confirm 0/400 seeds fail, and confirm a 1.1x-scaled analytic gradient still fails.
+- Test fixes from `notes/TODO.md`: the blind BatchNorm gradcheck in `tests/coverage_fill.rs`, and the io tests' fixed temp paths.
 - Docs toward the merge gate (the undocumented items behind the `lib.rs` allow). Read the code for every claim you write. Don't remove the allow until nothing is left.
-- CPU defects: B2 (LSTM `slice_gate`), B3 (`PositionalEncoding`), a diamond-accumulation regression test.
+- CPU defects: B3 (`PositionalEncoding`).
 - Comment-only fixes (for example the `BackwardParams` comments in `matmul_backward.wgsl`).
 - Investigations that end in a `notes/TODO.md` or `DECISIONS.md` entry.
 - Phase 3 work (storage, the `Shape` flip) and later architecture, on the same terms as locally: ask before choosing a design. Any GPU-touching part can't be verified here (below).
