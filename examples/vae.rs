@@ -75,7 +75,10 @@ fn main() {
         for batch_idx in 0..num_batches {
             let start = batch_idx * batch_size * input_dim;
             let end = start + batch_size * input_dim;
-            let batch_data = train_data.get(start..end).unwrap_or(&[]).to_vec();
+            let batch_data = train_data
+                .get(start..end)
+                .expect("the batch is inside the training data")
+                .to_vec();
             let x = RawTensor::new(batch_data.clone(), &[batch_size, input_dim], false);
 
             // Encoder forward
@@ -121,7 +124,10 @@ fn main() {
 
     // Test reconstruction
     println!("\nTesting reconstruction on first image:");
-    let test_img = train_data.get(0..input_dim).unwrap_or(&[]).to_vec();
+    let test_img = train_data
+        .get(0..input_dim)
+        .expect("the training data holds at least one image")
+        .to_vec();
     let x_test = RawTensor::new(test_img.clone(), &[1, input_dim], false);
 
     let h = enc_fc1.forward(&x_test).relu();
@@ -143,11 +149,15 @@ fn main() {
     // Show first 10 pixels
     println!(
         "Original (first 10 pixels): {:?}",
-        orig_data.get(0..10).unwrap_or(&[])
+        orig_data
+            .get(0..10)
+            .expect("an image has at least 10 pixels")
     );
     println!(
         "Reconstructed (first 10):    {:?}",
-        recon_data.get(0..10).unwrap_or(&[])
+        recon_data
+            .get(0..10)
+            .expect("a reconstruction has at least 10 pixels")
     );
 
     let mse = orig_data

@@ -347,8 +347,9 @@ fn test_external_model_loading_integration() {
     assert!(model.get_named("nonexistent").is_none());
 
     // Verify layer names
-    let names = model.layer_names();
-    assert_eq!(names.first().copied().unwrap_or(None), Some("encoder"));
-    assert_eq!(names.get(1).copied().unwrap_or(None), None); // ReLU is unnamed
-    assert_eq!(names.get(2).copied().unwrap_or(None), Some("decoder"));
+    // The ReLU in the middle is unnamed.
+    assert_eq!(
+        model.layer_names(),
+        vec![Some("encoder"), None, Some("decoder")]
+    );
 }

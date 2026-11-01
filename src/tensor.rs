@@ -628,7 +628,7 @@ impl RawTensor {
 
         let fan_in = match shape.len() {
             1 | 2 => fetch(shape, 0), // Linear weights: [in, out]
-            _ => shape.get(1..).unwrap_or(&[]).iter().product(), // Conv weights: [out, in, kH, kW, ...]
+            _ => span(shape, 1..shape.len()).iter().product(), // Conv weights: [out, in, kH, kW, ...]
         };
 
         let std_val: f32 = 2.0 / fan_in as f32;

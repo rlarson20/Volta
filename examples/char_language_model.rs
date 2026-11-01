@@ -56,9 +56,12 @@ impl CharVocab {
         *self.char_to_idx.get(&c).unwrap()
     }
 
-    /// Character at `idx`, or a space if `idx` is out of range.
+    /// Character at `idx`. Panics if `idx` is not in the vocabulary.
     fn decode_char(&self, idx: usize) -> char {
-        *self.idx_to_char.get(idx).unwrap_or(&' ')
+        *self
+            .idx_to_char
+            .get(idx)
+            .expect("the model's output index is inside the vocabulary")
     }
 }
 
@@ -132,7 +135,9 @@ fn forward_and_compute_loss(
     for (logits, &target_idx) in all_logits.iter().zip(&all_targets) {
         // Create one-hot target
         let mut target_one_hot = vec![0.0; vocab_size];
-        *target_one_hot.get_mut(target_idx).unwrap_or(&mut 0.0) = 1.0;
+        *target_one_hot
+            .get_mut(target_idx)
+            .expect("the target index is inside the vocabulary") = 1.0;
         let target_tensor = RawTensor::new(target_one_hot, &[1, vocab_size], false);
 
         // Cross entropy loss
@@ -173,7 +178,11 @@ fn generate(
     }
 
     // Generate new characters
-    let mut current_idx = vocab.encode_char(seed.chars().last().unwrap_or('a'));
+    let mut current_idx = vocab.encode_char(
+        seed.chars()
+            .last()
+            .expect("generation needs a non-empty seed"),
+    );
 
     for _ in 0..length {
         let emb = model.embedding.forward_indices(&[current_idx]);
@@ -186,7 +195,7 @@ fn generate(
 
         // Simple argmax for deterministic generation
         let mut max_idx = 0;
-        let mut max_val = *scaled.first().unwrap_or(&f32::NAN);
+        let mut max_val = *scaled.first().expect("the decoder produced logits");
         for (i, &val) in scaled.iter().enumerate().skip(1) {
             if val > max_val {
                 max_val = val;
@@ -222,7 +231,10 @@ fn main() {
     println!("Training data length: {} characters", data.len());
     println!(
         "Sample vocabulary: {:?}\n",
-        vocab.idx_to_char.get(..10.min(vocab.size())).unwrap_or(&[])
+        vocab
+            .idx_to_char
+            .get(..10.min(vocab.size()))
+            .expect("the prefix is inside the vocabulary")
     );
 
     // Hyperparameters
@@ -272,8 +284,10 @@ fn main() {
                 continue;
             }
 
-            let inputs = data.get(start..end).unwrap_or(&[]);
-            let targets = data.get(start + 1..end + 1).unwrap_or(&[]);
+            let inputs = data.get(start..end).expect("the batch is inside the data");
+            let targets = data
+                .get(start + 1..end + 1)
+                .expect("the shifted batch is inside the data");
 
             // Forward pass
             let loss = forward_and_compute_loss(&model, inputs, targets, vocab.size());
