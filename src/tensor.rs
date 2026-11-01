@@ -2081,6 +2081,30 @@ mod tensor_tests {
         assert!(x.grad().is_some(), "the input keeps the analytic gradient");
     }
 
+    /// `kl_divergence_gaussian` is `-0.5 * sum(1 + logvar - mu^2 - exp(logvar))` over every
+    /// element. Closed-form value on two latents, then finite-difference gradients for
+    /// `mu` and `logvar` from a random state.
+    #[test]
+    fn test_kl_divergence_gaussian_value_and_gradcheck() {
+        // mu = [0, 1], logvar = [0, 0]: terms are 0 and -1, so KL = -0.5 * -1 = 0.5.
+        let mu = RawTensor::new(vec![0.0, 1.0], &[1, 2], false);
+        let logvar = RawTensor::new(vec![0.0, 0.0], &[1, 2], false);
+        assert!((kl_divergence_gaussian(&mu, &logvar).item() - 0.5).abs() < 1e-6);
+
+        manual_seed(0x4B1D);
+        let mu = RawTensor::randn(&[4, 3]);
+        mu.set_requires_grad(true);
+        let logvar = RawTensor::randn(&[4, 3]);
+        logvar.set_requires_grad(true);
+
+        let (mu_err, _, mu_ok) =
+            RawTensor::check_gradients(&mu, |m| kl_divergence_gaussian(m, &logvar), 1e-2, 2e-2);
+        assert!(mu_ok, "d KL / d mu: max_err={mu_err}");
+        let (lv_err, _, lv_ok) =
+            RawTensor::check_gradients(&logvar, |l| kl_divergence_gaussian(&mu, l), 1e-2, 2e-2);
+        assert!(lv_ok, "d KL / d logvar: max_err={lv_err}");
+    }
+
     /// A rank-1 shape is a bias vector: `n` values bounded by `sqrt(6 / (n + 1))`.
     #[test]
     fn xavier_uniform_rank_one_is_a_bias_vector() {

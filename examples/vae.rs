@@ -3,7 +3,7 @@
 //! Needs the MNIST training images in `data/mnist/`; it exits with download instructions if they are missing, rather than train on made-up data.
 use volta::{
     Linear, Module, ProgressBar, RawTensor, SGD, kl_divergence_gaussian, load_mnist_images,
-    mse_loss, normalize, randn_like,
+    mse_loss, randn_like,
 };
 
 fn main() {
@@ -34,8 +34,8 @@ fn main() {
     println!("Loaded {num_train} MNIST training images");
 
     // Normalize to [0, 1]
-    let mut train_data = train_images;
-    normalize(&mut train_data, 0.0, 255.0);
+    // `load_mnist_images` already scales pixels to [0, 1].
+    let train_data = train_images;
 
     println!("Architecture:");
     println!("  Encoder: {input_dim} -> {hidden_dim} -> {latent_dim} (mu + logvar)");
@@ -66,8 +66,16 @@ fn main() {
     let num_batches = num_train / batch_size;
     let mut progress = ProgressBar::new(num_epochs, "Training");
 
+    // Both terms are per-sample ELBO terms: `mse_loss` is a mean over every pixel of the
+    // batch, so scale it back up by `input_dim` to a per-image sum; the KL is a sum over
+    // the batch and latent dims, so divide it by the batch size.
+    let recon_scale = RawTensor::new(vec![input_dim as f32], &[1], false);
+    let kl_scale = RawTensor::new(vec![1.0 / batch_size as f32], &[1], false);
+
+    let mut first_epoch_loss = None;
+    let mut last_epoch_loss = f32::NAN;
+
     for epoch in 0..num_epochs {
-        optimizer.zero_grad();
         let mut total_loss = 0.0;
         let mut total_recon = 0.0;
         let mut total_kl = 0.0;
@@ -98,26 +106,44 @@ fn main() {
             let x_recon = dec_out.forward(&h_dec).sigmoid(); // Output in [0, 1]
 
             // Loss = Reconstruction + KL divergence
-            let recon_loss = mse_loss(&x_recon, &x);
-            let kl_loss = kl_divergence_gaussian(&mu, &logvar);
+            let recon_loss = mse_loss(&x_recon, &x).elem_mul(&recon_scale);
+            let kl_loss = kl_divergence_gaussian(&mu, &logvar).elem_mul(&kl_scale);
             let loss = recon_loss.add(&kl_loss);
 
             total_loss += loss.item();
             total_recon += recon_loss.item();
             total_kl += kl_loss.item();
 
+            optimizer.zero_grad();
             loss.into_loss().expect("scalar loss").backward();
+            optimizer.step();
         }
 
-        optimizer.step();
         progress.update(epoch + 1);
 
+        let avg_loss = total_loss / num_batches as f32;
+        let avg_recon = total_recon / num_batches as f32;
+        let avg_kl = total_kl / num_batches as f32;
+        if !avg_loss.is_finite() {
+            eprintln!(
+                "\nEpoch {}: loss is {avg_loss} (Recon={avg_recon}, KL={avg_kl}); training diverged",
+                epoch + 1
+            );
+            std::process::exit(1);
+        }
+        first_epoch_loss.get_or_insert(avg_loss);
+        last_epoch_loss = avg_loss;
         if epoch % 2 == 1 || epoch == num_epochs - 1 {
-            let avg_loss = total_loss / num_batches as f32;
-            let avg_recon = total_recon / num_batches as f32;
-            let avg_kl = total_kl / num_batches as f32;
             println!(" Loss={avg_loss:.4} (Recon={avg_recon:.4}, KL={avg_kl:.4})");
         }
+    }
+
+    let first_epoch_loss = first_epoch_loss.expect("at least one epoch ran");
+    if last_epoch_loss >= first_epoch_loss {
+        eprintln!(
+            "\nThe loss did not fall: {first_epoch_loss:.4} in epoch 1, {last_epoch_loss:.4} in the last epoch"
+        );
+        std::process::exit(1);
     }
 
     println!("\n=== Training Complete ===");
@@ -167,4 +193,8 @@ fn main() {
         .sum::<f32>()
         / input_dim as f32;
     println!("Reconstruction MSE: {mse:.6}");
+    if !mse.is_finite() {
+        eprintln!("The test reconstruction is not finite");
+        std::process::exit(1);
+    }
 }
