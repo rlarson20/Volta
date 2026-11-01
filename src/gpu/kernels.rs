@@ -12,17 +12,23 @@ use crate::spec::PadValue;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MatMulParams {
-    pub m: u32,        // Rows of A / rows of C
-    pub k: u32,        // Cols of A / rows of B
-    pub n: u32,        // Cols of B / cols of C
-    pub _padding: u32, // Align to 16 bytes
+    /// Rows of `A` and of `C`.
+    pub m: u32,
+    /// Columns of `A` and rows of `B`.
+    pub k: u32,
+    /// Columns of `B` and of `C`.
+    pub n: u32,
+    /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
+    pub _padding: u32,
 }
 
 /// Parameters for reduction operations
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ReduceParams {
+    /// Number of elements to reduce.
     pub input_size: u32,
+    /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
     pub _padding: [u32; 3],
 }
 
@@ -30,9 +36,13 @@ pub struct ReduceParams {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ReduceBackwardParams {
+    /// Number of elements in the reduction input, which is the size of the gradient produced.
     pub input_size: u32,
-    pub op: u32, // 0 = sum, 1 = mean, 2 = max
+    /// Reduction being differentiated: 0 = sum, 1 = mean, 2 = max.
+    pub op: u32,
+    /// Scalar upstream gradient of the reduced output.
     pub grad_value: f32,
+    /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
     pub _padding: u32,
 }
 
@@ -40,13 +50,21 @@ pub struct ReduceBackwardParams {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct OptimizerStepParams {
-    pub op: u32,           // 0=SGD, 1=SGD+momentum, 2=Adam
-    pub lr: f32,           // Learning rate
-    pub beta1: f32,        // Adam beta1 or momentum coefficient
-    pub beta2: f32,        // Adam beta2
-    pub t: f32,            // Timestep for bias correction (Adam)
-    pub eps: f32,          // Adam epsilon
-    pub weight_decay: f32, // L2 regularization
+    /// Update rule: 0 = SGD, 1 = SGD with momentum, 2 = Adam.
+    pub op: u32,
+    /// Learning rate.
+    pub lr: f32,
+    /// Momentum coefficient for op 1, or Adam's first-moment decay for op 2.
+    pub beta1: f32,
+    /// Adam's second-moment decay; unused by the SGD ops.
+    pub beta2: f32,
+    /// Step count for Adam's bias correction (`1 - beta^t`), held as an `f32`.
+    pub t: f32,
+    /// Adam's epsilon, added to the denominator.
+    pub eps: f32,
+    /// L2 coefficient: when nonzero, `weight_decay * param` is added to the gradient before the update.
+    pub weight_decay: f32,
+    /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
     pub padding: f32,
 }
 
@@ -70,11 +88,17 @@ struct MuonParams {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MovementParams {
+    /// Shape of the input; only the first `rank` entries are read.
     pub old_shape: [u32; 4],
+    /// Shape of the output; only the first `rank` entries are read.
     pub new_shape: [u32; 4],
-    pub op_params: [u32; 4], // Operation-specific (permute axes, strides, etc.)
+    /// Per-operation values. Permute: the axis order. Shrink: the range start per axis. Stride: the stride per axis. Pad: `[left0, right0, left1, right1]` for dims 0 and 1.
+    pub op_params: [u32; 4],
+    /// Number of valid dimensions in the shapes, at most 4.
     pub rank: u32,
-    pub padding2: u32, // Packed padding for dims 2,3
+    /// Pad only: the left and right padding of dim 2, packed as `left << 16 | right` (16 bits each). Zero for other operations.
+    pub padding2: u32,
+    /// `padding[0]` packs the pad amounts of dim 3 the same way as `padding2`; `padding[1]` only keeps the struct 16-byte aligned. Zero for operations other than pad.
     pub padding: [u32; 2],
 }
 
@@ -83,16 +107,27 @@ pub struct MovementParams {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Im2colParams {
+    /// Batch size `N`.
     pub batch_size: u32,
+    /// Image channels `C`.
     pub channels: u32,
+    /// Input height `H`.
     pub height: u32,
+    /// Input width `W`.
     pub width: u32,
+    /// Kernel height.
     pub kernel_h: u32,
+    /// Kernel width.
     pub kernel_w: u32,
+    /// Stride along the height.
     pub stride_h: u32,
+    /// Stride along the width.
     pub stride_w: u32,
+    /// Output height, computed on the host.
     pub h_out: u32,
+    /// Output width, computed on the host.
     pub w_out: u32,
+    /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
     pub _padding: [u32; 2],
 }
 
@@ -101,16 +136,27 @@ pub struct Im2colParams {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Col2imParams {
+    /// Batch size `N`.
     pub batch_size: u32,
+    /// Image channels `C`.
     pub channels: u32,
+    /// Input height `H`.
     pub height: u32,
+    /// Input width `W`.
     pub width: u32,
+    /// Kernel height.
     pub kernel_h: u32,
+    /// Kernel width.
     pub kernel_w: u32,
+    /// Stride along the height.
     pub stride_h: u32,
+    /// Stride along the width.
     pub stride_w: u32,
+    /// Output height, computed on the host.
     pub h_out: u32,
+    /// Output width, computed on the host.
     pub w_out: u32,
+    /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
     pub _padding: [u32; 2],
 }
 
@@ -119,19 +165,33 @@ pub struct Col2imParams {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct DirectConvParams {
+    /// Batch size `N`.
     pub batch_size: u32,
+    /// Input channels `C_in`.
     pub in_channels: u32,
+    /// Output channels `C_out`.
     pub out_channels: u32,
+    /// Input height `H`.
     pub height: u32,
+    /// Input width `W`.
     pub width: u32,
+    /// Kernel height.
     pub kernel_h: u32,
+    /// Kernel width.
     pub kernel_w: u32,
+    /// Stride along the height.
     pub stride_h: u32,
+    /// Stride along the width.
     pub stride_w: u32,
+    /// Zero padding added to each of the top and bottom of the input.
     pub pad_h: u32,
+    /// Zero padding added to each of the left and right of the input.
     pub pad_w: u32,
+    /// Output height, computed on the host.
     pub h_out: u32,
+    /// Output width, computed on the host.
     pub w_out: u32,
+    /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
     pub _padding: u32,
 }
 
@@ -140,19 +200,33 @@ pub struct DirectConvParams {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ConvBackwardInputParams {
+    /// Batch size `N`.
     pub batch_size: u32,
+    /// Input channels `C_in`.
     pub in_channels: u32,
+    /// Output channels `C_out`.
     pub out_channels: u32,
+    /// Input height `H`.
     pub height: u32,
+    /// Input width `W`.
     pub width: u32,
+    /// Kernel height.
     pub kernel_h: u32,
+    /// Kernel width.
     pub kernel_w: u32,
+    /// Stride along the height.
     pub stride_h: u32,
+    /// Stride along the width.
     pub stride_w: u32,
+    /// Zero padding added to each of the top and bottom of the input.
     pub pad_h: u32,
+    /// Zero padding added to each of the left and right of the input.
     pub pad_w: u32,
+    /// Output height, computed on the host.
     pub h_out: u32,
+    /// Output width, computed on the host.
     pub w_out: u32,
+    /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
     pub _padding: u32,
 }
 
@@ -161,23 +235,40 @@ pub struct ConvBackwardInputParams {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct IGEMMParams {
+    /// Batch size `N`.
     pub batch_size: u32,
+    /// Input channels `C_in`.
     pub in_channels: u32,
+    /// Output channels `C_out`.
     pub out_channels: u32,
+    /// Input height `H`.
     pub height: u32,
+    /// Input width `W`.
     pub width: u32,
+    /// Kernel height.
     pub kernel_h: u32,
+    /// Kernel width.
     pub kernel_w: u32,
+    /// Stride along the height.
     pub stride_h: u32,
+    /// Stride along the width.
     pub stride_w: u32,
+    /// Zero padding added to each of the top and bottom of the input.
     pub pad_h: u32,
+    /// Zero padding added to each of the left and right of the input.
     pub pad_w: u32,
+    /// Output height, computed on the host.
     pub h_out: u32,
+    /// Output width, computed on the host.
     pub w_out: u32,
     // Tile configuration
-    pub oc_tile: u32, // Output channels per tile
-    pub ic_tile: u32, // Input channels per tile
-    pub s_tile: u32,  // Spatial positions per tile
+    /// Output channels per tile.
+    pub oc_tile: u32,
+    /// Input channels per tile.
+    pub ic_tile: u32,
+    /// Spatial positions per tile.
+    pub s_tile: u32,
+    /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
     pub _padding: u32,
 }
 
@@ -186,19 +277,33 @@ pub struct IGEMMParams {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ConvBackwardWeightParams {
+    /// Batch size `N`.
     pub batch_size: u32,
+    /// Input channels `C_in`.
     pub in_channels: u32,
+    /// Output channels `C_out`.
     pub out_channels: u32,
+    /// Input height `H`.
     pub height: u32,
+    /// Input width `W`.
     pub width: u32,
+    /// Kernel height.
     pub kernel_h: u32,
+    /// Kernel width.
     pub kernel_w: u32,
+    /// Stride along the height.
     pub stride_h: u32,
+    /// Stride along the width.
     pub stride_w: u32,
+    /// Zero padding added to each of the top and bottom of the input.
     pub pad_h: u32,
+    /// Zero padding added to each of the left and right of the input.
     pub pad_w: u32,
+    /// Output height, computed on the host.
     pub h_out: u32,
+    /// Output width, computed on the host.
     pub w_out: u32,
+    /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
     pub _padding: u32,
 }
 
@@ -207,19 +312,33 @@ pub struct ConvBackwardWeightParams {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct IGEMMBackwardInputParams {
+    /// Batch size `N`.
     pub batch_size: u32,
+    /// Input channels `C_in`.
     pub in_channels: u32,
+    /// Output channels `C_out`.
     pub out_channels: u32,
+    /// Input height `H`.
     pub height: u32,
+    /// Input width `W`.
     pub width: u32,
+    /// Kernel height.
     pub kernel_h: u32,
+    /// Kernel width.
     pub kernel_w: u32,
+    /// Stride along the height.
     pub stride_h: u32,
+    /// Stride along the width.
     pub stride_w: u32,
+    /// Zero padding added to each of the top and bottom of the input.
     pub pad_h: u32,
+    /// Zero padding added to each of the left and right of the input.
     pub pad_w: u32,
+    /// Output height, computed on the host.
     pub h_out: u32,
+    /// Output width, computed on the host.
     pub w_out: u32,
+    /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
     pub _padding: u32,
 }
 
@@ -228,19 +347,33 @@ pub struct IGEMMBackwardInputParams {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct IGEMMBackwardWeightParams {
+    /// Batch size `N`.
     pub batch_size: u32,
+    /// Input channels `C_in`.
     pub in_channels: u32,
+    /// Output channels `C_out`.
     pub out_channels: u32,
+    /// Input height `H`.
     pub height: u32,
+    /// Input width `W`.
     pub width: u32,
+    /// Kernel height.
     pub kernel_h: u32,
+    /// Kernel width.
     pub kernel_w: u32,
+    /// Stride along the height.
     pub stride_h: u32,
+    /// Stride along the width.
     pub stride_w: u32,
+    /// Zero padding added to each of the top and bottom of the input.
     pub pad_h: u32,
+    /// Zero padding added to each of the left and right of the input.
     pub pad_w: u32,
+    /// Output height, computed on the host.
     pub h_out: u32,
+    /// Output width, computed on the host.
     pub w_out: u32,
+    /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
     pub _padding: u32,
 }
 
@@ -249,12 +382,19 @@ pub struct IGEMMBackwardWeightParams {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct BinaryBackwardParams {
+    /// Broadcast output shape; only the first `out_rank` entries are read.
     pub out_shape: [u32; 4],
+    /// Shape of the first input; only the first `a_rank` entries are read.
     pub a_shape: [u32; 4],
+    /// Shape of the second input; only the first `b_rank` entries are read.
     pub b_shape: [u32; 4],
+    /// Rank of the output.
     pub out_rank: u32,
+    /// Rank of the first input.
     pub a_rank: u32,
+    /// Rank of the second input.
     pub b_rank: u32,
+    /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
     pub _padding: u32,
 }
 

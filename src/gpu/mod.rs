@@ -9,9 +9,11 @@
 mod buffer;
 mod context;
 pub mod early_warning;
+#[deny(missing_docs, clippy::missing_docs_in_private_items)]
 mod kernels;
 pub mod monitor;
 mod pool;
+/// Pool of `MAP_READ` staging buffers for GPU-to-CPU transfers.
 pub(crate) mod staging_pool;
 pub mod system_monitor;
 
