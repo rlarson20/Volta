@@ -1,9 +1,16 @@
-//! Loads PyTorch weights (a `SafeTensors` file) into a Volta `Sequential` through `StateDictMapper`, transposing the `fc1` and `fc2` weights from the `[out, in]` layout PyTorch uses, then runs a demo inference.
+//! Loads PyTorch weights (a `SafeTensors` file) into a Volta `Sequential` through `StateDictMapper`, transposing the `fc1` and `fc2` weights from the `[out, in]` layout PyTorch uses, then compares Volta's outputs against the PyTorch outputs that `scripts/export_pytorch_mnist.py` saved next to the weights.
+//!
+//! Without that test-data file it only runs a demo inference, which shows the model runs, not that it is right; the summary says which of the two happened. A mismatch beyond [`LOGIT_TOLERANCE`] exits with status 1.
 use std::path::Path;
 use volta::{
     Layer, Linear, Module, RawTensor, ReLU, Sequential,
     io::{load_safetensors, mapping::StateDictMapper},
 };
+
+/// Largest `|volta - pytorch|` accepted on any output logit. Both sides are f32 and the
+/// first layer sums 784 products in a different order, so they agree to a few 1e-7 (measured
+/// worst 4.8e-7), not exactly.
+const LOGIT_TOLERANCE: f32 = 1e-5;
 
 fn main() {
     println!("=== External Model Loading Example ===\n");
@@ -89,50 +96,114 @@ fn main() {
         .expect("converted PyTorch weights should fit the model");
     println!("✓ Weights loaded successfully\n");
 
-    // Try to load test data for validation
-    if Path::new(test_data_path).exists() {
+    // Compare against PyTorch's own outputs when the export script saved them
+    let validated = if Path::new(test_data_path).exists() {
         println!("✓ Found test data file: {test_data_path}");
-        run_validation(&model, test_data_path);
+        match run_validation(&model, test_data_path) {
+            Ok(worst) => {
+                println!(
+                    "✓ Matches PyTorch: worst |difference| {worst:.2e} (limit {LOGIT_TOLERANCE:.0e})"
+                );
+                true
+            }
+            Err(e) => {
+                eprintln!("❌ Validation against PyTorch failed: {e}");
+                std::process::exit(1);
+            }
+        }
     } else {
         println!("ℹ Test data not found (optional): {test_data_path}");
         println!("Running demo inference instead...\n");
         run_demo_inference(&model);
-    }
+        false
+    };
 
     println!("\n=== Summary ===");
     println!("✓ Successfully loaded PyTorch model into Volta");
     println!("✓ Named layers: fc1, fc2");
-    println!("✓ Weight transposition: Applied correctly");
-    println!("✓ Model ready for inference");
+    if validated {
+        println!("✓ Outputs verified against PyTorch (weight transposition is correct)");
+    } else {
+        println!("ℹ Outputs NOT verified: no PyTorch test data, so the transposition is unchecked");
+    }
 }
 
-/// Intended to compare Volta's outputs against PyTorch reference outputs read from `test_data_path`.
-///
-/// It does not do so yet: it reads the file, skips the JSON parsing (no `serde_json` dependency), and runs `run_demo_inference` instead.
-fn run_validation(model: &Sequential, test_data_path: &str) {
+/// Reads `inputs` and `outputs` (arrays of rows) from the JSON document `doc`.
+fn read_rows(doc: &serde_json::Value, key: &str) -> Result<Vec<Vec<f32>>, String> {
+    let rows = doc
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| format!("test data has no `{key}` array"))?;
+    rows.iter()
+        .map(|row| {
+            row.as_array()
+                .ok_or_else(|| format!("a row of `{key}` is not an array"))?
+                .iter()
+                .map(|v| {
+                    v.as_f64()
+                        .map(|f| f as f32)
+                        .ok_or_else(|| format!("`{key}` holds a non-number"))
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Runs `model` on the inputs in `test_data_path` and compares each logit with the PyTorch
+/// output saved beside it. Returns the largest absolute difference, or an error if the file
+/// is malformed or any logit is off by more than [`LOGIT_TOLERANCE`].
+fn run_validation(model: &Sequential, test_data_path: &str) -> Result<f32, String> {
     println!("\nRunning validation against PyTorch outputs...");
 
-    // Load test data JSON
-    let _test_data_str = match std::fs::read_to_string(test_data_path) {
-        Ok(content) => content,
-        Err(e) => {
-            println!("❌ Failed to read test data: {e}");
-            return;
-        }
-    };
+    let text = std::fs::read_to_string(test_data_path)
+        .map_err(|e| format!("could not read {test_data_path}: {e}"))?;
+    let doc: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("{test_data_path} is not JSON: {e}"))?;
+    let inputs = read_rows(&doc, "inputs")?;
+    let expected = read_rows(&doc, "outputs")?;
+    if inputs.is_empty() || inputs.len() != expected.len() {
+        return Err(format!(
+            "{} input rows but {} output rows",
+            inputs.len(),
+            expected.len()
+        ));
+    }
+    if let Some(row) = inputs.iter().find(|r| r.len() != 784) {
+        return Err(format!("an input row has {} values, not 784", row.len()));
+    }
+    println!("  {} samples", inputs.len());
 
-    // Parse JSON (simple manual parsing since we know the structure)
-    // In a real application, you'd use serde_json, but we want to keep dependencies minimal
-    println!("  Parsing test data...");
+    let batch = inputs.len();
+    let flat: Vec<f32> = inputs.into_iter().flatten().collect();
+    let output = model.forward(&RawTensor::new(flat, &[batch, 784], false));
+    let got = output.data();
+    let want: Vec<f32> = expected.into_iter().flatten().collect();
+    assert_eq!(
+        got.len(),
+        want.len(),
+        "Volta produced {} logits, PyTorch saved {}",
+        got.len(),
+        want.len()
+    );
 
-    // For this example, we'll just run demo inference since parsing JSON
-    // without serde_json would be verbose. In practice, you'd add serde_json
-    // as a dev dependency for examples.
-    println!("  (Skipping JSON parsing - would require serde_json dependency)");
-    println!("  Running demo inference instead...\n");
-
-    run_demo_inference(model);
+    let mut worst = 0.0f32;
+    for (sample, (g_row, w_row)) in got.chunks(10).zip(want.chunks(10)).enumerate() {
+        let diff = g_row
+            .iter()
+            .zip(w_row)
+            .map(|(g, w)| (g - w).abs())
+            .fold(0.0f32, f32::max);
+        println!("  sample {sample}: worst |difference| {diff:.2e}");
+        worst = worst.max(diff);
+    }
+    if worst > LOGIT_TOLERANCE {
+        return Err(format!(
+            "worst |difference| {worst:.2e} exceeds {LOGIT_TOLERANCE:.0e}"
+        ));
+    }
+    Ok(worst)
 }
+
 /// Runs `model` on one synthetic, flattened 28x28 input and prints the output shape and values. It checks that the loaded model runs, not that its outputs are correct.
 fn run_demo_inference(model: &Sequential) {
     println!("Running demo inference...");
@@ -159,9 +230,9 @@ fn run_demo_inference(model: &Sequential) {
     let pred_class = output_data
         .iter()
         .enumerate()
-        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+        .max_by(|(_, a), (_, b)| a.total_cmp(b))
         .map(|(idx, _)| idx)
-        .unwrap();
+        .expect("the model has output logits");
 
     println!("\n  Predicted class: {pred_class}");
     println!("  (Note: This is random weights, so prediction is meaningless)");

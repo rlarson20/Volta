@@ -1,5 +1,7 @@
 //! DCGAN on MNIST: a transposed-convolution `Generator` and a convolutional `Discriminator`, trained adversarially with `SGD` and `bce_with_logits_loss`.
 //!
+//! Needs the MNIST training images in `data/mnist/`; it exits with download instructions if they are missing, rather than train on made-up data.
+//!
 //! Images are normalized to `[-1, 1]` to match the generator's `Tanh` output.
 use volta::{
     Conv2d, ConvTranspose2d, Flatten, Layer, Linear, Module, ProgressBar, RawTensor, SGD, Tanh,
@@ -121,18 +123,20 @@ fn main() {
     let learning_rate = 0.0002;
 
     // Load MNIST data
-    let (train_images, num_train) =
-        if let Ok(images) = load_mnist_images("data/mnist/train-images-idx3-ubyte") {
-            let n = images.len() / 784;
-            println!("Loaded {n} MNIST training images");
-            (images, n)
-        } else {
-            println!("Could not load MNIST data from data/mnist/ directory");
-            println!("Generating synthetic data for demonstration...\n");
-            let n = 1000;
-            let images = vec![0.5; n * 784];
-            (images, n)
-        };
+    let train_images_path = "data/mnist/train-images-idx3-ubyte";
+    let train_images = match load_mnist_images(train_images_path) {
+        Ok(images) => images,
+        Err(err) => {
+            eprintln!("Could not load MNIST images from {train_images_path}: {err}");
+            eprintln!("\nTo download MNIST data:");
+            eprintln!("  mkdir -p data/mnist && cd data/mnist");
+            eprintln!("  curl -O http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz");
+            eprintln!("  gunzip *.gz");
+            std::process::exit(1);
+        }
+    };
+    let num_train = train_images.len() / 784;
+    println!("Loaded {num_train} MNIST training images");
 
     // Normalize to [-1, 1] to match tanh output
     let mut train_data = train_images;

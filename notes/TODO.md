@@ -70,9 +70,10 @@ Last verified: 2026-10-29.
 - [x] `assert_trainable!` exists for every parameterized layer, with a weighted loss and seeded random inputs (2026-10-26).
 - [x] Add a regression test for multi-consumer (diamond) gradient accumulation: `autograd::tests::diamond_accumulates_both_paths` (`x*x + x`, random input, grad `2x + 1`).
 - [x] Add a gradient test for `PositionalEncoding` (B3).
-- [ ] Remove example workarounds for broken components once the components are fixed.
-  - `examples/load_external_mnist.rs::run_validation` does not compare against PyTorch outputs; it skips the JSON parse and runs the demo inference.
-  - `examples/dcgan.rs` falls back to constant synthetic data (0.5) when MNIST is missing. `vae`, `mnist_cnn`, and `mnist_rnn` now print the download steps and exit 1 instead (2026-10-31). `vae` also read `data/train-images-idx3-ubyte` rather than `data/mnist/...`, so it trained on constant data even with MNIST present.
+- [x] Remove example workarounds for broken components (2026-11-01).
+  - `examples/load_external_mnist.rs::run_validation` now parses the PyTorch test data (`serde_json`, a dev-dependency already in the lockfile through criterion) and compares every logit against Volta's, exiting 1 past `LOGIT_TOLERANCE` (1e-5; measured worst 4.8e-7 over the 5 saved samples). Removing the ReLU from the example's model fails it with a 0.56 difference. The summary used to claim "Weight transposition: Applied correctly" even when nothing was compared; it now says outputs were verified only when they were, and otherwise says they were not.
+  - `examples/dcgan.rs` exits 1 with the download steps when MNIST is missing, like `vae`, `mnist_cnn`, and `mnist_rnn` (2026-10-31 for those three; they also fixed `vae` reading `data/train-images-idx3-ubyte` rather than `data/mnist/...`).
+- [ ] Silent fallbacks remain in examples that `just check-fallbacks` does not match (it covers `unwrap_or(0.0)`, `(&0.0)`, `(f32::NAN)`, `(1)`, and a few `if let Some` forms): `char_language_model.rs` has `*target_one_hot.get_mut(target_idx).unwrap_or(&mut 0.0) = 1.0` (an out-of-range target silently writes nothing), `unwrap_or(&[])` on batch slices at 225, 275, and 276, and `unwrap_or(&' ')` at 61; `vae.rs` has `train_data.get(start..end).unwrap_or(&[])` for a batch (78) and sample slices (124, 146, 150); `dcgan.rs:236` has one. An out-of-range index gives an empty batch or a skipped write instead of a panic (invariant 5). Fix with `.expect(..)`, and extend the script to match `unwrap_or(&[])`, `unwrap_or(&mut ..)`, and `unwrap_or(&'x')`.
 
 ## Rust / API (OPUS §7–14)
 
