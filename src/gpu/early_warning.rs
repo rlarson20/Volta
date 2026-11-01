@@ -47,9 +47,13 @@ pub enum HealthStatus {
 /// }
 /// ```
 pub struct EarlyWarningSystem {
+    /// Recent process-memory samples in MB, oldest first.
     memory_trend: VecDeque<usize>,
+    /// Recent pending-submission counts, oldest first.
     pending_trend: VecDeque<u32>,
+    /// When the last sample was recorded.
     last_check: Instant,
+    /// Most samples kept in each history.
     max_history: usize,
 }
 
@@ -116,6 +120,7 @@ impl EarlyWarningSystem {
         }
     }
 
+    /// Health from the memory history: warns or goes critical when it grows fast; healthy with fewer than 3 samples.
     fn analyze_memory_trend(&self) -> HealthStatus {
         if self.memory_trend.len() < 3 {
             return HealthStatus::Healthy;
@@ -137,6 +142,7 @@ impl EarlyWarningSystem {
         }
     }
 
+    /// Health from the pending-submission history: warns or goes critical when it grows fast; healthy with fewer than 3 samples.
     fn analyze_pending_trend(&self) -> HealthStatus {
         if self.pending_trend.len() < 3 {
             return HealthStatus::Healthy;

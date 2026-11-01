@@ -56,6 +56,7 @@ impl std::fmt::Display for GpuSyncError {
 
 impl std::error::Error for GpuSyncError {}
 
+/// Handle to the GPU: device, queue, compiled pipelines, buffer pools, and submission counters.
 pub struct GpuContext {
     /// The GPU device - represents the actual hardware
     device: wgpu::Device,
@@ -96,124 +97,209 @@ pub(crate) struct BinaryBackwardPipelines<'p> {
 /// and reuse the pipelines for all operations.
 pub struct ComputePipelines {
     // Element-wise operations
+    /// Elementwise `a + b`.
     pub add: wgpu::ComputePipeline,
+    /// Elementwise `a - b`.
     pub sub: wgpu::ComputePipeline,
+    /// Elementwise `a * b`.
     pub mul: wgpu::ComputePipeline,
+    /// Elementwise `a / b`.
     pub div: wgpu::ComputePipeline,
+    /// Elementwise `max(a, b)`.
     pub max: wgpu::ComputePipeline,
+    /// Elementwise `a mod b`.
     pub mod_op: wgpu::ComputePipeline,
+    /// Elementwise the comparison `a < b`.
     pub cmplt: wgpu::ComputePipeline,
 
     // Unary operations
+    /// Elementwise `-x`.
     pub neg: wgpu::ComputePipeline,
+    /// Elementwise `exp(x)`.
     pub exp: wgpu::ComputePipeline,
+    /// Elementwise `ln(x)`.
     pub log: wgpu::ComputePipeline,
+    /// Elementwise `max(x, 0)`.
     pub relu: wgpu::ComputePipeline,
+    /// Elementwise `sigmoid(x)`.
     pub sigmoid: wgpu::ComputePipeline,
+    /// Elementwise `tanh(x)`.
     pub tanh: wgpu::ComputePipeline,
+    /// Elementwise `sqrt(x)`.
     pub sqrt: wgpu::ComputePipeline,
+    /// Elementwise `1 / x`.
     pub recip: wgpu::ComputePipeline,
+    /// Elementwise `2^x`.
     pub exp2: wgpu::ComputePipeline,
+    /// Elementwise `log2(x)`.
     pub log2: wgpu::ComputePipeline,
+    /// Elementwise `sin(x)`.
     pub sin: wgpu::ComputePipeline,
+    /// Elementwise `cos(x)`.
     pub cos: wgpu::ComputePipeline,
+    /// Elementwise `erf(x)`.
     pub erf: wgpu::ComputePipeline,
 
     // Unary backward operations
+    /// Backward of `neg`: the input gradient.
     pub neg_backward: wgpu::ComputePipeline,
+    /// Backward of `exp`: the input gradient.
     pub exp_backward: wgpu::ComputePipeline,
+    /// Backward of `log`: the input gradient.
     pub log_backward: wgpu::ComputePipeline,
+    /// Backward of `relu`: the input gradient.
     pub relu_backward: wgpu::ComputePipeline,
+    /// Backward of `sigmoid`: the input gradient.
     pub sigmoid_backward: wgpu::ComputePipeline,
+    /// Backward of `tanh`: the input gradient.
     pub tanh_backward: wgpu::ComputePipeline,
+    /// Backward of `sqrt`: the input gradient.
     pub sqrt_backward: wgpu::ComputePipeline,
+    /// Backward of `recip`: the input gradient.
     pub recip_backward: wgpu::ComputePipeline,
+    /// Backward of `exp2`: the input gradient.
     pub exp2_backward: wgpu::ComputePipeline,
+    /// Backward of `log2`: the input gradient.
     pub log2_backward: wgpu::ComputePipeline,
+    /// Backward of `sin`: the input gradient.
     pub sin_backward: wgpu::ComputePipeline,
+    /// Backward of `cos`: the input gradient.
     pub cos_backward: wgpu::ComputePipeline,
+    /// Backward of `erf`: the input gradient.
     pub erf_backward: wgpu::ComputePipeline,
 
     // Binary backward operations (same-shape only, legacy)
+    /// Same-shape backward of `add` for the first operand.
     pub add_backward_a: wgpu::ComputePipeline,
+    /// Same-shape backward of `add` for the second operand.
     pub add_backward_b: wgpu::ComputePipeline,
+    /// Same-shape backward of `sub` for the first operand.
     pub sub_backward_a: wgpu::ComputePipeline,
+    /// Same-shape backward of `sub` for the second operand.
     pub sub_backward_b: wgpu::ComputePipeline,
+    /// Same-shape backward of `mul` for the first operand.
     pub mul_backward_a: wgpu::ComputePipeline,
+    /// Same-shape backward of `mul` for the second operand.
     pub mul_backward_b: wgpu::ComputePipeline,
+    /// Same-shape backward of `div` for the first operand.
     pub div_backward_a: wgpu::ComputePipeline,
+    /// Same-shape backward of `div` for the second operand.
     pub div_backward_b: wgpu::ComputePipeline,
+    /// Same-shape backward of `max` for the first operand.
     pub max_backward_a: wgpu::ComputePipeline,
+    /// Same-shape backward of `max` for the second operand.
     pub max_backward_b: wgpu::ComputePipeline,
 
     // Binary backward operations with RACE-FREE broadcasting (two-pass)
+    /// Broadcast backward of `add`, scatter pass: records each output element's contribution in a temporary buffer.
     pub add_broadcast_pass1: wgpu::ComputePipeline,
+    /// Broadcast backward of `add`, reduce pass: accumulates the temporary buffer into the operand gradients without write races.
     pub add_broadcast_pass2: wgpu::ComputePipeline,
+    /// Broadcast backward of `sub`, scatter pass: records each output element's contribution in a temporary buffer.
     pub sub_broadcast_pass1: wgpu::ComputePipeline,
+    /// Broadcast backward of `sub`, reduce pass: accumulates the temporary buffer into the operand gradients without write races.
     pub sub_broadcast_pass2: wgpu::ComputePipeline,
+    /// Broadcast backward of `mul`, scatter pass: records each output element's contribution in a temporary buffer.
     pub mul_broadcast_pass1: wgpu::ComputePipeline,
+    /// Broadcast backward of `mul`, reduce pass: accumulates the temporary buffer into the operand gradients without write races.
     pub mul_broadcast_pass2: wgpu::ComputePipeline,
+    /// Broadcast backward of `div`, scatter pass: records each output element's contribution in a temporary buffer.
     pub div_broadcast_pass1: wgpu::ComputePipeline,
+    /// Broadcast backward of `div`, reduce pass: accumulates the temporary buffer into the operand gradients without write races.
     pub div_broadcast_pass2: wgpu::ComputePipeline,
+    /// Broadcast backward of `max`, scatter pass: records each output element's contribution in a temporary buffer.
     pub max_broadcast_pass1: wgpu::ComputePipeline,
+    /// Broadcast backward of `max`, reduce pass: accumulates the temporary buffer into the operand gradients without write races.
     pub max_broadcast_pass2: wgpu::ComputePipeline,
 
     // Reductions
+    /// Reduces all elements to their sum.
     pub sum_reduce: wgpu::ComputePipeline,
+    /// Reduces all elements to their maximum.
     pub max_reduce: wgpu::ComputePipeline,
+    /// Reduces all elements to their mean.
     pub mean_reduce: wgpu::ComputePipeline,
 
     // Movement operations
+    /// Forward `permute` movement op.
     pub permute: wgpu::ComputePipeline,
+    /// Forward `expand` movement op.
     pub expand: wgpu::ComputePipeline,
+    /// Forward `pad` movement op.
     pub pad: wgpu::ComputePipeline,
+    /// Forward `shrink` movement op.
     pub shrink: wgpu::ComputePipeline,
+    /// Forward `stride` movement op.
     pub stride: wgpu::ComputePipeline,
 
     // Movement backward operations
+    /// Backward of the `permute` movement op.
     pub permute_backward: wgpu::ComputePipeline,
+    /// Backward of the `expand` movement op.
     pub expand_backward: wgpu::ComputePipeline,
+    /// Backward of the `pad` movement op.
     pub pad_backward: wgpu::ComputePipeline,
+    /// Backward of the `shrink` movement op.
     pub shrink_backward: wgpu::ComputePipeline,
+    /// Backward of the `stride` movement op.
     pub stride_backward: wgpu::ComputePipeline,
 
     // Matrix multiplication (this is the big one for ML!)
+    /// Batched matrix product.
     pub matmul: wgpu::ComputePipeline,
 
     // Matrix multiplication backward
+    /// Matmul gradient for the left operand.
     pub matmul_backward_a: wgpu::ComputePipeline,
+    /// Matmul gradient for the right operand.
     pub matmul_backward_b: wgpu::ComputePipeline,
 
     // Reduction backward
+    /// Backward of the full sum reduction.
     pub sum_backward: wgpu::ComputePipeline,
+    /// Backward of the full mean reduction.
     pub mean_backward: wgpu::ComputePipeline,
+    /// Backward of the full max reduction: the gradient goes to the maximum element.
     pub max_backward: wgpu::ComputePipeline,
 
     // Optimizer step
+    /// Parameter update shared by SGD, SGD with momentum, and Adam.
     pub optimizer_step: wgpu::ComputePipeline,
 
     // Muon: momentum, Frobenius norm, and the elementwise pieces of Newton-Schulz
+    /// Muon momentum buffer update (optionally Nesterov).
     pub muon_momentum: wgpu::ComputePipeline,
+    /// Sum of squares of a buffer, for the Frobenius norm.
     pub muon_sum_squares: wgpu::ComputePipeline,
+    /// Divides a buffer by the norm from `muon_sum_squares` (plus an epsilon).
     pub muon_normalize: wgpu::ComputePipeline,
+    /// Computes `alpha * x + beta * y`.
     pub muon_axpby: wgpu::ComputePipeline,
 
     // Image-to-column transformation for convolution
+    /// Unfolds input windows into columns.
     pub im2col: wgpu::ComputePipeline,
+    /// Folds columns back into an image, summing overlaps.
     pub col2im: wgpu::ComputePipeline,
 
     // Direct convolution (memory efficient)
+    /// Direct sliding-window convolution.
     pub direct_conv: wgpu::ComputePipeline,
 
     // Implicit GEMM convolution (balanced performance/memory)
+    /// Implicit-GEMM convolution.
     pub igemm: wgpu::ComputePipeline,
 
     // Convolution backward operations
+    /// Input gradient of direct convolution.
     pub conv_backward_input: wgpu::ComputePipeline,
+    /// Weight gradient of direct convolution.
     pub conv_backward_weight: wgpu::ComputePipeline,
 
     // iGEMM backward operations
+    /// Input gradient of implicit-GEMM convolution.
     pub igemm_backward_input: wgpu::ComputePipeline,
+    /// Weight gradient of implicit-GEMM convolution.
     pub igemm_backward_weight: wgpu::ComputePipeline,
 }
 
@@ -232,6 +318,7 @@ impl GpuContext {
         pollster::block_on(Self::new_async())
     }
 
+    /// Selects an adapter, opens a device, and compiles every pipeline; the error says which step failed.
     async fn new_async() -> Result<Self, String> {
         // Step 1: Create a wgpu instance
         // This is the entry point to wgpu

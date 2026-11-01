@@ -27,7 +27,7 @@ pub use system_monitor::{MonitorStats, SystemMonitor};
 
 use std::sync::OnceLock;
 
-// Global GPU context - initialized lazily on first use
+/// Global GPU context, initialized lazily on first use; `None` if no adapter was found.
 static GPU_CONTEXT: OnceLock<Option<GpuContext>> = OnceLock::new();
 
 /// Get the global GPU context, initializing it if necessary

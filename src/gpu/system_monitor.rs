@@ -29,11 +29,17 @@ use std::time::Instant;
 /// println!("Ops/sec: {:.2}", stats.ops_per_sec);
 /// ```
 pub struct SystemMonitor {
+    /// When monitoring began.
     start_time: Instant,
+    /// Highest process memory seen, in MB.
     peak_memory_mb: AtomicUsize,
+    /// Operations recorded.
     operation_count: AtomicU64,
+    /// Syncs recorded.
     sync_count: AtomicU64,
+    /// Operation count at the previous checkpoint.
     last_checkpoint_ops: AtomicU64,
+    /// Time of the previous checkpoint.
     last_checkpoint_time: Mutex<Instant>,
 }
 
