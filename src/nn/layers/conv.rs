@@ -1465,11 +1465,12 @@ mod conv2d_tests {
         let x = RawTensor::randn(&[1, 2, 6, 6]);
         x.borrow_mut().requires_grad = true;
 
+        // Seeded; measured max relative error 4.9e-6, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) = RawTensor::check_gradients(
             &x,
             |t| conv.forward(t).sum(),
             0.5,  // epsilon
-            2e-2, // tolerance (relaxed for conv's numerical complexity)
+            5e-5, // tolerance (relaxed for conv's numerical complexity)
         );
 
         assert!(
@@ -1716,8 +1717,9 @@ mod conv2d_tests {
         let x = RawTensor::randn(&[1, 2, 4, 4]);
         x.borrow_mut().requires_grad = true;
 
+        // Seeded; measured max relative error 1.6e-6, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-5);
 
         assert!(
             passed,
@@ -1736,8 +1738,9 @@ mod conv2d_tests {
         let x = RawTensor::randn(&[1, 2, 8, 8]);
         x.borrow_mut().requires_grad = true;
 
+        // Seeded; measured max relative error 7.7e-5, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 1e-3);
 
         assert!(
             passed,
@@ -1756,8 +1759,9 @@ mod conv2d_tests {
         let x = RawTensor::randn(&[1, 2, 8, 8]);
         x.borrow_mut().requires_grad = true;
 
+        // Seeded; measured max relative error 1.5e-5, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-4);
 
         assert!(
             passed,
@@ -1776,8 +1780,9 @@ mod conv2d_tests {
         let x = RawTensor::randn(&[1, 2, 6, 6]);
         x.borrow_mut().requires_grad = true;
 
+        // Seeded; measured max relative error 3.1e-5, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 5e-4);
 
         assert!(
             passed,
@@ -1796,8 +1801,9 @@ mod conv2d_tests {
         let x = RawTensor::randn(&[1, 4, 8, 8]);
         x.borrow_mut().requires_grad = true;
 
+        // Seeded; measured max relative error 2.7e-4, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 5e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 5e-3);
 
         assert!(
             passed,
@@ -1943,8 +1949,9 @@ mod conv2d_tests {
         let x = RawTensor::randn(&[1, 2, 8, 8]);
         x.borrow_mut().requires_grad = true;
 
+        // Seeded; measured max relative error 2.5e-4, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 5e-3);
 
         assert!(
             passed,
@@ -1965,8 +1972,9 @@ mod conv2d_tests {
         let x = RawTensor::randn(&[1, 2, 6, 6]);
         x.borrow_mut().requires_grad = true;
 
+        // Seeded; measured max relative error 2.5e-5, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 5e-4);
 
         assert!(
             passed,
@@ -1987,8 +1995,9 @@ mod conv2d_tests {
         let x = RawTensor::randn(&[1, 2, 8, 8]);
         x.borrow_mut().requires_grad = true;
 
+        // Seeded; measured max relative error 2.3e-5, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 5e-4);
 
         assert!(
             passed,
@@ -2009,8 +2018,9 @@ mod conv2d_tests {
         let x = RawTensor::randn(&[1, 2, 4, 4]);
         x.borrow_mut().requires_grad = true;
 
+        // Seeded; measured max relative error 1.3e-6, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-5);
 
         assert!(
             passed,
@@ -2031,8 +2041,9 @@ mod conv2d_tests {
         let x = RawTensor::randn(&[1, 2, 6, 6]);
         x.borrow_mut().requires_grad = true;
 
+        // Seeded; measured max relative error 1.2e-4, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-3);
 
         assert!(
             passed,
@@ -2160,15 +2171,17 @@ mod conv2d_tests {
         // `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels`: conv is
         // linear in `x`, so the step only affects f32 roundoff.
         crate::tensor::manual_seed(0xD1C);
+        // The last field is the tolerance: the next 1-2-5 value at least 10x above the max
+        // relative error measured for that config (8.9e-5, 1.7e-5, 1.7e-5, 1.6e-6, 1.1e-3).
         let configs = vec![
-            (2, 4, 3, 1, 0, 6, 6), // No padding
-            (2, 4, 3, 1, 1, 6, 6), // With padding
-            (2, 4, 3, 2, 1, 8, 8), // Stride 2
-            (2, 4, 1, 1, 0, 4, 4), // 1x1 kernel
-            (2, 4, 5, 1, 2, 8, 8), // 5x5 kernel
+            (2, 4, 3, 1, 0, 6, 6, 1e-3), // No padding
+            (2, 4, 3, 1, 1, 6, 6, 2e-4), // With padding
+            (2, 4, 3, 2, 1, 8, 8, 2e-4), // Stride 2
+            (2, 4, 1, 1, 0, 4, 4, 2e-5), // 1x1 kernel
+            (2, 4, 5, 1, 2, 8, 8, 2e-2), // 5x5 kernel
         ];
 
-        for (in_ch, out_ch, kernel, stride, padding, h, w) in configs {
+        for (in_ch, out_ch, kernel, stride, padding, h, w, tolerance) in configs {
             let conv = Conv2d::new(in_ch, out_ch, kernel, stride, padding, true);
             conv.set_algo(ConvAlgo::Direct);
 
@@ -2176,7 +2189,7 @@ mod conv2d_tests {
             x.borrow_mut().requires_grad = true;
 
             let (max_err, mean_err, passed) =
-                RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
+                RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, tolerance);
 
             assert!(
                 passed,
@@ -2270,8 +2283,9 @@ mod conv2d_tests {
         let x = RawTensor::randn(&[1, 2, 8, 8]);
         x.borrow_mut().requires_grad = true;
 
+        // Seeded; measured max relative error 3.2e-5, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 5e-4);
 
         assert!(
             passed,
@@ -2589,8 +2603,9 @@ mod conv2d_tests {
         let x = RawTensor::randn(&[1, 2, 8, 8]);
         x.borrow_mut().requires_grad = true;
 
+        // Seeded; measured max relative error 9.7e-5, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 1e-3);
 
         assert!(
             passed,

@@ -671,11 +671,12 @@ mod tests {
         let x = RawTensor::randn(&[1, 2, 6, 6]);
         x.borrow_mut().requires_grad = true;
 
+        // Seeded; measured max relative error 1.4e-5, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) = RawTensor::check_gradients(
             &x,
             |t| conv.forward(t).sum(),
             0.5,  // epsilon
-            2e-2, // tolerance (relaxed for numerical complexity)
+            2e-4, // tolerance (relaxed for numerical complexity)
         );
 
         assert!(
@@ -695,8 +696,9 @@ mod tests {
         let x = RawTensor::randn(&[1, 2, 4, 4]);
         x.borrow_mut().requires_grad = true;
 
+        // Seeded; measured max relative error 3.2e-5, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 5e-4);
 
         assert!(
             passed,
@@ -715,8 +717,9 @@ mod tests {
         let x = RawTensor::randn(&[1, 2, 5, 5]);
         x.borrow_mut().requires_grad = true;
 
+        // Seeded; measured max relative error 2.0e-6, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-5);
 
         assert!(
             passed,
@@ -735,8 +738,9 @@ mod tests {
         let x = RawTensor::randn(&[1, 2, 8, 8]);
         x.borrow_mut().requires_grad = true;
 
+        // Seeded; measured max relative error 6.2e-6, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 1e-4);
 
         assert!(
             passed,
@@ -756,6 +760,7 @@ mod tests {
         let x = RawTensor::randn(&[1, 2, 6, 6]);
         x.borrow_mut().requires_grad = true;
 
+        // Seeded; measured max relative error 1.1e-3, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
             RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
 
@@ -780,8 +785,9 @@ mod tests {
         let x = RawTensor::randn(&[1, 4, 6, 6]);
         x.borrow_mut().requires_grad = true;
 
+        // Seeded; measured max relative error 5.6e-5, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
-            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 2e-2);
+            RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, 1e-3);
 
         assert!(
             passed,
