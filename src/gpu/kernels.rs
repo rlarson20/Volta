@@ -50,6 +50,21 @@ pub struct OptimizerStepParams {
     pub padding: f32,
 }
 
+/// Parameters for the Muon kernels
+/// Must match the `MuonParams` struct in muon.wgsl
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct MuonParams {
+    /// Element count
+    n: u32,
+    /// Momentum: 1 for the Nesterov update
+    flag: u32,
+    /// Momentum: coefficient; normalize: epsilon; axpby: scale of `x`
+    alpha: f32,
+    /// Axpby: scale of `y`
+    beta: f32,
+}
+
 /// Parameters for movement operations
 /// Must match the `MovementParams` struct in movement.wgsl
 #[repr(C)]
@@ -1803,6 +1818,134 @@ impl GpuKernels {
         Some(())
     }
 
+    /// Muon momentum: `v ← μ·v + g`, returning `update = μ·v + g` (Nesterov) or `v`.
+    ///
+    /// `velocity` is updated in place, like the parameter in [`Self::optimizer_step`], so
+    /// the caller must have got it through the unsharing write path.
+    ///
+    /// # Panics
+    /// If `velocity` and `grad` differ in length.
+    #[must_use]
+    pub(crate) fn muon_momentum(
+        velocity: &GpuBuffer,
+        grad: &GpuBuffer,
+        momentum: f32,
+        nesterov: bool,
+    ) -> Option<GpuBuffer> {
+        assert_eq!(velocity.len(), grad.len(), "Muon velocity/grad length");
+        let ctx = get_gpu_context()?;
+        let update = GpuBuffer::zeros(grad.len())?;
+        let params = MuonParams {
+            n: gpu_len(grad.len()),
+            flag: u32::from(nesterov),
+            alpha: momentum,
+            beta: 0.0,
+        };
+        muon_dispatch(
+            &ctx.pipelines().muon_momentum,
+            &[(0, velocity), (1, grad), (2, &update)],
+            &params,
+            workgroups_for(grad.len()),
+        )?;
+        Some(update)
+    }
+
+    /// Approximately orthogonalize the `rows × cols` row-major matrix `g` with `steps`
+    /// quintic Newton-Schulz iterations, on the device. `g` is not modified.
+    ///
+    /// The same computation as the CPU `Muon::newton_schulz`: Frobenius normalization, a
+    /// tall matrix transposed so the Gram matrix is on the smaller side, then
+    /// `X ← a·X + (b·A + c·A²)·X` with `A = X Xᵀ`, then the transpose back. `coeffs` is
+    /// `[a, b, c]` and `eps` the normalization epsilon; the optimizer owns both, so the
+    /// kernel and the CPU path cannot drift apart.
+    ///
+    /// # Panics
+    /// If `g.len() != rows * cols`, or either dimension is 0.
+    #[must_use]
+    pub(crate) fn muon_newton_schulz(
+        g: &GpuBuffer,
+        rows: usize,
+        cols: usize,
+        steps: usize,
+        coeffs: [f32; 3],
+        eps: f32,
+    ) -> Option<GpuBuffer> {
+        assert!(
+            rows > 0 && cols > 0,
+            "Newton-Schulz needs a non-empty matrix"
+        );
+        assert_eq!(g.len(), rows * cols, "Newton-Schulz buffer vs dimensions");
+        let [a, b, c] = coeffs;
+        let transposed = rows > cols;
+        let (m, n) = if transposed {
+            (cols, rows)
+        } else {
+            (rows, cols)
+        };
+
+        let x0 = if transposed {
+            Self::permute(g, &[rows, cols], &[cols, rows], &[1, 0])?
+        } else {
+            g.copy_region(0, g.len())?
+        };
+
+        // Frobenius normalization: the sum of squares stays on the device.
+        let ctx = get_gpu_context()?;
+        let norm_sq = GpuBuffer::zeros(1)?;
+        let len = gpu_len(x0.len());
+        muon_dispatch(
+            &ctx.pipelines().muon_sum_squares,
+            &[(0, &x0), (2, &norm_sq)],
+            &MuonParams {
+                n: len,
+                flag: 0,
+                alpha: 0.0,
+                beta: 0.0,
+            },
+            1,
+        )?;
+        let mut x = GpuBuffer::zeros(x0.len())?;
+        muon_dispatch(
+            &ctx.pipelines().muon_normalize,
+            &[(0, &x0), (1, &norm_sq), (2, &x)],
+            &MuonParams {
+                n: len,
+                flag: 0,
+                alpha: eps,
+                beta: 0.0,
+            },
+            workgroups_for(x0.len()),
+        )?;
+
+        let spec = |lhs: &[usize], rhs: &[usize]| {
+            use crate::shape::Shape;
+            crate::spec::MatmulSpec::new(
+                &Shape::from_dims(lhs).expect("valid Newton-Schulz dims"),
+                &Shape::from_dims(rhs).expect("valid Newton-Schulz dims"),
+            )
+            .expect("valid Newton-Schulz matmul")
+        };
+        let gram_spec = spec(&[m, n], &[n, m]);
+        let square_spec = spec(&[m, m], &[m, m]);
+        let apply_spec = spec(&[m, m], &[m, n]);
+
+        for _ in 0..steps {
+            // A = X Xᵀ (m×m), B = b·A + c·A², X ← a·X + B·X
+            let xt = Self::permute(&x, &[m, n], &[n, m], &[1, 0])?;
+            let gram = Self::matmul(&x, &xt, &gram_spec)?;
+            let gram_sq = Self::matmul(&gram, &gram, &square_spec)?;
+            let poly = muon_axpby(&gram, b, &gram_sq, c)?;
+            let poly_x = Self::matmul(&poly, &x, &apply_spec)?;
+            x = muon_axpby(&x, a, &poly_x, 1.0)?;
+        }
+
+        if transposed {
+            Self::permute(&x, &[m, n], &[n, m], &[1, 0])
+        } else {
+            Some(x)
+        }
+    }
+
     /// Image-to-column transformation for GPU convolution
     ///
     /// Transforms 4D input (B, C, H, W) into 2D matrix (B*`H_out`*`W_out`, C*`K_h`*`K_w`)
@@ -2800,6 +2943,100 @@ fn movement_op(
     Some(result)
 }
 
+/// An element count as the `u32` the Muon shaders take.
+///
+/// # Panics
+/// If it does not fit.
+fn gpu_len(len: usize) -> u32 {
+    u32::try_from(len).unwrap_or_else(|_| panic!("GPU Muon buffer length {len} exceeds u32"))
+}
+
+/// Workgroups (256 threads each) that cover `len` elements.
+///
+/// # Panics
+/// If that is more than the 65535 a single dispatch dimension allows.
+fn workgroups_for(len: usize) -> u32 {
+    let groups = gpu_len(len).div_ceil(256);
+    assert!(
+        groups <= 65535,
+        "GPU Muon buffer of {len} elements needs {groups} workgroups, over the 65535 limit"
+    );
+    groups
+}
+
+/// `out = alpha·x + beta·y`, elementwise, into a new buffer.
+fn muon_axpby(x: &GpuBuffer, alpha: f32, y: &GpuBuffer, beta: f32) -> Option<GpuBuffer> {
+    assert_eq!(x.len(), y.len(), "axpby operand lengths");
+    let ctx = get_gpu_context()?;
+    let out = GpuBuffer::zeros(x.len())?;
+    let params = MuonParams {
+        n: gpu_len(x.len()),
+        flag: 0,
+        alpha,
+        beta,
+    };
+    muon_dispatch(
+        &ctx.pipelines().muon_axpby,
+        &[(0, x), (1, y), (2, &out)],
+        &params,
+        workgroups_for(x.len()),
+    )?;
+    Some(out)
+}
+
+/// Bind `buffers` (binding index, buffer) and `params` to a `muon.wgsl` pipeline and
+/// dispatch it.
+fn muon_dispatch(
+    pipeline: &wgpu::ComputePipeline,
+    buffers: &[(u32, &GpuBuffer)],
+    params: &MuonParams,
+    workgroups: u32,
+) -> Option<()> {
+    let ctx = get_gpu_context()?;
+    let params_buffer = ctx
+        .device()
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Muon Params"),
+            contents: bytemuck::bytes_of(params),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+    let mut entries: Vec<wgpu::BindGroupEntry> = buffers
+        .iter()
+        .map(|&(binding, buffer)| wgpu::BindGroupEntry {
+            binding,
+            resource: buffer.buffer().as_entire_binding(),
+        })
+        .collect();
+    entries.push(wgpu::BindGroupEntry {
+        binding: 3,
+        resource: params_buffer.as_entire_binding(),
+    });
+    let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Muon Bind Group"),
+        layout: &pipeline.get_bind_group_layout(0),
+        entries: &entries,
+    });
+
+    let mut encoder = ctx
+        .device()
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Muon Encoder"),
+        });
+    {
+        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Muon Pass"),
+            timestamp_writes: None,
+        });
+        compute_pass.set_pipeline(pipeline);
+        compute_pass.set_bind_group(0, &bind_group, &[]);
+        compute_pass.dispatch_workgroups(workgroups, 1, 1);
+    }
+    ctx.queue().submit(Some(encoder.finish()));
+    ctx.increment_pending();
+    ctx.maybe_sync();
+    Some(())
+}
+
 use wgpu::util::DeviceExt;
 
 #[cfg(test)]
@@ -3048,5 +3285,117 @@ mod direct_kernel_tests {
         let c = GpuKernels::binary_op(&a, &b, BinaryOp::Add).unwrap();
 
         assert_eq!(c.to_vec(), vec![6.0, 8.0, 10.0, 12.0]);
+    }
+}
+
+#[cfg(test)]
+mod muon_tests {
+    use super::{GpuBuffer, GpuKernels};
+    use crate::Muon;
+    use crate::gpu;
+    use crate::index::fetch;
+
+    const COEFFS: [f32; 3] = [3.4445, -4.7750, 2.0315];
+    const EPS: f32 = 1e-7;
+
+    /// A seeded random `rows × cols` matrix as a flat row-major vector.
+    fn random_matrix(rows: usize, cols: usize) -> Vec<f32> {
+        crate::tensor::randn(&[rows, cols]).borrow().data.to_vec()
+    }
+
+    /// The device Newton-Schulz of `g`, read back to the host.
+    fn on_gpu(g: &[f32], rows: usize, cols: usize, steps: usize) -> Vec<f32> {
+        let buf = GpuBuffer::from_slice(g).expect("GPU buffer");
+        GpuKernels::muon_newton_schulz(&buf, rows, cols, steps, COEFFS, EPS)
+            .expect("GPU Newton-Schulz")
+            .to_vec()
+    }
+
+    #[test]
+    fn newton_schulz_matches_the_cpu_for_wide_tall_square_and_untiled_shapes() {
+        if !gpu::is_gpu_available() {
+            return;
+        }
+        crate::tensor::manual_seed(0x6A11);
+        // Measured worst difference on an Apple M2: about 1e-6 (summation order and fused
+        // multiply-add differ), so 1e-5 leaves 10x of margin without hiding a real error.
+        // 300x2 and 2x300 have more than 256 elements in a 2-row Gram matrix, so the
+        // norm's strided loop runs more than once per thread; 20x37 and 37x20 are not
+        // multiples of the 16x16 matmul tile.
+        for (rows, cols) in [(20, 37), (37, 20), (64, 96), (16, 16), (2, 300), (300, 2)] {
+            let g = random_matrix(rows, cols);
+            let mut cpu = g.clone();
+            Muon::newton_schulz(&mut cpu, rows, cols, 5);
+            let gpu = on_gpu(&g, rows, cols, 5);
+            assert_eq!(gpu.len(), cpu.len(), "{rows}x{cols}: length");
+            let worst = cpu
+                .iter()
+                .zip(&gpu)
+                .map(|(c, g)| (c - g).abs())
+                .fold(0.0f32, f32::max);
+            assert!(
+                worst < 1e-5,
+                "{rows}x{cols}: GPU differs from CPU by {worst}"
+            );
+        }
+    }
+
+    #[test]
+    fn newton_schulz_does_not_modify_its_input() {
+        if !gpu::is_gpu_available() {
+            return;
+        }
+        crate::tensor::manual_seed(0x1D07);
+        let g = random_matrix(5, 9);
+        let buf = GpuBuffer::from_slice(&g).expect("GPU buffer");
+        let _ = GpuKernels::muon_newton_schulz(&buf, 5, 9, 5, COEFFS, EPS).expect("GPU");
+        assert_eq!(buf.to_vec(), g);
+    }
+
+    #[test]
+    fn newton_schulz_leaves_a_zero_matrix_at_zero() {
+        if !gpu::is_gpu_available() {
+            return;
+        }
+        let out = on_gpu(&[0.0; 12], 3, 4, 5);
+        for i in 0..12 {
+            assert_eq!(fetch(&out, i), 0.0, "entry {i} must stay 0, with no NaN");
+        }
+    }
+
+    #[test]
+    fn momentum_updates_the_velocity_in_place_and_returns_the_update() {
+        if !gpu::is_gpu_available() {
+            return;
+        }
+        let v0 = [1.0f32, -2.0, 0.5, 4.0];
+        let g = [0.25f32, 1.0, -3.0, 0.0];
+        let mu = 0.9f32;
+        for nesterov in [false, true] {
+            let velocity = GpuBuffer::from_slice(&v0).expect("GPU buffer");
+            let grad = GpuBuffer::from_slice(&g).expect("GPU buffer");
+            let update = GpuKernels::muon_momentum(&velocity, &grad, mu, nesterov)
+                .expect("GPU momentum")
+                .to_vec();
+            let (v_out, want_v): (Vec<f32>, Vec<f32>) = (
+                velocity.to_vec(),
+                v0.iter().zip(&g).map(|(v, g)| mu * v + g).collect(),
+            );
+            let want_update: Vec<f32> = if nesterov {
+                want_v.iter().zip(&g).map(|(v, g)| mu * v + g).collect()
+            } else {
+                want_v.clone()
+            };
+            for i in 0..4 {
+                assert!(
+                    (fetch(&v_out, i) - fetch(&want_v, i)).abs() < 1e-6,
+                    "v[{i}]"
+                );
+                assert!(
+                    (fetch(&update, i) - fetch(&want_update, i)).abs() < 1e-6,
+                    "update[{i}] nesterov={nesterov}"
+                );
+            }
+        }
     }
 }

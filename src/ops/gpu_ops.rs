@@ -15,6 +15,66 @@ use crate::spec::PadValue;
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
 
+/// What a Muon step needs besides its three storages. The optimizer owns the values, so
+/// the CPU and GPU paths read the same ones.
+pub(crate) struct MuonStep {
+    /// Learning rate
+    pub lr: f32,
+    /// Momentum coefficient
+    pub momentum: f32,
+    /// Use the Nesterov update `momentum·v + g` instead of `v`
+    pub nesterov: bool,
+    /// Newton-Schulz iterations
+    pub ns_steps: usize,
+    /// Matrix view of the parameter: `dim0` rows
+    pub rows: usize,
+    /// Matrix view of the parameter: the product of the other dims
+    pub cols: usize,
+    /// Whether the view is a real matrix (more than one row and column), so it is
+    /// orthogonalized
+    pub orthogonalize: bool,
+    /// Shape scale `sqrt(max(1, rows / cols))`, or 1 for a non-matrix
+    pub scale: f32,
+    /// Newton-Schulz quintic coefficients `[a, b, c]`
+    pub coeffs: [f32; 3],
+    /// Newton-Schulz normalization epsilon
+    pub eps: f32,
+}
+
+impl MuonStep {
+    /// Check the matrix view against the parameter's length. `Muon::step` calls it once per
+    /// parameter, before either device path runs.
+    ///
+    /// # Panics
+    /// If `rows * cols` is not `len`, or `orthogonalize` or `scale` disagree with the
+    /// view. Those come from the optimizer, so a mismatch is a bug there, and the kernels
+    /// would otherwise read the wrong matrix.
+    pub(crate) fn validate(&self, len: usize) {
+        assert_eq!(
+            self.rows * self.cols,
+            len,
+            "Muon matrix view {}x{} does not cover {len} elements",
+            self.rows,
+            self.cols
+        );
+        let is_matrix = self.rows > 1 && self.cols > 1;
+        assert_eq!(
+            self.orthogonalize, is_matrix,
+            "Muon orthogonalizes exactly the real matrices"
+        );
+        let want_scale = if is_matrix {
+            (self.rows as f32 / self.cols as f32).max(1.0).sqrt()
+        } else {
+            1.0
+        };
+        assert!(
+            (self.scale - want_scale).abs() <= f32::EPSILON * want_scale,
+            "Muon scale {} is not sqrt(max(1, rows/cols)) = {want_scale}",
+            self.scale
+        );
+    }
+}
+
 impl RawTensor {
     /// GPU-accelerated element-wise binary op (same shape; no broadcasting)
     #[cfg(feature = "gpu")]
@@ -532,6 +592,72 @@ impl RawTensor {
         let buf_state1 = state1.gpu_buffer_mut()?;
         let buf_state2 = state2.gpu_buffer_mut()?;
         GpuKernels::optimizer_step(buf_params, buf_grads, buf_state1, buf_state2, opt_params)
+    }
+
+    /// One Muon step for a GPU parameter, entirely on the device.
+    ///
+    /// Momentum, Newton-Schulz (for a real matrix), and the parameter update are the same
+    /// computation as the CPU `Muon::step`. `velocity` and `param` are written in place
+    /// through the unsharing write path, so snapshots and later host reads stay correct.
+    /// Returns `None` if a kernel could not run; the caller must not skip the update.
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_muon_step(
+        param: &mut Storage,
+        grad: &Storage,
+        velocity: &mut Storage,
+        step: &MuonStep,
+    ) -> Option<()> {
+        use crate::gpu::{GpuBuffer, OptimizerStepParams};
+
+        let buf_grad = grad.gpu_buffer()?;
+        let buf_velocity = velocity.gpu_buffer_mut()?;
+        let update =
+            GpuKernels::muon_momentum(buf_velocity, buf_grad, step.momentum, step.nesterov)?;
+        let update = if step.orthogonalize {
+            GpuKernels::muon_newton_schulz(
+                &update,
+                step.rows,
+                step.cols,
+                step.ns_steps,
+                step.coeffs,
+                step.eps,
+            )?
+        } else {
+            update
+        };
+
+        // `param -= lr·scale·update`, through the SGD arm of the optimizer kernel. That
+        // kernel binds both state buffers, so give it two it will not touch.
+        let len = update.len();
+        let (unused1, unused2) = (GpuBuffer::zeros(len)?, GpuBuffer::zeros(len)?);
+        let opt_params = OptimizerStepParams {
+            op: 0,
+            lr: step.lr * step.scale,
+            beta1: 0.0,
+            beta2: 0.0,
+            t: 0.0,
+            eps: 0.0,
+            weight_decay: 0.0,
+            padding: 0.0,
+        };
+        GpuKernels::optimizer_step(
+            param.gpu_buffer_mut()?,
+            &update,
+            &unused1,
+            &unused2,
+            &opt_params,
+        )
+    }
+
+    /// Not-gpu stub: a GPU parameter cannot exist, so `Muon::step` never reaches this.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_muon_step(
+        _param: &mut Storage,
+        _grad: &Storage,
+        _velocity: &mut Storage,
+        _step: &MuonStep,
+    ) -> Option<()> {
+        None
     }
 
     /// GPU-accelerated im2col transformation for convolution

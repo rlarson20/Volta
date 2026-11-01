@@ -535,9 +535,9 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 
 ## Optimizers
 
-### Muon follows the reference iteration and runs on the CPU only
+### Muon follows the reference iteration, on the CPU and the GPU
 
-**Decision:** `Muon` orthogonalizes with the reference quintic Newton-Schulz (`a, b, c = 3.4445, -4.7750, 2.0315`), scales the step by `sqrt(max(1, rows / cols))`, and panics in `Muon::new` on a GPU parameter. It is exported from the crate root with `Adam` and `SGD`.
+**Decision:** `Muon` orthogonalizes with the reference quintic Newton-Schulz (`a, b, c = 3.4445, -4.7750, 2.0315`), scales the step by `sqrt(max(1, rows / cols))`, and runs on a GPU parameter with its state on the device. It is exported from the crate root with `Adam` and `SGD`.
 
 **Why the quintic:** the old code iterated `0.5·X·(3I - XᵀX)`, the classic cubic. It converges to exactly orthogonal on a well-conditioned matrix, so a Gram-matrix check cannot tell the two apart (measured: the cubic scores better on random 8x12 and 6x24 inputs). The quintic's point is the slope at zero, 3.44 against 1.5: a singular value around 5e-3 (a direction the gradient has nearly lost) reaches the band in five steps, where the cubic leaves it near 0.04. `muon::tests::newton_schulz_recovers_a_nearly_vanished_direction` pins that, and the cubic fails it. The quintic settles in about `[0.7, 1.2]` rather than at 1, which is what the reference accepts.
 
@@ -545,7 +545,9 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 
 **Non-matrices:** a parameter of rank below 2, or with one row or column, gets plain momentum with no orthogonalization and no scale. The reference sends those to Adam; here the caller can put them in an `Adam`.
 
-**Why a panic in `new`:** Muon's momentum and Newton-Schulz run on host buffers, and there is no GPU kernel. The failure used to come from `step`, at the first update, after training had begun. A parameter's device is something the program chose when it built the model, so it is a contract violation between tensors the program built (invariant 8): a panic, documented under `# Panics`. A GPU Muon would be a kernel, not a conversion.
+**GPU:** a GPU parameter keeps its velocity on the device, and `step` runs momentum, Newton-Schulz, and the update there with no host round-trip (`RawTensor::gpu_muon_step`). The kernels are `muon.wgsl` (momentum, sum of squares, normalize, `axpby`) composed with the existing `matmul` and `permute`; the update itself goes through the SGD arm of `optimizer_step`, with `lr · scale` as the rate. The Frobenius norm is computed by a one-workgroup reduction and read by the next kernel from a device buffer, so it costs no sync. The quintic coefficients and epsilon are passed in from `muon.rs`, so the CPU and GPU iterations cannot drift apart. Each kernel takes its element count from a uniform, not `arrayLength`, because pooled buffers are power-of-2 buckets. Evidence: `tests/gpu_muon.rs` (CPU/GPU parity over wide, tall, square, conv, vector, and column shapes, three steps, both momentum forms) and `gpu::kernels::muon_tests` (Newton-Schulz parity to 1e-5, measured worst 1.1e-6 on an Apple M2).
+
+**History:** the first H8 fix made `Muon::new` panic on a GPU parameter instead of writing the kernel. That was wrong: a missing GPU path is a gap to close (`.claude/rules/gpu.md`), and refusing the input where the CPU path works only moves the failure. It was replaced by the kernels above.
 
 ## Concurrency and Async
 

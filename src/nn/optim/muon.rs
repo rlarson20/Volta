@@ -1,3 +1,5 @@
+use crate::ops::gpu_ops::MuonStep;
+use crate::storage::Storage;
 use crate::tensor::{RawTensor, Tensor};
 
 /// Coefficients of the quintic `p(x) = a·x + b·x³ + c·x⁵` that Muon iterates on the
@@ -7,6 +9,8 @@ use crate::tensor::{RawTensor, Tensor};
 const NS_A: f32 = 3.4445;
 const NS_B: f32 = -4.7750;
 const NS_C: f32 = 2.0315;
+/// Added to the Frobenius norm before dividing by it, so a zero gradient stays zero.
+const NS_EPS: f32 = 1e-7;
 
 /// Muon: momentum, then an approximately orthogonalized update.
 ///
@@ -23,31 +27,27 @@ const NS_C: f32 = 2.0315;
 /// is updated with plain momentum and no orthogonalization or scaling; the reference
 /// optimizes such parameters with Adam instead.
 ///
-/// Parameters must live on the CPU: see [`Muon::new`].
+/// Parameters may live on the CPU or the GPU. A GPU parameter's momentum, Newton-Schulz,
+/// and update all run on the device, with no host round-trip.
 pub struct Muon {
     params: Vec<Tensor>,
     lr: f32,
     momentum: f32,
     nesterov: bool,
     ns_steps: usize,
-    velocity: Vec<Vec<f32>>,
+    velocity: Vec<Storage>, // on each parameter's device
 }
 
 impl Muon {
     /// Create a Muon optimizer.
     ///
     /// # Arguments
-    /// * `params` - Parameters to optimize (CPU, f32)
+    /// * `params` - Parameters to optimize (f32, CPU or GPU)
     /// * `lr` - Learning rate. The step is orthogonalized, so its size does not follow the
     ///   gradient's; the reference uses about 0.02
     /// * `momentum` - Momentum coefficient (typical: 0.95)
     /// * `nesterov` - Use the Nesterov update `momentum·v + g` instead of `v`
     /// * `ns_steps` - Newton-Schulz iterations (typical: 5)
-    ///
-    /// # Panics
-    /// If a parameter is on the GPU. Muon's momentum and Newton-Schulz run on host
-    /// buffers and there is no GPU kernel for them, so a GPU parameter would otherwise
-    /// fail at the first `step`, after training had started.
     #[must_use]
     pub fn new(
         params: Vec<Tensor>,
@@ -56,15 +56,13 @@ impl Muon {
         nesterov: bool,
         ns_steps: usize,
     ) -> Self {
-        for (i, p) in params.iter().enumerate() {
-            assert!(
-                !p.borrow().device.is_gpu(),
-                "Muon: parameter {i} is on the GPU, but Muon runs on the CPU only (H8)"
-            );
-        }
+        // Velocity lives where its parameter does.
         let velocity = params
             .iter()
-            .map(|p| vec![0.0; p.borrow().data.len()])
+            .map(|p| {
+                let p = p.borrow();
+                Storage::new_zeros(p.data.len(), &p.device)
+            })
             .collect();
         Self {
             params,
@@ -89,7 +87,18 @@ impl Muon {
     /// `g` is normalized by its Frobenius norm first (`‖g‖_F ≥ ‖g‖₂`, so every singular
     /// value starts in `[0, 1]`, inside the basin of the iteration). A tall matrix is
     /// transposed so the Gram matrix `X Xᵀ` is on the smaller side, and transposed back.
-    fn newton_schulz(g: &mut [f32], rows: usize, cols: usize, steps: usize) {
+    ///
+    /// `coeffs` is the quintic's `[a, b, c]` and `eps` the normalization epsilon; `step`
+    /// passes the same values to the GPU kernels.
+    fn newton_schulz_with(
+        g: &mut [f32],
+        rows: usize,
+        cols: usize,
+        steps: usize,
+        coeffs: [f32; 3],
+        eps: f32,
+    ) {
+        let [a_coeff, b_coeff, c_coeff] = coeffs;
         let transposed = rows > cols;
         let (m, n) = if transposed {
             (cols, rows)
@@ -104,7 +113,7 @@ impl Muon {
         };
 
         let norm = x.iter().map(|v| v * v).sum::<f32>().sqrt();
-        let inv = 1.0 / (norm + 1e-7);
+        let inv = 1.0 / (norm + eps);
         for v in &mut x {
             *v *= inv;
         }
@@ -117,10 +126,14 @@ impl Muon {
             let b: Vec<f32> = a
                 .iter()
                 .zip(&a2)
-                .map(|(&a, &a2)| NS_B * a + NS_C * a2)
+                .map(|(&a, &a2)| b_coeff * a + c_coeff * a2)
                 .collect();
             let bx = RawTensor::matmul_raw(&b, &x, m, m, n);
-            x = x.iter().zip(&bx).map(|(&x, &bx)| NS_A * x + bx).collect();
+            x = x
+                .iter()
+                .zip(&bx)
+                .map(|(&x, &bx)| a_coeff * x + bx)
+                .collect();
         }
 
         let result = if transposed {
@@ -131,14 +144,21 @@ impl Muon {
         g.copy_from_slice(&result);
     }
 
+    /// [`Self::newton_schulz_with`] with the reference coefficients and epsilon.
+    #[cfg(test)]
+    pub(crate) fn newton_schulz(g: &mut [f32], rows: usize, cols: usize, steps: usize) {
+        Self::newton_schulz_with(g, rows, cols, steps, [NS_A, NS_B, NS_C], NS_EPS);
+    }
+
     /// Perform one optimization step on every parameter that has a gradient.
     ///
     /// # Panics
-    /// If a parameter's data is not CPU f32.
+    /// If a GPU kernel cannot run: the parameter would otherwise be silently left
+    /// untrained, as in `SGD` and `Adam`.
     pub fn step(&mut self) {
         for (param, velocity) in self.params.iter().zip(self.velocity.iter_mut()) {
             let mut p = param.borrow_mut();
-            let Some(grad) = p.grad.as_ref().map(|g| g.to_host_f32().into_owned()) else {
+            let Some(grad) = p.grad.clone() else {
                 continue;
             };
 
@@ -150,29 +170,66 @@ impl Muon {
                 _ => (p.shape.dim_at(0), p.shape.numel_from(1)),
             };
 
-            // v ← momentum·v + g
-            for (v, &g) in velocity.iter_mut().zip(&grad) {
-                *v = self.momentum.mul_add(*v, g);
-            }
-
-            // Nesterov looks one momentum step ahead: update = momentum·v + g
-            let mut update: Vec<f32> = if self.nesterov {
-                velocity
-                    .iter()
-                    .zip(&grad)
-                    .map(|(&v, &g)| self.momentum * v + g)
-                    .collect()
-            } else {
-                velocity.clone()
-            };
-
             // Only a real matrix is orthogonalized and shape-scaled.
-            let scale = if rows > 1 && cols > 1 {
-                Self::newton_schulz(&mut update, rows, cols, self.ns_steps);
+            let orthogonalize = rows > 1 && cols > 1;
+            let scale = if orthogonalize {
                 (rows as f32 / cols as f32).max(1.0).sqrt()
             } else {
                 1.0
             };
+
+            // One description of the step, read by the CPU and the GPU path alike.
+            let step = MuonStep {
+                lr: self.lr,
+                momentum: self.momentum,
+                nesterov: self.nesterov,
+                ns_steps: self.ns_steps,
+                rows,
+                cols,
+                orthogonalize,
+                scale,
+                coeffs: [NS_A, NS_B, NS_C],
+                eps: NS_EPS,
+            };
+            step.validate(p.data.len());
+
+            if p.device.is_gpu() {
+                RawTensor::gpu_muon_step(&mut p.data, &grad, velocity, &step)
+                    .expect("GPU Muon step failed: the parameter was not updated");
+                continue;
+            }
+
+            let grad = grad.to_host_f32();
+            let velocity = velocity
+                .as_host_f32_mut()
+                .expect("Muon velocity: CPU F32 storage");
+
+            // v ← momentum·v + g
+            for (v, &g) in velocity.iter_mut().zip(grad.iter()) {
+                *v = step.momentum.mul_add(*v, g);
+            }
+
+            // Nesterov looks one momentum step ahead: update = momentum·v + g
+            let mut update: Vec<f32> = if step.nesterov {
+                velocity
+                    .iter()
+                    .zip(grad.iter())
+                    .map(|(&v, &g)| step.momentum * v + g)
+                    .collect()
+            } else {
+                velocity.to_vec()
+            };
+
+            if step.orthogonalize {
+                Self::newton_schulz_with(
+                    &mut update,
+                    step.rows,
+                    step.cols,
+                    step.ns_steps,
+                    step.coeffs,
+                    step.eps,
+                );
+            }
 
             // w -= lr · scale · update
             for (w, u) in p
@@ -182,7 +239,7 @@ impl Muon {
                 .iter_mut()
                 .zip(&update)
             {
-                *w -= self.lr * scale * u;
+                *w -= step.lr * step.scale * u;
             }
         }
     }
@@ -390,19 +447,5 @@ mod tests {
         let mut opt = Muon::new(vec![p.clone()], 0.1, 0.9, false, 5);
         opt.step();
         assert_eq!(p.borrow().data.to_vec(), vec![1.0, 2.0, 3.0, 4.0]);
-    }
-
-    #[cfg(feature = "gpu")]
-    #[test]
-    fn new_rejects_gpu_parameters() {
-        let Some(gpu) = crate::Device::gpu() else {
-            return;
-        };
-        let p = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false).to_device(gpu);
-        p.set_requires_grad(true);
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = Muon::new(vec![p.clone()], 0.1, 0.9, false, 5);
-        }));
-        assert!(result.is_err(), "Muon::new must panic on a GPU parameter");
     }
 }

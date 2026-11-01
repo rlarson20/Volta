@@ -192,6 +192,12 @@ pub struct ComputePipelines {
     // Optimizer step
     pub optimizer_step: wgpu::ComputePipeline,
 
+    // Muon: momentum, Frobenius norm, and the elementwise pieces of Newton-Schulz
+    pub muon_momentum: wgpu::ComputePipeline,
+    pub muon_sum_squares: wgpu::ComputePipeline,
+    pub muon_normalize: wgpu::ComputePipeline,
+    pub muon_axpby: wgpu::ComputePipeline,
+
     // Image-to-column transformation for convolution
     pub im2col: wgpu::ComputePipeline,
     pub col2im: wgpu::ComputePipeline,
@@ -569,6 +575,11 @@ impl GpuContext {
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/optimizer_step.wgsl").into()),
         });
 
+        let muon_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Muon Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/muon.wgsl").into()),
+        });
+
         let im2col_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Im2col Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/im2col.wgsl").into()),
@@ -898,6 +909,16 @@ impl GpuContext {
                 "main",
                 "Optimizer Step Pipeline",
             ),
+
+            // Muon
+            muon_momentum: create_pipeline(&muon_shader, "momentum", "Muon Momentum Pipeline"),
+            muon_sum_squares: create_pipeline(
+                &muon_shader,
+                "sum_squares",
+                "Muon Sum Squares Pipeline",
+            ),
+            muon_normalize: create_pipeline(&muon_shader, "normalize", "Muon Normalize Pipeline"),
+            muon_axpby: create_pipeline(&muon_shader, "axpby", "Muon Axpby Pipeline"),
 
             // Image-to-column transformation
             im2col: create_pipeline(&im2col_shader, "im2col_main", "Im2col Pipeline"),
