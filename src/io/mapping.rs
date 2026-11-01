@@ -2,6 +2,8 @@ use crate::index::{fetch, slot};
 use crate::io::{StateDict, TensorData};
 use crate::shape::fixed_dims;
 
+/// One queued edit of a [`StateDict`], applied by [`StateDictMapper::map`].
+pub type TransformationBox = Box<dyn Fn(&mut StateDict)>;
 /// Builder for composable state dict transformations
 ///
 /// `StateDictMapper` allows you to transform state dicts when loading external models.
@@ -38,9 +40,9 @@ use crate::shape::fixed_dims;
 /// let volta_state = mapper.map(pytorch_state);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-pub type TransformationBox = Box<dyn Fn(&mut StateDict)>;
 #[must_use]
 pub struct StateDictMapper {
+    /// Edits to apply, in insertion order.
     transformations: Vec<TransformationBox>,
 }
 

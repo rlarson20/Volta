@@ -27,7 +27,12 @@ pub enum Storage {
     /// The bytes are shared: `clone` bumps a refcount instead of copying. Every write
     /// goes through `as_host_f32_mut`, which copies first if the buffer is shared
     /// (copy-on-write), so a write to one storage is never visible through another.
-    Cpu { data: Arc<[u8]>, dtype: DType },
+    Cpu {
+        /// Native-endian bytes of the elements.
+        data: Arc<[u8]>,
+        /// Element type of `data`.
+        dtype: DType,
+    },
 
     /// GPU storage - data lives in GPU memory, always f32.
     ///
@@ -44,12 +49,15 @@ pub enum Storage {
 /// by a writer that holds the sole reference, so a reference into it cannot outlive a change.
 #[cfg(feature = "gpu")]
 pub struct GpuStorage {
+    /// The device buffer.
     buffer: GpuBuffer,
+    /// Host copy, filled by the first host read.
     host: OnceLock<Vec<f32>>,
 }
 
 #[cfg(feature = "gpu")]
 impl GpuStorage {
+    /// Wraps `buffer` with an empty host copy.
     fn new(buffer: GpuBuffer) -> Self {
         Self {
             buffer,

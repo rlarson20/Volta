@@ -7,8 +7,10 @@ use std::fmt;
 #[non_exhaustive]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum Device {
+    /// Host memory.
     #[default]
     CPU,
+    /// A GPU, identified by the adapter name.
     GPU(String),
 }
 

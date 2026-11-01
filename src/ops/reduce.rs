@@ -11,9 +11,12 @@ use crate::{RawTensor, Tensor};
 /// since the output shape differs from the input.
 #[derive(Clone, Copy)]
 pub enum ReduceOp {
-    Sum,  // Σ(x) - gradient broadcasts ones
-    Max,  // max(x) - gradient goes only to max element
-    Mean, // mean(x) - gradient broadcasts 1/n
+    /// Sum of all elements; the gradient broadcasts ones.
+    Sum,
+    /// Maximum element; the gradient goes only to the maximum.
+    Max,
+    /// Mean of all elements; the gradient broadcasts `1/n`.
+    Mean,
 }
 
 /// Gradient function for Sum reduction
@@ -21,10 +24,12 @@ pub enum ReduceOp {
 /// Sum reduction collapses to scalar, so gradient broadcasts back to original shape.
 #[derive(Clone)]
 pub(crate) struct SumGradFn {
+    /// Shape of the reduced input.
     input_shape: Shape,
 }
 
 impl SumGradFn {
+    /// Broadcasts the scalar gradient to the input's shape.
     pub(crate) fn backward(
         &self,
         out_grad: &RawTensor,
@@ -59,11 +64,14 @@ impl SumGradFn {
 /// Only the maximum element receives gradient; all others get zero.
 #[derive(Clone)]
 pub(crate) struct MaxReduceGradFn {
+    /// Shape of the reduced input.
     input_shape: Shape,
-    max_index: usize, // Linear index of the maximum element
+    /// Linear index of the maximum element.
+    max_index: usize,
 }
 
 impl MaxReduceGradFn {
+    /// Routes the scalar gradient to `max_index`; every other element gets zero.
     pub(crate) fn backward(
         &self,
         out_grad: &RawTensor,
@@ -100,10 +108,12 @@ impl MaxReduceGradFn {
 /// Each element gets gradient / `num_elements`.
 #[derive(Clone)]
 pub(crate) struct MeanGradFn {
+    /// Shape of the reduced input.
     input_shape: Shape,
 }
 
 impl MeanGradFn {
+    /// Broadcasts the scalar gradient divided by the element count.
     pub(crate) fn backward(
         &self,
         out_grad: &RawTensor,

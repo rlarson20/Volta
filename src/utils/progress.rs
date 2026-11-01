@@ -9,9 +9,13 @@ use std::io::{self, Write};
 
 /// Simple progress bar for training loops
 pub struct ProgressBar {
+    /// Number of steps that make a full bar.
     total: usize,
+    /// Steps completed so far.
     current: usize,
+    /// Label printed before the bar.
     prefix: String,
+    /// Bar width in characters.
     width: usize,
 }
 
@@ -45,6 +49,7 @@ impl ProgressBar {
         let _ = io::stderr().flush();
     }
 
+    /// Redraws the bar on the current stderr line.
     fn render(&self) {
         // An empty bar (total 0) shows 0%.
         let percent = self

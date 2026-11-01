@@ -9,8 +9,10 @@ use crate::{RawTensor, Tensor};
 /// Ternary operations: three inputs, one output
 #[derive(Clone, Copy)]
 pub enum TernaryOp {
-    MulAcc, // x*y + z (fused multiply-accumulate)
-    Where,  // condition ? x : y (masked selection)
+    /// `x * y + z`, fused.
+    MulAcc,
+    /// `condition ? x : y`, selected elementwise.
+    Where,
 }
 
 /// Gradient function for `MulAcc` (fused multiply-add)
@@ -22,6 +24,7 @@ pub enum TernaryOp {
 #[derive(Clone)]
 pub(crate) struct MulAccGradFn;
 impl MulAccGradFn {
+    /// Gradients for `x`, `y`, and the optional addend, reduced to each one's shape.
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         // SAFETY: MulAcc operation always creates 2 or 3 parents (x, y, optional w)
         debug_assert!(
@@ -79,12 +82,16 @@ impl MulAccGradFn {
 /// along any dimensions that were broadcast.
 #[derive(Clone)]
 pub(crate) struct WhereGradFn {
-    condition: Vec<f32>, // broadcasted condition (matches out_grad shape)
-    true_shape: Shape,   // original shape of the "true" branch
-    false_shape: Shape,  // original shape of the "false" branch
+    /// Condition broadcast to the output's shape.
+    condition: Vec<f32>,
+    /// Original shape of the "true" branch.
+    true_shape: Shape,
+    /// Original shape of the "false" branch.
+    false_shape: Shape,
 }
 
 impl WhereGradFn {
+    /// Routes the gradient to the selected branch and reduces over broadcast dims.
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         // SAFETY: Where operation always creates exactly 2 parents (true_branch, false_branch)
         debug_assert!(parents.len() >= 2, "Where grad requires 2 parents");

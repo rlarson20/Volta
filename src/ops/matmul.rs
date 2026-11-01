@@ -17,6 +17,7 @@ use crate::{RawTensor, Tensor};
 pub(crate) struct TransposeGradFn;
 
 impl TransposeGradFn {
+    /// Transposes the gradient back; returns it for the single parent.
     pub(crate) fn backward(
         &self,
         out_grad: &RawTensor,
@@ -361,10 +362,12 @@ pub(crate) struct MatMulGradFn {
 }
 
 impl MatMulGradFn {
+    /// Backward state for a matrix-form product with a validated spec.
     fn matrix(spec: MatmulSpec) -> Self {
         Self { spec: Some(spec) }
     }
 
+    /// Backward state for a vector form, which reads the parents' shapes directly.
     fn vector() -> Self {
         Self { spec: None }
     }
@@ -421,6 +424,7 @@ impl MatMulGradFn {
 }
 
 impl MatMulGradFn {
+    /// Gradients for both operands of the matrix product.
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let x = parents
             .first()

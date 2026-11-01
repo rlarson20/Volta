@@ -1,4 +1,6 @@
+/// Test helper that checks a model's parameters receive gradients.
 mod assert_trainable;
+/// The `define_ops!` macro that generates the unary and binary op families.
 mod define_ops;
 
 pub(crate) use define_ops::define_ops;

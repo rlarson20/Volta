@@ -26,10 +26,12 @@ use std::rc::Rc;
 /// replace with `Arc<Mutex<RawTensor>>`.
 #[derive(Clone, Debug)]
 pub struct Tensor {
-    inner: Rc<RefCell<RawTensor>>, //keeps fields private
+    /// The shared node; private so downstream code cannot reach `RawTensor`'s fields.
+    inner: Rc<RefCell<RawTensor>>,
 }
 
 impl Tensor {
+    /// Whether gradients are tracked for this tensor.
     #[must_use]
     pub fn requires_grad(&self) -> bool {
         self.inner.borrow().requires_grad
@@ -55,6 +57,7 @@ impl Tensor {
         self.inner.borrow()
     }
 
+    /// Mutably borrows the underlying `RawTensor`; see [`Tensor::borrow`].
     pub(crate) fn borrow_mut(&self) -> std::cell::RefMut<'_, RawTensor> {
         self.inner.borrow_mut()
     }
@@ -275,13 +278,20 @@ impl Tensor {
 /// - `parents`: input tensors that this tensor depends on
 /// - `device`: where computation happens (CPU/GPU)
 pub struct RawTensor {
-    pub data: Storage,         // Storage enum
-    pub shape: Shape,          //tensor dims, eg [B,C,H,W]
-    pub grad: Option<Storage>, //grad w.r.t tensor data, None if req_grad == false
+    /// Element storage (CPU bytes or a GPU buffer).
+    pub data: Storage,
+    /// Dimensions, e.g. `[B, C, H, W]`.
+    pub shape: Shape,
+    /// Gradient with respect to `data`; `None` until one is accumulated.
+    pub grad: Option<Storage>,
+    /// Whether gradients are tracked for this tensor.
     pub requires_grad: bool,
-    pub(crate) grad_fn: Option<GradFn>, //func to compute grad, if result of op
-    pub parents: Vec<Tensor>,           //refs to parent tensor on graph
-    pub device: Device,                 //cpu/gpu
+    /// Backward function, present when this tensor is the result of an op.
+    pub(crate) grad_fn: Option<GradFn>,
+    /// Inputs this tensor was computed from (the graph's edges).
+    pub parents: Vec<Tensor>,
+    /// Where `data` lives.
+    pub device: Device,
 }
 
 // ===== RNG HELPERS =====
@@ -707,6 +717,7 @@ impl RawTensor {
 
 // ===== LOSS FUNCTIONS =====
 impl RawTensor {
+    /// Mean squared error: `mean((pred - target)^2)`.
     #[must_use]
     pub fn mse_loss(pred: &Tensor, target: &Tensor) -> Tensor {
         let diff = pred.sub(target);
@@ -714,6 +725,7 @@ impl RawTensor {
         squared.mean()
     }
 
+    /// Cross entropy from raw logits `[N, C]` and one-hot `targets`, averaged over the batch (applies `log_softmax` along axis 1).
     #[must_use]
     pub fn cross_entropy_loss(logits: &Tensor, targets: &Tensor) -> Tensor {
         // Use log_softmax for numerical stability
@@ -740,6 +752,10 @@ impl RawTensor {
     ///
     /// Used in VAE loss: KL(q(z|x) || p(z))
     /// Formula: -0.5 * sum(1 + logvar - mu^2 - exp(logvar))
+    ///
+    /// The sum runs over every element, the batch dimension included, so the result
+    /// grows with the batch size. Divide by the batch size for a per-sample term, and
+    /// match it to the reconstruction term's reduction (`mse_loss` is a mean).
     ///
     /// # Arguments
     /// * `mu` - Mean of learned distribution
@@ -829,12 +845,16 @@ impl RawTensor {
 /// Gradient for `sum_dim`: broadcast ones back to input shape
 #[derive(Clone)]
 pub(crate) struct SumDimGradFn {
+    /// Shape of the tensor that was summed.
     input_shape: Shape,
+    /// Axis that was summed.
     dim: usize,
+    /// Whether the summed axis was kept with size 1.
     keepdim: bool,
 }
 
 impl SumDimGradFn {
+    /// Broadcasts `out_grad` back along the summed axis.
     pub(crate) fn backward(
         &self,
         out_grad: &RawTensor,
@@ -890,13 +910,18 @@ impl SumDimGradFn {
 /// Gradient for `max_dim`: sparse gradient to max elements only
 #[derive(Clone)]
 pub(crate) struct MaxDimGradFn {
+    /// Shape of the tensor the max was taken over.
     input_shape: Shape,
-    max_indices: Vec<usize>, // linear indices of max elements
+    /// Linear index, in the input, of each maximum element.
+    max_indices: Vec<usize>,
+    /// Axis the max was taken along.
     dim: usize,
+    /// Whether the reduced axis was kept with size 1.
     keepdim: bool,
 }
 
 impl MaxDimGradFn {
+    /// Routes `out_grad` to the maximum elements; every other element gets zero.
     pub(crate) fn backward(
         &self,
         out_grad: &RawTensor,
@@ -1145,6 +1170,7 @@ impl RawTensor {
         )
     }
 
+    /// Numerically stable softmax along `dim` (subtracts the max first).
     #[must_use]
     pub fn softmax(self_t: &Tensor, dim: Axis) -> Tensor {
         let max = Self::max_dim(self_t, dim, true);
@@ -1642,19 +1668,30 @@ impl Tensor {
 
 // ===== DataLoaders =====
 
+/// Iterator over mini-batches (optionally shuffled) of `(data, targets)` tensors.
 pub struct DataLoader {
+    /// All samples, flattened row-major.
     data: Vec<f32>,
+    /// All targets, flattened row-major.
     targets: Vec<f32>,
-    data_shape: Vec<usize>, // per-sample shape
+    /// Shape of one sample.
+    data_shape: Vec<usize>,
+    /// Shape of one target.
     target_shape: Vec<usize>,
+    /// Samples per batch; the last batch may be smaller.
     batch_size: usize,
+    /// Whether `reset` reshuffles the sample order.
     shuffle: bool,
+    /// Order in which samples are visited.
     indices: Vec<usize>,
+    /// Position in `indices` of the next batch.
     current: usize,
-    device: Option<crate::device::Device>, // Optional device for GPU prefetch
+    /// If set, each batch is moved to this device (GPU prefetch).
+    device: Option<crate::device::Device>,
 }
 
 impl DataLoader {
+    /// Builds a loader over `data` and `targets`, whose sample count is `data.len()` divided by the elements of `data_shape`. Shuffles once if `shuffle`.
     #[must_use]
     pub fn new(
         data: Vec<f32>,
@@ -1712,6 +1749,7 @@ impl DataLoader {
         self
     }
 
+    /// Rewinds to the first batch, reshuffling if the loader shuffles.
     pub fn reset(&mut self) {
         self.current = 0;
         if self.shuffle {
@@ -1778,79 +1816,94 @@ impl Iterator for DataLoader {
 pub use RawTensor as new_tensor;
 
 // Tensor constructors
+/// Free-function form of [`RawTensor::zeros`].
 #[must_use]
 pub fn zeros(shape: &[usize]) -> Tensor {
     RawTensor::zeros(shape)
 }
 
+/// Free-function form of [`RawTensor::ones`].
 #[must_use]
 pub fn ones(shape: &[usize]) -> Tensor {
     RawTensor::ones(shape)
 }
 
+/// Free-function form of [`RawTensor::rand`].
 #[must_use]
 pub fn rand(shape: &[usize]) -> Tensor {
     RawTensor::rand(shape)
 }
 
+/// Free-function form of [`RawTensor::randn`].
 #[must_use]
 pub fn randn(shape: &[usize]) -> Tensor {
     RawTensor::randn(shape)
 }
 
+/// Free-function form of [`RawTensor::randn_like`].
 #[must_use]
 pub fn randn_like(tensor: &Tensor) -> Tensor {
     RawTensor::randn_like(tensor)
 }
 
 // Loss functions
+/// Free-function form of [`RawTensor::mse_loss`].
 #[must_use]
 pub fn mse_loss(pred: &Tensor, target: &Tensor) -> Tensor {
     RawTensor::mse_loss(pred, target)
 }
 
+/// Free-function form of [`RawTensor::cross_entropy_loss`].
 #[must_use]
 pub fn cross_entropy_loss(logits: &Tensor, targets: &Tensor) -> Tensor {
     RawTensor::cross_entropy_loss(logits, targets)
 }
 
+/// Free-function form of [`RawTensor::nll_loss`].
 #[must_use]
 pub fn nll_loss(log_probs: &Tensor, targets: &Tensor) -> Tensor {
     RawTensor::nll_loss(log_probs, targets)
 }
 
+/// Free-function form of [`RawTensor::kl_divergence_gaussian`].
 #[must_use]
 pub fn kl_divergence_gaussian(mu: &Tensor, logvar: &Tensor) -> Tensor {
     RawTensor::kl_divergence_gaussian(mu, logvar)
 }
 
+/// Free-function form of [`RawTensor::bce_loss`].
 #[must_use]
 pub fn bce_loss(pred: &Tensor, target: &Tensor) -> Tensor {
     RawTensor::bce_loss(pred, target)
 }
 
+/// Free-function form of [`RawTensor::bce_with_logits_loss`].
 #[must_use]
 pub fn bce_with_logits_loss(logits: &Tensor, target: &Tensor) -> Tensor {
     RawTensor::bce_with_logits_loss(logits, target)
 }
 
 // Axis reductions
+/// Free-function form of [`RawTensor::sum_dim`].
 #[must_use]
 pub fn sum_dim(t: &Tensor, dim: Axis, keepdim: bool) -> Tensor {
     RawTensor::sum_dim(t, dim, keepdim)
 }
 
+/// Free-function form of [`RawTensor::max_dim`].
 #[must_use]
 pub fn max_dim(t: &Tensor, dim: Axis, keepdim: bool) -> Tensor {
     RawTensor::max_dim(t, dim, keepdim)
 }
 
+/// Free-function form of [`RawTensor::softmax`].
 #[must_use]
 pub fn softmax(t: &Tensor, dim: Axis) -> Tensor {
     RawTensor::softmax(t, dim)
 }
 
 // Gradient checking
+/// Free-function form of [`RawTensor::check_gradients`].
 pub fn check_gradients<F>(
     tensor: &Tensor,
     loss_fn: F,
@@ -1863,6 +1916,7 @@ where
     RawTensor::check_gradients(tensor, loss_fn, epsilon, tolerance)
 }
 
+/// Free-function form of [`RawTensor::check_gradients_simple`].
 pub fn check_gradients_simple<F>(tensor: &Tensor, loss_fn: F) -> bool
 where
     F: Fn(&Tensor) -> Tensor,

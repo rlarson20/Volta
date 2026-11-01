@@ -63,6 +63,7 @@ define_ops! {
 /// Stores which operation was performed so backward can apply the correct derivative.
 #[derive(Clone)]
 pub(crate) struct UnaryGradFn {
+    /// The forward op, which selects the derivative.
     op: UnaryOp,
 }
 
@@ -72,6 +73,7 @@ impl UnaryGradFn {
         format!("Unary({:?})", self.op)
     }
 
+    /// Gradient for the single input: `out_grad` times the op's derivative.
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let x = parents
             .first()

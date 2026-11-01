@@ -33,24 +33,43 @@ use std::marker::PhantomData;
 /// and returns one gradient per parent (`Some` if it needs one, `None` otherwise).
 #[derive(Clone)]
 pub(crate) enum GradFn {
+    /// Elementwise unary ops (`exp`, `relu`, ...).
     Unary(UnaryGradFn),
+    /// Elementwise binary ops with broadcasting.
     Binary(BinaryGradFn),
+    /// Matrix product, in matrix and vector forms.
     MatMul(MatMulGradFn),
+    /// 2D transpose.
     Transpose(TransposeGradFn),
+    /// Sum over all elements.
     Sum(SumGradFn),
+    /// Max over all elements.
     MaxReduce(MaxReduceGradFn),
+    /// Mean over all elements.
     Mean(MeanGradFn),
+    /// Sum along one axis.
     SumDim(SumDimGradFn),
+    /// Max along one axis.
     MaxDim(MaxDimGradFn),
+    /// Fused multiply-accumulate `x * y + z`.
     MulAcc(MulAccGradFn),
+    /// Masked selection `condition ? x : y`.
     Where(WhereGradFn),
+    /// Reshape, permute, expand, pad, shrink, stride.
     Movement(MovementGradFn),
+    /// Convolution via `im2col` and a matmul.
     Im2col(Im2colGradFn),
+    /// Direct (sliding-window) convolution.
     DirectConv(DirectConvGradFn),
+    /// Convolution via implicit GEMM.
     Igemm(IGEMMGradFn),
+    /// Transposed convolution.
     ConvTranspose2d(ConvTranspose2dGradFn),
+    /// 2D max pooling.
     MaxPool2d(MaxPool2dGradFn),
+    /// Embedding lookup.
     Embedding(EmbeddingGradFn),
+    /// Device transfer (exempt from `edge()`'s input-to-output device check).
     ToDevice(ToDeviceGradFn),
 }
 

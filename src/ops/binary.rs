@@ -53,6 +53,7 @@ define_ops! {
 /// over dimensions that were broadcast in the forward pass.
 #[derive(Clone)]
 pub(crate) struct BinaryGradFn {
+    /// The forward op, which selects the derivative.
     op: BinaryOp,
 }
 
@@ -62,6 +63,7 @@ impl BinaryGradFn {
         format!("Binary({:?})", self.op)
     }
 
+    /// Gradients for both operands, reduced back to each operand's pre-broadcast shape.
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let [x_ref, y_ref] = parents else {
             panic!("binary ops require 2 parents, got {}", parents.len());
@@ -108,6 +110,7 @@ impl BinaryGradFn {
         ]
     }
 
+    /// Whether the op has no derivative (`Mod`, `Cmplt`), so `edge()` attaches no grad fn.
     pub(crate) fn is_trivial(&self) -> bool {
         self.op.is_trivial()
     }

@@ -10,14 +10,19 @@ use std::fs::File;
 use std::io::{Error, Read, Result, Write};
 use std::path::Path;
 
+/// Key remapping between Volta and external (e.g. PyTorch) state dicts.
 pub mod mapping;
 
+/// Parameter name to saved values.
 pub type StateDict = BTreeMap<String, TensorData>;
 
 // Serializable representation of tensor data
+/// Serializable copy of one tensor: its values and its shape.
 #[derive(Encode, Decode, Clone)]
 pub struct TensorData {
+    /// Row-major values.
     pub data: Vec<f32>,
+    /// Dimension sizes, outermost first.
     pub shape: Vec<usize>,
 }
 
@@ -79,6 +84,7 @@ impl fmt::Display for StateDictDiff {
 }
 
 impl TensorData {
+    /// Copies a tensor's values and shape out of the graph.
     #[must_use]
     pub fn from_tensor(t: &Tensor) -> Self {
         let borrowed = t.borrow();
@@ -88,6 +94,7 @@ impl TensorData {
         }
     }
 
+    /// Rebuilds a tensor from the saved values with the given `requires_grad`.
     #[must_use]
     pub fn to_tensor(&self, requires_grad: bool) -> Tensor {
         crate::RawTensor::new(self.data.clone(), &self.shape, requires_grad)

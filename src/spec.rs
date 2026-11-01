@@ -24,6 +24,7 @@ fn dims4(shape: &Shape, what: &str) -> Result<[usize; 4]> {
     ])
 }
 
+/// Rejects a zero stride in either direction.
 fn check_stride(stride: (usize, usize)) -> Result<()> {
     if stride.0 == 0 || stride.1 == 0 {
         return Err(VoltaError::InvalidParameter(format!(
@@ -48,18 +49,31 @@ fn window_out(axis: &str, input: usize, kernel: usize, stride: usize, pad: usize
 /// Validated geometry of a `Conv2d` forward pass.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Conv2dSpec {
+    /// Batch size `B`.
     pub batch: usize,
+    /// Input channels.
     pub in_ch: usize,
+    /// Output channels.
     pub out_ch: usize,
+    /// Input height, before padding.
     pub in_h: usize,
+    /// Input width, before padding.
     pub in_w: usize,
+    /// Kernel height.
     pub kernel_h: usize,
+    /// Kernel width.
     pub kernel_w: usize,
+    /// Vertical stride (non-zero).
     pub stride_h: usize,
+    /// Horizontal stride (non-zero).
     pub stride_w: usize,
+    /// Zero padding added to each of the top and bottom.
     pub pad_h: usize,
+    /// Zero padding added to each of the left and right.
     pub pad_w: usize,
+    /// Output height.
     pub out_h: usize,
+    /// Output width.
     pub out_w: usize,
 }
 
@@ -100,22 +114,27 @@ impl Conv2dSpec {
         })
     }
 
+    /// Input height after padding.
     pub(crate) fn padded_h(&self) -> usize {
         self.in_h + 2 * self.pad_h
     }
 
+    /// Input width after padding.
     pub(crate) fn padded_w(&self) -> usize {
         self.in_w + 2 * self.pad_w
     }
 
+    /// Input shape as `[B, C, H, W]`.
     pub(crate) fn input_dims(&self) -> [usize; 4] {
         [self.batch, self.in_ch, self.in_h, self.in_w]
     }
 
+    /// Weight shape as `[O, C, Kh, Kw]`.
     pub(crate) fn weight_dims(&self) -> [usize; 4] {
         [self.out_ch, self.in_ch, self.kernel_h, self.kernel_w]
     }
 
+    /// Output shape as `[B, C, H, W]`.
     pub(crate) fn output_dims(&self) -> [usize; 4] {
         [self.batch, self.out_ch, self.out_h, self.out_w]
     }
@@ -145,18 +164,31 @@ impl Conv2dSpec {
 /// Validated geometry of a `ConvTranspose2d` forward pass.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ConvTranspose2dSpec {
+    /// Batch size `B`.
     pub batch: usize,
+    /// Input channels.
     pub in_ch: usize,
+    /// Output channels.
     pub out_ch: usize,
+    /// Input height, before padding.
     pub in_h: usize,
+    /// Input width, before padding.
     pub in_w: usize,
+    /// Kernel height.
     pub kernel_h: usize,
+    /// Kernel width.
     pub kernel_w: usize,
+    /// Vertical stride (non-zero).
     pub stride_h: usize,
+    /// Horizontal stride (non-zero).
     pub stride_w: usize,
+    /// Rows trimmed from each of the top and bottom of the full output.
     pub pad_h: usize,
+    /// Columns trimmed from each of the left and right of the full output.
     pub pad_w: usize,
+    /// Output height.
     pub out_h: usize,
+    /// Output width.
     pub out_w: usize,
 }
 
@@ -197,6 +229,7 @@ impl ConvTranspose2dSpec {
         })
     }
 
+    /// Output shape as `[B, C, H, W]`.
     pub(crate) fn output_dims(&self) -> [usize; 4] {
         [self.batch, self.out_ch, self.out_h, self.out_w]
     }
@@ -226,17 +259,29 @@ fn transpose_out(
 /// by `im2col`/`col2im`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Window2dSpec {
+    /// Batch size `B`.
     pub batch: usize,
+    /// Channels (unchanged by the window).
     pub channels: usize,
+    /// Input height, before padding.
     pub in_h: usize,
+    /// Input width, before padding.
     pub in_w: usize,
+    /// Kernel height.
     pub kernel_h: usize,
+    /// Kernel width.
     pub kernel_w: usize,
+    /// Vertical stride (non-zero).
     pub stride_h: usize,
+    /// Horizontal stride (non-zero).
     pub stride_w: usize,
+    /// Zero padding added to each of the top and bottom.
     pub pad_h: usize,
+    /// Zero padding added to each of the left and right.
     pub pad_w: usize,
+    /// Output height.
     pub out_h: usize,
+    /// Output width.
     pub out_w: usize,
 }
 
@@ -276,18 +321,22 @@ impl Window2dSpec {
         })
     }
 
+    /// Input shape as `[B, C, H, W]`.
     pub(crate) fn input_dims(&self) -> [usize; 4] {
         [self.batch, self.channels, self.in_h, self.in_w]
     }
 
+    /// Input height after padding.
     pub(crate) fn padded_h(&self) -> usize {
         self.in_h + 2 * self.pad_h
     }
 
+    /// Input width after padding.
     pub(crate) fn padded_w(&self) -> usize {
         self.in_w + 2 * self.pad_w
     }
 
+    /// Output shape as `[B, C, H, W]`.
     pub(crate) fn output_dims(&self) -> [usize; 4] {
         [self.batch, self.channels, self.out_h, self.out_w]
     }
@@ -302,15 +351,22 @@ impl Window2dSpec {
 /// backward never has to guess which operand's rank indexes which shape.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct MatmulSpec {
+    /// Batch dims of the left operand (before broadcasting).
     pub a_batch: Vec<usize>,
+    /// Batch dims of the right operand (before broadcasting).
     pub b_batch: Vec<usize>,
+    /// Broadcast batch dims of the result.
     pub out_batch: Vec<usize>,
+    /// Rows of the left matrix.
     pub m: usize,
+    /// Shared inner dimension.
     pub k: usize,
+    /// Columns of the right matrix.
     pub n: usize,
 }
 
 impl MatmulSpec {
+    /// Validates `a` and `b` and computes the broadcast geometry; rejects mismatched ranks or inner dims.
     pub(crate) fn new(a: &Shape, b: &Shape) -> Result<Self> {
         let (a_dims, b_dims) = (a.truncate_rank(), b.truncate_rank());
         let (rank_a, rank_b) = (a_dims.len(), b_dims.len());

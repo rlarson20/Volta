@@ -40,6 +40,7 @@ trait ForwardIndexMapper {
 
 /// Mapper for pad operations: adds padding offset to index
 struct PadMapper {
+    /// Per-axis `(before, after)` zero padding.
     padding: Vec<(usize, usize)>,
 }
 
@@ -61,6 +62,7 @@ impl ForwardIndexMapper for PadMapper {
 
 /// Mapper for shrink operations: offsets by range start
 struct ShrinkMapper {
+    /// Per-axis `(start, end)` range kept, `end` exclusive.
     ranges: Vec<(usize, usize)>,
 }
 
@@ -82,6 +84,7 @@ impl ForwardIndexMapper for ShrinkMapper {
 
 /// Mapper for stride operations: multiplies by stride
 struct StrideMapper {
+    /// Per-axis step between kept elements.
     strides: Vec<usize>,
 }
 
@@ -135,6 +138,7 @@ trait BackwardIndexMapper {
 
 /// Backward mapper for pad operations
 struct PadBackwardMapper {
+    /// Per-axis `(before, after)` padding applied in forward.
     padding: Vec<(usize, usize)>,
 }
 
@@ -163,6 +167,7 @@ impl BackwardIndexMapper for PadBackwardMapper {
 
 /// Backward mapper for shrink operations
 struct ShrinkBackwardMapper {
+    /// Per-axis `(start, end)` range kept in forward.
     ranges: Vec<(usize, usize)>,
 }
 
@@ -191,6 +196,7 @@ impl BackwardIndexMapper for ShrinkBackwardMapper {
 
 /// Backward mapper for stride operations
 struct StrideBackwardMapper {
+    /// Per-axis stride applied in forward.
     strides: Vec<usize>,
 }
 
@@ -227,13 +233,18 @@ impl BackwardIndexMapper for StrideBackwardMapper {
 /// Holds all the shared parameters for recursive movement operations,
 /// reducing the number of function parameters from 10 to 4.
 struct MovementContext<'a> {
+    /// Shape of the source tensor.
     input_shape: &'a [usize],
+    /// Shape of the result.
     output_shape: &'a [usize],
+    /// Row-major strides of the source tensor.
     input_strides: &'a [usize],
+    /// Row-major strides of the result.
     output_strides: &'a [usize],
 }
 
 impl<'a> MovementContext<'a> {
+    /// Bundles the four shape and stride slices.
     fn new(
         input_shape: &'a [usize],
         output_shape: &'a [usize],
@@ -394,12 +405,36 @@ fn apply_movement_forward<M: ForwardIndexMapper>(
 /// Gradients must "undo" these operations during backpropagation.
 #[derive(Clone)]
 pub enum MovementOp {
-    Reshape { new_shape: Vec<usize> }, // Change shape, preserve order
-    Permute { axes: Vec<usize> },      // Transpose/reorder axes
-    Expand { new_shape: Vec<usize> },  // Broadcast to larger shape
-    Pad { padding: Vec<(usize, usize)> }, // Add zeros around edges
-    Shrink { ranges: Vec<(usize, usize)> }, // Extract subregion
-    Stride { strides: Vec<usize> },    // Subsample with stride
+    /// Change the shape, keeping element order.
+    Reshape {
+        /// Target shape.
+        new_shape: Vec<usize>,
+    },
+    /// Reorder the axes.
+    Permute {
+        /// `axes[i]` is the input axis that becomes output axis `i`.
+        axes: Vec<usize>,
+    },
+    /// Broadcast to a larger shape.
+    Expand {
+        /// Target shape.
+        new_shape: Vec<usize>,
+    },
+    /// Add zeros around the edges.
+    Pad {
+        /// Per-axis `(before, after)` counts.
+        padding: Vec<(usize, usize)>,
+    },
+    /// Extract a sub-region.
+    Shrink {
+        /// Per-axis `(start, end)` range, `end` exclusive.
+        ranges: Vec<(usize, usize)>,
+    },
+    /// Subsample with a step.
+    Stride {
+        /// Per-axis step between kept elements.
+        strides: Vec<usize>,
+    },
 }
 
 /// Unified gradient function for all movement operations
@@ -408,7 +443,9 @@ pub enum MovementOp {
 /// During backward, we need to "undo" the movement to restore the original shape.
 #[derive(Clone)]
 pub(crate) struct MovementGradFn {
+    /// The movement applied in forward.
     op: MovementOp,
+    /// Shape of the input, which the gradient must be restored to.
     original_shape: Shape,
 }
 
@@ -426,6 +463,7 @@ impl MovementGradFn {
         format!("Movement({op})")
     }
 
+    /// Undoes the movement on `out_grad`, returning a gradient in the input's shape.
     pub(crate) fn backward(
         &self,
         out_grad: &RawTensor,

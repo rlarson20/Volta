@@ -1,10 +1,16 @@
 // Operation enums and trait implementations
+/// Elementwise binary ops.
 pub mod binary;
 pub mod gpu_ops;
+/// Matrix multiplication.
 pub mod matmul;
+/// Movement ops (reshape, permute, expand, pad, shrink, stride).
 pub mod movement;
+/// Reductions (sum, max, mean, and per-axis forms).
 pub mod reduce;
+/// Ternary ops (`mul_add`, `where_cond`).
 pub mod ternary;
+/// Elementwise unary ops.
 pub mod unary;
 
 // Re-export operation types
