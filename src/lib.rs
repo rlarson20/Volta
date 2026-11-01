@@ -12,10 +12,6 @@
 //! The library uses reference-counted interior mutability (`Rc<RefCell<RawTensor>>`) to build
 //! dynamic computation graphs. Each tensor operation creates new tensors and stores gradient
 //! functions that know how to backpropagate through that operation.
-#![allow(
-    clippy::missing_docs_in_private_items,
-    missing_docs //FIXME: MUST REMOVE BEFORE MERGING IN
-)]
 // A library must not write to stdout/stderr unprompted — diagnostics go through
 // the `log` facade. Scoped to non-test builds of the library crate: examples and
 // integration tests are separate crates (unaffected), and unit-test modules may
@@ -26,6 +22,7 @@
 pub mod gpu;
 
 pub mod dtype;
+/// Error type and `Result` alias.
 pub mod error;
 pub(crate) mod index;
 pub mod shape;
@@ -46,15 +43,24 @@ pub use gpu::{
     gpu_pool_stats, gpu_sync, gpu_sync_threshold, is_gpu_available,
 };
 
+/// Reverse-mode automatic differentiation: the graph edges and `backward`.
 pub mod autograd;
+/// Dataset loading and preprocessing.
 pub mod data;
+/// The `Device` a tensor lives on.
 pub mod device;
 pub mod device_policy;
+/// Saving, loading, and remapping state dicts.
 pub mod io;
+/// Internal macros.
 mod macros;
+/// Layers, containers, optimizers, and transformer blocks.
 pub mod nn;
+/// Differentiable tensor operations.
 pub mod ops;
+/// The `Tensor` type.
 pub mod tensor;
+/// Small utilities (progress reporting).
 pub mod utils;
 
 // Re-export main types for easy access
