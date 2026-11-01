@@ -32,8 +32,11 @@ pub enum PositionalEncodingType {
 /// ```
 #[derive(Clone, Debug)]
 pub struct PositionalEncoding {
+    /// Width of each position's vector.
     embed_dim: usize,
+    /// Longest sequence supported.
     max_len: usize,
+    /// Whether the encoding is fixed sinusoids or learned.
     encoding_type: PositionalEncodingType,
     /// Sinusoidal: pre-computed fixed encoding tensor
     encoding: Option<Tensor>,

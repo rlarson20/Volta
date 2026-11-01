@@ -21,11 +21,16 @@ use crate::tensor::Tensor;
 /// let ffn = FeedForward::new(512, 4, 0.1);
 /// ```
 pub struct FeedForward {
+    /// First projection, `embed_dim` to `embed_dim * expansion_factor`.
     expand: Linear,
+    /// Second projection back to `embed_dim`.
     contract: Linear,
+    /// Nonlinearity between the projections.
     activation: GELU,
+    /// Dropout probability. Stored but not applied: dropout is not implemented here yet.
     #[allow(dead_code)]
     dropout: f32,
+    /// Hidden width as a multiple of `embed_dim`.
     expansion_factor: usize,
 }
 

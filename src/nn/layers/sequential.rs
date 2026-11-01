@@ -6,11 +6,15 @@ use crate::tensor::Tensor;
 
 /// Internal struct to hold a layer with an optional name
 pub(crate) struct LayerEntry {
+    /// Name used as the state-dict prefix; the index is used if `None`.
     pub(crate) name: Option<String>,
+    /// The layer itself.
     pub(crate) layer: Box<dyn Layer>,
 }
 
+/// Layers applied in order, each one's output feeding the next.
 pub struct Sequential {
+    /// The layers, with their optional names.
     pub(crate) layers: Vec<LayerEntry>,
 }
 
@@ -99,6 +103,7 @@ impl Layer for Sequential {
 
 impl Sequential {
     // Helper constructor for easier testing and building
+    /// Builds a container of unnamed layers; state-dict keys are prefixed with each layer's index.
     #[must_use]
     pub fn new(layers: Vec<Box<dyn Layer>>) -> Self {
         Self {
@@ -168,6 +173,7 @@ impl Sequential {
 // Usage example
 #[allow(dead_code)]
 impl Sequential {
+    /// Example: a two-layer perceptron with a `ReLU` between.
     fn build_mlp(input_dim: usize, hidden_dim: usize, output_dim: usize) -> Self {
         Self::new(vec![
             Box::new(Linear::new(input_dim, hidden_dim, true)),

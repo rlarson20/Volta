@@ -12,8 +12,10 @@ use crate::tensor::{RawTensor, Tensor};
 /// - `c_next` = f * c + i * g                  (new cell state)
 /// - `h_next` = o * `tanh(c_next)`               (new hidden state)
 pub struct LSTMCell {
+    /// Width of the input vector `x`.
     #[allow(dead_code)]
     input_size: usize,
+    /// Width of the hidden and cell state.
     hidden_size: usize,
     /// Combined weights for input: `[4*hidden_size, input_size]`
     /// Order: input, forget, cell, output gates

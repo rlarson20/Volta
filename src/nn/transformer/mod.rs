@@ -7,11 +7,17 @@
 //! - Positional encodings (sinusoidal and learned)
 //! - Causal masks for autoregressive models
 
+/// Scaled dot-product attention.
 pub mod attention;
+/// `TransformerBlock`.
 pub mod block;
+/// Position-wise feed-forward network.
 pub mod feed_forward;
+/// Attention masks.
 pub mod mask;
+/// Multi-head attention.
 pub mod multi_head_attention;
+/// Positional encodings.
 pub mod positional_encoding;
 
 pub use attention::ScaledDotProductAttention;

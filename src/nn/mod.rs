@@ -2,7 +2,9 @@ use crate::device::Device;
 use crate::io::StateDict;
 use crate::tensor::Tensor;
 
+/// Layers and containers.
 pub mod layers;
+/// Optimizers.
 pub mod optim;
 pub mod transformer;
 
@@ -32,9 +34,11 @@ pub(crate) use sealed::SealedLayer;
 /// by kind of layer: see [`Layer`] (one tensor in, one out), [`IndexedLayer`] (integer indices in),
 /// and [`RecurrentLayer`] (input plus carried state).
 pub trait Module {
+    /// Every learnable tensor of the module, in a stable order.
     fn parameters(&self) -> Vec<Tensor>;
 
     // State dict methods
+    /// The parameters as a name-to-values map, ready to save with [`crate::io`].
     fn state_dict(&self) -> StateDict;
 
     /// Loads the entries of `state` that match this module's parameters.
@@ -55,6 +59,7 @@ pub trait Module {
     /// already been written. Discard the module, or load into a fresh one.
     fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()>;
 
+    /// Clears the gradient of every parameter.
     fn zero_grad(&mut self) {
         for p in self.parameters() {
             p.borrow_mut().grad = None;
@@ -100,6 +105,7 @@ pub trait Module {
     /// Switch between training and evaluation modes.
     /// Important for layers like `BatchNorm` and Dropout.
     fn train(&mut self, _mode: bool) {}
+    /// Switches to evaluation mode; same as `train(false)`.
     fn eval(&mut self) {
         self.train(false);
     }

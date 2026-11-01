@@ -2,6 +2,7 @@ use crate::io::StateDict;
 use crate::nn::{Layer, Module};
 use crate::tensor::Tensor;
 
+/// Rectified linear unit: `max(0, x)`.
 pub struct ReLU;
 
 impl Module for ReLU {

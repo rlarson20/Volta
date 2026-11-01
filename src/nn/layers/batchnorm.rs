@@ -4,25 +4,36 @@ use crate::nn::{Layer, Module};
 use crate::shape::Axis;
 use crate::tensor::{RawTensor, Tensor};
 
+/// Batch normalization over `[B, C, H, W]` input, with per-channel statistics.
 pub struct BatchNorm2d {
+    /// Number of channels `C`.
     num_features: usize,
+    /// Added to the variance for numerical stability.
     eps: f32,
+    /// Weight of the new batch statistics in the running averages.
     momentum: f32,
+    /// Training mode uses batch statistics; evaluation mode uses the running ones.
     training: bool,
     // Parameters (Learnable)
+    /// Learnable scale, shape `[C]`.
     gamma: Tensor,
+    /// Learnable shift, shape `[C]`.
     beta: Tensor,
     // Buffers (Non-learnable)
+    /// Running mean used in evaluation mode (a buffer, not learnable).
     running_mean: Tensor,
+    /// Running variance used in evaluation mode (a buffer, not learnable).
     running_var: Tensor,
 }
 
 impl BatchNorm2d {
+    /// Layer over `num_features` channels with `eps = 1e-5` and `momentum = 0.1`.
     #[must_use]
     pub fn new(num_features: usize) -> Self {
         Self::new_with_params(num_features, 1e-5, 0.1)
     }
 
+    /// Layer over `num_features` channels with the given `eps` and `momentum`.
     #[must_use]
     pub fn new_with_params(num_features: usize, eps: f32, momentum: f32) -> Self {
         let gamma = RawTensor::ones(&[num_features]);
@@ -200,24 +211,34 @@ impl Layer for BatchNorm2d {
 /// Normalizes over the batch dimension (dim=0), computing per-feature statistics.
 /// Commonly used after fully-connected layers or LSTM outputs.
 pub struct BatchNorm1d {
+    /// Number of features `C`.
     num_features: usize,
+    /// Added to the variance for numerical stability.
     eps: f32,
+    /// Weight of the new batch statistics in the running averages.
     momentum: f32,
+    /// Training mode uses batch statistics; evaluation mode uses the running ones.
     training: bool,
     // Parameters (Learnable)
+    /// Learnable scale, shape `[C]`.
     gamma: Tensor,
+    /// Learnable shift, shape `[C]`.
     beta: Tensor,
     // Buffers (Non-learnable)
+    /// Running mean used in evaluation mode (a buffer, not learnable).
     running_mean: Tensor,
+    /// Running variance used in evaluation mode (a buffer, not learnable).
     running_var: Tensor,
 }
 
 impl BatchNorm1d {
+    /// Layer over `num_features` features with `eps = 1e-5` and `momentum = 0.1`.
     #[must_use]
     pub fn new(num_features: usize) -> Self {
         Self::new_with_params(num_features, 1e-5, 0.1)
     }
 
+    /// Layer over `num_features` features with the given `eps` and `momentum`.
     #[must_use]
     pub fn new_with_params(num_features: usize, eps: f32, momentum: f32) -> Self {
         let gamma = RawTensor::ones(&[num_features]);

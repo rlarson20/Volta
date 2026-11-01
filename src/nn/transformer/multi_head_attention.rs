@@ -19,18 +19,23 @@ use crate::tensor::{RawTensor, Tensor};
 /// let mha = MultiHeadAttention::new(512, 8, 0.1);
 /// ```
 pub struct MultiHeadAttention {
+    /// Model width.
     embed_dim: usize,
+    /// Number of attention heads.
     num_heads: usize,
+    /// Width of one head, `embed_dim / num_heads`.
     head_dim: usize,
-    // Q, K, V projections
+    /// Query projection.
     q_proj: Linear,
+    /// Key projection.
     k_proj: Linear,
+    /// Value projection.
     v_proj: Linear,
-    // Output projection
+    /// Output projection.
     out_proj: Linear,
-    // Optional layer norm
+    /// Layer norm applied to the input, set by `new_with_norm`.
     norm: Option<LayerNorm>,
-    // Dropout
+    /// Dropout probability. Stored but not applied.
     #[allow(dead_code)]
     dropout: f32,
 }
@@ -152,6 +157,7 @@ impl MultiHeadAttention {
         x.add(&output)
     }
 
+    /// Splits `[batch, seq_len, embed_dim]` into heads: `[batch, num_heads, seq_len, head_dim]`.
     fn reshape_for_heads(&self, x: &Tensor, batch_size: usize, seq_len: usize) -> Tensor {
         // [batch, seq_len, embed_dim] -> [batch, seq_len, num_heads, head_dim]
         let reshaped = x.reshape(&[batch_size, seq_len, self.num_heads, self.head_dim]);
@@ -160,6 +166,7 @@ impl MultiHeadAttention {
         reshaped.permute(&[Axis(0), Axis(2), Axis(1), Axis(3)])
     }
 
+    /// Inverse of `reshape_for_heads`.
     fn reshape_from_heads(&self, x: &Tensor, batch_size: usize, seq_len: usize) -> Tensor {
         // [batch, num_heads, seq_len, head_dim] -> [batch, seq_len, num_heads, head_dim]
         let permuted = x.permute(&[Axis(0), Axis(2), Axis(1), Axis(3)]);
@@ -168,6 +175,7 @@ impl MultiHeadAttention {
         permuted.reshape(&[batch_size, seq_len, self.embed_dim])
     }
 
+    /// Scaled dot-product attention over `[batch, num_heads, seq_len, head_dim]` tensors, with an optional causal mask and an optional additive mask.
     fn apply_attention(
         &self,
         q: &Tensor,
@@ -212,6 +220,7 @@ impl MultiHeadAttention {
         attention_weights.matmul(v) // [batch, num_heads, seq_len, head_dim]
     }
 
+    /// Additive mask `[seq_len, seq_len]`: `-inf` above the diagonal, 0 elsewhere, on `device`.
     fn create_causal_mask(&self, seq_len: usize, device: crate::Device) -> Tensor {
         let mut mask_data = Vec::with_capacity(seq_len * seq_len);
         for i in 0..seq_len {

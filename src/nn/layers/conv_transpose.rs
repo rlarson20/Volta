@@ -14,13 +14,18 @@ use crate::tensor::{RawTensor, Tensor};
 ///
 /// Output size: `H_out` = (`H_in` - 1) * stride + kernel - 2*padding
 pub struct ConvTranspose2d {
-    weight: Tensor,       // [in_channels, out_channels, kernel_h, kernel_w]
-    bias: Option<Tensor>, // [out_channels]
+    /// Kernel, shape `[in_channels, out_channels, kernel_h, kernel_w]`.
+    weight: Tensor,
+    /// Optional bias, shape `[out_channels]`.
+    bias: Option<Tensor>,
+    /// `(vertical, horizontal)` stride.
     stride: (usize, usize),
+    /// `(vertical, horizontal)` zero padding.
     padding: (usize, usize),
 }
 
 impl ConvTranspose2d {
+    /// Layer with square `kernel`, equal `stride` and `padding` on both axes, and He-initialized weights.
     #[must_use]
     pub fn new(
         in_ch: usize,
@@ -131,12 +136,16 @@ impl ConvTranspose2d {
 /// of regular convolution with respect to the input.
 #[derive(Clone)]
 pub(crate) struct ConvTranspose2dGradFn {
+    /// Geometry of the forward pass.
     spec: ConvTranspose2dSpec,
+    /// The kernel, kept for computing the input gradient.
     weight: Tensor,
+    /// Whether the forward pass added a bias (a third parent).
     has_bias: bool,
 }
 
 impl ConvTranspose2dGradFn {
+    /// Gradients for the input, the weight, and (if `has_bias`) the bias.
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         // parents: [input, weight, bias] if has_bias, else [input, weight]
         let input = parents

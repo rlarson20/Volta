@@ -2,6 +2,7 @@ use crate::io::StateDict;
 use crate::nn::{Layer, Module};
 use crate::tensor::Tensor;
 
+/// Hyperbolic tangent.
 pub struct Tanh;
 
 impl Module for Tanh {

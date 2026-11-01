@@ -13,13 +13,18 @@ use crate::tensor::{RawTensor, Tensor};
 /// Accepts tensors shaped (batch, channels, height, width) and downsamples each
 /// spatial window to its maximum value, similar to PyTorch's `nn.MaxPool2d`.
 pub struct MaxPool2d {
+    /// `(height, width)` of the pooling window.
     kernel: (usize, usize),
+    /// `(vertical, horizontal)` step between windows.
     stride: (usize, usize),
+    /// `(vertical, horizontal)` implicit padding.
     padding: (usize, usize),
 }
 
+/// Gradient function for [`MaxPool2d`]: sends each output gradient to the input element that won its window.
 #[derive(Clone)]
 pub(crate) struct MaxPool2dGradFn {
+    /// For each output element, the linear index into the input of its window's maximum.
     max_indices: Vec<usize>,
 }
 
@@ -48,6 +53,7 @@ impl MaxPool2d {
         }
     }
 
+    /// Computes the pooled output and attaches the backward edge.
     fn pool_forward(&self, x: &Tensor) -> Tensor {
         let spec = Window2dSpec::new(&x.shape(), self.kernel, self.stride, self.padding)
             .unwrap_or_else(|e| panic!("{e}"));
@@ -153,6 +159,7 @@ impl Layer for MaxPool2d {
 }
 
 impl MaxPool2dGradFn {
+    /// Scatters `out_grad` to the recorded maxima; all other input elements get zero.
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let input_shape = parents.first().unwrap().borrow().shape.clone();
         let mut grad_input = vec![0.0; input_shape.iter().product()];

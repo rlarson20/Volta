@@ -33,8 +33,11 @@ use rand::Rng;
 /// ```
 #[derive(Clone, Debug)]
 pub struct Embedding {
+    /// Lookup table, shape `[vocab_size, dim]`.
     pub weight: Tensor,
+    /// Number of rows in the table.
     vocab_size: usize,
+    /// Width of each row.
     dim: usize,
 }
 
@@ -146,12 +149,16 @@ impl Module for Embedding {
 /// Handles gradient accumulation for repeated indices.
 #[derive(Clone)]
 pub(crate) struct EmbeddingGradFn {
+    /// Rows that were looked up, in output order (repeats allowed).
     indices: Vec<usize>,
+    /// Number of rows in the table.
     vocab_size: usize,
+    /// Width of each row.
     embedding_dim: usize,
 }
 
 impl EmbeddingGradFn {
+    /// Scatters `out_grad` into a `[vocab_size, embedding_dim]` weight gradient, summing repeated indices.
     pub(crate) fn backward(
         &self,
         out_grad: &RawTensor,

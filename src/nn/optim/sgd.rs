@@ -9,11 +9,16 @@ use crate::tensor::Tensor;
 ///
 /// Momentum helps accelerate convergence and dampen oscillations.
 pub struct SGD {
+    /// Parameters being optimized.
     params: Vec<Tensor>,
+    /// Learning rate.
     lr: f32,
+    /// Momentum coefficient; 0 disables momentum.
     momentum: f32,
+    /// L2 penalty.
     weight_decay: f32,
-    velocity: Vec<Storage>, // Can be CPU or GPU storage (empty if momentum=0)
+    /// Momentum buffer per parameter, on that parameter's device (empty if `momentum` is 0).
+    velocity: Vec<Storage>,
 }
 
 impl SGD {
@@ -201,6 +206,7 @@ impl SGD {
 // Fallback when GPU feature is not enabled
 #[cfg(not(feature = "gpu"))]
 impl SGD {
+    /// Stub for builds without the `gpu` feature; a GPU parameter cannot exist there.
     fn step_gpu_param(&mut self, _i: usize) {
         unreachable!("GPU step should not be called without GPU feature");
     }

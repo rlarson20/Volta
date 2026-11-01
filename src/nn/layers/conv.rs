@@ -134,21 +134,29 @@ impl Default for TileConfig {
     }
 }
 
+/// 2D convolution over `[B, C, H, W]` input, with an algorithm chosen by [`ConvAlgo`].
 pub struct Conv2d {
-    weight: Tensor,       // [out_channels, in_channels, kernel_h, kernel_w]
-    bias: Option<Tensor>, // [out_channels]
+    /// Kernel, shape `[out_channels, in_channels, kernel_h, kernel_w]`.
+    weight: Tensor,
+    /// Optional bias, shape `[out_channels]`.
+    bias: Option<Tensor>,
+    /// `(vertical, horizontal)` stride.
     stride: (usize, usize),
+    /// `(vertical, horizontal)` zero padding.
     padding: (usize, usize),
-    algo: std::cell::Cell<ConvAlgo>, // Algorithm to use
+    /// Algorithm used by `forward`.
+    algo: std::cell::Cell<ConvAlgo>,
 }
 
 /// Gradient function for im2col operation
 #[derive(Clone)]
 pub(crate) struct Im2colGradFn {
+    /// Window geometry of the `im2col` call this undoes.
     spec: Window2dSpec,
 }
 
 impl Im2colGradFn {
+    /// Folds the column gradient back into the input's shape with `col2im`.
     pub(crate) fn backward(
         &self,
         out_grad: &RawTensor,
@@ -186,10 +194,12 @@ impl Im2colGradFn {
 /// - Weight gradient: Direct accumulation (outer products of input patches and output gradients)
 #[derive(Clone)]
 pub(crate) struct DirectConvGradFn {
+    /// Geometry of the forward convolution.
     spec: Conv2dSpec,
 }
 
 impl DirectConvGradFn {
+    /// Gradients for the input, the weight, and (if present) the bias.
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         // parents: [input, weight]
         let x = parents.first().cloned();
@@ -433,11 +443,14 @@ impl DirectConvGradFn {
 /// as the forward pass to maintain consistency and efficiency.
 #[derive(Clone)]
 pub(crate) struct IGEMMGradFn {
+    /// Geometry of the forward convolution.
     spec: Conv2dSpec,
-    _variant: IGEMMVariant, // Which iGEMM variant was used
+    /// The iGEMM variant the forward pass used.
+    _variant: IGEMMVariant,
 }
 
 impl IGEMMGradFn {
+    /// Gradients for the input, the weight, and (if present) the bias.
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         // parents: [input, weight]
         let x = parents.first().cloned();
@@ -726,6 +739,7 @@ impl IGEMMGradFn {
 }
 
 impl Conv2d {
+    /// Layer with square `kernel`, equal `stride` and `padding` on both axes, and He-initialized weights.
     #[must_use]
     pub fn new(
         in_ch: usize,

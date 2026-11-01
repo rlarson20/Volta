@@ -16,6 +16,7 @@ use crate::nn::{Layer, Sequential};
 ///     .build();
 /// ```
 pub struct SequentialBuilder {
+    /// Layers added so far.
     entries: Vec<LayerEntry>,
 }
 

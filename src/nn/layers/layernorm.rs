@@ -28,11 +28,15 @@ use crate::tensor::{RawTensor, Tensor};
 /// let ln = LayerNorm::new(vec![32, 32, 3]);
 /// ```
 pub struct LayerNorm {
+    /// Trailing dims the statistics are computed over.
     normalized_shape: Vec<usize>,
+    /// Added to the variance for numerical stability.
     eps: f32,
     // Learnable parameters
-    gamma: Tensor, // Scale parameter (initialized to 1)
-    beta: Tensor,  // Shift parameter (initialized to 0)
+    /// Learnable scale, initialized to 1.
+    gamma: Tensor,
+    /// Learnable shift, initialized to 0.
+    beta: Tensor,
 }
 
 impl LayerNorm {

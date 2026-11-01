@@ -2,18 +2,28 @@ use crate::index::{fetch, slot};
 use crate::storage::Storage;
 use crate::tensor::Tensor;
 
+/// Adam optimizer (Kingma & Ba): per-parameter step sizes from running first and second moments of the gradient.
 pub struct Adam {
+    /// Parameters being optimized.
     params: Vec<Tensor>,
+    /// Learning rate.
     lr: f32,
+    /// Decay rates `(beta1, beta2)` of the first and second moment estimates.
     betas: (f32, f32),
+    /// Added to the denominator for numerical stability.
     eps: f32,
+    /// L2 penalty, added to the gradient before the moment updates.
     weight_decay: f32,
-    m: Vec<Storage>, // 1st moment (can be CPU or GPU storage)
-    v: Vec<Storage>, // 2nd moment (can be CPU or GPU storage)
-    t: usize,        // timestep
+    /// First-moment estimate per parameter, on that parameter's device.
+    m: Vec<Storage>,
+    /// Second-moment estimate per parameter, on that parameter's device.
+    v: Vec<Storage>,
+    /// Number of steps taken, for bias correction.
+    t: usize,
 }
 
 impl Adam {
+    /// Optimizer over `params` with zeroed moment estimates on each parameter's device.
     #[must_use]
     pub fn new(
         params: Vec<Tensor>,
@@ -59,6 +69,7 @@ impl Adam {
         }
     }
 
+    /// Clears the gradient of every parameter.
     pub fn zero_grad(&self) {
         for param in &self.params {
             param.borrow_mut().grad = None;
@@ -207,6 +218,7 @@ impl Adam {
 // Fallback when GPU feature is not enabled
 #[cfg(not(feature = "gpu"))]
 impl Adam {
+    /// Stub for builds without the `gpu` feature; a GPU parameter cannot exist there.
     fn step_gpu_param(&mut self, _i: usize) {
         unreachable!("GPU step should not be called without GPU feature");
     }

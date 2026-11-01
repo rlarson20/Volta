@@ -27,22 +27,24 @@ use crate::tensor::Tensor;
 /// let block = TransformerBlock::new(512, 8, 4, 0.1);
 /// ```
 pub struct TransformerBlock {
-    // First layer norm (before attention)
+    /// Layer norm applied before attention.
     norm1: LayerNorm,
-    // Multi-head attention
+    /// Self-attention sublayer.
     attention: MultiHeadAttention,
-    // Second layer norm (before FFN)
+    /// Layer norm applied before the feed-forward network.
     norm2: LayerNorm,
-    // Feed-forward network
+    /// Feed-forward sublayer.
     ffn: FeedForward,
-    // Dropout probability
+    /// Dropout probability, passed to the sublayers. Not applied by the block itself.
     #[allow(dead_code)]
     dropout: f32,
-    // Configuration
+    /// Model width.
     #[allow(dead_code)]
     embed_dim: usize,
+    /// Number of attention heads.
     #[allow(dead_code)]
     num_heads: usize,
+    /// Hidden width of the feed-forward network, as a multiple of `embed_dim`.
     #[allow(dead_code)]
     expansion_factor: usize,
 }

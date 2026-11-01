@@ -26,6 +26,7 @@ use crate::tensor::Tensor;
 /// assert_eq!(output.shape(), vec![1, 3, 8, 8]);
 /// ```
 pub struct PixelShuffle {
+    /// Factor `r` by which each spatial side grows (channels shrink by `r^2`).
     upscale_factor: usize,
 }
 

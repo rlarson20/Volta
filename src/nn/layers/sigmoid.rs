@@ -2,6 +2,7 @@ use crate::io::StateDict;
 use crate::nn::{Layer, Module};
 use crate::tensor::Tensor;
 
+/// Logistic function `1 / (1 + exp(-x))`.
 pub struct Sigmoid;
 
 impl Module for Sigmoid {

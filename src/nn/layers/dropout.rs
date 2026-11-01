@@ -3,8 +3,11 @@ use crate::nn::{Layer, Module};
 use crate::tensor::{RawTensor, Tensor};
 use rand::Rng;
 
+/// Zeroes each element with probability `p` in training mode, scaling the rest by `1 / (1 - p)`; the identity in evaluation mode.
 pub struct Dropout {
+    /// Probability that an element is zeroed.
     p: f32,
+    /// Whether dropout is active.
     training: bool,
 }
 

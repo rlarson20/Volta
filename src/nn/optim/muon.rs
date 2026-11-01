@@ -7,7 +7,9 @@ use crate::tensor::{RawTensor, Tensor};
 /// slope at zero, not for convergence to 1: after five steps the singular values land
 /// roughly in `[0.7, 1.2]`, which is close enough to orthogonal for an optimizer.
 const NS_A: f32 = 3.4445;
+/// Second coefficient of the Newton-Schulz quintic (see `NS_A`).
 const NS_B: f32 = -4.7750;
+/// Third coefficient of the Newton-Schulz quintic (see `NS_A`).
 const NS_C: f32 = 2.0315;
 /// Added to the Frobenius norm before dividing by it, so a zero gradient stays zero.
 const NS_EPS: f32 = 1e-7;
@@ -30,12 +32,18 @@ const NS_EPS: f32 = 1e-7;
 /// Parameters may live on the CPU or the GPU. A GPU parameter's momentum, Newton-Schulz,
 /// and update all run on the device, with no host round-trip.
 pub struct Muon {
+    /// Parameters being optimized.
     params: Vec<Tensor>,
+    /// Learning rate.
     lr: f32,
+    /// Momentum coefficient.
     momentum: f32,
+    /// Whether to use Nesterov momentum.
     nesterov: bool,
+    /// Newton-Schulz iterations per step.
     ns_steps: usize,
-    velocity: Vec<Storage>, // on each parameter's device
+    /// Momentum buffer per parameter, on that parameter's device.
+    velocity: Vec<Storage>,
 }
 
 impl Muon {

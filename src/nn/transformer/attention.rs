@@ -138,6 +138,7 @@ impl ScaledDotProductAttention {
         attention_weights.matmul(value)
     }
 
+    /// Additive mask `[seq_len, seq_len]`: `-inf` above the diagonal, 0 elsewhere, on `device`.
     fn create_causal_mask(&self, seq_len: usize, device: crate::Device) -> Tensor {
         let mut mask_data = Vec::with_capacity(seq_len * seq_len);
         for i in 0..seq_len {
