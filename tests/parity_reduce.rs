@@ -14,17 +14,22 @@ use volta::Axis;
 
 #[test]
 fn sum_whole_tensor_parity() {
-    assert_reduce_parity("sum", |t| t.sum(), &[4, 5], TOL_FWD_GPU);
+    assert_reduce_parity("sum", volta::Tensor::sum, &[4, 5], TOL_FWD_GPU);
 }
 
 #[test]
 fn mean_whole_tensor_parity() {
-    assert_reduce_parity("mean", |t| t.mean(), &[4, 5], TOL_FWD_GPU);
+    assert_reduce_parity("mean", volta::Tensor::mean, &[4, 5], TOL_FWD_GPU);
 }
 
 #[test]
 fn max_reduce_whole_tensor_parity() {
-    assert_reduce_parity("max_reduce", |t| t.max_reduce(), &[4, 5], TOL_FWD_GPU);
+    assert_reduce_parity(
+        "max_reduce",
+        volta::Tensor::max_reduce,
+        &[4, 5],
+        TOL_FWD_GPU,
+    );
 }
 
 #[test]
@@ -90,5 +95,5 @@ fn max_dim_keepdim_parity() {
 #[test]
 fn sum_3d_parity() {
     // Sanity: helper handles a non-2D shape.
-    assert_reduce_parity("sum 3d", |t| t.sum(), &[2, 3, 4], TOL_FWD_GPU);
+    assert_reduce_parity("sum 3d", volta::Tensor::sum, &[2, 3, 4], TOL_FWD_GPU);
 }

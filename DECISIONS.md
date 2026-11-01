@@ -511,6 +511,17 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 
 **Tests:** the output against the sin/cos formula and against the learned weight rows; the exact input gradient (`w` for the loss `sum(out ⊙ w)`, both modes); the exact learned-weight gradient (`Σ_b w[b, p, :]` for `p < seq_len`, zero past it); `assert_trainable!` in learned mode; and GPU parity of the output and both gradients on an Apple M2. The gradient tests fail when the output is replaced by a detached copy of the same values.
 
+
+### Pedantic cast lints: three denied, two allowed (2026-11-01)
+
+**Decision:** `cast_possible_truncation`, `cast_possible_wrap`, and `cast_sign_loss` are `deny`; `cast_precision_loss` and `needless_pass_by_value` are `allow` with the reason in `Cargo.toml`; `redundant_closure_for_method_calls` is `deny`.
+
+**Why the first three:** they are the silent-wrong-number class that `fetch`/`slot` closed for indexing, one step earlier: an `as` that wraps a window coordinate or truncates a kernel parameter produces a plausible index or dimension instead of a failure. The iGEMM batch offset bug lived in exactly that arithmetic. `Shape` caps a tensor at 1e8 elements, below `u32::MAX`, so none of the converted sites could fire, and the checked helpers (`signed`, `unsigned`, `pack_u32`) change no behavior today; they make the cap load-bearing in one place instead of assumed in 250. Where narrowing is the point (f64 to f32, float to an integer dtype), the function says so with `#[expect(.., reason)]`, which fails to compile if the lint stops firing.
+
+**Why the two allowed:** `usize as f32` for counts, means, and positions rounds above 2^24 (a relative error around 6e-8), which cannot change a result beyond f32's own rounding, and converting 106 sites buys no safety. `needless_pass_by_value` flags the `Storage` constructors and `set_grad`, which take ownership because the caller has just built the buffer; taking a slice would make every caller clone.
+
+**Not done:** the lint stays an allow, not a convention, so an `as f32` that ever feeds an integer-exact comparison is not caught. Revisit if one appears.
+
 ## Errors
 
 ### Panic inside the program, `Result` where data comes from outside

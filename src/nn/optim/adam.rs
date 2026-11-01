@@ -185,8 +185,9 @@ impl Adam {
         }
 
         // Bias correction
-        let m_hat_scale = 1.0 / (1.0 - self.betas.0.powi(self.t as i32));
-        let v_hat_scale = 1.0 / (1.0 - self.betas.1.powi(self.t as i32));
+        let t = i32::try_from(self.t).expect("Adam step count fits i32");
+        let m_hat_scale = 1.0 / (1.0 - self.betas.0.powi(t));
+        let v_hat_scale = 1.0 / (1.0 - self.betas.1.powi(t));
 
         // Update parameters
         let p_data = p

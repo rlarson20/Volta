@@ -25,7 +25,7 @@ fn transpose_parity() {
     expect_gaps(&["Transpose"], || {
         assert_unary_parity(
             "transpose",
-            |t| t.transpose(),
+            volta::Tensor::transpose,
             &[4, 5],
             (-2.0, 2.0),
             TOL_FWD_GPU,
@@ -38,7 +38,7 @@ fn transpose_backward_parity() {
     expect_gaps(&["Transpose"], || {
         assert_unary_parity_backward(
             "transpose",
-            |t| t.transpose(),
+            volta::Tensor::transpose,
             &[4, 5],
             (-2.0, 2.0),
             TOL_FWD_GPU,

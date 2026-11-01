@@ -46,11 +46,12 @@ impl ProgressBar {
     }
 
     fn render(&self) {
-        let percent = if self.total > 0 {
-            (self.current as f32 / self.total as f32 * 100.0) as usize
-        } else {
-            0
-        };
+        // An empty bar (total 0) shows 0%.
+        let percent = self
+            .current
+            .saturating_mul(100)
+            .checked_div(self.total)
+            .unwrap_or(0);
 
         let filled = (self.current * self.width)
             .checked_div(self.total)

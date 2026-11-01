@@ -2,7 +2,7 @@ use crate::Storage;
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::device_policy::kernel_failed;
-use crate::index::{fetch, slot};
+use crate::index::{fetch, signed, slot, unsigned};
 use crate::io::{StateDict, TensorData};
 use crate::nn::{Layer, Module};
 use crate::shape::Axis;
@@ -390,16 +390,16 @@ impl DirectConvGradFn {
                                     let w_pos = w_start + kw;
 
                                     // Check if within padded bounds
-                                    let in_h = h_pos as isize - pad_h as isize;
-                                    let in_w = w_pos as isize - pad_w as isize;
+                                    let in_h = signed(h_pos) - signed(pad_h);
+                                    let in_w = signed(w_pos) - signed(pad_w);
 
                                     if in_h >= 0
-                                        && in_h < height as isize
+                                        && in_h < signed(height)
                                         && in_w >= 0
-                                        && in_w < width as isize
+                                        && in_w < signed(width)
                                     {
-                                        let in_h = in_h as usize;
-                                        let in_w = in_w as usize;
+                                        let in_h = unsigned(in_h);
+                                        let in_w = unsigned(in_w);
 
                                         // Get input value
                                         let in_idx = b * (in_ch * height * width)
@@ -689,16 +689,16 @@ impl IGEMMGradFn {
                                         let w_pos = w_start + kw;
 
                                         // Check padding
-                                        let in_h = h_pos as isize - pad_h as isize;
-                                        let in_w = w_pos as isize - pad_w as isize;
+                                        let in_h = signed(h_pos) - signed(pad_h);
+                                        let in_w = signed(w_pos) - signed(pad_w);
 
                                         if in_h >= 0
-                                            && in_h < height as isize
+                                            && in_h < signed(height)
                                             && in_w >= 0
-                                            && in_w < width as isize
+                                            && in_w < signed(width)
                                         {
-                                            let in_h = in_h as usize;
-                                            let in_w = in_w as usize;
+                                            let in_h = unsigned(in_h);
+                                            let in_w = unsigned(in_w);
 
                                             // Input index: (b, ic, in_h, in_w)
                                             let in_idx = b * (in_ch * height * width)
@@ -1027,16 +1027,16 @@ impl Conv2d {
                                     let w_pos = w_start + kw;
 
                                     // Check if within padded bounds
-                                    let in_h = h_pos as isize - pad_h as isize;
-                                    let in_w = w_pos as isize - pad_w as isize;
+                                    let in_h = signed(h_pos) - signed(pad_h);
+                                    let in_w = signed(w_pos) - signed(pad_w);
 
                                     if in_h >= 0
-                                        && in_h < height as isize
+                                        && in_h < signed(height)
                                         && in_w >= 0
-                                        && in_w < width as isize
+                                        && in_w < signed(width)
                                     {
-                                        let in_h = in_h as usize;
-                                        let in_w = in_w as usize;
+                                        let in_h = unsigned(in_h);
+                                        let in_w = unsigned(in_w);
 
                                         // Input index: (b, ic, in_h, in_w)
                                         let in_idx = b * (in_ch * height * width)
@@ -1253,16 +1253,16 @@ impl Conv2d {
                                         let w_pos = w_start + kw;
 
                                         // Check if within padded bounds
-                                        let in_h = h_pos as isize - pad_h as isize;
-                                        let in_w = w_pos as isize - pad_w as isize;
+                                        let in_h = signed(h_pos) - signed(pad_h);
+                                        let in_w = signed(w_pos) - signed(pad_w);
 
                                         if in_h >= 0
-                                            && in_h < height as isize
+                                            && in_h < signed(height)
                                             && in_w >= 0
-                                            && in_w < width as isize
+                                            && in_w < signed(width)
                                         {
-                                            let in_h = in_h as usize;
-                                            let in_w = in_w as usize;
+                                            let in_h = unsigned(in_h);
+                                            let in_w = unsigned(in_w);
 
                                             // Input index: (b, ic, in_h, in_w)
                                             let in_idx = b * (in_ch * height * width)
@@ -2391,17 +2391,15 @@ mod conv2d_tests {
                         for oc in 0..out_ch {
                             for oh in 0..out_h {
                                 for ow in 0..out_w {
-                                    let kh =
-                                        ih as isize + pad_h as isize - (oh * stride_h) as isize;
-                                    let kw =
-                                        iw as isize + pad_w as isize - (ow * stride_w) as isize;
-                                    if (0..kernel_h as isize).contains(&kh)
-                                        && (0..kernel_w as isize).contains(&kw)
+                                    let kh = signed(ih) + signed(pad_h) - signed(oh * stride_h);
+                                    let kw = signed(iw) + signed(pad_w) - signed(ow * stride_w);
+                                    if (0..signed(kernel_h)).contains(&kh)
+                                        && (0..signed(kernel_w)).contains(&kw)
                                     {
                                         let out_idx = ((b * out_ch + oc) * out_h + oh) * out_w + ow;
-                                        let w_idx = ((oc * in_ch + ic) * kernel_h + kh as usize)
+                                        let w_idx = ((oc * in_ch + ic) * kernel_h + unsigned(kh))
                                             * kernel_w
-                                            + kw as usize;
+                                            + unsigned(kw);
                                         sum += fetch(out_grad, out_idx) * fetch(weight, w_idx);
                                     }
                                 }

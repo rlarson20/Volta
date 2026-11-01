@@ -372,6 +372,10 @@ impl Storage {
     /// # Panics
     ///`as_f64_slice` can panic
     #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "F64 storage narrows to f32 by definition"
+    )]
     pub fn to_f32_vec(&self) -> Vec<f32> {
         match self.dtype() {
             DType::F32 => self.f32_host_slice().to_vec(),
@@ -425,6 +429,12 @@ impl Storage {
 
     /// Convert storage to a different dtype
     #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "float data converted to an integer dtype truncates toward zero and saturates, \
+                  which is what the integer dtype means; U8 is clamped to 0..=255 first"
+    )]
     pub fn to_dtype(&self, target: DType) -> Self {
         if self.dtype() == target {
             return self.clone();

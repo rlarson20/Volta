@@ -17,7 +17,7 @@ const SHAPE_2D: &[usize] = &[4, 5];
 fn neg_parity() {
     assert_unary_parity_backward(
         "neg",
-        |t| t.neg(),
+        volta::Tensor::neg,
         SHAPE_2D,
         (-2.0, 2.0),
         TOL_FWD_GPU,
@@ -30,7 +30,7 @@ fn recip_parity() {
     // Avoid 0; keep magnitudes well above eps to keep gradients well-conditioned.
     assert_unary_parity_backward(
         "recip",
-        |t| t.recip(),
+        volta::Tensor::recip,
         SHAPE_2D,
         (0.5, 5.0),
         TOL_FWD_GPU,
@@ -42,7 +42,7 @@ fn recip_parity() {
 fn sqrt_parity() {
     assert_unary_parity_backward(
         "sqrt",
-        |t| t.sqrt(),
+        volta::Tensor::sqrt,
         SHAPE_2D,
         (0.01, 5.0),
         TOL_FWD_GPU,
@@ -54,7 +54,7 @@ fn sqrt_parity() {
 fn exp_parity() {
     assert_unary_parity_backward(
         "exp",
-        |t| t.exp(),
+        volta::Tensor::exp,
         SHAPE_2D,
         (-3.0, 3.0),
         TOL_FWD_GPU,
@@ -66,7 +66,7 @@ fn exp_parity() {
 fn log_parity() {
     assert_unary_parity_backward(
         "log",
-        |t| t.log(),
+        volta::Tensor::log,
         SHAPE_2D,
         (0.1, 5.0),
         TOL_FWD_GPU,
@@ -78,7 +78,7 @@ fn log_parity() {
 fn exp2_parity() {
     assert_unary_parity_backward(
         "exp2",
-        |t| t.exp2(),
+        volta::Tensor::exp2,
         SHAPE_2D,
         (-3.0, 3.0),
         TOL_FWD_GPU,
@@ -90,7 +90,7 @@ fn exp2_parity() {
 fn log2_parity() {
     assert_unary_parity_backward(
         "log2",
-        |t| t.log2(),
+        volta::Tensor::log2,
         SHAPE_2D,
         (0.1, 5.0),
         TOL_FWD_GPU,
@@ -102,7 +102,7 @@ fn log2_parity() {
 fn sin_parity() {
     assert_unary_parity_backward(
         "sin",
-        |t| t.sin(),
+        volta::Tensor::sin,
         SHAPE_2D,
         (-2.0, 2.0),
         TOL_FWD_GPU,
@@ -114,7 +114,7 @@ fn sin_parity() {
 fn cos_parity() {
     assert_unary_parity_backward(
         "cos",
-        |t| t.cos(),
+        volta::Tensor::cos,
         SHAPE_2D,
         (-2.0, 2.0),
         TOL_FWD_GPU,
@@ -126,7 +126,7 @@ fn cos_parity() {
 fn tanh_parity() {
     assert_unary_parity_backward(
         "tanh",
-        |t| t.tanh(),
+        volta::Tensor::tanh,
         SHAPE_2D,
         (-2.0, 2.0),
         TOL_FWD_GPU,
@@ -138,7 +138,7 @@ fn tanh_parity() {
 fn sigmoid_parity() {
     assert_unary_parity_backward(
         "sigmoid",
-        |t| t.sigmoid(),
+        volta::Tensor::sigmoid,
         SHAPE_2D,
         (-2.0, 2.0),
         TOL_FWD_GPU,
@@ -151,7 +151,7 @@ fn relu_parity() {
     // Skip 0 to keep finite differences well-defined; otherwise sign at 0 is ambiguous.
     assert_unary_parity_backward(
         "relu",
-        |t| t.relu(),
+        volta::Tensor::relu,
         SHAPE_2D,
         (-1.5, 1.5),
         TOL_FWD_GPU,
@@ -165,7 +165,7 @@ fn erf_parity() {
     // `unary_backward` panicked on it.
     assert_unary_parity_backward(
         "erf",
-        |t| t.erf(),
+        volta::Tensor::erf,
         SHAPE_2D,
         (-1.5, 1.5),
         TOL_FWD_GPU,
@@ -178,7 +178,7 @@ fn unary_parity_3d_shape() {
     // Sanity check: helper handles a non-2D shape.
     assert_unary_parity(
         "sigmoid 3d",
-        |t| t.sigmoid(),
+        volta::Tensor::sigmoid,
         &[2, 3, 4],
         (-2.0, 2.0),
         TOL_FWD_GPU,

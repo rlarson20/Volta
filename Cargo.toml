@@ -93,6 +93,13 @@ missing_docs = "deny"
 # Memory safety and bounds checking
 indexing_slicing = "deny" # Use crate::index::{fetch, slot, span}; tests are exempt via clippy.toml
 
+# Casts that can silently wrap or truncate index math and kernel parameters. Use
+# crate::index::{signed, unsigned} (and `pack_u32` in src/gpu/kernels.rs), which panic instead
+# (ADDENDUM §8).
+cast_possible_truncation = "deny" # usize -> u32 kernel parameters, float -> int
+cast_possible_wrap = "deny"       # usize -> isize/i64 in padding and window math
+cast_sign_loss = "deny"           # signed -> usize after a bounds check
+
 # Type safety and conversions
 fallible_impl_from = "deny" # Fallible conversions should use TryFrom, not From
 
@@ -122,6 +129,7 @@ default_trait_access = "deny" # Use Type::default() instead of Default::default(
 implicit_clone = "deny"       # Make clones explicit for clarity
 assigning_clones = "deny"     # Use clone_from when assigning clones
 cast_lossless = "deny"        # Use From/Into for lossless casts
+redundant_closure_for_method_calls = "deny" # Pass `Tensor::exp`, not `|t| t.exp()`
 
 # Pattern matching
 single_match_else = "deny"                  # Use if-let for single match arms
@@ -178,3 +186,14 @@ use_self = "deny"           # Use Self instead of repeating type name
 
 # Pedantic lints that are too noisy or don't apply
 similar_names = "allow" # Common in math/ML code (x, y, z, w, h, etc.)
+
+# `usize`/`i32 as f32` for counts, means, and positions. A count above 2^24 rounds in the low
+# bits (relative error about 6e-8), which cannot change a result beyond f32's own rounding.
+# Wrapping 100+ sites would add noise, not safety. Revisit if an `as f32` ever feeds an
+# integer-exact comparison.
+cast_precision_loss = "allow"
+
+# `Storage::cpu`, `cpu_f64`, `cpu_f16`, `cpu_bf16`, `gpu` and `Tensor::set_grad` take ownership
+# by design: a caller hands over the buffer it just built. Taking `&[f32]` would make every
+# caller clone, across the crate, the examples, the tests, and the benches.
+needless_pass_by_value = "allow"

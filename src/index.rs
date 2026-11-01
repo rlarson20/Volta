@@ -67,6 +67,31 @@ pub(crate) fn span<T>(s: &[T], r: Range<usize>) -> &[T] {
     }
 }
 
+/// Converts an index or extent to `isize` for signed window math (padding offsets), panicking
+/// if it does not fit instead of wrapping.
+///
+/// # Panics
+///
+/// If `v > isize::MAX`.
+#[inline]
+#[track_caller]
+pub(crate) fn signed(v: usize) -> isize {
+    isize::try_from(v)
+        .unwrap_or_else(|_| panic!("index {v} does not fit isize (index-mapping bug)"))
+}
+
+/// Converts a signed coordinate to an index, panicking if it is negative instead of wrapping.
+/// Call it after the bounds check that proves the coordinate is inside the tensor.
+///
+/// # Panics
+///
+/// If `v < 0`.
+#[inline]
+#[track_caller]
+pub(crate) fn unsigned(v: isize) -> usize {
+    usize::try_from(v).unwrap_or_else(|_| panic!("coordinate {v} is negative (index-mapping bug)"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,5 +151,28 @@ mod tests {
     fn span_out_of_bounds_panics() {
         let v = [1.0_f32, 2.0, 3.0, 4.0];
         let _ = span(&v, 2..5);
+    }
+
+    /// In-range values convert exactly, including the signed ones either side of zero.
+    #[test]
+    fn conversions_in_range() {
+        assert_eq!(signed(7), 7);
+        assert_eq!(unsigned(7), 7);
+        assert_eq!(unsigned(0), 0);
+        assert_eq!(signed(0) - signed(3), -3);
+    }
+
+    /// A negative coordinate panics instead of becoming a huge index.
+    #[test]
+    #[should_panic(expected = "is negative")]
+    fn unsigned_negative_panics() {
+        let _ = unsigned(-1);
+    }
+
+    /// A value above `isize::MAX` panics instead of wrapping negative.
+    #[test]
+    #[should_panic(expected = "does not fit isize")]
+    fn signed_overflow_panics() {
+        let _ = signed(usize::MAX);
     }
 }

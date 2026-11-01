@@ -292,7 +292,7 @@ fn bench_conv_memory_scaling(c: &mut Criterion) {
 
     for (scale_type, batch, in_ch, out_ch, h, w, kernel, stride, padding) in scaling_tests {
         let im2col_mb = im2col_memory_mb(batch, in_ch, h, w, kernel, stride, padding);
-        let label = format!("{}_{}MB", scale_type, im2col_mb.floor() as i64);
+        let label = format!("{scale_type}_{}MB", im2col_mb.floor());
 
         group.bench_with_input(
             BenchmarkId::new("direct", &label),

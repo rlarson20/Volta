@@ -132,14 +132,14 @@ impl RawTensor {
                     n,
                     1.0,
                     a.as_ptr(),
-                    k as isize,
+                    crate::index::signed(k),
                     1,
                     b.as_ptr(),
-                    n as isize,
+                    crate::index::signed(n),
                     1,
                     0.0,
                     result.as_mut_ptr(),
-                    n as isize,
+                    crate::index::signed(n),
                     1,
                 );
             }
@@ -653,7 +653,13 @@ mod tests {
                             * f64::from(fetch(b, p * b_rs + j * b_cs))
                     })
                     .sum();
-                *slot(&mut c, i * n + j) = acc as f32;
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "the f64 accumulator narrows to the f32 result"
+                )]
+                {
+                    *slot(&mut c, i * n + j) = acc as f32;
+                }
             }
         }
         c

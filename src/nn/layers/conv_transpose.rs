@@ -1,6 +1,6 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
-use crate::index::{fetch, slot};
+use crate::index::{fetch, signed, slot, unsigned};
 use crate::io::{StateDict, TensorData};
 use crate::nn::{Layer, Module};
 use crate::shape::Axis;
@@ -181,21 +181,21 @@ impl ConvTranspose2dGradFn {
                                 for kw_idx in 0..kw {
                                     // Position in out_grad: matches forward pass col2im_transpose mapping
                                     // h_out_pos = ih * stride + kh_idx - padding
-                                    let h_out =
-                                        ih as i64 * stride_h as i64 + kh_idx as i64 - pad_h as i64;
-                                    let w_out =
-                                        iw as i64 * stride_w as i64 + kw_idx as i64 - pad_w as i64;
+                                    let h_out = signed(ih) * signed(stride_h) + signed(kh_idx)
+                                        - signed(pad_h);
+                                    let w_out = signed(iw) * signed(stride_w) + signed(kw_idx)
+                                        - signed(pad_w);
 
                                     // Check bounds
                                     if h_out >= 0
-                                        && h_out < out_h as i64
+                                        && h_out < signed(out_h)
                                         && w_out >= 0
-                                        && w_out < out_w as i64
+                                        && w_out < signed(out_w)
                                     {
                                         let out_idx = b * (out_channels * out_h * out_w)
                                             + c_out * (out_h * out_w)
-                                            + h_out as usize * out_w
-                                            + w_out as usize;
+                                            + unsigned(h_out) * out_w
+                                            + unsigned(w_out);
 
                                         let w_idx = c_in * (out_channels * kh * kw)
                                             + c_out * (kh * kw)
@@ -238,16 +238,16 @@ impl ConvTranspose2dGradFn {
                                 for iw in 0..in_w {
                                     // Position in out_grad
                                     // Use i64 to avoid underflow with unsigned types
-                                    let h_out =
-                                        ih as i64 * stride_h as i64 + kh_idx as i64 - pad_h as i64;
-                                    let w_out =
-                                        iw as i64 * stride_w as i64 + kw_idx as i64 - pad_w as i64;
+                                    let h_out = signed(ih) * signed(stride_h) + signed(kh_idx)
+                                        - signed(pad_h);
+                                    let w_out = signed(iw) * signed(stride_w) + signed(kw_idx)
+                                        - signed(pad_w);
 
                                     // Check bounds
                                     if h_out >= 0
-                                        && h_out < out_h as i64
+                                        && h_out < signed(out_h)
                                         && w_out >= 0
-                                        && w_out < out_w as i64
+                                        && w_out < signed(out_w)
                                     {
                                         let in_idx = b * (in_channels * in_h * in_w)
                                             + c_in * (in_h * in_w)
@@ -256,8 +256,8 @@ impl ConvTranspose2dGradFn {
 
                                         let out_idx = b * (out_channels * out_h * out_w)
                                             + c_out * (out_h * out_w)
-                                            + h_out as usize * out_w
-                                            + w_out as usize;
+                                            + unsigned(h_out) * out_w
+                                            + unsigned(w_out);
 
                                         grad_sum += fetch(&input_data, in_idx)
                                             * fetch(&out_grad_data, out_idx);

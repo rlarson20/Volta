@@ -129,6 +129,10 @@ fn main() {
 }
 
 /// Reads `inputs` and `outputs` (arrays of rows) from the JSON document `doc`.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "JSON numbers are f64, and PyTorch wrote f32 values into them"
+)]
 fn read_rows(doc: &serde_json::Value, key: &str) -> Result<Vec<Vec<f32>>, String> {
     let rows = doc
         .get(key)

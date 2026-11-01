@@ -17,7 +17,7 @@ const SHAPE: &[usize] = &[3, 4];
 fn add_parity() {
     assert_binary_parity_backward(
         "add",
-        |a, b| a.add(b),
+        volta::Tensor::add,
         SHAPE,
         (-2.0, 2.0),
         TOL_FWD_GPU,
@@ -29,7 +29,7 @@ fn add_parity() {
 fn sub_parity() {
     assert_binary_parity_backward(
         "sub",
-        |a, b| a.sub(b),
+        volta::Tensor::sub,
         SHAPE,
         (-2.0, 2.0),
         TOL_FWD_GPU,
@@ -41,7 +41,7 @@ fn sub_parity() {
 fn elem_mul_parity() {
     assert_binary_parity_backward(
         "elem_mul",
-        |a, b| a.elem_mul(b),
+        volta::Tensor::elem_mul,
         SHAPE,
         (-2.0, 2.0),
         TOL_FWD_GPU,
@@ -54,7 +54,7 @@ fn div_parity() {
     // Keep divisor away from 0 to keep gradient magnitudes well-conditioned.
     assert_binary_parity_backward(
         "div",
-        |a, b| a.div(b),
+        volta::Tensor::div,
         SHAPE,
         (0.5, 2.0),
         TOL_FWD_GPU,
@@ -69,7 +69,7 @@ fn max_elem_parity_forward_only() {
     // Forward parity is the reliable invariant to check here.
     assert_binary_parity(
         "max_elem",
-        |a, b| a.max_elem(b),
+        volta::Tensor::max_elem,
         SHAPE,
         (-2.0, 2.0),
         TOL_FWD_GPU,
@@ -78,10 +78,22 @@ fn max_elem_parity_forward_only() {
 
 #[test]
 fn modulo_parity_forward() {
-    assert_binary_parity("modulo", |a, b| a.modulo(b), SHAPE, (1.0, 5.0), TOL_FWD_GPU);
+    assert_binary_parity(
+        "modulo",
+        volta::Tensor::modulo,
+        SHAPE,
+        (1.0, 5.0),
+        TOL_FWD_GPU,
+    );
 }
 
 #[test]
 fn cmplt_parity_forward() {
-    assert_binary_parity("cmplt", |a, b| a.cmplt(b), SHAPE, (-2.0, 2.0), TOL_FWD_GPU);
+    assert_binary_parity(
+        "cmplt",
+        volta::Tensor::cmplt,
+        SHAPE,
+        (-2.0, 2.0),
+        TOL_FWD_GPU,
+    );
 }

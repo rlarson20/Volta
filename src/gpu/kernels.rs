@@ -265,7 +265,7 @@ fn reduce_scalar(input: &GpuBuffer, pipeline: &wgpu::ComputePipeline) -> Option<
 
     // Create uniform buffer with input size (pad to 32 bytes for wgpu min uniform buffer size)
     // Shader only reads first 4 u32s, but buffer must be at least 32 bytes
-    let params = [input.len() as u32, 0, 0, 0];
+    let params = [pack_u32(input.len()), 0, 0, 0];
     let mut padded_params = [0u32; 8];
     padded_params[..4].copy_from_slice(&params);
     let params_buffer = ctx
@@ -387,7 +387,7 @@ impl GpuKernels {
 
             // Dispatch workgroups
             // Each workgroup processes 256 elements (defined in shader)
-            let workgroup_count = (a.len() as u32).div_ceil(256);
+            let workgroup_count = pack_u32(a.len()).div_ceil(256);
             compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
         }
 
@@ -439,7 +439,7 @@ impl GpuKernels {
             compute_pass.set_pipeline(pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
-            let workgroup_count = (input.len() as u32).div_ceil(256);
+            let workgroup_count = pack_u32(input.len()).div_ceil(256);
             compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
         }
 
@@ -511,7 +511,7 @@ impl GpuKernels {
             compute_pass.set_pipeline(pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
-            let workgroup_count = (out_grad.len() as u32).div_ceil(256);
+            let workgroup_count = pack_u32(out_grad.len()).div_ceil(256);
             compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
         }
 
@@ -596,7 +596,7 @@ impl GpuKernels {
             compute_pass.set_pipeline(pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
-            let workgroup_count = (out_grad.len() as u32).div_ceil(256);
+            let workgroup_count = pack_u32(out_grad.len()).div_ceil(256);
             compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
         }
 
@@ -681,7 +681,7 @@ impl GpuKernels {
             compute_pass.set_pipeline(pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
-            let workgroup_count = (out_grad.len() as u32).div_ceil(256);
+            let workgroup_count = pack_u32(out_grad.len()).div_ceil(256);
             compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
         }
 
@@ -740,9 +740,9 @@ impl GpuKernels {
         let mut a_shape_padded = [1u32; 4];
         let mut b_shape_padded = [1u32; 4];
 
-        let out_rank = out_shape.len() as u32;
-        let a_rank = a_shape.len() as u32;
-        let b_rank = b_shape.len() as u32;
+        let out_rank = pack_u32(out_shape.len());
+        let a_rank = pack_u32(a_shape.len());
+        let b_rank = pack_u32(b_shape.len());
 
         // Pad shapes to match (align to right for NumPy-style broadcasting)
         let out_offset = 4usize.saturating_sub(out_shape.len());
@@ -751,15 +751,15 @@ impl GpuKernels {
 
         for (i, &dim) in out_shape.iter().enumerate() {
             let idx = out_offset + i;
-            *slot(&mut out_shape_padded, idx) = dim as u32;
+            *slot(&mut out_shape_padded, idx) = pack_u32(dim);
         }
         for (i, &dim) in a_shape.iter().enumerate() {
             let idx = a_offset + i;
-            *slot(&mut a_shape_padded, idx) = dim as u32;
+            *slot(&mut a_shape_padded, idx) = pack_u32(dim);
         }
         for (i, &dim) in b_shape.iter().enumerate() {
             let idx = b_offset + i;
-            *slot(&mut b_shape_padded, idx) = dim as u32;
+            *slot(&mut b_shape_padded, idx) = pack_u32(dim);
         }
 
         let params = BinaryBackwardParams {
@@ -832,7 +832,7 @@ impl GpuKernels {
             compute_pass.set_pipeline(pass1_pipeline);
             compute_pass.set_bind_group(0, &pass1_bind_group, &[]);
 
-            let workgroup_count = (out_grad.len() as u32).div_ceil(256);
+            let workgroup_count = pack_u32(out_grad.len()).div_ceil(256);
             compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
         }
 
@@ -878,7 +878,7 @@ impl GpuKernels {
             compute_pass.set_pipeline(pass2_pipeline);
             compute_pass.set_bind_group(0, &pass2_bind_group, &[]);
 
-            let max_size = (a.len().max(b.len()) as u32).div_ceil(256);
+            let max_size = pack_u32(a.len().max(b.len())).div_ceil(256);
             compute_pass.dispatch_workgroups(max_size, 1, 1);
         }
 
@@ -920,9 +920,9 @@ impl GpuKernels {
 
         // Create uniform buffer for dimensions
         let params = MatMulParams {
-            m: m as u32,
-            k: k as u32,
-            n: n as u32,
+            m: pack_u32(m),
+            k: pack_u32(k),
+            n: pack_u32(n),
             _padding: 0,
         };
 
@@ -975,8 +975,8 @@ impl GpuKernels {
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
             // Dispatch one workgroup per 16x16 tile of the output
-            let workgroups_x = (n as u32).div_ceil(16);
-            let workgroups_y = (m as u32).div_ceil(16);
+            let workgroups_x = pack_u32(n).div_ceil(16);
+            let workgroups_y = pack_u32(m).div_ceil(16);
             compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
         }
 
@@ -1021,9 +1021,9 @@ impl GpuKernels {
 
         // Create uniform buffer for dimensions
         let params = MatMulParams {
-            m: m as u32,
-            k: k as u32,
-            n: n as u32,
+            m: pack_u32(m),
+            k: pack_u32(k),
+            n: pack_u32(n),
             _padding: 0,
         };
 
@@ -1076,8 +1076,8 @@ impl GpuKernels {
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
             // Output is (m, k), dispatch one workgroup per 16x16 tile
-            let workgroups_x = (k as u32).div_ceil(16);
-            let workgroups_y = (m as u32).div_ceil(16);
+            let workgroups_x = pack_u32(k).div_ceil(16);
+            let workgroups_y = pack_u32(m).div_ceil(16);
             compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
         }
 
@@ -1122,9 +1122,9 @@ impl GpuKernels {
 
         // Create uniform buffer for dimensions
         let params = MatMulParams {
-            m: m as u32,
-            k: k as u32,
-            n: n as u32,
+            m: pack_u32(m),
+            k: pack_u32(k),
+            n: pack_u32(n),
             _padding: 0,
         };
 
@@ -1177,8 +1177,8 @@ impl GpuKernels {
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
             // Output is (k, n), dispatch one workgroup per 16x16 tile
-            let workgroups_x = (n as u32).div_ceil(16);
-            let workgroups_y = (k as u32).div_ceil(16);
+            let workgroups_x = pack_u32(n).div_ceil(16);
+            let workgroups_y = pack_u32(k).div_ceil(16);
             compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
         }
 
@@ -1217,7 +1217,7 @@ impl GpuKernels {
         let result = GpuBuffer::zeros(input_size)?;
 
         let params = ReduceBackwardParams {
-            input_size: input_size as u32,
+            input_size: pack_u32(input_size),
             op: 0, // sum
             grad_value: grad,
             _padding: 0,
@@ -1286,7 +1286,7 @@ impl GpuKernels {
             compute_pass.set_pipeline(pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
-            let workgroup_count = (input_size as u32).div_ceil(256);
+            let workgroup_count = pack_u32(input_size).div_ceil(256);
             compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
         }
 
@@ -1304,7 +1304,7 @@ impl GpuKernels {
         let result = GpuBuffer::zeros(input_size)?;
 
         let params = ReduceBackwardParams {
-            input_size: input_size as u32,
+            input_size: pack_u32(input_size),
             op: 1, // mean
             grad_value: grad,
             _padding: 0,
@@ -1373,7 +1373,7 @@ impl GpuKernels {
             compute_pass.set_pipeline(pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
-            let workgroup_count = (input_size as u32).div_ceil(256);
+            let workgroup_count = pack_u32(input_size).div_ceil(256);
             compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
         }
 
@@ -1391,7 +1391,7 @@ impl GpuKernels {
         let result = GpuBuffer::zeros(input_size)?;
 
         let params = ReduceBackwardParams {
-            input_size: input_size as u32,
+            input_size: pack_u32(input_size),
             op: 2, // max
             grad_value: grad,
             _padding: 0,
@@ -1407,7 +1407,7 @@ impl GpuKernels {
 
         // Create max indices buffer
         let mut indices = vec![0u32; input_size.div_ceil(256)];
-        *slot(&mut indices, 0) = max_index as u32;
+        *slot(&mut indices, 0) = pack_u32(max_index);
         let max_indices_buffer =
             ctx.device()
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1463,7 +1463,7 @@ impl GpuKernels {
             compute_pass.set_pipeline(pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
-            let workgroup_count = (input_size as u32).div_ceil(256);
+            let workgroup_count = pack_u32(input_size).div_ceil(256);
             compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
         }
 
@@ -1490,7 +1490,7 @@ impl GpuKernels {
             old_shape: pad_to_u32_4(old_shape),
             new_shape: pad_to_u32_4(new_shape),
             op_params: pad_to_u32_4(axes),
-            rank: old_shape.len() as u32,
+            rank: pack_u32(old_shape.len()),
             padding2: 0,
             padding: [0, 0],
         };
@@ -1519,7 +1519,7 @@ impl GpuKernels {
             old_shape: pad_to_u32_4(old_shape),
             new_shape: pad_to_u32_4(new_shape),
             op_params: broadcast_flags,
-            rank: old_shape.len() as u32,
+            rank: pack_u32(old_shape.len()),
             padding2: 0,
             padding: [0, 0],
         };
@@ -1546,7 +1546,7 @@ impl GpuKernels {
             old_shape: pad_to_u32_4(old_shape),
             new_shape: pad_to_u32_4(new_shape),
             op_params: pad_params,
-            rank: old_shape.len() as u32,
+            rank: pack_u32(old_shape.len()),
             padding2,
             // padding[1] carries the fill value bits, read by `pad` in movement.wgsl
             padding: [padding3, value.get().to_bits()],
@@ -1574,7 +1574,7 @@ impl GpuKernels {
             old_shape: pad_to_u32_4(old_shape),
             new_shape: pad_to_u32_4(new_shape),
             op_params: pad_to_u32_4(&starts),
-            rank: old_shape.len() as u32,
+            rank: pack_u32(old_shape.len()),
             padding2: 0,
             padding: [0, 0],
         };
@@ -1598,7 +1598,7 @@ impl GpuKernels {
             old_shape: pad_to_u32_4(old_shape),
             new_shape: pad_to_u32_4(new_shape),
             op_params: pad_to_u32_4(strides),
-            rank: old_shape.len() as u32,
+            rank: pack_u32(old_shape.len()),
             padding2: 0,
             padding: [0, 0],
         };
@@ -1624,7 +1624,7 @@ impl GpuKernels {
             old_shape: pad_to_u32_4(old_shape),
             new_shape: pad_to_u32_4(new_shape),
             op_params: pad_to_u32_4(axes),
-            rank: old_shape.len() as u32,
+            rank: pack_u32(old_shape.len()),
             padding2: 0,
             padding: [0, 0],
         };
@@ -1647,7 +1647,7 @@ impl GpuKernels {
             old_shape: pad_to_u32_4(old_shape),
             new_shape: pad_to_u32_4(new_shape),
             op_params: [0, 0, 0, 0],
-            rank: old_shape.len() as u32,
+            rank: pack_u32(old_shape.len()),
             padding2: 0,
             padding: [0, 0],
         };
@@ -1673,7 +1673,7 @@ impl GpuKernels {
             old_shape: pad_to_u32_4(old_shape),
             new_shape: pad_to_u32_4(new_shape),
             op_params,
-            rank: old_shape.len() as u32,
+            rank: pack_u32(old_shape.len()),
             padding2,
             padding: [padding3, 0],
         };
@@ -1703,7 +1703,7 @@ impl GpuKernels {
             old_shape: pad_to_u32_4(old_shape),
             new_shape: pad_to_u32_4(new_shape),
             op_params: pad_to_u32_4(&range_starts),
-            rank: old_shape.len() as u32,
+            rank: pack_u32(old_shape.len()),
             padding2: 0,
             padding: [0, 0],
         };
@@ -1727,7 +1727,7 @@ impl GpuKernels {
             old_shape: pad_to_u32_4(old_shape),
             new_shape: pad_to_u32_4(new_shape),
             op_params: pad_to_u32_4(strides),
-            rank: old_shape.len() as u32,
+            rank: pack_u32(old_shape.len()),
             padding2: 0,
             padding: [0, 0],
         };
@@ -1807,7 +1807,7 @@ impl GpuKernels {
             compute_pass.set_pipeline(pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
-            let workgroup_count = (params.len() as u32).div_ceil(256);
+            let workgroup_count = pack_u32(params.len()).div_ceil(256);
             compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
         }
 
@@ -1836,7 +1836,7 @@ impl GpuKernels {
         let ctx = get_gpu_context()?;
         let update = GpuBuffer::zeros(grad.len())?;
         let params = MuonParams {
-            n: gpu_len(grad.len()),
+            n: pack_u32(grad.len()),
             flag: u32::from(nesterov),
             alpha: momentum,
             beta: 0.0,
@@ -1892,7 +1892,7 @@ impl GpuKernels {
         // Frobenius normalization: the sum of squares stays on the device.
         let ctx = get_gpu_context()?;
         let norm_sq = GpuBuffer::zeros(1)?;
-        let len = gpu_len(x0.len());
+        let len = pack_u32(x0.len());
         muon_dispatch(
             &ctx.pipelines().muon_sum_squares,
             &[(0, &x0), (2, &norm_sq)],
@@ -1991,16 +1991,16 @@ impl GpuKernels {
 
         // Create uniform buffer with im2col parameters
         let params = Im2colParams {
-            batch_size: batch_size as u32,
-            channels: channels as u32,
-            height: height as u32,
-            width: width as u32,
-            kernel_h: kernel_h as u32,
-            kernel_w: kernel_w as u32,
-            stride_h: stride_h as u32,
-            stride_w: stride_w as u32,
-            h_out: h_out as u32,
-            w_out: w_out as u32,
+            batch_size: pack_u32(batch_size),
+            channels: pack_u32(channels),
+            height: pack_u32(height),
+            width: pack_u32(width),
+            kernel_h: pack_u32(kernel_h),
+            kernel_w: pack_u32(kernel_w),
+            stride_h: pack_u32(stride_h),
+            stride_w: pack_u32(stride_w),
+            h_out: pack_u32(h_out),
+            w_out: pack_u32(w_out),
             _padding: [0, 0],
         };
 
@@ -2048,7 +2048,7 @@ impl GpuKernels {
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
             // Each workgroup handles one output row (one output position)
-            let workgroup_count = (rows as u32).div_ceil(256);
+            let workgroup_count = pack_u32(rows).div_ceil(256);
             compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
         }
 
@@ -2102,16 +2102,16 @@ impl GpuKernels {
 
         // Create uniform buffer with col2im parameters
         let params = Col2imParams {
-            batch_size: batch_size as u32,
-            channels: channels as u32,
-            height: height as u32,
-            width: width as u32,
-            kernel_h: kernel_h as u32,
-            kernel_w: kernel_w as u32,
-            stride_h: stride_h as u32,
-            stride_w: stride_w as u32,
-            h_out: h_out as u32,
-            w_out: w_out as u32,
+            batch_size: pack_u32(batch_size),
+            channels: pack_u32(channels),
+            height: pack_u32(height),
+            width: pack_u32(width),
+            kernel_h: pack_u32(kernel_h),
+            kernel_w: pack_u32(kernel_w),
+            stride_h: pack_u32(stride_h),
+            stride_w: pack_u32(stride_w),
+            h_out: pack_u32(h_out),
+            w_out: pack_u32(w_out),
             _padding: [0, 0],
         };
 
@@ -2160,8 +2160,8 @@ impl GpuKernels {
 
             // Workgroup size is (16, 16, 1)
             // x dimension: channels, y dimension: batch * height * width
-            let workgroup_x = (channels as u32).div_ceil(16);
-            let workgroup_y = ((batch_size * height * width) as u32).div_ceil(16);
+            let workgroup_x = pack_u32(channels).div_ceil(16);
+            let workgroup_y = pack_u32(batch_size * height * width).div_ceil(16);
             compute_pass.dispatch_workgroups(workgroup_x, workgroup_y, 1);
         }
 
@@ -2203,19 +2203,19 @@ impl GpuKernels {
 
         // Create uniform buffer with direct conv parameters
         let params = DirectConvParams {
-            batch_size: batch_size as u32,
-            in_channels: in_channels as u32,
-            out_channels: out_channels as u32,
-            height: height as u32,
-            width: width as u32,
-            kernel_h: kernel_h as u32,
-            kernel_w: kernel_w as u32,
-            stride_h: stride_h as u32,
-            stride_w: stride_w as u32,
-            pad_h: pad_h as u32,
-            pad_w: pad_w as u32,
-            h_out: h_out as u32,
-            w_out: w_out as u32,
+            batch_size: pack_u32(batch_size),
+            in_channels: pack_u32(in_channels),
+            out_channels: pack_u32(out_channels),
+            height: pack_u32(height),
+            width: pack_u32(width),
+            kernel_h: pack_u32(kernel_h),
+            kernel_w: pack_u32(kernel_w),
+            stride_h: pack_u32(stride_h),
+            stride_w: pack_u32(stride_w),
+            pad_h: pack_u32(pad_h),
+            pad_w: pack_u32(pad_w),
+            h_out: pack_u32(h_out),
+            w_out: pack_u32(w_out),
             _padding: 0,
         };
 
@@ -2268,8 +2268,8 @@ impl GpuKernels {
 
             // Workgroup dimensions: (out_channels, batch * h_out * w_out, 1)
             // Each thread handles one output pixel
-            let workgroups_x = (out_channels as u32).div_ceil(16);
-            let workgroups_y = ((batch_size * h_out * w_out) as u32).div_ceil(16);
+            let workgroups_x = pack_u32(out_channels).div_ceil(16);
+            let workgroups_y = pack_u32(batch_size * h_out * w_out).div_ceil(16);
             compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
         }
 
@@ -2317,19 +2317,19 @@ impl GpuKernels {
 
         // Create uniform buffer with iGEMM parameters
         let params = IGEMMParams {
-            batch_size: batch_size as u32,
-            in_channels: in_channels as u32,
-            out_channels: out_channels as u32,
-            height: height as u32,
-            width: width as u32,
-            kernel_h: kernel_h as u32,
-            kernel_w: kernel_w as u32,
-            stride_h: stride_h as u32,
-            stride_w: stride_w as u32,
-            pad_h: pad_h as u32,
-            pad_w: pad_w as u32,
-            h_out: h_out as u32,
-            w_out: w_out as u32,
+            batch_size: pack_u32(batch_size),
+            in_channels: pack_u32(in_channels),
+            out_channels: pack_u32(out_channels),
+            height: pack_u32(height),
+            width: pack_u32(width),
+            kernel_h: pack_u32(kernel_h),
+            kernel_w: pack_u32(kernel_w),
+            stride_h: pack_u32(stride_h),
+            stride_w: pack_u32(stride_w),
+            pad_h: pack_u32(pad_h),
+            pad_w: pack_u32(pad_w),
+            h_out: pack_u32(h_out),
+            w_out: pack_u32(w_out),
             oc_tile,
             ic_tile,
             s_tile,
@@ -2384,8 +2384,8 @@ impl GpuKernels {
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
             // Calculate number of tiles
-            let num_oc_tiles = (out_channels as u32).div_ceil(oc_tile);
-            let total_spatial = (batch_size * h_out * w_out) as u32;
+            let num_oc_tiles = pack_u32(out_channels).div_ceil(oc_tile);
+            let total_spatial = pack_u32(batch_size * h_out * w_out);
             let num_spatial_tiles = total_spatial.div_ceil(s_tile);
             let num_tiles = num_oc_tiles * num_spatial_tiles;
 
@@ -2431,19 +2431,19 @@ impl GpuKernels {
         let result = GpuBuffer::zeros(output_size)?;
 
         let params = ConvBackwardInputParams {
-            batch_size: batch_size as u32,
-            in_channels: in_channels as u32,
-            out_channels: out_channels as u32,
-            height: height as u32,
-            width: width as u32,
-            kernel_h: kernel_h as u32,
-            kernel_w: kernel_w as u32,
-            stride_h: stride_h as u32,
-            stride_w: stride_w as u32,
-            pad_h: pad_h as u32,
-            pad_w: pad_w as u32,
-            h_out: h_out as u32,
-            w_out: w_out as u32,
+            batch_size: pack_u32(batch_size),
+            in_channels: pack_u32(in_channels),
+            out_channels: pack_u32(out_channels),
+            height: pack_u32(height),
+            width: pack_u32(width),
+            kernel_h: pack_u32(kernel_h),
+            kernel_w: pack_u32(kernel_w),
+            stride_h: pack_u32(stride_h),
+            stride_w: pack_u32(stride_w),
+            pad_h: pack_u32(pad_h),
+            pad_w: pack_u32(pad_w),
+            h_out: pack_u32(h_out),
+            w_out: pack_u32(w_out),
             _padding: 0,
         };
 
@@ -2495,8 +2495,8 @@ impl GpuKernels {
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
             // Workgroup: (in_channels, batch * height * width, 1)
-            let workgroups_x = (in_channels as u32).div_ceil(16);
-            let workgroups_y = ((batch_size * height * width) as u32).div_ceil(16);
+            let workgroups_x = pack_u32(in_channels).div_ceil(16);
+            let workgroups_y = pack_u32(batch_size * height * width).div_ceil(16);
             compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
         }
 
@@ -2537,19 +2537,19 @@ impl GpuKernels {
         let result = GpuBuffer::zeros(output_size)?;
 
         let params = ConvBackwardWeightParams {
-            batch_size: batch_size as u32,
-            in_channels: in_channels as u32,
-            out_channels: out_channels as u32,
-            height: height as u32,
-            width: width as u32,
-            kernel_h: kernel_h as u32,
-            kernel_w: kernel_w as u32,
-            stride_h: stride_h as u32,
-            stride_w: stride_w as u32,
-            pad_h: pad_h as u32,
-            pad_w: pad_w as u32,
-            h_out: h_out as u32,
-            w_out: w_out as u32,
+            batch_size: pack_u32(batch_size),
+            in_channels: pack_u32(in_channels),
+            out_channels: pack_u32(out_channels),
+            height: pack_u32(height),
+            width: pack_u32(width),
+            kernel_h: pack_u32(kernel_h),
+            kernel_w: pack_u32(kernel_w),
+            stride_h: pack_u32(stride_h),
+            stride_w: pack_u32(stride_w),
+            pad_h: pack_u32(pad_h),
+            pad_w: pack_u32(pad_w),
+            h_out: pack_u32(h_out),
+            w_out: pack_u32(w_out),
             _padding: 0,
         };
 
@@ -2601,8 +2601,8 @@ impl GpuKernels {
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
             // Workgroup: (out_channels, in_channels * kernel_h * kernel_w, 1)
-            let workgroups_x = (out_channels as u32).div_ceil(16);
-            let workgroups_y = ((in_channels * kernel_h * kernel_w) as u32).div_ceil(16);
+            let workgroups_x = pack_u32(out_channels).div_ceil(16);
+            let workgroups_y = pack_u32(in_channels * kernel_h * kernel_w).div_ceil(16);
             compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
         }
 
@@ -2642,19 +2642,19 @@ impl GpuKernels {
         let result = GpuBuffer::zeros(output_size)?;
 
         let params = IGEMMBackwardInputParams {
-            batch_size: batch_size as u32,
-            in_channels: in_channels as u32,
-            out_channels: out_channels as u32,
-            height: height as u32,
-            width: width as u32,
-            kernel_h: kernel_h as u32,
-            kernel_w: kernel_w as u32,
-            stride_h: stride_h as u32,
-            stride_w: stride_w as u32,
-            pad_h: pad_h as u32,
-            pad_w: pad_w as u32,
-            h_out: h_out as u32,
-            w_out: w_out as u32,
+            batch_size: pack_u32(batch_size),
+            in_channels: pack_u32(in_channels),
+            out_channels: pack_u32(out_channels),
+            height: pack_u32(height),
+            width: pack_u32(width),
+            kernel_h: pack_u32(kernel_h),
+            kernel_w: pack_u32(kernel_w),
+            stride_h: pack_u32(stride_h),
+            stride_w: pack_u32(stride_w),
+            pad_h: pack_u32(pad_h),
+            pad_w: pack_u32(pad_w),
+            h_out: pack_u32(h_out),
+            w_out: pack_u32(w_out),
             _padding: 0,
         };
 
@@ -2706,8 +2706,8 @@ impl GpuKernels {
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
             // Workgroup: (in_channels, batch * height * width, 1)
-            let workgroups_x = (in_channels as u32).div_ceil(16);
-            let workgroups_y = ((batch_size * height * width) as u32).div_ceil(16);
+            let workgroups_x = pack_u32(in_channels).div_ceil(16);
+            let workgroups_y = pack_u32(batch_size * height * width).div_ceil(16);
             compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
         }
 
@@ -2747,19 +2747,19 @@ impl GpuKernels {
         let result = GpuBuffer::zeros(output_size)?;
 
         let params = IGEMMBackwardWeightParams {
-            batch_size: batch_size as u32,
-            in_channels: in_channels as u32,
-            out_channels: out_channels as u32,
-            height: height as u32,
-            width: width as u32,
-            kernel_h: kernel_h as u32,
-            kernel_w: kernel_w as u32,
-            stride_h: stride_h as u32,
-            stride_w: stride_w as u32,
-            pad_h: pad_h as u32,
-            pad_w: pad_w as u32,
-            h_out: h_out as u32,
-            w_out: w_out as u32,
+            batch_size: pack_u32(batch_size),
+            in_channels: pack_u32(in_channels),
+            out_channels: pack_u32(out_channels),
+            height: pack_u32(height),
+            width: pack_u32(width),
+            kernel_h: pack_u32(kernel_h),
+            kernel_w: pack_u32(kernel_w),
+            stride_h: pack_u32(stride_h),
+            stride_w: pack_u32(stride_w),
+            pad_h: pack_u32(pad_h),
+            pad_w: pack_u32(pad_w),
+            h_out: pack_u32(h_out),
+            w_out: pack_u32(w_out),
             _padding: 0,
         };
 
@@ -2811,8 +2811,8 @@ impl GpuKernels {
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
             // Workgroup: (out_channels, in_channels * kernel_h * kernel_w, 1)
-            let workgroups_x = (out_channels as u32).div_ceil(16);
-            let workgroups_y = ((in_channels * kernel_h * kernel_w) as u32).div_ceil(16);
+            let workgroups_x = pack_u32(out_channels).div_ceil(16);
+            let workgroups_y = pack_u32(in_channels * kernel_h * kernel_w).div_ceil(16);
             compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
         }
 
@@ -2943,12 +2943,16 @@ fn movement_op(
     Some(result)
 }
 
-/// An element count as the `u32` the Muon shaders take.
+/// Converts an index, extent, or length to the `u32` a kernel parameter holds, panicking if it
+/// does not fit instead of truncating.
 ///
 /// # Panics
-/// If it does not fit.
-fn gpu_len(len: usize) -> u32 {
-    u32::try_from(len).unwrap_or_else(|_| panic!("GPU Muon buffer length {len} exceeds u32"))
+///
+/// If `v > u32::MAX`.
+#[track_caller]
+fn pack_u32(v: usize) -> u32 {
+    u32::try_from(v)
+        .unwrap_or_else(|_| panic!("kernel parameter {v} does not fit u32 (index-mapping bug)"))
 }
 
 /// Workgroups (256 threads each) that cover `len` elements.
@@ -2956,7 +2960,7 @@ fn gpu_len(len: usize) -> u32 {
 /// # Panics
 /// If that is more than the 65535 a single dispatch dimension allows.
 fn workgroups_for(len: usize) -> u32 {
-    let groups = gpu_len(len).div_ceil(256);
+    let groups = pack_u32(len).div_ceil(256);
     assert!(
         groups <= 65535,
         "GPU Muon buffer of {len} elements needs {groups} workgroups, over the 65535 limit"
@@ -2970,7 +2974,7 @@ fn muon_axpby(x: &GpuBuffer, alpha: f32, y: &GpuBuffer, beta: f32) -> Option<Gpu
     let ctx = get_gpu_context()?;
     let out = GpuBuffer::zeros(x.len())?;
     let params = MuonParams {
-        n: gpu_len(x.len()),
+        n: pack_u32(x.len()),
         flag: 0,
         alpha,
         beta,
@@ -3041,7 +3045,19 @@ use wgpu::util::DeviceExt;
 
 #[cfg(test)]
 mod packing_tests {
-    use super::{pack_pad_widths, pad_to_u32_4};
+    use super::{pack_pad_widths, pack_u32, pad_to_u32_4};
+
+    #[test]
+    fn pack_u32_converts_in_range_values_exactly() {
+        assert_eq!(pack_u32(0), 0);
+        assert_eq!(pack_u32(u32::MAX as usize), u32::MAX);
+    }
+
+    #[test]
+    #[should_panic(expected = "does not fit u32")]
+    fn pack_u32_over_u32_panics() {
+        let _ = pack_u32(u32::MAX as usize + 1);
+    }
 
     #[test]
     fn pad_widths_pack_as_the_shader_reads_them() {

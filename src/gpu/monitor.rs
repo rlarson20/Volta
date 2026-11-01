@@ -150,6 +150,11 @@ fn get_process_memory_ratio() -> f64 {
 /// println!("Current memory usage: {}MB", get_process_memory_mb());
 /// ```
 #[must_use]
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the ratio is a fraction of 24 GiB, so the product is a whole, non-negative MB count"
+)]
 pub fn get_process_memory_mb() -> usize {
     const SYSTEM_MEMORY_MB: usize = 24 * 1024;
     let ratio = get_process_memory_ratio();
