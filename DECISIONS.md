@@ -213,7 +213,7 @@ A size silently defaulting to 1 is the same class as `.get(i).unwrap_or(0.0)` (i
 
 **Also changed:**
 - `GpuKernels::matmul`, `matmul_backward_a`, and `matmul_backward_b` are now `pub(crate)`, for the same reason as the conv wrappers. `test_gpu_matmul` was the only external caller; it moved from `tests/gpu_test.rs` into `src/gpu/kernels.rs` as a unit test (with a non-square case, so swapped `m/k/n` shows up).
-- The GPU matmul backward returned early even when a gradient kernel failed (a `FIXME`), which silently froze a parameter. It now returns early only if every required gradient was computed, and otherwise falls through to the CPU path with a `warn`. No test forces a kernel failure, so the fall-through path itself is untested.
+- The GPU matmul backward returned early even when a gradient kernel failed (a `FIXME`), which silently froze a parameter. Each required gradient now comes from its kernel or panics: a `None` calls `kernel_failed("MatMul")` (see "`DevicePolicy`"), and only a case with no kernel (batched, vector) is a gap. No test forces a kernel failure, so the panic branch is checked by review only.
 
 ### PadValue (ADDENDUM §2.4)
 
