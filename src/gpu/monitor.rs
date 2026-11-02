@@ -128,7 +128,6 @@ fn get_process_memory_ratio() -> f64 {
     };
 
     // Convert to ratio of 24GB (M2 Mac system memory)
-    // TODO: Could use sysinfo crate for cross-platform memory detection
     rss_kb as f64 / SYSTEM_MEMORY_KB as f64
 }
 

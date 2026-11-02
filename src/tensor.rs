@@ -74,7 +74,6 @@ impl Tensor {
     /// argument so a `Tensor` method can be called on it) — `inner` being private
     /// means a `Tensor { inner: .. }` struct literal only compiles inside this
     /// module, so this is the crate-wide way to do it instead.
-    /// TODO: investigate why i actually need this
     #[must_use]
     pub(crate) fn from_raw(raw: RawTensor) -> Self {
         Self {

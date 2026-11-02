@@ -311,7 +311,7 @@ impl GpuContext {
     /// 2. Creates a device and queue
     /// 3. Compiles all our compute shaders
     /// # Errors
-    /// Whatever errors come from async (TODO: inspect this deeper)
+    /// A message naming the step that failed: no suitable adapter, or the device request was refused.
     pub fn new() -> Result<Self, String> {
         // wgpu is async, but we want a sync API for simplicity
         // pollster::block_on runs async code synchronously
