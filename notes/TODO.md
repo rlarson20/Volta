@@ -8,7 +8,7 @@ This file holds only open work. The done items, with their evidence (tests, muta
 ## Correctness
 
 - [ ] **`examples/dcgan.rs` is fixed but unverified: nobody has seen it learn.** The double normalization is gone (it asserts the data spans [-1, 1]) and it uses Adam (lr 2e-4, betas 0.5/0.999), but a CPU release run (`--no-default-features`) had not finished one 937-batch epoch after 13 minutes, so the D/G losses and the before/after generator stats it prints (it exits 1 on a non-finite loss or a collapsed output) have never been seen. Find out where the time goes (the two `ConvTranspose2d` layers have no GPU path and the example runs 4 forward/backward passes per batch) before judging the training.
-- [ ] The dtype system is decorative: every compute path is f32. Either make it real or stop advertising it.
+- [ ] **The dtype system is decorative: every compute path is f32.** Being made real as ADDENDUM §11 (Phase 5, PRs P0–P8); the merge gate waits for it.
 - [ ] **GPU broadcast backward is broken, but unreachable.** Verified on `fff5397` with a 3x1 + 1x4 add: the race-free two-pass path (`binary_backward_broadcast_safe`) panics with a wgpu validation error (pass-1 bind group has 6 bindings; the auto layout keeps only the bindings the entry point uses: 3 for Add, 5 for Mul). Nothing reaches it: `gpu_binary_backward` treats differing shapes as a device-policy gap and takes the CPU backward. Fixing it means an explicit bind group layout (or matching bindings per entry point) plus a GPU forward that broadcasts. Repro: `cargo test --lib gpu_binary_backward_broadcast_matches_cpu -- --ignored`.
 
 ## Correctness: found by the 2026-11 sweep
