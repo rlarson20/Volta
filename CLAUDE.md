@@ -8,11 +8,11 @@ In a cloud session (Linux, `CLAUDE_CODE_REMOTE` set, no `rtk`, no GPU), read `de
 
 ## Current state
 
-Update this section when a phase lands or the merge gate changes. Keep it short.
+Update this section when a phase lands or the merge gate changes. Keep it short; what landed is in the commit log and `DECISIONS.md`.
 
-- **Roadmap:** `docs/plans/ADDENDUM.md` § Sequencing is the only plan. Phases 0–3 are done. Phase 2 (types for dims and ops): `edge()`, tensor construction, and the dim arguments use `Shape`/`Axis`, and `Strides::from_shape` replaced `compute_strides`. `RawTensor.shape` is a `Shape`, and `Tensor::shape()` returns it (Phase 3; DECISIONS.md, "`RawTensor.shape` is a `Shape`"). The conv specs, `MatmulSpec`, and `PadValue` (`src/spec.rs`) have landed; B4 and H1 are retired. The closed `GradFn` enum (§2.5) has landed. `define_ops!` (§5.1) has landed for the unary and binary families. `into_loss`/`ScalarLoss` (§2.2) has landed: `Tensor` has no `backward` and `into_loss()?.backward()` is the only entry point. Movement ops share one `movement_edge` helper. The indexing policy (§8) has landed as `crate::index::{fetch, slot, span}` (panic, not NaN: DECISIONS.md, "Indexing policy"). It found and fixed a batch > 1 offset bug in all three CPU iGEMM kernels. `TensorOps` is deleted: its methods are inherent on `Tensor` (§3.4). The layer traits are split (§3.2): `Module` (base), `Layer` (`forward`), and sealed `IndexedLayer`/`RecurrentLayer`; `TransformerBlock` uses real attention (H6). GPU storage is `Arc<GpuStorage>` with a write-once host copy and copy-on-write writes (H3; DECISIONS.md, "GPU storage: shared write-once host copy"). `DevicePolicy` (§2.1) has landed: `Strict` by default, so a GPU op with no kernel panics unless wrapped in `with_device_policy(DevicePolicy::PreferGpu)` (DECISIONS.md, "`DevicePolicy`"). Phase 3 is done. Next: the merge gate below; Phase 4 is optional.
-- **Open defects:** IDs B1–B5 and H1–H8 come from `docs/audits/OPUS_5_EVAL_AUDIT.md`. Live status is in `notes/TODO.md`.
-- **Merge gate:** cleared. The `lib.rs` allow is gone and the library documents every item (`missing_docs` and `missing_docs_in_private_items` are `deny`). `just ci` passes. `improvements` can merge into `main` once the other TODO items are done.
+- **Roadmap:** `docs/plans/ADDENDUM.md` § Sequencing is the only plan. Phases 0–3 are done. Phase 4 (arena graph, sealed `Backend` trait, proptest DAG checks) is optional and comes last.
+- **Open work:** `notes/TODO.md` lists only what is open. The defect IDs B1–B5 and H1–H8 (`docs/audits/OPUS_5_EVAL_AUDIT.md`) are all fixed; the audits are frozen records.
+- **Merge gate:** cleared. The library documents every item (`missing_docs` and `missing_docs_in_private_items` are `deny`), and `just ci` passes. `improvements` can merge into `main` once the other TODO items are done.
 
 ## Invariants
 
@@ -59,7 +59,7 @@ Read these when the need comes up; don't preload them.
 | What's in scope now; what's next | ADDENDUM § Sequencing + `notes/TODO.md` |
 | Evidence and repro for a defect ID | `docs/audits/` |
 | Feature ideas after Phase 2 | `docs/backlog.md` (don't start these unprompted) |
-| Step-by-step: adding an op or layer | `dev-docs/DEVELOPMENT.md` (pre-Phase-1 in places; the invariants above win) |
+| Step-by-step: adding an op or layer | `dev-docs/DEVELOPMENT.md` |
 | Conv algorithms and selection | `dev-docs/CONV2D_IMPLEMENTATION.md` |
 | What's valid in a cloud session; Linux/no-GPU differences | `dev-docs/CLOUD.md` |
 
