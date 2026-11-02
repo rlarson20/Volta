@@ -3,6 +3,9 @@ use crate::index::slot;
 use crate::shape::MAX_NUMEL;
 
 /// Normalize data in-place: (x - mean) / std
+///
+/// `load_mnist_images` output is already in `[0, 1]`, so `mean = 0.5, std = 0.5` maps it
+/// to `[-1, 1]`; a `255`-based `mean`/`std` would rescale it a second time.
 pub fn normalize(data: &mut [f32], mean: f32, std: f32) {
     for x in data.iter_mut() {
         *x = (*x - mean) / std;

@@ -39,6 +39,17 @@ fn main() {
         std::process::exit(1);
     };
 
+    // Pixels must span [0, 1] (`load_mnist_images` scales them); a second rescale would break this.
+    let (lo, hi) = image_data
+        .iter()
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &x| {
+            (lo.min(x), hi.max(x))
+        });
+    assert!(
+        lo == 0.0 && hi == 1.0,
+        "training images must span [0, 1], found [{lo}, {hi}]"
+    );
+
     // Create DataLoader
     let batch_size = 64;
     let mut dataloader = DataLoader::new(

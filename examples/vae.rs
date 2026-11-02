@@ -33,9 +33,19 @@ fn main() {
     let num_train = train_images.len() / input_dim;
     println!("Loaded {num_train} MNIST training images");
 
-    // Normalize to [0, 1]
     // `load_mnist_images` already scales pixels to [0, 1].
     let train_data = train_images;
+
+    // Pixels must span [0, 1] (`load_mnist_images` scales them); a second rescale would break this.
+    let (lo, hi) = train_data
+        .iter()
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &x| {
+            (lo.min(x), hi.max(x))
+        });
+    assert!(
+        lo == 0.0 && hi == 1.0,
+        "training images must span [0, 1], found [{lo}, {hi}]"
+    );
 
     println!("Architecture:");
     println!("  Encoder: {input_dim} -> {hidden_dim} -> {latent_dim} (mu + logvar)");

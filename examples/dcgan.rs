@@ -1,11 +1,11 @@
-//! DCGAN on MNIST: a transposed-convolution `Generator` and a convolutional `Discriminator`, trained adversarially with `SGD` and `bce_with_logits_loss`.
+//! DCGAN on MNIST: a transposed-convolution `Generator` and a convolutional `Discriminator`, trained adversarially with `Adam` and `bce_with_logits_loss`.
 //!
 //! Needs the MNIST training images in `data/mnist/`; it exits with download instructions if they are missing, rather than train on made-up data.
 //!
-//! Images are normalized to `[-1, 1]` to match the generator's `Tanh` output.
+//! Images are normalized to `[-1, 1]` to match the generator's `Tanh` output. The example asserts that range before it trains, and exits if the losses go non-finite or the generator's output collapses to a constant.
 use volta::{
-    Conv2d, ConvTranspose2d, Flatten, Layer, Linear, Module, ProgressBar, RawTensor, SGD, Tanh,
-    bce_with_logits_loss, load_mnist_images, normalize, randn,
+    Adam, Conv2d, ConvTranspose2d, Flatten, Layer, Linear, Module, ProgressBar, RawTensor, Tanh,
+    Tensor, bce_with_logits_loss, load_mnist_images, normalize, randn,
 };
 
 // Generator: noise -> fake images
@@ -114,6 +114,15 @@ impl Discriminator {
     }
 }
 
+/// Mean and standard deviation over every element of `t`.
+fn mean_std(t: &Tensor) -> (f32, f32) {
+    let data = t.data();
+    let n = data.len() as f32;
+    let mean = data.iter().sum::<f32>() / n;
+    let var = data.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / n;
+    (mean, var.sqrt())
+}
+
 fn main() {
     println!("=== DCGAN on MNIST ===\n");
 
@@ -138,9 +147,20 @@ fn main() {
     let num_train = train_images.len() / 784;
     println!("Loaded {num_train} MNIST training images");
 
-    // Normalize to [-1, 1] to match tanh output
+    // `load_mnist_images` already scales pixels to [0, 1]; map them to [-1, 1] to match tanh output.
     let mut train_data = train_images;
-    normalize(&mut train_data, 127.5, 127.5);
+    normalize(&mut train_data, 0.5, 0.5);
+    // MNIST contains both black (0) and white (255) pixels, so both ends of the range are hit.
+    // Checking both ends catches a double normalization, which stays inside [-1, 1] but collapses.
+    let (lo, hi) = train_data
+        .iter()
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &x| {
+            (lo.min(x), hi.max(x))
+        });
+    assert!(
+        (lo + 1.0).abs() < 1e-6 && (hi - 1.0).abs() < 1e-6,
+        "training images must span [-1, 1], found [{lo}, {hi}]"
+    );
 
     println!("Architecture:");
     println!("  Generator:");
@@ -158,8 +178,15 @@ fn main() {
     let generator = Generator::new(latent_dim);
     let discriminator = Discriminator::new();
 
-    let mut g_optimizer = SGD::new(generator.parameters(), learning_rate, 0.5, 0.0);
-    let mut d_optimizer = SGD::new(discriminator.parameters(), learning_rate, 0.5, 0.0);
+    // The DCGAN paper's settings: lr 2e-4 and beta1 0.5 are for Adam.
+    let betas = (0.5, 0.999);
+    let mut g_optimizer = Adam::new(generator.parameters(), learning_rate, betas, 1e-8, 0.0);
+    let mut d_optimizer = Adam::new(discriminator.parameters(), learning_rate, betas, 1e-8, 0.0);
+
+    // A fixed noise batch, so the generator's output can be compared before and after training.
+    let probe_noise = randn(&[16, latent_dim]);
+    let (mean_before, std_before) = mean_std(&generator.forward(&probe_noise));
+    println!("Generator output before training: mean={mean_before:.4}, std={std_before:.4}");
 
     let num_batches = num_train / batch_size;
     let mut progress = ProgressBar::new(num_epochs, "Training");
@@ -224,9 +251,21 @@ fn main() {
         let avg_d_loss = total_d_loss / num_batches as f32;
         let avg_g_loss = total_g_loss / num_batches as f32;
         println!(" D_loss={avg_d_loss:.4}, G_loss={avg_g_loss:.4}");
+        if !avg_d_loss.is_finite() || !avg_g_loss.is_finite() {
+            eprintln!("Training diverged: D_loss={avg_d_loss}, G_loss={avg_g_loss}");
+            std::process::exit(1);
+        }
     }
 
     println!("\n=== Training Complete ===");
+
+    let (mean_after, std_after) = mean_std(&generator.forward(&probe_noise));
+    println!("Generator output after training: mean={mean_after:.4}, std={std_after:.4}");
+    // A generator that collapsed (or saturated tanh) emits one constant image.
+    if std_after < 1e-3 {
+        eprintln!("Generator output collapsed to a constant (std={std_after})");
+        std::process::exit(1);
+    }
 
     // Generate sample images
     println!("\nGenerating sample images:");

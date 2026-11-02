@@ -3,7 +3,9 @@ use std::io::{Read, Result};
 use std::path::Path;
 
 /// Load MNIST images from IDX format file
-/// Returns flattened image data (all images concatenated)
+/// Returns flattened image data (all images concatenated), with each pixel already
+/// scaled to `[0, 1]` (`byte / 255`). Do not divide by 255 again; for `[-1, 1]` use
+/// `normalize(&mut data, 0.5, 0.5)`.
 /// # Errors
 /// file opening errors
 pub fn load_mnist_images<P: AsRef<Path>>(path: P) -> Result<Vec<f32>> {
@@ -70,13 +72,41 @@ pub fn load_mnist_labels<P: AsRef<Path>>(path: P) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_mnist_header_parsing() {
-        // This test validates the magic number checking
-        // Actual file loading would require test data
+    use crate::index::fetch;
 
-        // Just verify the functions exist and have correct signatures
-        let _ = load_mnist_images::<&str> as fn(_) -> Result<Vec<f32>>;
-        let _ = load_mnist_labels::<&str> as fn(_) -> Result<Vec<u8>>;
+    /// Writes `bytes` to a uniquely named file in the temp dir and returns its path.
+    fn write_idx(name: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("volta_{}_{name}", std::process::id()));
+        std::fs::write(&path, bytes).expect("write temp IDX file");
+        path
+    }
+
+    /// Pixels come back as `byte / 255`, so the extremes are exactly 0 and 1.
+    #[test]
+    fn test_load_mnist_images_scales_pixels_to_unit_range() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0x0000_0803_u32.to_be_bytes());
+        bytes.extend_from_slice(&1_u32.to_be_bytes()); // images
+        bytes.extend_from_slice(&1_u32.to_be_bytes()); // rows
+        bytes.extend_from_slice(&3_u32.to_be_bytes()); // cols
+        bytes.extend_from_slice(&[0, 128, 255]);
+        let path = write_idx("images", &bytes);
+
+        let data = load_mnist_images(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+
+        assert_eq!(data.len(), 3);
+        assert_eq!(fetch(&data, 0), 0.0);
+        assert!((fetch(&data, 1) - 128.0 / 255.0).abs() < 1e-7);
+        assert_eq!(fetch(&data, 2), 1.0);
+    }
+
+    /// A file with the wrong magic number is `InvalidData`, not a panic or garbage pixels.
+    #[test]
+    fn test_load_mnist_images_rejects_bad_magic() {
+        let path = write_idx("bad_magic", &[0u8; 16]);
+        let err = load_mnist_images(&path).unwrap_err();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 }
