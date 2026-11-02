@@ -45,6 +45,9 @@ This file holds only open work. The done items, with their evidence (tests, muta
 ## Tests and tooling
 
 - [ ] `tests/improvements_test.rs` is a vague name; rename it for what it covers. `tests/coverage_fill.rs` needs a `//!` line saying why it exists.
+- [ ] `GpuBuffer::zeros` builds a host `vec![0.0; len]` and uploads it, even for a fresh buffer. Use `encoder.clear_buffer` (or wgpu's zero-initialised fresh buffers) so a matmul output does not pay for a host allocation and a copy.
+- [ ] A synced GPU elementwise op costs about 1.5 ms at 4096 elements and `matmul` 256 about 2.9 ms (`just bench-gpu`, M-series Mac), so the floor is per-op overhead and not the kernel. Find where it goes (params buffer and bind group created per call, `GpuBuffer::zeros` upload, the sync poll) before quoting any CPU-vs-GPU number.
+- [ ] Any `memory_transfer` throughput figure recorded before the pending-upload fix measured a host copy into staging, not a transfer. Re-run `just bench-gpu` and replace it.
 - [ ] `bench.sh` loops one test and averages; decide whether it belongs in the `justfile` (`dev-docs/BENCHMARKING.md` is the doc).
 
 ## Phase 4 — endgame (optional, last)

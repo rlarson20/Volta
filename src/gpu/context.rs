@@ -428,6 +428,9 @@ impl GpuContext {
     /// the pending counter. Use this when you need a clean sync point, such as
     /// between benchmark iterations or before reading results.
     ///
+    /// Submits an empty command buffer first so that queued `write_buffer` uploads are flushed
+    /// (and their staging memory can be freed) rather than left waiting for the next kernel.
+    ///
     /// Returns true if sync completed successfully, false if it timed out.
     /// A timeout doesn't necessarily mean the device is lost - the GPU may
     /// just be under heavy load. The pending counter is reset regardless.
@@ -440,6 +443,10 @@ impl GpuContext {
         }
 
         log::debug!("[GPU] syncing {pending} pending submissions...");
+
+        // `write_buffer` data sits in wgpu's staging area until the next submit, so an upload
+        // alone is never in flight. An empty submit flushes it and gives `poll` something to wait on.
+        self.queue.submit(std::iter::empty::<wgpu::CommandBuffer>());
 
         // Poll the device until all work completes
         let result = self.device.poll(wgpu::PollType::Wait {
@@ -542,7 +549,10 @@ impl GpuContext {
 
         log::debug!("[GPU] sync_checked: {pending} pending submissions...");
 
-        // Use 2-second hard timeout
+        // Flush queued `write_buffer` uploads; see `sync`.
+        self.queue.submit(std::iter::empty::<wgpu::CommandBuffer>());
+
+        // Use the hard sync timeout
         let result = self.device.poll(wgpu::PollType::Wait {
             submission_index: None,
             timeout: Some(Duration::from_secs(get_sync_timeout_secs())),

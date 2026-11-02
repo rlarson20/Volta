@@ -78,6 +78,9 @@ fn bench_matmul_cpu_vs_gpu(c: &mut Criterion) {
 
     // Large matrices where GPU should shine
     for n in [256, 512, 1024, 2048] {
+        // Fewer samples as the work grows (2048^3 is ~512x the flops of 256^3), so the heaviest
+        // case cannot hold the machine for minutes. Criterion's minimum is 10.
+        group.sample_size(if n >= 1024 { 10 } else { 30 });
         let n_ref = &n;
         // CPU version
         group.bench_with_input(BenchmarkId::new("cpu", n), n_ref, |b, s| {
@@ -95,7 +98,7 @@ fn bench_matmul_cpu_vs_gpu(c: &mut Criterion) {
             setup_tensors.push(tensor_b.clone());
             b.iter(|| {
                 let result = black_box(&a).matmul(black_box(&tensor_b));
-                let _ = gpu_sync();
+                assert!(gpu_sync(), "GPU sync timed out inside a timed iteration");
                 result
             });
         });
@@ -211,7 +214,7 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
             setup_tensors.push(tensor_b.clone());
             b.iter(|| {
                 let result = black_box(&a).add(black_box(&tensor_b));
-                let _ = gpu_sync();
+                assert!(gpu_sync(), "GPU sync timed out inside a timed iteration");
                 result
             });
         });
@@ -232,7 +235,7 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
             setup_tensors.push(tensor_b.clone());
             b.iter(|| {
                 let result = black_box(&a).elem_mul(black_box(&tensor_b));
-                let _ = gpu_sync();
+                assert!(gpu_sync(), "GPU sync timed out inside a timed iteration");
                 result
             });
         });
@@ -343,7 +346,7 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
             setup_tensors.push(a.clone());
             b.iter(|| {
                 let result = black_box(&a).exp();
-                let _ = gpu_sync();
+                assert!(gpu_sync(), "GPU sync timed out inside a timed iteration");
                 result
             });
         });
@@ -361,7 +364,7 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
             setup_tensors.push(a.clone());
             b.iter(|| {
                 let result = black_box(&a).relu();
-                let _ = gpu_sync();
+                assert!(gpu_sync(), "GPU sync timed out inside a timed iteration");
                 result
             });
         });
@@ -472,7 +475,7 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
             setup_tensors.push(a.clone());
             b.iter(|| {
                 let result = black_box(&a).sum();
-                let _ = gpu_sync();
+                assert!(gpu_sync(), "GPU sync timed out inside a timed iteration");
                 result
             });
         });
@@ -490,7 +493,7 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
             setup_tensors.push(a.clone());
             b.iter(|| {
                 let result = black_box(&a).mean();
-                let _ = gpu_sync();
+                assert!(gpu_sync(), "GPU sync timed out inside a timed iteration");
                 result
             });
         });
@@ -593,7 +596,7 @@ fn bench_memory_transfer(c: &mut Criterion) {
             let a = random_tensor(*s);
             b.iter(|| {
                 let result = black_box(&a).to_device(Device::gpu().unwrap());
-                let _ = gpu_sync(); // Ensure transfer completes for accurate timing
+                assert!(gpu_sync(), "GPU sync timed out inside a timed iteration"); // Ensure transfer completes for accurate timing
                 result
             });
         });
@@ -722,9 +725,7 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
             }
 
             // Sync to ensure GPU work completes and timing is accurate
-            if !gpu_sync() {
-                eprintln!("Warning: GPU sync timed out during benchmark");
-            }
+            assert!(gpu_sync(), "GPU sync timed out inside a timed iteration");
 
             // Check resources after each iteration
             if let ResourceStatus::Critical(msg) = check_system_resources() {
@@ -764,9 +765,7 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
             black_box(black_box(&large_tensor).relu());
 
             // Sync to ensure GPU work completes and timing is accurate
-            if !gpu_sync() {
-                eprintln!("Warning: GPU sync timed out during benchmark");
-            }
+            assert!(gpu_sync(), "GPU sync timed out inside a timed iteration");
 
             // Check resources after each iteration
             if let ResourceStatus::Critical(msg) = check_system_resources() {

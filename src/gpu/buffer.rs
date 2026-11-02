@@ -46,6 +46,8 @@ impl GpuBuffer {
             // Write data to the pooled buffer
             ctx.queue()
                 .write_buffer(&buffer, 0, bytemuck::cast_slice(data));
+            ctx.increment_pending();
+            ctx.maybe_sync();
 
             return Some(Self {
                 buffer: Some(buffer),
@@ -71,6 +73,8 @@ impl GpuBuffer {
         // Write the actual data
         ctx.queue()
             .write_buffer(&buffer, 0, bytemuck::cast_slice(data));
+        ctx.increment_pending();
+        ctx.maybe_sync();
 
         Some(Self {
             buffer: Some(buffer),
@@ -95,6 +99,8 @@ impl GpuBuffer {
             let zeros = vec![0.0f32; len];
             ctx.queue()
                 .write_buffer(&buffer, 0, bytemuck::cast_slice(&zeros));
+            ctx.increment_pending();
+            ctx.maybe_sync();
 
             return Some(Self {
                 buffer: Some(buffer),
@@ -120,6 +126,8 @@ impl GpuBuffer {
         let zeros = vec![0.0f32; len];
         ctx.queue()
             .write_buffer(&buffer, 0, bytemuck::cast_slice(&zeros));
+        ctx.increment_pending();
+        ctx.maybe_sync();
 
         Some(Self {
             buffer: Some(buffer),
