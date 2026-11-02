@@ -34,6 +34,14 @@ This file holds only open work. The done items, with their evidence (tests, muta
 - [ ] `cargo check --lib --no-default-features --target wasm32-unknown-unknown` fails: `getrandom 0.3` (through `rand`) needs its `wasm_js` backend and `--cfg getrandom_backend="wasm_js"`. Also unverified for wasm32: `std::fs`/`std::time` use in `io` and `utils`, and the `accelerate` feature (macOS-only). The WASM binding (`pkg/`, `minigrad-react/src/wasm/`) is an untracked build of code that is not in this repo, so nothing here is tested against it. Add a wasm32 `cargo check` to CI once the target builds. The README copies in those two untracked directories still show `Module::forward` and `TensorOps`.
 - [ ] `Tensor::from_raw` (`src/tensor.rs`) carried a note "investigate why I actually need this". Check its call sites; if each one could use an existing constructor or `edge()`, delete it (invariant 1 and 2 are why: a `RawTensor` wrapped by hand skips the graph).
 
+## Feature proposals (not started; details in `docs/backlog.md`)
+
+- [ ] Gradient clipping (`clip_grad_norm`, `clip_grad_value`), then add it to the two LSTM examples.
+- [ ] `lr()` / `set_lr()` on the optimizers, then LR schedulers.
+- [ ] `Reduction` argument, `l1_loss`, and `huber_loss`; move the losses out of `tensor.rs`.
+- [ ] `GRUCell`, `RNNCell`, and a `(B, T, F)` unroll wrapper.
+- [ ] Training checkpoints (optimizer state plus model), with the atomic `load_state_dict` item.
+
 ## Tests and tooling
 
 - [ ] `tests/improvements_test.rs` is a vague name; rename it for what it covers. `tests/coverage_fill.rs` needs a `//!` line saying why it exists.
