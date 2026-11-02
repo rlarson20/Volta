@@ -50,6 +50,10 @@ validate-shaders:
 test-gpu:
 	cargo test --test 'gpu_*' -- --nocapture
 
+# Regenerate the PyTorch reference fixtures in tests/fixtures/torch/ (needs uv; pinned torch)
+torch-fixtures:
+	uv run scripts/torch_ref/gen_fixtures.py
+
 # Run all tests without GPU/Accelerate features
 test-cpu:
 	cargo test --no-default-features -- --nocapture

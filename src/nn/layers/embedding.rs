@@ -52,7 +52,8 @@ impl Embedding {
         assert!(vocab_size > 0, "vocab_size must be positive");
         assert!(embedding_dim > 0, "embedding_dim must be positive");
 
-        // Initialize with uniform distribution [-0.1, 0.1] (PyTorch default)
+        // Uniform [-0.1, 0.1]. This is not PyTorch's default, which is N(0, 1)
+        // (docs/audits/2026-11-sweep.md, D2).
         let limit = 0.1;
         let data: Vec<f32> = with_rng(|rng| {
             (0..vocab_size * embedding_dim)

@@ -11,8 +11,8 @@ In a cloud session (Linux, `CLAUDE_CODE_REMOTE` set, no `rtk`, no GPU), read `de
 Update this section when a phase lands or the merge gate changes. Keep it short; what landed is in the commit log and `DECISIONS.md`.
 
 - **Roadmap:** `docs/plans/ADDENDUM.md` § Sequencing is the only plan. Phases 0–3 are done. Phase 4 (arena graph, sealed `Backend` trait, proptest DAG checks) is optional and comes last.
-- **Open work:** `notes/TODO.md` lists only what is open. The defect IDs B1–B5 and H1–H8 (`docs/audits/OPUS_5_EVAL_AUDIT.md`) are all fixed; the audits are frozen records.
-- **Merge gate:** cleared. The library documents every item (`missing_docs` and `missing_docs_in_private_items` are `deny`), and `just ci` passes. `improvements` can merge into `main` once the other TODO items are done.
+- **Open work:** `notes/TODO.md` lists only what is open, including the 2026-11 sweep (`docs/audits/2026-11-sweep.md`): defects found by checking against PyTorch, each with an `#[ignore = "S<n>: ..."]` test. PyTorch fixtures are regenerated with `just torch-fixtures` (needs `uv`). The defect IDs B1–B5 and H1–H8 (`docs/audits/OPUS_5_EVAL_AUDIT.md`) are all fixed; the audits are frozen records.
+- **Merge gate:** cleared. The library documents every item (`missing_docs` and `missing_docs_in_private_items` are `deny`), and `just ci` passes. `improvements` can merge into `main` once the other TODO items are done, including the correctness items from the 2026-11 sweep (`notes/TODO.md`, "Correctness: found by the 2026-11 sweep"). Those are open defects, not features, so the gate is not cleared until they are fixed or deliberately deferred.
 
 ## Invariants
 
