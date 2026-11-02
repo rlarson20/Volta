@@ -151,6 +151,8 @@ A bool breaks as soon as one `no_grad()` scope nests inside another, for example
 
 **Revision (2026-10-30):** B2 is fixed (`slice_gate` is a `shrink`), and the LSTMCell test passes un-ignored. It drives the cell through a test-only wrapper that takes two steps, not one. One step from the zero initial state gives `weight_hh` an exactly zero gradient (`dgatesᵀ · h` with `h = 0`), so a one-step wrapper fails the macro on a correct cell. The same holds for any layer whose initial state zeroes a parameter's gradient: drive it past that state, and don't loosen the macro.
 
+**Calls go through UFCS** (`<_ as Module>::forward(..)`), because `MultiHeadAttention` and `TransformerBlock` have an inherent `forward` of a different arity next to `Module::forward`, and an inherent method wins `.forward()` resolution whatever its arity.
+
 ## Types for Dims and Ops (ADDENDUM Phase 2)
 
 ### Shape boundary: signatures, not the field
@@ -172,6 +174,8 @@ Roughly 440 places in `src/` read the `.shape` field (about 365 outside `lib.rs`
 Before this, the zero/cap checks lived in `Tensor::try_new` only. `try_new_with_storage`, which `edge()` reaches, checked neither, and `expand`, `pad`, and `broadcast_to` each carried a copy of the cap. `pad`'s message even said "Expand would create tensor", copied from `expand`. An op whose output was zero-sized could therefore build a degenerate tensor that no check ever saw.
 
 **Consequence:** an op that produces a zero-sized or over-cap output now panics at `edge()` instead. No existing test hit this. `reshape` needed no change: its size-equality assert already guarantees the target is a valid `Shape`, and `edge()` validates it.
+
+**Public constructors keep `&[usize]`** (`new`, `zeros`, `randn`, `reshape`, `expand`), so literal shapes stay ergonomic; they still go through the one checked constructor. **`Strides::from_shape`** (`pub(crate)`) replaced `RawTensor::compute_strides`, which is deleted. It takes `&[usize]` because op code holds raw dims, and call sites demote with `truncate_rank()`. Its body is a running product with no `if let Some` skip.
 
 ### `Axis` and the silent default
 
@@ -204,6 +208,8 @@ A size silently defaulting to 1 is the same class as `.get(i).unwrap_or(0.0)` (i
 - NumPy/PyTorch right-aligned batch broadcasting for unequal ranks. Deferred as a feature; it can be added by teaching `MatmulSpec::new` to left-pad the shorter batch.
 - Folding the vector forms into the spec. They have different semantics (the rank-1 operand is not a matrix), and `MatmulSpec` is "a matrix product" by definition. They keep their own forward and backward arms, so the `None` case is the vector forms.
 - Letting a batched spec reach the GPU kernels. The kernels are 2D only; `GpuKernels::matmul*` assert `!spec.is_batched()` instead of silently using only `m, k, n`.
+
+**Fields beyond the sketch:** `a_batch`, `b_batch`, and `out_batch` carry the broadcast batch dims, so backward reduces over them without re-deriving them from the operands.
 
 **Also changed:**
 - `GpuKernels::matmul`, `matmul_backward_a`, and `matmul_backward_b` are now `pub(crate)`, for the same reason as the conv wrappers. `test_gpu_matmul` was the only external caller; it moved from `tests/gpu_test.rs` into `src/gpu/kernels.rs` as a unit test (with a non-square case, so swapped `m/k/n` shows up).

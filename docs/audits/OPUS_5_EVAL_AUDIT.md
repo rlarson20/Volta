@@ -1,5 +1,7 @@
 # OPUS_5_EVAL_AUDIT
 
+> **Frozen record (2026-11-02).** B1–B5 and H1–H8 are fixed; live status is in `notes/TODO.md`, and the evidence for each fix is in the git history. Findings below describe the code as it was when audited.
+
 ## Intro
 
 Evaluation of every claim in the **"new notes"** section of `notes/TODO.md`, checked against the
