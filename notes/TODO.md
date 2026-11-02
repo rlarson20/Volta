@@ -46,8 +46,9 @@ This file holds only open work. The done items, with their evidence (tests, muta
 
 - [ ] `tests/improvements_test.rs` is a vague name; rename it for what it covers. `tests/coverage_fill.rs` needs a `//!` line saying why it exists.
 - [ ] `GpuBuffer::zeros` builds a host `vec![0.0; len]` and uploads it, even for a fresh buffer. Use `encoder.clear_buffer` (or wgpu's zero-initialised fresh buffers) so a matmul output does not pay for a host allocation and a copy.
-- [ ] A synced GPU elementwise op costs about 1.5 ms at 4096 elements and `matmul` 256 about 2.9 ms (`just bench-gpu`, M-series Mac), so the floor is per-op overhead and not the kernel. Find where it goes (params buffer and bind group created per call, `GpuBuffer::zeros` upload, the sync poll) before quoting any CPU-vs-GPU number.
-- [ ] Any `memory_transfer` throughput figure recorded before the pending-upload fix measured a host copy into staging, not a transfer. Re-run `just bench-gpu` and replace it.
+- [ ] A synced GPU elementwise op costs about 1.5 ms at 4096 elements and `matmul` 256 about 3.0 ms (`just bench-gpu` at `8008088`; table in `dev-docs/BENCHMARKING.md`), so the floor is per-op overhead and not the kernel. Find where it goes (params buffer and bind group created per call, `GpuBuffer::zeros` upload, the sync poll) before quoting any CPU-vs-GPU number.
+- [ ] GPU `matmul` 2048 runs at about 55 GFLOP/s (310 ms) and `sum`/`mean` cost 3x to 7x an elementwise op. Profile both once the per-op floor is understood.
+- [ ] `memory_transfer` is flat near 1.4 ms up to 16384 floats, so its MiB/s figures are a latency floor, not bandwidth. Add a size large enough to saturate (several MiB) before quoting a transfer rate.
 - [ ] `bench.sh` loops one test and averages; decide whether it belongs in the `justfile` (`dev-docs/BENCHMARKING.md` is the doc).
 
 ## Phase 4 — endgame (optional, last)

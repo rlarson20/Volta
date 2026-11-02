@@ -56,7 +56,7 @@ This library is functional for training MLPs, CNNs, RNNs, GANs, VAEs, and other 
 
 - ⚠️ **What's in Progress:**
   - **Performance:** Comprehensive benchmarking suite for performance tracking with `just bench` commands
-  - **Benchmarks:** known issue: crashes under full benchmark suite, suspected resource exhaustion/synchronization barrier, isolated benchmarks pass
+  - **Benchmarks:** `just bench-gpu` completes a full run. The GPU is slower than the CPU at every size measured, because each op pays about 1.5 ms of fixed overhead; see `dev-docs/BENCHMARKING.md`
   - **GPU Support:** Experimental WGPU-based acceleration via `gpu` feature:
     - ✅ Core ops on GPU: elementwise (unary/binary), matmul, reductions (sum/max/mean), movement ops (permute/expand/pad/shrink/stride)
     - ✅ GPU backward pass for autograd with lazy CPU↔GPU transfers
@@ -142,7 +142,7 @@ Volta provides multiple backends for computation:
 
 ## Benchmarks
 
-In progress; contributions welcome. CPU matmul baseline vs naive tracked via Criterion.
+Criterion benchmarks run through `just bench` (CPU) and `just bench-gpu`. GPU results and how to read them are in `dev-docs/BENCHMARKING.md`; the GPU does not beat the CPU yet.
 
 ## Examples:
 

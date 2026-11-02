@@ -2,17 +2,44 @@
 
 This document provides detailed information about benchmarking in the Volta deep learning framework.
 
-## Safety Warning
+## Safety
 
-**⚠️ WARNING:** The `gpu_comparison` benchmark is NOT SAFE and will crash your computer.
-DO NOT run `just bench-gpu` or `cargo bench --bench gpu_comparison`.
+`gpu_comparison` used to crash the machine under resource exhaustion. After the buffer-pool and cleanup work it completed in one full run (`just bench-gpu` at `8008088`, M-series Mac, peak process memory 146 MB at the 2048 matmul), so it is no longer marked unsafe. That is a single run, not a guarantee: watch memory the first time on a new machine. The run takes several minutes, so start it in the background.
 
-The new `conv_algorithms` benchmark is SAFE and designed to stay under 16GB memory limit.
+`conv_algorithms` is designed to stay under a 16GB memory limit.
+
+## GPU results
+
+`just bench-gpu`, commit `8008088`, Criterion median, M-series Mac. Every GPU time includes a sync, so it is latency, not kernel throughput.
+
+| Group | Size | CPU | GPU |
+| --- | --- | --- | --- |
+| add / mul | 4096 | 5.9 µs | 1.50 ms |
+| add / mul | 65536 | 87 µs | 1.6 ms |
+| exp | 4096 | 13.6 µs | 1.50 ms |
+| exp | 65536 | 217 µs | 1.69 ms |
+| sum / mean | 4096 | 6.5 µs | 4.3 ms |
+| sum / mean | 65536 | 101 µs | 11 ms |
+| matmul | 256 | 70 µs | 3.0 ms |
+| matmul | 1024 | 3.0 ms | 37 ms |
+| matmul | 2048 | 22 ms | 310 ms |
+| `cpu_to_gpu` | 1024 floats | | 1.42 ms (2.7 MiB/s) |
+| `cpu_to_gpu` | 262144 floats | | 1.8 ms (549 MiB/s) |
+
+What the numbers say:
+
+- The GPU loses to the CPU at every size measured. Elementwise GPU time is flat at about 1.5 ms from 4096 to 16384 elements and grows slowly after, so the cost is per-op overhead, not the kernel.
+- `memory_transfer` is flat near 1.4 ms for the smaller sizes, so the MiB/s figures there are a latency floor divided into the payload, not bandwidth. Only the largest size starts to reflect transfer cost.
+- GPU matmul at 2048 is about 55 GFLOP/s, so matmul is slow beyond the overhead floor. This has not been investigated.
+- Reductions cost 3x to 7x an elementwise op and grow with size. Not investigated.
+- Criterion's "regressed" and "improved" flags compare against whatever baseline was on disk, so they are not a verdict on a code change. The largest flags in this run were `gpu_sum` and `gpu_mean` at 4096 (+43% and +52%) and `many_small_ops` (+16%).
+
+Open follow-ups are in `notes/TODO.md`.
 
 ## Benchmark Commands
 
 ```bash
-# Run all benchmarks (except gpu_comparison)
+# Run all benchmarks (except gpu_comparison; use `just bench-gpu`)
 just bench
 
 # Run convolution algorithm comparison (SAFE)
@@ -21,7 +48,7 @@ just bench-conv
 # Run specific benchmark
 just bench-name tensor_ops
 just bench-name neural_networks
-just bench-name gpu_comparison # NOT FOR USE
+just bench-name gpu_comparison
 
 # CPU-only benchmarks (no acceleration)
 just bench-cpu
