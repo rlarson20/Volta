@@ -1,5 +1,7 @@
 # Should Volta become a workspace of crates?
 
+tldr: don't split for now, something to handle much later
+
 Evaluation, 2026-11-02, against `improvements` at `039c4a2`. This is a recommendation, not a roadmap item: `docs/plans/ADDENDUM.md` § Sequencing stays the only plan, and nothing here is scheduled until it is added there.
 
 ## TL;DR
@@ -26,13 +28,13 @@ Cycles (each arrow is a `use crate::...`; every cycle must stay inside one crate
 Leaves: shape, dtype, error, index, data, utils   (spec mentions Tensor only in a doc link)
 ```
 
-| Edge | Why it exists | Blocks a split because |
-| --- | --- | --- |
-| `autograd → nn::layers::{conv, conv_transpose, maxpool, embedding}` | The closed `GradFn` enum has variants for these ops' backward structs (DECISIONS "Closed `GradFn` enum" already names this as a layering cost) | `GradFn` must be in the same crate as every variant's struct, so those kernels can't live in an `nn` crate |
-| `ops/* → impl Tensor` (9 files) | Ops are inherent methods on `Tensor` | Inherent impls must be in `Tensor`'s crate. Moving ops out would bring back an extension trait, which "Delete `TensorOps`" (§3.4) removed on purpose |
-| `io ↔ nn` | `io` uses `Module`; layers use `StateDict`/`TensorData`; `tensor::load_weight` uses `TensorData` | A cycle at the crate level |
-| `storage → gpu`, `gpu::kernels → ops::{BinaryOp, UnaryOp}`, `spec`, `tensor` | GPU storage and the op enums the kernels dispatch on | `gpu` can't sit below core or above it; it sits *inside* it |
-| `nn → crate internals` | 13 `edge()` calls, 209 `.borrow()`, 83 `.borrow_mut()`, 115 `index::{fetch, slot, span, ...}` calls | `nn` is not a client of the public API. It is part of the core |
+| Edge                                                                         | Why it exists                                                                                                                                  | Blocks a split because                                                                                                                               |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autograd → nn::layers::{conv, conv_transpose, maxpool, embedding}`          | The closed `GradFn` enum has variants for these ops' backward structs (DECISIONS "Closed `GradFn` enum" already names this as a layering cost) | `GradFn` must be in the same crate as every variant's struct, so those kernels can't live in an `nn` crate                                           |
+| `ops/* → impl Tensor` (9 files)                                              | Ops are inherent methods on `Tensor`                                                                                                           | Inherent impls must be in `Tensor`'s crate. Moving ops out would bring back an extension trait, which "Delete `TensorOps`" (§3.4) removed on purpose |
+| `io ↔ nn`                                                                    | `io` uses `Module`; layers use `StateDict`/`TensorData`; `tensor::load_weight` uses `TensorData`                                               | A cycle at the crate level                                                                                                                           |
+| `storage → gpu`, `gpu::kernels → ops::{BinaryOp, UnaryOp}`, `spec`, `tensor` | GPU storage and the op enums the kernels dispatch on                                                                                           | `gpu` can't sit below core or above it; it sits _inside_ it                                                                                          |
+| `nn → crate internals`                                                       | 13 `edge()` calls, 209 `.borrow()`, 83 `.borrow_mut()`, 115 `index::{fetch, slot, span, ...}` calls                                            | `nn` is not a client of the public API. It is part of the core                                                                                       |
 
 Only `data` (190 lines: MNIST plus transforms, depending on `error`, `index`, `shape`) and `utils::progress` (79 lines) are true leaves.
 
@@ -42,15 +44,15 @@ Invariant 3 ("only `accumulate_grad` and `set_grad` write `grad`") is broken tod
 
 ## Costs and benefits
 
-| | Split now | Stay single crate (+ step 0) |
-| --- | --- | --- |
-| Encapsulation of `edge`/`GradFn`/`RawTensor` | Weakened (`pub` or `#[doc(hidden)] pub`; trybuild can't pin "hidden") | Kept (`pub(crate)`) |
-| Layering enforced by the compiler | Only if internals stay private, which needs step 0 first; with `pub` internals, no | Only by review, until 0d adds a check |
-| Incremental build | 0.7 s lib / 2.5 s tests today. Gains only when the edit is in a leaf crate, and most edits are in core | Unchanged |
-| Tooling to port | `clippy.toml`, `check-fallbacks.sh` (`dirs=(src tests examples benches)` hard-coded, so it would **pass vacuously** after files move to `crates/`), `validate-shaders` path, 6 trybuild `.stderr` files (crate paths in diagnostics), CI lanes, pre-commit, `build.rs` (Accelerate link) | None |
-| Unit tests (`src/lib_tests/`, 5.2k lines, 13 of 18 files touch internals) | Must be split per crate and keep their internal access | None |
-| Publishing | N crates to version and publish in order; every `pub` internal becomes semver surface | One crate |
-| Roadmap fit | Cuts before the Backend seam exists, so it will be cut again | Leaves Phase 4 free to choose the seam |
+|                                                                           | Split now                                                                                                                                                                                                                                                                                | Stay single crate (+ step 0)           |
+| ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| Encapsulation of `edge`/`GradFn`/`RawTensor`                              | Weakened (`pub` or `#[doc(hidden)] pub`; trybuild can't pin "hidden")                                                                                                                                                                                                                    | Kept (`pub(crate)`)                    |
+| Layering enforced by the compiler                                         | Only if internals stay private, which needs step 0 first; with `pub` internals, no                                                                                                                                                                                                       | Only by review, until 0d adds a check  |
+| Incremental build                                                         | 0.7 s lib / 2.5 s tests today. Gains only when the edit is in a leaf crate, and most edits are in core                                                                                                                                                                                   | Unchanged                              |
+| Tooling to port                                                           | `clippy.toml`, `check-fallbacks.sh` (`dirs=(src tests examples benches)` hard-coded, so it would **pass vacuously** after files move to `crates/`), `validate-shaders` path, 6 trybuild `.stderr` files (crate paths in diagnostics), CI lanes, pre-commit, `build.rs` (Accelerate link) | None                                   |
+| Unit tests (`src/lib_tests/`, 5.2k lines, 13 of 18 files touch internals) | Must be split per crate and keep their internal access                                                                                                                                                                                                                                   | None                                   |
+| Publishing                                                                | N crates to version and publish in order; every `pub` internal becomes semver surface                                                                                                                                                                                                    | One crate                              |
+| Roadmap fit                                                               | Cuts before the Backend seam exists, so it will be cut again                                                                                                                                                                                                                             | Leaves Phase 4 free to choose the seam |
 
 ## Recommendation
 
@@ -133,13 +135,13 @@ The members share one `workspace.package.version`. Publish in dependency order: 
 
 Linux cloud VM, CPU-only (`--no-default-features`), shared and noisy (`dev-docs/CLOUD.md`), with dependencies already built. These are single runs, so treat them as rough sizes, not benchmarks. Re-measure on the Mac before using a number as a trigger.
 
-| Scenario (`--no-default-features`) | Wall time |
-| --- | --- |
-| Real edit in `nn/layers/conv.rs` (a new fn appended), `cargo check --lib` | 0.6 s |
-| Same, `cargo build --lib` | 0.7–0.8 s |
-| Same, `cargo build --tests` (lib unit tests + 22 integration test binaries) | 2.3–2.5 s |
+| Scenario (`--no-default-features`)                                                        | Wall time     |
+| ----------------------------------------------------------------------------------------- | ------------- |
+| Real edit in `nn/layers/conv.rs` (a new fn appended), `cargo check --lib`                 | 0.6 s         |
+| Same, `cargo build --lib`                                                                 | 0.7–0.8 s     |
+| Same, `cargo build --tests` (lib unit tests + 22 integration test binaries)               | 2.3–2.5 s     |
 | Real edit in `shape.rs` (a leaf every module uses), `cargo check --lib` / `build --tests` | 0.5 s / 2.5 s |
-| `volta` from scratch (deps cached), `build --lib` | 4.2 s |
-| Then every test target from scratch | 10.0 s |
+| `volta` from scratch (deps cached), `build --lib`                                         | 4.2 s         |
+| Then every test target from scratch                                                       | 10.0 s        |
 
 These numbers come from a 4-core VM. An edit inside a hot function body invalidates more than an appended fn does, so expect somewhat higher times in practice, but not by enough to matter. At these sizes, a crate split has almost no build time left to save. The roughly 2 s of a test build goes mostly to linking about 23 test binaries, and a split would add more crates to link, not fewer.
