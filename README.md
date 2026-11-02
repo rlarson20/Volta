@@ -39,7 +39,7 @@ This library is functional for training MLPs, CNNs, RNNs, GANs, VAEs, and other 
 
 - ✅ **What's Working:**
   - **Core Autograd:** All operations verified with numerical gradient checking
-  - **Layers:** Linear, Conv2d, ConvTranspose2d, MaxPool2d, Embedding, LSTMCell, PixelShuffle, LayerNorm, BatchNorm1d/2d, Dropout
+  - **Layers:** Linear, Conv2d, ConvTranspose2d, MaxPool2d, Embedding, LSTMCell, PixelShuffle, LayerNorm, BatchNorm1d/2d, Dropout, MultiHeadAttention, TransformerBlock, PositionalEncoding
   - **Optimizers:** SGD (with momentum), Adam, Muon
   - **External Loading:** PyTorch/HuggingFace model weights via SafeTensors with automatic transposition
   - **Named Layers:** Robust serialization with human-readable state dict keys
@@ -63,7 +63,7 @@ This library is functional for training MLPs, CNNs, RNNs, GANs, VAEs, and other 
     - ⚠️ Broadcasting preprocessing happens on CPU before GPU dispatch
 
 - ❌ **What's Missing:**
-  - Production-ready GPU integration, distributed training, learning-rate schedulers, full attention mechanisms (LayerNorm and components are implemented)
+  - Production-ready GPU integration, distributed training, learning-rate schedulers (planned; see the roadmap)
 
 ## Installation
 
