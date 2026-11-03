@@ -1,4 +1,5 @@
 use crate::device::Device;
+use crate::dtype::DType;
 use crate::io::StateDict;
 use crate::tensor::Tensor;
 
@@ -102,12 +103,44 @@ pub trait Module {
         }
     }
 
+    /// Converts every parameter, and its gradient, to `dtype` in place: PyTorch's
+    /// `module.to(dtype)` (`.double()`, `.half()`). Values follow [`crate::Storage::cast`],
+    /// so f32 to f64 is exact. A layer holding a non-parameter tensor (`BatchNorm`'s running
+    /// statistics, `PositionalEncoding`'s table) overrides this to convert it too, and a
+    /// container (`Sequential`) forwards it to each child.
+    ///
+    /// Of the layers, those whose kernels are dtype-generic run in f64 after this; see
+    /// ADDENDUM §11 for which.
+    ///
+    /// # Panics
+    /// If `dtype` is not a float dtype (parameters need gradients), or a parameter is on
+    /// the GPU and `dtype` is not F32.
+    fn to_dtype(&mut self, dtype: DType) {
+        cast_parameters(self, dtype);
+    }
+
     /// Switch between training and evaluation modes.
     /// Important for layers like `BatchNorm` and Dropout.
     fn train(&mut self, _mode: bool) {}
     /// Switches to evaluation mode; same as `train(false)`.
     fn eval(&mut self) {
         self.train(false);
+    }
+}
+
+/// The default of [`Module::to_dtype`]: casts every parameter of `module` to `dtype`.
+/// Overrides call it and then convert their buffers.
+///
+/// # Panics
+/// As [`Module::to_dtype`].
+#[track_caller]
+pub(crate) fn cast_parameters<M: Module + ?Sized>(module: &M, dtype: DType) {
+    assert!(
+        dtype.is_float(),
+        "to_dtype({dtype}): a module's parameters need a float dtype"
+    );
+    for param in module.parameters() {
+        param.cast_in_place(dtype);
     }
 }
 

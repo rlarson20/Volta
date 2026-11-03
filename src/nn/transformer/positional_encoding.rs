@@ -185,6 +185,17 @@ impl Module for PositionalEncoding {
         Ok(())
     }
 
+    /// Converts the learned weight, and also the fixed sinusoid table, which is not a
+    /// parameter and so is not converted by the default.
+    fn to_dtype(&mut self, dtype: crate::DType) {
+        if let Some(enc) = &self.encoding {
+            enc.cast_in_place(dtype);
+        }
+        if let Some(emb) = &mut self.learned_embedding {
+            emb.to_dtype(dtype);
+        }
+    }
+
     /// Moves the learned weight, and also the fixed sinusoid table, which is not a parameter
     /// and so is not moved by the default.
     fn to_device(&mut self, device: Device) {

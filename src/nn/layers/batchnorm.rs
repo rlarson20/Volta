@@ -68,6 +68,13 @@ impl Module for BatchNorm2d {
         self.training = mode;
     }
 
+    /// Converts the running statistics too: they are buffers, not parameters.
+    fn to_dtype(&mut self, dtype: crate::DType) {
+        crate::nn::cast_parameters(self, dtype);
+        self.running_mean.cast_in_place(dtype);
+        self.running_var.cast_in_place(dtype);
+    }
+
     fn state_dict(&self) -> StateDict {
         let mut state = StateDict::new();
         state.insert("gamma".to_string(), TensorData::from_tensor(&self.gamma));
@@ -270,6 +277,13 @@ impl Module for BatchNorm1d {
 
     fn train(&mut self, mode: bool) {
         self.training = mode;
+    }
+
+    /// Converts the running statistics too: they are buffers, not parameters.
+    fn to_dtype(&mut self, dtype: crate::DType) {
+        crate::nn::cast_parameters(self, dtype);
+        self.running_mean.cast_in_place(dtype);
+        self.running_var.cast_in_place(dtype);
     }
 
     fn state_dict(&self) -> StateDict {
