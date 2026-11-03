@@ -166,3 +166,52 @@ fn sgd_step_refuses_an_f64_param() {
     let mut opt = SGD::new(vec![a, b], 0.1, 0.0, 0.0);
     opt.step();
 }
+
+/// `to_vec_as` returns the values in their own dtype, exactly: no f32 decode.
+#[test]
+fn to_vec_as_reads_every_dtype_losslessly() {
+    let f64s = vec![0.1f64, 1.0 + 1e-12, -3.5e300];
+    assert_eq!(
+        RawTensor::from_typed(f64s.clone(), &[3])
+            .to_vec_as::<f64>()
+            .expect("f64"),
+        f64s
+    );
+    let i64s = vec![i64::MIN, 0, (1 << 53) + 1];
+    assert_eq!(
+        RawTensor::from_typed(i64s.clone(), &[3])
+            .to_vec_as::<i64>()
+            .expect("i64"),
+        i64s
+    );
+    assert_eq!(
+        RawTensor::from_typed(vec![true, false], &[2])
+            .to_vec_as::<bool>()
+            .expect("bool"),
+        vec![true, false]
+    );
+    assert_eq!(
+        RawTensor::new(vec![1.5, -2.0], &[2], false)
+            .to_vec_as::<f32>()
+            .expect("f32"),
+        vec![1.5, -2.0]
+    );
+}
+
+/// Asking for another dtype is an error, not a conversion.
+#[test]
+fn to_vec_as_refuses_another_dtype() {
+    let err = RawTensor::new(vec![1.0], &[1], false)
+        .to_vec_as::<f64>()
+        .expect_err("f32 tensor read as f64");
+    assert!(
+        matches!(
+            err,
+            VoltaError::DTypeMismatch {
+                expected: DType::F64,
+                actual: DType::F32
+            }
+        ),
+        "{err}"
+    );
+}

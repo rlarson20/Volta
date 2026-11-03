@@ -147,6 +147,24 @@ impl Tensor {
         self.inner.borrow().data.to_f32_vec()
     }
 
+    /// This tensor's data in its own dtype, without conversion: the lossless counterpart of
+    /// [`Self::data`] (which decodes to `f32`). `T` names the dtype, e.g.
+    /// `t.to_vec_as::<f64>()`. A GPU tensor is copied to the host.
+    ///
+    /// # Errors
+    ///
+    /// `VoltaError::DTypeMismatch` if `T` is not this tensor's dtype. Use
+    /// [`Self::to_dtype`] first to convert on purpose.
+    pub fn to_vec_as<T: Element>(&self) -> Result<Vec<T>> {
+        let t = self.inner.borrow();
+        let host = if t.data.is_gpu() {
+            t.data.to_device(&Device::CPU)
+        } else {
+            t.data.clone()
+        };
+        host.as_host::<T>().map(<[T]>::to_vec)
+    }
+
     /// The value of a single-element tensor, decoded to `f32` regardless of dtype/device.
     ///
     /// Use this to read a loss or any other scalar. It is stricter than
