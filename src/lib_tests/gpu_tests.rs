@@ -6,8 +6,13 @@ use approx::assert_abs_diff_eq;
 
 /// Run `f` under `DevicePolicy::PreferGpu` and assert that the ops it ran on the CPU
 /// for GPU inputs are exactly `ops`, as a set of names (`tests/common::expect_gaps`).
+/// Skips without an adapter, like the integration-test copy: `f` would return early and
+/// no gap could be recorded.
 #[cfg(feature = "gpu")]
 fn expect_gaps(ops: &[&str], f: impl FnOnce()) {
+    if !is_gpu_available() {
+        return;
+    }
     let _prefer = with_device_policy(DevicePolicy::PreferGpu);
     let _ = take_fallback_events();
     f();
