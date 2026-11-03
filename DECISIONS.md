@@ -493,6 +493,20 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 
 **Removed:** `Storage::to_dtype` (no callers; P2 brings a differentiable cast with checked semantics) and `try_as_bytes` (`as_bytes` cannot fail). `TypedTensorData::to_storage`/`to_tensor_data` now return `Result`, since their fields are public bytes.
 
+### `to_dtype` is a differentiable cast that matches torch bit for bit (P2)
+
+**Decision:** `Tensor::to_dtype` builds a `GradFn::Cast` through `edge()`; backward casts the gradient back to the input's dtype, as PyTorch's `.to(dtype)` does, so rounding to f16 is the identity in backward. The values come from `Storage::cast`, which `tests/torch_ref_casts.rs` checks exactly against `x.to(dst)` for all 64 dtype pairs (fixture group `casts`, torch 2.15.0). Same dtype returns the tensor itself, as PyTorch does.
+
+**Semantics, as measured on torch:** float to float rounds to nearest even, but f64 (and every integer) to f16/bf16 goes through f32, so two roundings: `1 + 2^-11 + 2^-30` becomes f16 `1.0`, not `1.0009765625`. Integer narrowing wraps. Anything to bool is `x != 0` (NaN is true, `-0.0` false).
+
+**Where Volta differs:** float to integer for NaN, an infinity, or a value whose truncation is out of range panics, naming the element. Torch leaves these undefined (on x86 they return whatever the conversion instruction gives), and a saturated or wrapped value would be a plausible wrong number (invariant 5). The fixture leaves them out.
+
+**Gradients and dtypes:** `edge()` never makes a non-float output require grad, whatever its inputs (PyTorch's rule), so a cast to an integer or bool is a dead end for autograd, like comparisons will be (P5). `accumulate_grad` checks that a gradient has its tensor's dtype, and adds in that dtype (half types add in f32 and round, decision 1 above). `Tensor::grad()` decodes to f32 like `data()`; `grad_storage()` keeps the dtype.
+
+**GPU:** `to_dtype` on a GPU tensor to anything but F32 panics. That is not a gap with a CPU fallback: GPU storage cannot hold the result until P8.
+
+**Tests:** besides the fixture, three mutants were run against it and all fail it (rounding instead of truncating float to int, saturating instead of wrapping, NaN to `false`). `tests/dtype_cast_grad.rs` covers the f64 round trip (exact values, unit gradient, gradcheck), the f16 round trip, gradient accumulation at a shared f64 node (fails if the f64 add drops a contribution), and integer and bool casts carrying no gradient.
+
 ## Errors
 
 ### Panic inside the program, `Result` where data comes from outside

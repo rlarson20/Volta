@@ -1,5 +1,5 @@
 use crate::Storage;
-use crate::autograd::{GradFn, ToDeviceGradFn, edge};
+use crate::autograd::{CastGradFn, GradFn, ToDeviceGradFn, edge};
 use crate::device::Device;
 use crate::device_policy::{Pass, on_gap};
 use crate::dtype::DType;
@@ -255,6 +255,13 @@ impl Tensor {
     /// tensor (an op bug).
     pub(crate) fn accumulate_grad(&self, g: Storage, op: &GradFn) {
         let mut t = self.inner.borrow_mut();
+        assert!(
+            g.dtype() == t.data.dtype(),
+            "{}: produced a {} gradient for a {} tensor (a gradient has its tensor's dtype)",
+            op.op_name(),
+            g.dtype(),
+            t.data.dtype()
+        );
         let g = match (t.device.is_gpu(), g.is_gpu()) {
             (true, false) => {
                 on_gap(&op.op_name(), Pass::Backward);
@@ -1188,6 +1195,40 @@ impl RawTensor {
         )
     }
 
+    /// Converts to `dtype` as a differentiable op, like PyTorch's `x.to(dtype)`. The values
+    /// follow [`Storage::cast`]; backward casts the gradient back to `self_t`'s dtype.
+    /// A cast to an integer or bool dtype carries no gradient.
+    ///
+    /// Returns `self_t` itself when it already has `dtype`, as PyTorch does.
+    ///
+    /// # Panics
+    /// If `self_t` is on the GPU and `dtype` is not F32 (GPU storage is f32-only until
+    /// ADDENDUM §11 P8), and on a float-to-integer value that is NaN, infinite, or out of
+    /// range (see [`Storage::cast`]).
+    #[must_use]
+    #[track_caller]
+    pub fn to_dtype(self_t: &Tensor, dtype: DType) -> Tensor {
+        let (data, shape, device, source) = {
+            let t = self_t.borrow();
+            if t.data.dtype() == dtype {
+                return self_t.clone();
+            }
+            (
+                t.data.cast(dtype),
+                t.shape.clone(),
+                t.device.clone(),
+                t.data.dtype(),
+            )
+        };
+        edge(
+            [self_t.clone()],
+            data,
+            shape,
+            device,
+            GradFn::Cast(CastGradFn { source }),
+        )
+    }
+
     /// Max along a specific axis
     ///
     /// Returns maximum value along dimension and stores indices for backward pass.
@@ -1682,6 +1723,17 @@ impl Tensor {
         RawTensor::stride_op(self, strides)
     }
 
+    /// Converts to `dtype` as a differentiable op: backward casts the gradient back to this
+    /// tensor's dtype. See [`RawTensor::to_dtype`].
+    ///
+    /// # Panics
+    /// As [`RawTensor::to_dtype`].
+    #[must_use]
+    #[track_caller]
+    pub fn to_dtype(&self, dtype: DType) -> Self {
+        RawTensor::to_dtype(self, dtype)
+    }
+
     /// Copies the tensor to `device` as a differentiable op: backward moves the gradient
     /// back to this tensor. See [`RawTensor::to_device`].
     ///
@@ -1705,13 +1757,14 @@ impl Tensor {
         RawTensor::transpose(self)
     }
 
-    /// The accumulated gradient as host data, or `None` if there is none.
+    /// The accumulated gradient decoded to `f32` (like [`Self::data`]), or `None` if
+    /// there is none. Lossy for an f64 gradient; [`Self::grad_storage`] keeps the dtype.
     #[must_use]
     pub fn grad(&self) -> Option<Vec<f32>> {
         self.borrow()
             .grad
             .as_ref()
-            .map(super::storage::Storage::to_vec)
+            .map(super::storage::Storage::to_f32_vec)
     }
 
     /// Clears the accumulated gradient.
