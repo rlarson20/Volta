@@ -18,9 +18,9 @@ struct ConvBackwardWeightParams {
     _padding: u32,
 }
 
-@group(0) @binding(0) var<storage, read> out_grad: array<f32>;
-@group(0) @binding(1) var<storage, read> input: array<f32>;
-@group(0) @binding(2) var<storage, read_write> grad_weight: array<f32>;
+@group(0) @binding(0) var<storage, read> out_grad: array<ELEM>;
+@group(0) @binding(1) var<storage, read> input: array<ELEM>;
+@group(0) @binding(2) var<storage, read_write> grad_weight: array<ELEM>;
 @group(0) @binding(3) var<uniform> params: ConvBackwardWeightParams;
 
 @compute @workgroup_size(16, 16, 1)
@@ -71,11 +71,11 @@ fn conv_backward_weight_main(
                     iw_unpadded >= 0 && iw_unpadded < width_i32) {
                     // Get input value at this position
                     let input_idx = ((batch * params.in_channels + in_ch) * params.height + u32(ih_unpadded)) * params.width + u32(iw_unpadded);
-                    let input_val = input[input_idx];
+                    let input_val = ld_input(input_idx);
 
                     // Get output gradient at this position
                     let out_grad_idx = ((batch * params.out_channels + out_ch) * params.h_out + oh) * params.w_out + ow;
-                    let grad_val = out_grad[out_grad_idx];
+                    let grad_val = ld_out_grad(out_grad_idx);
 
                     sum += input_val * grad_val;
                 }
@@ -85,5 +85,5 @@ fn conv_backward_weight_main(
 
     // Write result
     let weight_idx = ((out_ch * params.in_channels + in_ch) * params.kernel_h + kh) * params.kernel_w + kw;
-    grad_weight[weight_idx] = sum;
+    st_grad_weight(weight_idx, sum);
 }

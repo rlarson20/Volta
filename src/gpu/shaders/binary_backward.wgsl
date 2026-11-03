@@ -1,10 +1,10 @@
 // Binary backward operations for same-shape inputs: one thread per element, direct
 // assignment (no atomics). Broadcasting backward lives in binary_backward_safe.wgsl.
 
-@group(0) @binding(0) var<storage, read> out_grad: array<f32>;
-@group(0) @binding(1) var<storage, read> a: array<f32>;  // first input
-@group(0) @binding(2) var<storage, read> b: array<f32>;  // second input
-@group(0) @binding(3) var<storage, read_write> result_grad: array<f32>;
+@group(0) @binding(0) var<storage, read> out_grad: array<ELEM>;
+@group(0) @binding(1) var<storage, read> a: array<ELEM>;  // first input
+@group(0) @binding(2) var<storage, read> b: array<ELEM>;  // second input
+@group(0) @binding(3) var<storage, read_write> result_grad: array<ELEM>;
 
 // Helper to force use of all bindings (prevents wgpu from optimizing them out)
 fn force_use_bindings(x: f32, y: f32) {
@@ -20,10 +20,10 @@ fn force_use_bindings(x: f32, y: f32) {
 @compute @workgroup_size(256)
 fn add_backward_a(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx < arrayLength(&out_grad)) {
+    if (idx < len_out_grad()) {
         // Force use of a and b to ensure all bindings are included in layout
-        force_use_bindings(a[idx], b[idx]);
-        result_grad[idx] = out_grad[idx];
+        force_use_bindings(ld_a(idx), ld_b(idx));
+        st_result_grad(idx, ld_out_grad(idx));
     }
 }
 
@@ -31,9 +31,9 @@ fn add_backward_a(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @compute @workgroup_size(256)
 fn add_backward_b(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx < arrayLength(&out_grad)) {
-        force_use_bindings(a[idx], b[idx]);
-        result_grad[idx] = out_grad[idx];
+    if (idx < len_out_grad()) {
+        force_use_bindings(ld_a(idx), ld_b(idx));
+        st_result_grad(idx, ld_out_grad(idx));
     }
 }
 
@@ -41,9 +41,9 @@ fn add_backward_b(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @compute @workgroup_size(256)
 fn sub_backward_a(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx < arrayLength(&out_grad)) {
-        force_use_bindings(a[idx], b[idx]);
-        result_grad[idx] = out_grad[idx];
+    if (idx < len_out_grad()) {
+        force_use_bindings(ld_a(idx), ld_b(idx));
+        st_result_grad(idx, ld_out_grad(idx));
     }
 }
 
@@ -51,9 +51,9 @@ fn sub_backward_a(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @compute @workgroup_size(256)
 fn sub_backward_b(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx < arrayLength(&out_grad)) {
-        force_use_bindings(a[idx], b[idx]);
-        result_grad[idx] = -out_grad[idx];
+    if (idx < len_out_grad()) {
+        force_use_bindings(ld_a(idx), ld_b(idx));
+        st_result_grad(idx, -ld_out_grad(idx));
     }
 }
 
@@ -61,9 +61,9 @@ fn sub_backward_b(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @compute @workgroup_size(256)
 fn mul_backward_a(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx < arrayLength(&out_grad)) {
-        force_use_bindings(a[idx], b[idx]);
-        result_grad[idx] = out_grad[idx] * b[idx];
+    if (idx < len_out_grad()) {
+        force_use_bindings(ld_a(idx), ld_b(idx));
+        st_result_grad(idx, ld_out_grad(idx) * ld_b(idx));
     }
 }
 
@@ -71,9 +71,9 @@ fn mul_backward_a(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @compute @workgroup_size(256)
 fn mul_backward_b(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx < arrayLength(&out_grad)) {
-        force_use_bindings(a[idx], b[idx]);
-        result_grad[idx] = out_grad[idx] * a[idx];
+    if (idx < len_out_grad()) {
+        force_use_bindings(ld_a(idx), ld_b(idx));
+        st_result_grad(idx, ld_out_grad(idx) * ld_a(idx));
     }
 }
 
@@ -81,9 +81,9 @@ fn mul_backward_b(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @compute @workgroup_size(256)
 fn div_backward_a(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx < arrayLength(&out_grad)) {
-        force_use_bindings(a[idx], b[idx]);
-        result_grad[idx] = out_grad[idx] / b[idx];
+    if (idx < len_out_grad()) {
+        force_use_bindings(ld_a(idx), ld_b(idx));
+        st_result_grad(idx, ld_out_grad(idx) / ld_b(idx));
     }
 }
 
@@ -91,9 +91,9 @@ fn div_backward_a(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @compute @workgroup_size(256)
 fn div_backward_b(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx < arrayLength(&out_grad)) {
-        let b_inv = 1.0 / b[idx];
-        result_grad[idx] = -out_grad[idx] * a[idx] * b_inv * b_inv;
+    if (idx < len_out_grad()) {
+        let b_inv = 1.0 / ld_b(idx);
+        st_result_grad(idx, -ld_out_grad(idx) * ld_a(idx) * b_inv * b_inv);
     }
 }
 
@@ -101,9 +101,9 @@ fn div_backward_b(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @compute @workgroup_size(256)
 fn max_backward_a(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx < arrayLength(&out_grad)) {
-        let grad = select(0.0, out_grad[idx], a[idx] >= b[idx]);
-        result_grad[idx] = grad;
+    if (idx < len_out_grad()) {
+        let grad = select(0.0, ld_out_grad(idx), ld_a(idx) >= ld_b(idx));
+        st_result_grad(idx, grad);
     }
 }
 
@@ -111,8 +111,8 @@ fn max_backward_a(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @compute @workgroup_size(256)
 fn max_backward_b(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx < arrayLength(&out_grad)) {
-        let grad = select(0.0, out_grad[idx], b[idx] > a[idx]);
-        result_grad[idx] = grad;
+    if (idx < len_out_grad()) {
+        let grad = select(0.0, ld_out_grad(idx), ld_b(idx) > ld_a(idx));
+        st_result_grad(idx, grad);
     }
 }

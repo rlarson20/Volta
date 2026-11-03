@@ -23,9 +23,9 @@ struct IGEMMParams {
     _padding: u32,
 }
 
-@group(0) @binding(0) var<storage, read> input: array<f32>;
-@group(0) @binding(1) var<storage, read> weight: array<f32>;
-@group(0) @binding(2) var<storage, read_write> output: array<f32>;
+@group(0) @binding(0) var<storage, read> input: array<ELEM>;
+@group(0) @binding(1) var<storage, read> weight: array<ELEM>;
+@group(0) @binding(2) var<storage, read_write> output: array<ELEM>;
 @group(0) @binding(3) var<uniform> params: IGEMMParams;
 
 // Workgroup-local storage for accumulating partial results
@@ -118,7 +118,7 @@ fn igemm_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                                         kh * kernel_w +
                                         kw;
 
-                        sum += input[input_idx] * weight[weight_idx];
+                        sum += ld_input(input_idx) * ld_weight(weight_idx);
                     }
                 }
             }
@@ -134,5 +134,5 @@ fn igemm_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     oh * w_out +
                     ow;
 
-    output[output_idx] = sum;
+    st_output(output_idx, sum);
 }

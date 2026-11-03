@@ -1,8 +1,8 @@
 // Movement operations backward pass
 // These compute gradients by inverting the forward movement operations
 
-@group(0) @binding(0) var<storage, read> out_grad: array<f32>;
-@group(0) @binding(1) var<storage, read_write> result: array<f32>;
+@group(0) @binding(0) var<storage, read> out_grad: array<ELEM>;
+@group(0) @binding(1) var<storage, read_write> result: array<ELEM>;
 
 // Parameters for movement operations (up to 4 dimensions)
 struct MovementParams {
@@ -85,7 +85,7 @@ fn permute_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let new_strides = compute_strides(params.new_shape, params.rank);
         let new_idx = coords_to_idx(new_coords, new_strides, params.rank);
-        result[idx] = out_grad[new_idx];
+        st_result(idx, ld_out_grad(new_idx));
     }
 }
 
@@ -115,9 +115,9 @@ fn stride_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (is_strided) {
             let new_strides = compute_strides(params.new_shape, params.rank);
             let new_idx = coords_to_idx(new_coords, new_strides, params.rank);
-            result[idx] = out_grad[new_idx];
+            st_result(idx, ld_out_grad(new_idx));
         } else {
-            result[idx] = 0.0;
+            st_result(idx, 0.0);
         }
     }
 }
@@ -148,9 +148,9 @@ fn shrink_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (in_window) {
             let new_strides = compute_strides(params.new_shape, params.rank);
             let new_idx = coords_to_idx(new_coords, new_strides, params.rank);
-            result[idx] = out_grad[new_idx];
+            st_result(idx, ld_out_grad(new_idx));
         } else {
-            result[idx] = 0.0;
+            st_result(idx, 0.0);
         }
     }
 }
@@ -186,7 +186,7 @@ fn pad_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let new_strides = compute_strides(params.new_shape, params.rank);
         let new_idx = coords_to_idx(new_coords, new_strides, params.rank);
-        result[idx] = out_grad[new_idx];
+        st_result(idx, ld_out_grad(new_idx));
     }
 }
 
@@ -231,10 +231,10 @@ fn expand_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
             }
 
             if (maps_to_this) {
-                sum = sum + out_grad[i];
+                sum = sum + ld_out_grad(i);
             }
         }
 
-        result[thread_idx] = sum;
+        st_result(thread_idx, sum);
     }
 }

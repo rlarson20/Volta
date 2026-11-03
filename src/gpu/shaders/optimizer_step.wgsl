@@ -16,50 +16,50 @@ struct OptimizerParams {
     _padding: f32,
 }
 
-@group(0) @binding(0) var<storage, read_write> params: array<f32>;
-@group(0) @binding(1) var<storage, read> grads: array<f32>;
-@group(0) @binding(2) var<storage, read_write> state1: array<f32>;  // velocity (SGD) or m (Adam)
-@group(0) @binding(3) var<storage, read_write> state2: array<f32>;  // v (Adam only)
+@group(0) @binding(0) var<storage, read_write> params: array<ELEM>;
+@group(0) @binding(1) var<storage, read> grads: array<ELEM>;
+@group(0) @binding(2) var<storage, read_write> state1: array<ELEM>;  // velocity (SGD) or m (Adam)
+@group(0) @binding(3) var<storage, read_write> state2: array<ELEM>;  // v (Adam only)
 @group(0) @binding(4) var<uniform> opt_params: OptimizerParams;
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx >= arrayLength(&params)) {
+    if (idx >= len_params()) {
         return;
     }
 
     let p = opt_params;
-    var grad = grads[idx];
+    var grad = ld_grads(idx);
 
     // Apply weight decay: grad = grad + weight_decay * param
     if (p.weight_decay != 0.0) {
-        grad = grad + p.weight_decay * params[idx];
+        grad = grad + p.weight_decay * ld_params(idx);
     }
 
     if (p.op == 0u) {
         // Simple SGD: param = param - lr * grad
-        params[idx] = params[idx] - p.lr * grad;
+        st_params(idx, ld_params(idx) - p.lr * grad);
     } else if (p.op == 1u) {
         // SGD with momentum
         // v = momentum * v - lr * grad
-        state1[idx] = p.beta1 * state1[idx] - p.lr * grad;
+        st_state1(idx, p.beta1 * ld_state1(idx) - p.lr * grad);
         // param = param + v
-        params[idx] = params[idx] + state1[idx];
+        st_params(idx, ld_params(idx) + ld_state1(idx));
     } else {
         // Adam optimizer
         // m = beta1 * m + (1 - beta1) * grad
-        state1[idx] = p.beta1 * state1[idx] + (1.0 - p.beta1) * grad;
+        st_state1(idx, p.beta1 * ld_state1(idx) + (1.0 - p.beta1) * grad);
         // v = beta2 * v + (1 - beta2) * grad^2
-        state2[idx] = p.beta2 * state2[idx] + (1.0 - p.beta2) * grad * grad;
+        st_state2(idx, p.beta2 * ld_state2(idx) + (1.0 - p.beta2) * grad * grad);
 
         // Bias correction
         let m_hat_scale = 1.0 / (1.0 - pow(p.beta1, p.t));
         let v_hat_scale = 1.0 / (1.0 - pow(p.beta2, p.t));
 
         // param = param - lr * m_hat / (sqrt(v_hat) + eps)
-        let m_hat = state1[idx] * m_hat_scale;
-        let v_hat = state2[idx] * v_hat_scale;
-        params[idx] = params[idx] - p.lr * m_hat / (sqrt(v_hat) + p.eps);
+        let m_hat = ld_state1(idx) * m_hat_scale;
+        let v_hat = ld_state2(idx) * v_hat_scale;
+        st_params(idx, ld_params(idx) - p.lr * m_hat / (sqrt(v_hat) + p.eps));
     }
 }

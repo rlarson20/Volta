@@ -2,8 +2,8 @@
 // Inverse of im2col: transforms 2D matrix (B*H_out*W_out, C*K_h*K_w) back to 4D tensor (B, C, H, W)
 // Each input position accumulates gradients from all output positions where it contributes
 
-@group(0) @binding(0) var<storage, read> col: array<f32>;
-@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(0) var<storage, read> col: array<ELEM>;
+@group(0) @binding(1) var<storage, read_write> output: array<ELEM>;
 
 struct Col2imParams {
     batch_size: u32,
@@ -78,12 +78,12 @@ fn col2im_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
                 // Read from col matrix and accumulate
                 let col_data_idx = row_idx * cols + col_idx;
-                acc += col[col_data_idx];
+                acc += ld_col(col_data_idx);
             }
         }
     }
 
     // Write accumulated gradient to output
     let output_idx = coords_to_idx_4d(batch, ch, h, w);
-    output[output_idx] = acc;
+    st_output(output_idx, acc);
 }

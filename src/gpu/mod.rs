@@ -13,6 +13,7 @@ pub mod early_warning;
 mod kernels;
 pub mod monitor;
 mod pool;
+pub(crate) mod shader_template;
 /// Pool of `MAP_READ` staging buffers for GPU-to-CPU transfers.
 pub(crate) mod staging_pool;
 pub mod system_monitor;

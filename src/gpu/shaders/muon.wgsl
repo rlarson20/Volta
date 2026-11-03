@@ -19,9 +19,9 @@ struct MuonParams {
     beta: f32,     // axpby: scale of y
 }
 
-@group(0) @binding(0) var<storage, read_write> buf0: array<f32>;
-@group(0) @binding(1) var<storage, read_write> buf1: array<f32>;
-@group(0) @binding(2) var<storage, read_write> buf2: array<f32>;
+@group(0) @binding(0) var<storage, read_write> buf0: array<ELEM>;
+@group(0) @binding(1) var<storage, read_write> buf1: array<ELEM>;
+@group(0) @binding(2) var<storage, read_write> buf2: array<ELEM>;
 @group(0) @binding(3) var<uniform> params: MuonParams;
 
 // v <- alpha * v + g;  update = Nesterov ? alpha * v + g : v
@@ -31,12 +31,12 @@ fn momentum(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (idx >= params.n) {
         return;
     }
-    let v = params.alpha * buf0[idx] + buf1[idx];
-    buf0[idx] = v;
+    let v = params.alpha * ld_buf0(idx) + ld_buf1(idx);
+    st_buf0(idx, v);
     if (params.flag == 1u) {
-        buf2[idx] = params.alpha * v + buf1[idx];
+        st_buf2(idx, params.alpha * v + ld_buf1(idx));
     } else {
-        buf2[idx] = v;
+        st_buf2(idx, v);
     }
 }
 
@@ -49,7 +49,7 @@ fn sum_squares(@builtin(local_invocation_id) local_id: vec3<u32>) {
     let tid = local_id.x;
     var acc: f32 = 0.0;
     for (var i: u32 = tid; i < params.n; i = i + 256u) {
-        let v = buf0[i];
+        let v = ld_buf0(i);
         acc = acc + v * v;
     }
     partial[tid] = acc;
@@ -61,7 +61,7 @@ fn sum_squares(@builtin(local_invocation_id) local_id: vec3<u32>) {
         workgroupBarrier();
     }
     if (tid == 0u) {
-        buf2[0] = partial[0];
+        st_buf2(0, partial[0]);
     }
 }
 
@@ -72,7 +72,7 @@ fn normalize(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (idx >= params.n) {
         return;
     }
-    buf2[idx] = buf0[idx] * (1.0 / (sqrt(buf1[0]) + params.alpha));
+    st_buf2(idx, ld_buf0(idx) * (1.0 / (sqrt(ld_buf1(0)) + params.alpha)));
 }
 
 // buf2[i] = alpha * buf0[i] + beta * buf1[i]
@@ -82,5 +82,5 @@ fn axpby(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (idx >= params.n) {
         return;
     }
-    buf2[idx] = params.alpha * buf0[idx] + params.beta * buf1[idx];
+    st_buf2(idx, params.alpha * ld_buf0(idx) + params.beta * ld_buf1(idx));
 }
