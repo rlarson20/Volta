@@ -1,7 +1,8 @@
 //! Tensors of non-f32 dtypes (ADDENDUM §11): they can be built and read back, integer and
 //! bool tensors cannot require gradients, half ops compute in f32 and round each output,
-//! and an op refuses an operand it has no kernel for (integers and bool) or mixed dtypes
-//! (until P6) loudly, naming the op, instead of converting. f64 values are checked in
+//! mixed operands of elementwise ops promote (or panic under `DTypePolicy::Strict`), and an
+//! op refuses an operand it has no kernel for (integer arithmetic) or mixed dtypes where
+//! PyTorch does too (matmul, conv, layers) loudly, naming the op. f64 values are checked in
 //! `src/lib_tests/f64_tests.rs`, f16/bf16 against torch in `tests/torch_ref_half.rs`.
 
 use half::{bf16, f16};
@@ -109,13 +110,82 @@ fn try_from_typed_checks_the_length() {
     assert!(matches!(err, VoltaError::ShapeDataMismatch { .. }), "{err}");
 }
 
-/// A mixed-dtype op fails loudly; before P1 the f64 operand was silently read as f32.
+/// A mixed f32/f64 product promotes to f64 (PyTorch), and each operand's gradient comes
+/// back in its own dtype through the inserted cast. Before P1 the f64 operand was silently
+/// read as f32; since P6 it is cast, in the graph, to the wider dtype.
 #[test]
-#[should_panic(expected = "Binary(Add): DType mismatch: expected F32, got F64 (input 1)")]
-fn mixed_dtype_binary_op_panics() {
+fn mixed_dtype_binary_op_promotes_and_grads_keep_their_dtype() {
+    let a = RawTensor::new(vec![0.1, 2.0], &[2], true);
+    let b = RawTensor::from_typed(vec![1.0f64 + 1e-12, 3.0], &[2]);
+    b.set_requires_grad(true);
+    let out = a.elem_mul(&b);
+    assert_eq!(out.dtype(), DType::F64);
+    assert_eq!(
+        out.to_vec_as::<f64>().expect("f64"),
+        vec![f64::from(0.1f32) * (1.0 + 1e-12), 6.0]
+    );
+    out.sum().into_loss().expect("scalar").backward();
+    let ga = a.grad_storage().expect("grad");
+    let gb = b.grad_storage().expect("grad");
+    assert_eq!(ga.dtype(), DType::F32);
+    assert_eq!(gb.dtype(), DType::F64);
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the f64 gradient rounds to f32"
+    )]
+    let want_a = (1.0f64 + 1e-12) as f32;
+    assert_eq!(ga.as_host::<f32>().expect("f32"), &[want_a, 3.0]);
+    assert_eq!(gb.as_host::<f64>().expect("f64"), &[f64::from(0.1f32), 2.0]);
+}
+
+/// Under `DTypePolicy::Strict` a mixed-dtype op panics instead of casting, and the guard
+/// restores `Promote` when it drops.
+#[test]
+fn strict_dtype_policy_refuses_mixed_operands() {
     let a = RawTensor::new(vec![1.0, 2.0], &[2], false);
     let b = RawTensor::from_typed(vec![1.0f64, 2.0], &[2]);
-    let _ = a.add(&b);
+    {
+        let _strict = volta::with_dtype_policy(volta::DTypePolicy::Strict);
+        let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| a.add(&b)))
+            .expect_err("Strict refuses a mixed add");
+        let msg = err
+            .downcast_ref::<String>()
+            .map_or("", String::as_str)
+            .to_string();
+        assert!(
+            msg.contains("Binary(Add): DType mismatch: expected F32, got F64 (input 1) under DTypePolicy::Strict"),
+            "{msg}"
+        );
+        assert_eq!(
+            a.add(&a).dtype(),
+            DType::F32,
+            "one dtype is fine under Strict"
+        );
+    }
+    assert_eq!(volta::dtype_policy(), volta::DTypePolicy::Promote);
+    assert_eq!(a.add(&b).dtype(), DType::F64);
+}
+
+/// Integer division is true division, in f32 (PyTorch's `div`); integer `add` still has no
+/// kernel (data-only integers, `notes/TODO.md`).
+#[test]
+fn int_division_is_true_division_in_f32() {
+    let a = RawTensor::from_typed(vec![1i64, 7, -3], &[3]);
+    let b = RawTensor::from_typed(vec![3i64, 2, 2], &[3]);
+    let q = a.div(&b);
+    assert_eq!(q.dtype(), DType::F32);
+    assert_eq!(
+        q.to_vec_as::<f32>().expect("f32"),
+        vec![1.0 / 3.0, 3.5, -1.5]
+    );
+}
+
+/// `i64 + i64` promotes to i64, which has no arithmetic kernel: it panics, naming the op.
+#[test]
+#[should_panic(expected = "Binary(Add): no i64 kernel")]
+fn int_add_panics_naming_the_op() {
+    let a = RawTensor::from_typed(vec![1i64], &[1]);
+    let _ = a.add(&a);
 }
 
 /// A half op decodes to f32, computes there, and rounds the output once (PyTorch CPU).
@@ -248,12 +318,20 @@ fn comparisons_return_bool_on_every_dtype() {
     assert_eq!(get(&p.gt(&q)), vec![true, false]);
 }
 
-/// Comparisons need one dtype until promotion (P6).
+/// Mixed comparisons compare in the promoted dtype: i64 against f32 compares in f32, so
+/// 2^24 + 1 (rounded to 2^24) equals 2^24, as in PyTorch.
 #[test]
-#[should_panic(expected = "Compare(Lt): DType mismatch: expected I64, got F32 (input 1)")]
-fn comparison_of_mixed_dtypes_panics() {
-    let a = RawTensor::from_typed(vec![1i64], &[1]);
-    let _ = a.lt(&RawTensor::new(vec![1.0], &[1], false));
+fn comparison_of_mixed_dtypes_promotes() {
+    let a = RawTensor::from_typed(vec![(1i64 << 24) + 1, 3], &[2]);
+    let b = RawTensor::new(vec![16_777_216.0, 2.5], &[2], false);
+    assert_eq!(
+        a.elem_eq(&b).to_vec_as::<bool>().expect("bool"),
+        vec![true, false]
+    );
+    assert_eq!(
+        a.gt(&b).to_vec_as::<bool>().expect("bool"),
+        vec![false, true]
+    );
 }
 
 /// `where` selects from branches of any dtype under a Bool condition.
@@ -278,7 +356,9 @@ fn where_with_float_condition_panics() {
 /// An f64 input to an f32 layer is a mismatch, named by the layer: `to_dtype` the layer
 /// (or the input) first.
 #[test]
-#[should_panic(expected = "Conv2d: DType mismatch: expected F64, got F32 (input 1)")]
+#[should_panic(
+    expected = "Conv2d: DType mismatch: expected F64, got F32 (input 1); this op needs one dtype, as in PyTorch: cast with to_dtype (a layer with Module::to_dtype)"
+)]
 fn f64_input_to_f32_conv_panics_naming_the_layer() {
     let conv = Conv2d::new(1, 1, 1, 1, 0, false);
     let x = RawTensor::from_typed(vec![1.0f64; 4], &[1, 1, 2, 2]);

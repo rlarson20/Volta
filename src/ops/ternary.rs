@@ -2,7 +2,7 @@ use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::device_policy::kernel_failed;
 use crate::dtype::DType;
-use crate::real::{Real, compute_dtype, dispatch_bits, dispatch_real, same_dtype};
+use crate::real::{Real, compute_dtype, dispatch_bits, dispatch_real, promote_operands};
 use crate::shape::Shape;
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
@@ -133,7 +133,13 @@ impl RawTensor {
     pub fn ternary_op(x: &Tensor, y: &Tensor, z: &Tensor, op: TernaryOp) -> Tensor {
         match op {
             TernaryOp::MulAcc => {
-                let dtype = compute_dtype(|| format!("{op:?}"), &[x.dtype(), y.dtype(), z.dtype()]);
+                // Mixed operands are cast to one dtype first (`DTypePolicy`), as addcmul does.
+                let (promoted, operands) =
+                    promote_operands(|| format!("{op:?}"), &[x, y, z], false);
+                let [x, y, z] = operands.as_slice() else {
+                    unreachable!("three operands in, three out")
+                };
+                let dtype = compute_dtype(|| format!("{op:?}"), &[promoted]);
                 let (data_x, shape_x, dev_x) = {
                     let s = x.borrow();
                     (s.data.clone(), s.shape.clone(), s.device.clone())
@@ -205,7 +211,11 @@ impl RawTensor {
                     "Where: its Bool condition cannot live on the GPU until ADDENDUM §11 P8; \
                      select on the CPU"
                 );
-                let dtype = same_dtype(|| format!("{op:?}"), &[y.dtype(), z.dtype()]);
+                // The branches are cast to one dtype (`DTypePolicy`); the condition stays Bool.
+                let (dtype, branches) = promote_operands(|| format!("{op:?}"), &[y, z], false);
+                let [y, z] = branches.as_slice() else {
+                    unreachable!("two branches in, two out")
+                };
                 let (cond_data, cond_shape) = {
                     let s = x.borrow();
                     (s.data.clone(), s.shape.clone())

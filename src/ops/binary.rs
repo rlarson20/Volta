@@ -2,7 +2,7 @@ use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::index::{fetch, slot};
 use crate::macros::define_ops;
-use crate::real::{Real, compute_dtype, dispatch_real};
+use crate::real::{Real, compute_dtype, dispatch_real, promote_operands};
 use crate::shape::{Shape, Strides};
 use crate::storage::Storage;
 use crate::{RawTensor, Result, Tensor, VoltaError};
@@ -315,10 +315,17 @@ impl RawTensor {
     /// broadcast failure
     #[must_use]
     pub fn binary_op(self_t: &Tensor, other: &Tensor, op: BinaryOp) -> Tensor {
-        let dtype = compute_dtype(
+        // Mixed operands are cast to one dtype first (`DTypePolicy`); `Div` is true
+        // division, so integers divide in f32 as in PyTorch.
+        let (promoted, operands) = promote_operands(
             || format!("Binary({op:?})"),
-            &[self_t.dtype(), other.dtype()],
+            &[self_t, other],
+            op == BinaryOp::Div,
         );
+        let [self_t, other] = operands.as_slice() else {
+            unreachable!("two operands in, two out")
+        };
+        let dtype = compute_dtype(|| format!("Binary({op:?})"), &[promoted]);
         // If both operands are on the same GPU with equal shapes, run the kernel there;
         // otherwise (or if it fails) fall through to the CPU path.
         if let Some((shape, storage, device)) = Self::gpu_binary_forward(self_t, other, op) {
