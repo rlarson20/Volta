@@ -1,6 +1,6 @@
 use crate::io::StateDict;
 use crate::nn::{Layer, Module};
-use crate::tensor::{RawTensor, Tensor};
+use crate::tensor::Tensor;
 use rand::Rng;
 
 /// Zeroes each element with probability `p` in training mode, scaling the rest by `1 / (1 - p)`; the identity in evaluation mode.
@@ -56,10 +56,7 @@ impl Layer for Dropout {
         let keep_prob = 1.0 - self.p;
         let scale = 1.0 / keep_prob;
 
-        let (shape, device) = {
-            let x_borrow = x.borrow();
-            (x_borrow.shape.clone(), x_borrow.device.clone())
-        };
+        let shape = x.borrow().shape.clone();
         let size: usize = shape.iter().product();
 
         // Generate mask: 1 with prob (1-p), 0 with prob p
@@ -75,7 +72,8 @@ impl Layer for Dropout {
                 .collect()
         });
 
-        let mask = RawTensor::from_shape(mask_data, shape.clone(), false).to_device(device);
+        // On x's device and in its dtype; the f32 scale widens exactly.
+        let mask = x.constant_like(mask_data, shape.truncate_rank());
 
         // Apply mask: x * mask
         x.elem_mul(&mask)

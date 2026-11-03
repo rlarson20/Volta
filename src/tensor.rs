@@ -388,32 +388,6 @@ pub struct RawTensor {
     pub device: Device,
 }
 
-/// Panics unless every input is f32, naming the op: the f32-only check of the layers and
-/// optimizers whose kernels are not dtype-generic yet (ADDENDUM §11 P3b). Called at the
-/// entry, before any work, so the message names the op rather than a kernel read. Core ops
-/// use `real::compute_dtype` instead.
-///
-/// # Panics
-/// If an input's dtype is not F32.
-#[track_caller]
-pub(crate) fn expect_f32(op: impl FnOnce() -> String, inputs: &[&Tensor]) {
-    if let Some((i, dtype)) = inputs
-        .iter()
-        .map(|t| t.dtype())
-        .enumerate()
-        .find(|&(_, d)| d != DType::F32)
-    {
-        panic!(
-            "{}: {} (input {i}); this op computes in f32 only until ADDENDUM §11 P3b",
-            op(),
-            VoltaError::DTypeMismatch {
-                expected: DType::F32,
-                actual: dtype,
-            }
-        );
-    }
-}
-
 // ===== RNG HELPERS =====
 
 thread_local! {
@@ -603,6 +577,7 @@ impl RawTensor {
     /// # Panics
     ///
     /// If `data.len()` != `shape.numel()`.
+    #[cfg(test)]
     pub(crate) fn from_shape(data: Vec<f32>, shape: Shape, requires_grad: bool) -> Tensor {
         Self::new_with_storage(Storage::cpu(data), shape, Device::CPU, requires_grad)
     }

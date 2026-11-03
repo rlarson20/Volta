@@ -523,6 +523,20 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 
 **Not done here:** torch fixtures in f64 (P3b): checking them from `tests/` needs a public way to read typed values back, and `data()` decodes to f32. The f64 gradcheck is test-only for the same reason.
 
+### Layers and optimizers in f64; `Module::to_dtype` (P3b)
+
+**Decision:** every layer and optimizer kernel dispatches on dtype like the core ops (P3a), and `Module::to_dtype` converts a model in place (PyTorch's `module.to(dtype)`). The default converts `parameters()`; `BatchNorm1d/2d` also convert their running statistics, `PositionalEncoding` its sinusoid table, and `Sequential` forwards to each child so buffers are reached. The transformer containers hold only parameter-only children, so the default covers them. `Tensor::to_vec_as::<T>()` is the public lossless readback (approved on #22); `data()` still decodes to f32.
+
+**Choices made here:**
+- **Loading casts.** `load_state_dict` casts the f32 `TensorData` to each parameter's dtype, exactly for f64, as PyTorch's `load_state_dict` (`copy_`) does. This replaces P1's refusal; an integer destination is still an error.
+- **Saving stays f32-only.** `state_dict()` on a non-f32 model panics in `TensorData::from_tensor`: `TensorData` is f32, and narrowing silently would lose the point of f64. A typed `TensorData` changes the bincode format, so it is a TODO, not part of P3b.
+- **Optimizers step each parameter in its own dtype.** A mixed f32/f64 list is fine (as in PyTorch); a parameter with no kernel (f16 until P4) is refused before any parameter is updated. Optimizer state is allocated in each parameter's dtype at construction, so a model converted after its optimizer was built panics on the first step with "build the optimizer after Module::to_dtype" (the dtype twin of S17's device bug, which allocates lazily as its fix would).
+- **Hyperparameters stay f32.** `lr`, betas, eps, momentum, and weight decay are widened to the parameter's dtype, so `lr = 0.01` is `0.009999999776` in an f64 step. Training does not care; the torch f64 fixture uses powers of two so both sides agree exactly.
+- **Helper tensors follow the input.** Dropout's mask, the causal masks, and LSTM's zero state come from `constant_like` (input's device and dtype). BatchNorm's eval path reshapes the running statistics instead of `constant_like(.., data())`, which would have rounded f64 statistics through f32.
+- `check_gradients` perturbs in the input's dtype and computes errors in f64, so it checks f64 tensors through its existing signature. `expect_f32` is gone: nothing is f32-only on the CPU any more.
+
+**Evidence:** `src/lib_tests/f64_tests.rs` gradchecks every `Layer` (Linear, Conv2d with each of its three algorithms, ConvTranspose2d, MaxPool2d, BatchNorm1d/2d, LayerNorm, GELU, PixelShuffle, FeedForward, MultiHeadAttention, TransformerBlock, both PositionalEncodings), `Embedding`, and `LSTMCell` over two steps, in f64 at 1e-7 for the input and for every parameter (perturbed in place). A mutant that scales Conv2d's direct weight gradient by 1 + 1e-6 fails it, while all 98 f32 conv tests still pass. `tests/torch_ref_f64.rs` matches PyTorch's float64 results at 1e-10 relative for exp/tanh/sigmoid/erf, both softmaxes, broadcast batched matmul, Linear, Conv2d (all three algorithms against one fixture), ConvTranspose2d, MaxPool2d, BatchNorm2d (training), LayerNorm, Embedding, and three Adam steps with weight decay. Optimizer tests pin an f64 Adam step against the formula, a 1e-12 SGD update surviving, and mixed f32/f64 parameter lists.
+
 ## Errors
 
 ### Panic inside the program, `Result` where data comes from outside

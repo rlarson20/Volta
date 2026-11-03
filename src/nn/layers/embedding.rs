@@ -3,6 +3,7 @@ use crate::device::Device;
 use crate::index::{fetch, slot, span};
 use crate::io::StateDict;
 use crate::nn::{IndexedLayer, Module, SealedLayer};
+use crate::real::{Real, dispatch_real};
 use crate::shape::Shape;
 use crate::storage::Storage;
 use crate::tensor::{RawTensor, Tensor, with_rng};
@@ -89,22 +90,25 @@ impl IndexedLayer for Embedding {
         assert!(!indices.is_empty(), "indices cannot be empty");
 
         let weight_borrowed = self.weight.borrow();
-        let weight_data = weight_borrowed.data.to_host_f32();
+        let output = dispatch_real!(weight_borrowed.data.dtype(), T => {
+            let weight_data = weight_borrowed.data.host::<T>();
 
-        // Gather operation: select rows from weight matrix
-        let mut output_data = Vec::with_capacity(indices.len() * self.dim);
+            // Gather operation: select rows from weight matrix
+            let mut output_data = Vec::with_capacity(indices.len() * self.dim);
 
-        for &idx in indices {
-            assert!(
-                idx < self.vocab_size,
-                "Index {} out of bounds for vocab_size {}",
-                idx,
-                self.vocab_size
-            );
-            let start = idx * self.dim;
-            let end = start + self.dim;
-            output_data.extend_from_slice(span(weight_data, start..end));
-        }
+            for &idx in indices {
+                assert!(
+                    idx < self.vocab_size,
+                    "Index {} out of bounds for vocab_size {}",
+                    idx,
+                    self.vocab_size
+                );
+                let start = idx * self.dim;
+                let end = start + self.dim;
+                output_data.extend_from_slice(span(weight_data, start..end));
+            }
+            Storage::from_typed(output_data)
+        });
 
         drop(weight_borrowed);
 
@@ -112,7 +116,7 @@ impl IndexedLayer for Embedding {
 
         edge(
             [self.weight.clone()],
-            Storage::cpu(output_data),
+            output,
             Shape::derived(output_shape),
             Device::CPU,
             GradFn::Embedding(EmbeddingGradFn {
@@ -168,20 +172,22 @@ impl EmbeddingGradFn {
         // out_grad: [num_indices, embedding_dim]
         // Scatter gradients to weight: [vocab_size, embedding_dim]
 
-        let mut grad_weight = vec![0.0; self.vocab_size * self.embedding_dim];
-
-        // Accumulate gradients for each index
-        let g_host = out_grad.data.to_host_f32();
-        for (i, &idx) in self.indices.iter().enumerate() {
-            for d in 0..self.embedding_dim {
-                let out_grad_idx = i * self.embedding_dim + d;
-                let weight_idx = idx * self.embedding_dim + d;
-                *slot(&mut grad_weight, weight_idx) += fetch(g_host, out_grad_idx);
+        // Accumulate gradients for each index, in the gradient's dtype
+        let grad_tensor = dispatch_real!(out_grad.data.dtype(), T => {
+            let mut grad_weight = vec![T::ZERO; self.vocab_size * self.embedding_dim];
+            let g_host = out_grad.data.host::<T>();
+            for (i, &idx) in self.indices.iter().enumerate() {
+                for d in 0..self.embedding_dim {
+                    let out_grad_idx = i * self.embedding_dim + d;
+                    let weight_idx = idx * self.embedding_dim + d;
+                    *slot(&mut grad_weight, weight_idx) += fetch(g_host, out_grad_idx);
+                }
             }
-        }
-
-        let grad_tensor =
-            RawTensor::new(grad_weight, &[self.vocab_size, self.embedding_dim], false);
+            RawTensor::from_shape_typed(
+                grad_weight,
+                Shape::derived(vec![self.vocab_size, self.embedding_dim]),
+            )
+        });
 
         vec![Some(grad_tensor)]
     }

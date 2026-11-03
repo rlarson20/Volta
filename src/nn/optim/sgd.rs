@@ -1,3 +1,4 @@
+use crate::real::{Real, dispatch_real};
 use crate::storage::Storage;
 use crate::tensor::Tensor;
 
@@ -31,7 +32,7 @@ impl SGD {
     /// * `weight_decay` - L2 penalty (typical: 1e-4, or 0.0 for none)
     #[must_use]
     pub fn new(params: Vec<Tensor>, lr: f32, momentum: f32, weight_decay: f32) -> Self {
-        // Create velocity state matching the device of each parameter
+        // Create velocity state matching the device and dtype of each parameter
         let velocity = if momentum > 0.0 {
             params
                 .iter()
@@ -39,8 +40,13 @@ impl SGD {
                     let param = p.borrow();
                     let len = param.data.len();
                     let device = param.device.clone();
+                    let dtype = param.data.dtype();
                     drop(param);
-                    Storage::new_zeros(len, &device)
+                    if device.is_gpu() {
+                        Storage::new_zeros(len, &device)
+                    } else {
+                        Storage::new_zeros(len, &device).cast(dtype)
+                    }
                 })
                 .collect()
         } else {
@@ -72,10 +78,11 @@ impl SGD {
     /// # Panics
     /// unwrap params
     pub fn step(&mut self) {
-        crate::tensor::expect_f32(
-            || "SGD step".to_string(),
-            &self.params.iter().collect::<Vec<_>>(),
-        );
+        // Each parameter steps in its own dtype (a mixed list is fine, as in PyTorch);
+        // each must have a kernel. Checked for all before any is updated.
+        for param in &self.params {
+            crate::real::compute_dtype(|| "SGD step".to_string(), &[param.dtype()]);
+        }
         // Process each parameter based on its device
         for i in 0..self.params.len() {
             let param = self.params.get(i).unwrap();
@@ -160,16 +167,21 @@ impl SGD {
             None => return,
         };
 
+        let dtype = p.data.dtype();
+        dispatch_real!(dtype, T => {
+        let lr = T::from_f64(f64::from(self.lr));
+        let momentum = T::from_f64(f64::from(self.momentum));
+        let weight_decay = T::from_f64(f64::from(self.weight_decay));
         // Apply weight decay to gradient
         let mut active_grad = grad;
         if self.weight_decay != 0.0 {
             for (g, theta) in active_grad
-                .as_host_f32_mut()
-                .expect("SGD weight decay: CPU F32 gradient")
+                .as_host_mut::<T>()
+                .expect("SGD weight decay: CPU gradient in the parameter's dtype")
                 .iter_mut()
-                .zip(p.data.to_host_f32().iter())
+                .zip(p.data.host::<T>().iter())
             {
-                *g += self.weight_decay * *theta;
+                *g += weight_decay * *theta;
             }
         }
 
@@ -178,18 +190,24 @@ impl SGD {
             let vel_slice = self
                 .velocity
                 .get_mut(i)
-                .and_then(|v| v.as_host_f32_mut().ok())
-                .expect("Velocity should be CPU storage");
+                .map(|v| {
+                    v.as_host_mut::<T>().unwrap_or_else(|e| {
+                        panic!(
+                            "SGD velocity: {e}; build the optimizer after Module::to_dtype"
+                        )
+                    })
+                })
+                .expect("SGD: a velocity per parameter");
 
             // Update velocity: v = momentum·v - lr·grad
-            for (v, &g) in vel_slice.iter_mut().zip(active_grad.to_host_f32().iter()) {
-                *v = self.momentum.mul_add(*v, -(self.lr * g));
+            for (v, &g) in vel_slice.iter_mut().zip(active_grad.host::<T>().iter()) {
+                *v = momentum.mul_add(*v, -(lr * g));
             }
 
             // Update parameters: θ = θ + v
             let p_data = p
                 .data
-                .as_host_f32_mut()
+                .as_host_mut::<T>()
                 .expect("Parameter should be CPU storage");
             for (d, &v) in p_data.iter_mut().zip(vel_slice.iter()) {
                 *d += v;
@@ -198,12 +216,13 @@ impl SGD {
             // Simple SGD: θ = θ - lr·grad
             let p_data = p
                 .data
-                .as_host_f32_mut()
+                .as_host_mut::<T>()
                 .expect("Parameter should be CPU storage");
-            for (d, &g) in p_data.iter_mut().zip(active_grad.to_host_f32().iter()) {
-                *d -= self.lr * g;
+            for (d, &g) in p_data.iter_mut().zip(active_grad.host::<T>().iter()) {
+                *d -= lr * g;
             }
         }
+        });
     }
 }
 
