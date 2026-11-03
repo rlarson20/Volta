@@ -125,6 +125,7 @@ impl RawTensor {
     /// if we implement views/strides that share memory.
     #[must_use]
     pub fn contiguous(self_t: &Tensor) -> Tensor {
+        crate::tensor::expect_f32(|| "Contiguous".to_string(), &[self_t]);
         let s = self_t.borrow();
         Self::from_shape(s.data.to_vec(), s.shape.clone(), s.requires_grad)
     }

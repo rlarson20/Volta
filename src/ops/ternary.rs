@@ -7,7 +7,7 @@ use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
 
 /// Ternary operations: three inputs, one output
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum TernaryOp {
     /// `x * y + z`, fused.
     MulAcc,
@@ -176,6 +176,7 @@ impl RawTensor {
     /// assert shape match for `x`, `y`
     #[must_use]
     pub fn ternary_op(x: &Tensor, y: &Tensor, z: &Tensor, op: TernaryOp) -> Tensor {
+        crate::tensor::expect_f32(|| format!("{op:?}"), &[x, y, z]);
         match op {
             TernaryOp::MulAcc => {
                 let (data_x, shape_x, dev_x) = {

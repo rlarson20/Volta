@@ -344,6 +344,7 @@ impl Module for ConvTranspose2d {
 
 impl Layer for ConvTranspose2d {
     fn forward(&self, x: &Tensor) -> Tensor {
+        crate::tensor::expect_f32(|| "ConvTranspose2d".to_string(), &[x, &self.weight]);
         let spec =
             ConvTranspose2dSpec::new(&x.shape(), &self.weight.shape(), self.stride, self.padding)
                 .unwrap_or_else(|e| panic!("{e}"));

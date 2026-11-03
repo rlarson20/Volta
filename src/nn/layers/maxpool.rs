@@ -55,6 +55,7 @@ impl MaxPool2d {
 
     /// Computes the pooled output and attaches the backward edge.
     fn pool_forward(&self, x: &Tensor) -> Tensor {
+        crate::tensor::expect_f32(|| "MaxPool2d".to_string(), &[x]);
         let spec = Window2dSpec::new(&x.shape(), self.kernel, self.stride, self.padding)
             .unwrap_or_else(|e| panic!("{e}"));
         let Window2dSpec {

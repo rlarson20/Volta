@@ -332,6 +332,31 @@ pub struct RawTensor {
     pub device: Device,
 }
 
+/// Panics unless every input is f32, naming the op: every kernel computes in f32 only
+/// until ADDENDUM §11 P3/P4. Called at each op's entry, before any work, so the message
+/// names the op rather than the kernel read that would otherwise fail first.
+///
+/// # Panics
+/// If an input's dtype is not F32.
+#[track_caller]
+pub(crate) fn expect_f32(op: impl FnOnce() -> String, inputs: &[&Tensor]) {
+    if let Some((i, dtype)) = inputs
+        .iter()
+        .map(|t| t.dtype())
+        .enumerate()
+        .find(|&(_, d)| d != DType::F32)
+    {
+        panic!(
+            "{}: {} (input {i}); ops compute in f32 only until ADDENDUM §11 P3/P4",
+            op(),
+            VoltaError::DTypeMismatch {
+                expected: DType::F32,
+                actual: dtype,
+            }
+        );
+    }
+}
+
 // ===== RNG HELPERS =====
 
 thread_local! {
@@ -1044,6 +1069,7 @@ impl RawTensor {
     ///
     /// Returns `VoltaError::DimensionOutOfBounds` if dim is >= tensor rank
     pub fn try_sum_dim(self_t: &Tensor, dim: Axis, keepdim: bool) -> Result<Tensor> {
+        expect_f32(|| "SumDim".to_string(), &[self_t]);
         let (data, shape) = {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone())
@@ -1169,6 +1195,7 @@ impl RawTensor {
     /// dim out of bounds
     #[must_use]
     pub fn max_dim(self_t: &Tensor, dim: Axis, keepdim: bool) -> Tensor {
+        expect_f32(|| "MaxDim".to_string(), &[self_t]);
         let (data, shape) = {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone())

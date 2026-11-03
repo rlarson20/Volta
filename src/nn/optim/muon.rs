@@ -164,6 +164,10 @@ impl Muon {
     /// If a GPU kernel cannot run: the parameter would otherwise be silently left
     /// untrained, as in `SGD` and `Adam`.
     pub fn step(&mut self) {
+        crate::tensor::expect_f32(
+            || "Muon step".to_string(),
+            &self.params.iter().collect::<Vec<_>>(),
+        );
         for (param, velocity) in self.params.iter().zip(self.velocity.iter_mut()) {
             let mut p = param.borrow_mut();
             let Some(grad) = p.grad.clone() else {

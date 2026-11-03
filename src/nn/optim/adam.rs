@@ -79,6 +79,10 @@ impl Adam {
     /// # Panics
     /// unwrap params
     pub fn step(&mut self) {
+        crate::tensor::expect_f32(
+            || "Adam step".to_string(),
+            &self.params.iter().collect::<Vec<_>>(),
+        );
         self.t += 1;
 
         // Process each parameter based on its device

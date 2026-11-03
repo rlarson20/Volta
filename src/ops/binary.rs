@@ -302,6 +302,7 @@ impl RawTensor {
     /// broadcast failure
     #[must_use]
     pub fn binary_op(self_t: &Tensor, other: &Tensor, op: BinaryOp) -> Tensor {
+        crate::tensor::expect_f32(|| format!("Binary({op:?})"), &[self_t, other]);
         // If both operands are on the same GPU with equal shapes, run the kernel there;
         // otherwise (or if it fails) fall through to the CPU path.
         if let Some((shape, storage, device)) = Self::gpu_binary_forward(self_t, other, op) {

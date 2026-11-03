@@ -736,6 +736,7 @@ impl RawTensor {
     /// `VoltaError::InvalidParameter` if `new_shape` has a zero dimension, overflows, or
     /// exceeds `MAX_NUMEL` (see [`Shape::from_dims`]), or has a different element count.
     pub fn try_reshape(self_t: &Tensor, new_shape: &[usize]) -> Result<Tensor> {
+        crate::tensor::expect_f32(|| "Reshape".to_string(), &[self_t]);
         // Validate before `product()` or any allocation: `new_shape` may be user data.
         let target = Shape::from_dims(new_shape)?;
         let (data, old_shape, device) = {
@@ -830,6 +831,7 @@ impl RawTensor {
     /// invalid permutation axes
     #[must_use]
     pub fn permute(self_t: &Tensor, axes: &[Axis]) -> Tensor {
+        crate::tensor::expect_f32(|| "Permute".to_string(), &[self_t]);
         let old_shape = self_t.borrow().shape.clone();
         let axes: Vec<usize> = axes.iter().map(|a| a.0).collect();
 
@@ -875,6 +877,7 @@ impl RawTensor {
     /// or has a different rank, `VoltaError::BroadcastError` if a dimension is neither
     /// `1` nor equal to the target.
     pub fn try_expand(self_t: &Tensor, new_shape: &[usize]) -> Result<Tensor> {
+        crate::tensor::expect_f32(|| "Expand".to_string(), &[self_t]);
         let out_shape = Shape::from_dims(new_shape)?;
         let (data, old_shape, device) = {
             let s = self_t.borrow();
@@ -970,6 +973,7 @@ impl RawTensor {
         value: PadValue,
     ) -> Result<Tensor> {
         use crate::error::VoltaError;
+        crate::tensor::expect_f32(|| "Pad".to_string(), &[self_t]);
 
         let (data, old_shape, device) = {
             let s = self_t.borrow();
@@ -1128,6 +1132,7 @@ impl RawTensor {
     ///   - Any range has `start == end` (zero-sized dimension)
     /// * `VoltaError::DimensionOutOfBounds` - If any range has `end > dimension size`
     pub fn try_shrink(self_t: &Tensor, ranges: &[(usize, usize)]) -> Result<Tensor> {
+        crate::tensor::expect_f32(|| "Shrink".to_string(), &[self_t]);
         let (data, old_shape, device) = {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone(), s.device.clone())
@@ -1188,6 +1193,7 @@ impl RawTensor {
     /// Strides length must match rank
     #[must_use]
     pub fn stride_op(self_t: &Tensor, strides: &[usize]) -> Tensor {
+        crate::tensor::expect_f32(|| "Stride".to_string(), &[self_t]);
         let (data, old_shape, device) = {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone(), s.device.clone())

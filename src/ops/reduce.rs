@@ -9,7 +9,7 @@ use crate::{RawTensor, Tensor};
 ///
 /// These operations collapse all dimensions and require special gradient handling
 /// since the output shape differs from the input.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum ReduceOp {
     /// Sum of all elements; the gradient broadcasts ones.
     Sum,
@@ -154,6 +154,7 @@ impl RawTensor {
     /// unwrap map
     #[must_use]
     pub fn reduce_op(self_t: &Tensor, op: ReduceOp) -> Tensor {
+        crate::tensor::expect_f32(|| format!("{op:?}"), &[self_t]);
         let (data, shape, device) = {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone(), s.device.clone())

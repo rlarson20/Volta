@@ -160,6 +160,7 @@ impl RawTensor {
     /// Dimension mismatch, or matrix operands of unequal rank (see `MatmulSpec`)
     #[must_use]
     pub fn matmul(self_t: &Tensor, other: &Tensor) -> Tensor {
+        crate::tensor::expect_f32(|| "MatMul".to_string(), &[self_t, other]);
         let (data_a, shape_a) = {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone())
