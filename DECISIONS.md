@@ -543,6 +543,17 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 - **Helper tensors follow the input.** Dropout's mask, the causal masks, and LSTM's zero state come from `constant_like` (input's device and dtype). BatchNorm's eval path reshapes the running statistics instead of `constant_like(.., data())`, which would have rounded f64 statistics through f32.
 - `check_gradients` perturbs in the input's dtype and computes errors in f64, so it checks f64 tensors through its existing signature. `expect_f32` is gone: nothing is f32-only on the CPU any more.
 
+**Compile time after P3b (measured 2026-11-03):** medians of three rotated runs per tree, `volta` only, `CARGO_INCREMENTAL=0`, against #21's tip (P2), P3a, and P3b:
+
+| Build | P2 | P3a | P3b |
+| --- | --- | --- | --- |
+| debug, CPU | 2.04 s | 2.26 s (+11%) | 2.40 s (+18%) |
+| release, CPU | 5.25 s | 5.77 s (+10%) | 6.89 s (+31%; user CPU +37%) |
+| debug, default features | 3.24 s | 3.42 s (+5%) | 3.47 s (+7%) |
+| lib unit-test binary, CPU | 4.94 s | 5.31 s (+8%) | 5.82 s (+18%) |
+
+`libvolta.rlib` (release) grows 3.64 to 4.00 to 4.21 MB. The release jump is LLVM optimizing a second copy of the large kernels (the three conv algorithms, conv-transpose, pooling): each `dispatch_real!` duplicates a whole loop nest. Accepted: it is about 1.6 s per release rebuild of this crate, paid once by a dependent, and P4's half types reuse the f32 instance. If it grows, the cheapest lever is a default-on `f64` cargo feature that compiles the f64 arms only when enabled.
+
 **Evidence:** `src/lib_tests/f64_tests.rs` gradchecks every `Layer` (Linear, Conv2d with each of its three algorithms, ConvTranspose2d, MaxPool2d, BatchNorm1d/2d, LayerNorm, GELU, PixelShuffle, FeedForward, MultiHeadAttention, TransformerBlock, both PositionalEncodings), `Embedding`, and `LSTMCell` over two steps, in f64 at 1e-7 for the input and for every parameter (perturbed in place). A mutant that scales Conv2d's direct weight gradient by 1 + 1e-6 fails it, while all 98 f32 conv tests still pass. `tests/torch_ref_f64.rs` matches PyTorch's float64 results at 1e-10 relative for exp/tanh/sigmoid/erf, both softmaxes, broadcast batched matmul, Linear, Conv2d (all three algorithms against one fixture), ConvTranspose2d, MaxPool2d, BatchNorm2d (training), LayerNorm, Embedding, and three Adam steps with weight decay. Optimizer tests pin an f64 Adam step against the formula, a 1e-12 SGD update surviving, and mixed f32/f64 parameter lists.
 
 ## Errors
