@@ -187,3 +187,46 @@ fn flatten_backward_parity() {
 // pow — not available; no `pow` method exists on Tensor.
 // Skipping as the operation is not implemented in the framework.
 // ---------------------------------------------------------------------------
+
+/// Rank 5 is past the GPU permute kernels (rank <= 4), so forward and backward are gaps
+/// and the backward runs its CPU path on a GPU gradient. That path once relabeled the
+/// GPU storage as CPU instead of copying it to the host, and panicked.
+#[test]
+fn permute_rank5_backward_gap_parity() {
+    if skip_if_no_gpu() {
+        return;
+    }
+    expect_gaps(&["Movement(Permute)"], || {
+        let shape = [2, 1, 3, 2, 2];
+        let axes = [Axis(4), Axis(2), Axis(0), Axis(3), Axis(1)];
+        let x_cpu = make_input(&shape, true, (-2.0, 2.0));
+        let w_cpu = make_input(&[2, 3, 2, 2, 1], false, (0.5, 3.0));
+        x_cpu
+            .permute(&axes)
+            .elem_mul(&w_cpu)
+            .sum()
+            .into_loss()
+            .expect("scalar")
+            .backward();
+
+        let x_gpu = gpu_leaf(&x_cpu);
+        let w_gpu = gpu_leaf(&w_cpu);
+        let out = x_gpu.permute(&axes);
+        assert!(
+            out.device().is_gpu(),
+            "PreferGpu moves the gap's result back"
+        );
+        out.elem_mul(&w_gpu)
+            .sum()
+            .into_loss()
+            .expect("scalar")
+            .backward();
+
+        assert_close(
+            "permute rank-5 grad",
+            &x_cpu.grad().expect("CPU grad"),
+            &x_gpu.grad().expect("GPU grad"),
+            TOL_BWD_GPU,
+        );
+    });
+}
