@@ -366,8 +366,9 @@ impl RawTensor {
         {
             let mut tensor = tensor_ref.borrow_mut();
             if tensor.grad.is_none() {
-                // Initialize grad on the same device as this tensor's data
-                let base = Storage::cpu(vec![1.0]);
+                // Initialize grad on the same device, and in the same dtype, as this
+                // tensor's data (a gradient has its tensor's dtype).
+                let base = Storage::cpu(vec![1.0]).cast(tensor.data.dtype());
                 let grad_storage = base.to_device(&tensor.device);
                 tensor.grad = Some(grad_storage);
             }

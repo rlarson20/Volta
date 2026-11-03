@@ -1,9 +1,9 @@
 //! Tensor storage: a typed host buffer, or an f32 GPU buffer.
 //!
 //! CPU data is a [`HostBuf`]: one `Arc<[T]>` per dtype, so alignment and element type are
-//! guaranteed by the type rather than by a tag next to a byte buffer. Every `Tensor` still
-//! computes in f32: [`Storage::to_host_f32`], the read every kernel uses, panics on any
-//! other dtype rather than converting it. Real dtypes are planned in ADDENDUM §11.
+//! guaranteed by the type rather than by a tag next to a byte buffer. Kernels read their
+//! inputs through `host::<T>()` for `T` = f32 or f64 (`crate::real`), which panics on any
+//! other dtype rather than converting it. GPU storage is f32-only until ADDENDUM §11 P8.
 
 use crate::VoltaError;
 use crate::device::Device;
@@ -505,9 +505,8 @@ impl Storage {
     ///
     /// # Panics
     ///
-    /// If the dtype is not F32. Kernels compute in f32 only (ADDENDUM §11), so another
-    /// dtype reaching one is a loud failure, not a silent conversion. Use
-    /// [`Self::to_f32_vec`] to decode other dtypes on purpose.
+    /// If the dtype is not F32: another dtype reaching an f32 read is a loud failure, not a
+    /// silent conversion. Use [`Self::to_f32_vec`] to decode other dtypes on purpose.
     #[must_use]
     #[track_caller]
     pub fn to_host_f32(&self) -> &[f32] {
@@ -523,6 +522,22 @@ impl Storage {
             }),
             #[cfg(feature = "gpu")]
             Self::Gpu(shared) => shared.host.get_or_init(|| shared.buffer.to_vec()),
+        }
+    }
+
+    /// Host view of a kernel's input as `T` (`f32` or `f64`): [`Self::to_host_f32`] for
+    /// `f32` (which syncs GPU storage), the CPU buffer for `f64`.
+    ///
+    /// # Panics
+    /// If the dtype is not `T`'s. Kernels check dtypes at the op's entry
+    /// (`real::compute_dtype`), so this is the backstop.
+    #[must_use]
+    #[track_caller]
+    pub(crate) fn host<T: crate::real::Real>(&self) -> &[T] {
+        if T::DTYPE == DType::F32 {
+            cast_slice(self.to_host_f32())
+        } else {
+            self.as_host::<T>().unwrap_or_else(|e| panic!("{e}"))
         }
     }
 

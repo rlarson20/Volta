@@ -94,8 +94,7 @@ impl RawTensor {
     /// Separate from [`Self::from_vec`] on purpose: an unsuffixed float literal is `f64` in
     /// Rust, so a generic `from_vec(vec![1.0])` would build an f64 tensor unasked.
     ///
-    /// Only f32 tensors can go through ops today: every kernel panics on another dtype
-    /// (ADDENDUM §11). Other dtypes can be built, inspected, and saved. An integer or bool
+    /// Of the ops, the core ops (elementwise, reductions, movement, matmul) compute in f32 or f64; layers and optimizers are f32-only until ADDENDUM §11 P3b, and half types wait for P4. Other dtypes can be built, inspected, saved, and cast. An integer or bool
     /// tensor cannot require gradients (`set_requires_grad(true)` panics).
     ///
     /// # Errors
@@ -125,9 +124,12 @@ impl RawTensor {
     /// if we implement views/strides that share memory.
     #[must_use]
     pub fn contiguous(self_t: &Tensor) -> Tensor {
-        crate::tensor::expect_f32(|| "Contiguous".to_string(), &[self_t]);
+        let dtype = crate::real::compute_dtype(|| "Contiguous".to_string(), &[self_t.dtype()]);
         let s = self_t.borrow();
-        Self::from_shape(s.data.to_vec(), s.shape.clone(), s.requires_grad)
+        let data = crate::real::dispatch_real!(dtype, T => {
+            crate::Storage::from_typed(s.data.host::<T>().to_vec())
+        });
+        Self::new_with_storage(data, s.shape.clone(), crate::Device::CPU, s.requires_grad)
     }
 }
 

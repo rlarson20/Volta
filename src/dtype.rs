@@ -1,8 +1,8 @@
 //! Tensor data types.
 //!
-//! A tensor of any `DType` can be built (`RawTensor::from_typed`) and read back, but every
-//! kernel computes in f32 and panics on another dtype; `load_safetensors` converts to f32.
-//! Real dtypes and mixed precision are planned in ADDENDUM §11.
+//! A tensor of any `DType` can be built (`RawTensor::from_typed`) and read back. Of the
+//! ops, the core ops (elementwise, reductions, movement, matmul) compute in f32 or f64; layers and optimizers are f32-only until ADDENDUM §11 P3b, and half types wait for P4; an op panics, naming itself, on a dtype it has no kernel for.
+//! `load_safetensors` converts to f32. Mixed precision is planned in ADDENDUM §11.
 
 use std::fmt;
 

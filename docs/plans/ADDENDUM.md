@@ -596,7 +596,8 @@ Today `DType` only tags bytes: every `Tensor` is f32, `Storage`'s typed construc
 | P0 | S18 fix; `DType::promote` matches `torch.result_type`; this plan | S18 tests un-ignored; a torch-generated table checks all 64 dtype pairs |
 | P1 | Typed `HostBuf`; `Tensor::dtype()`; same-dtype checks (`DTypeMismatch`); `requires_grad` only on floats | Existing tests pass unchanged; mismatch and int-grad tests |
 | P2 | Differentiable `to_dtype` (`GradFn::Cast`) | Gradcheck through f32 → f64 → f32 |
-| P3 | Kernels generic over the accumulator; f64 end to end | Every op family gradchecks in f64 with tight tolerances; torch fixtures in f64 |
+| P3a | Core-op kernels generic over `Real` (f32, f64): elementwise, reductions, movement, matmul | Every core op family gradchecks in f64 at 1e-7 |
+| P3b | Layers (conv family, pooling, embedding, norms) and optimizers in f64; torch fixtures in f64 | Every layer gradchecks in f64; f64 torch fixtures match |
 | P4 | f16/bf16 tensors | Torch fixtures in f16 and bf16 for every op family |
 | P5 | I64/Bool tensors; `Embedding` becomes a `Layer` (§3.2) | `Embedding` in `Sequential` trains; comparisons, `where`, cross-entropy against torch |
 | P6 | Implicit promotion | Mixed-dtype ops match torch's result dtype and values |
