@@ -155,8 +155,8 @@ impl Tensor {
     /// follow [`Storage::cast`].
     ///
     /// # Panics
-    /// If the tensor is on the GPU and `dtype` is not F32 (GPU storage is f32-only until
-    /// ADDENDUM §11 P8), or `dtype` is not a float dtype while the tensor requires grad.
+    /// If the tensor is on the GPU and `dtype` cannot live there (F64 or an integer type),
+    /// or `dtype` is not a float dtype while the tensor requires grad.
     #[track_caller]
     pub(crate) fn cast_in_place(&self, dtype: DType) {
         let mut t = self.inner.borrow_mut();
@@ -1325,9 +1325,9 @@ impl RawTensor {
     /// Returns `self_t` itself when it already has `dtype`, as PyTorch does.
     ///
     /// # Panics
-    /// If `self_t` is on the GPU and `dtype` is not F32 (GPU storage is f32-only until
-    /// ADDENDUM §11 P8), and on a float-to-integer value that is NaN, infinite, or out of
-    /// range (see [`Storage::cast`]).
+    /// If `self_t` is on the GPU and `dtype` cannot live there (F64 or an integer type;
+    /// casts between F32, F16, BF16 and Bool run on the device), and on a float-to-integer
+    /// value that is NaN, infinite, or out of range (see [`Storage::cast`]).
     #[must_use]
     #[track_caller]
     pub fn to_dtype(self_t: &Tensor, dtype: DType) -> Tensor {

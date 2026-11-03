@@ -1,6 +1,6 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
-use crate::device_policy::kernel_failed;
+use crate::device_policy::{common_device, kernel_failed};
 use crate::dtype::DType;
 use crate::real::{Real, compute_dtype, dispatch_bits, dispatch_real, promote_operands};
 use crate::shape::Shape;
@@ -206,11 +206,8 @@ impl RawTensor {
                      or cast with `to_dtype(DType::Bool)`",
                     x.dtype()
                 );
-                assert!(
-                    ![x, y, z].iter().any(|t| t.device().is_gpu()),
-                    "Where: its Bool condition cannot live on the GPU until ADDENDUM §11 P8; \
-                     select on the CPU"
-                );
+                let device = common_device("Where", [&x.device(), &y.device(), &z.device()])
+                    .expect("three inputs");
                 // The branches are cast to one dtype (`DTypePolicy`); the condition stays Bool.
                 let (dtype, branches) = promote_operands(|| format!("{op:?}"), &[y, z], false);
                 let [y, z] = branches.as_slice() else {
@@ -228,6 +225,33 @@ impl RawTensor {
                     let s = z.borrow();
                     (s.data.clone(), s.shape.clone())
                 };
+
+                // GPU path for equal shapes; a `None` from the kernel is a failure. Broadcasting
+                // is a gap: the CPU computes it and `edge()` applies the policy.
+                if device.is_gpu() && cond_shape == true_shape && true_shape == false_shape {
+                    let out = Self::gpu_where(&cond_data, &true_data, &false_data)
+                        .unwrap_or_else(|| kernel_failed("Where"));
+                    return edge(
+                        [y.clone(), z.clone()],
+                        out,
+                        true_shape.clone(),
+                        device,
+                        GradFn::Where(WhereGradFn {
+                            mask: cond_data
+                                .to_device(&Device::CPU)
+                                .as_host::<bool>()
+                                .expect("Bool condition")
+                                .to_vec(),
+                            true_shape,
+                            false_shape,
+                        }),
+                    );
+                }
+                let (cond_data, true_data, false_data) = (
+                    cond_data.to_device(&Device::CPU),
+                    true_data.to_device(&Device::CPU),
+                    false_data.to_device(&Device::CPU),
+                );
 
                 let tmp_shape =
                     Self::broadcast_shape(cond_shape.truncate_rank(), true_shape.truncate_rank());

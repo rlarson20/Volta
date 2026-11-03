@@ -302,8 +302,18 @@ impl GradScaler {
 }
 
 /// `g * inv` in `g`'s dtype (computed in f32 for half gradients, rounded once), and
-/// whether any result is inf or NaN.
+/// whether any result is inf or NaN. A GPU gradient is unscaled on the device by a fused
+/// kernel; only the flag comes back.
 fn unscale_storage(g: &Storage, inv: f64) -> (Storage, bool) {
+    if g.is_gpu() {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "the GPU kernels compute in f32"
+        )]
+        let inv32 = inv as f32;
+        return crate::RawTensor::gpu_amp_unscale(g, inv32)
+            .unwrap_or_else(|| crate::device_policy::kernel_failed("GradScaler::unscale"));
+    }
     let dtype = g.dtype();
     dispatch_real!(dtype, T => {
         let inv = T::from_f64(inv);

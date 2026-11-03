@@ -70,12 +70,8 @@ impl Muon {
             .iter()
             .map(|p| {
                 let p = p.borrow();
-                // In the parameter's dtype (GPU storage is f32-only).
-                if p.device.is_gpu() {
-                    Storage::new_zeros(p.data.len(), &p.device)
-                } else {
-                    Storage::new_zeros(p.data.len(), &p.device).cast(p.data.dtype())
-                }
+                // In the parameter's dtype on its device (a no-op cast for f32).
+                Storage::new_zeros(p.data.len(), &p.device).cast(p.data.dtype())
             })
             .collect();
         Self {

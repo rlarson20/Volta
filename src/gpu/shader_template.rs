@@ -255,6 +255,7 @@ mod tests {
     /// Every shader file, with the element types its `ELEM2` buffers take (`None`: it has
     /// none).
     pub(crate) const SHADERS: &[(&str, &str)] = &[
+        ("amp_unscale", include_str!("shaders/amp_unscale.wgsl")),
         (
             "binary_backward",
             include_str!("shaders/binary_backward.wgsl"),

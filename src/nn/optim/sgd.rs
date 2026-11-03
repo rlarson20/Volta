@@ -42,11 +42,8 @@ impl SGD {
                     let device = param.device.clone();
                     let dtype = param.data.dtype();
                     drop(param);
-                    if device.is_gpu() {
-                        Storage::new_zeros(len, &device)
-                    } else {
-                        Storage::new_zeros(len, &device).cast(dtype)
-                    }
+                    // In the parameter's dtype on its device (a no-op cast for f32).
+                    Storage::new_zeros(len, &device).cast(dtype)
                 })
                 .collect()
         } else {
@@ -124,9 +121,11 @@ impl SGD {
 
         let len = p.data.len();
         let device = p.device.clone();
-        // Plain SGD keeps no state, but the kernel binds both state buffers.
-        let mut dummy_state1 = Storage::new_zeros(len, &device);
-        let mut dummy_state2 = Storage::new_zeros(len, &device);
+        // Plain SGD keeps no state, but the kernel binds both state buffers, in the
+        // parameter's dtype (the kernel binds one element type).
+        let dtype = p.data.dtype();
+        let mut dummy_state1 = Storage::new_zeros(len, &device).cast(dtype);
+        let mut dummy_state2 = Storage::new_zeros(len, &device).cast(dtype);
         let (op, beta1, state1) = if self.momentum == 0.0 {
             (0, 0.0, &mut dummy_state1)
         } else {

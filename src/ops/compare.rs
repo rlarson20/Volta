@@ -5,6 +5,7 @@
 
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
+use crate::device_policy::kernel_failed;
 use crate::real::{dispatch_elem, promote_operands};
 use crate::shape::Shape;
 use crate::storage::Storage;
@@ -63,8 +64,8 @@ impl RawTensor {
     /// the default [`crate::DTypePolicy`]), as in PyTorch.
     ///
     /// # Panics
-    /// If the dtypes differ under `DTypePolicy::Strict`, the shapes don't broadcast, or
-    /// an operand is on the GPU: Bool tensors cannot live there until P8.
+    /// If the dtypes differ under `DTypePolicy::Strict`, the shapes don't broadcast, or the
+    /// operands are on different devices. Broadcasting GPU operands is a device-policy gap.
     #[must_use]
     #[track_caller]
     pub fn compare(a: &Tensor, b: &Tensor, op: CmpOp) -> Tensor {
@@ -74,20 +75,27 @@ impl RawTensor {
         let [a, b] = operands.as_slice() else {
             unreachable!("two operands in, two out")
         };
-        assert!(
-            !a.device().is_gpu() && !b.device().is_gpu(),
-            "{}: a comparison returns Bool, and Bool tensors cannot live on the GPU until \
-             ADDENDUM §11 P8; compare on the CPU",
-            name()
-        );
-        let (da, sa) = {
+        let (da, sa, device) = {
             let s = a.borrow();
-            (s.data.clone(), s.shape.clone())
+            (s.data.clone(), s.shape.clone(), s.device.clone())
         };
         let (db, sb) = {
             let s = b.borrow();
             (s.data.clone(), s.shape.clone())
         };
+        // GPU path for equal shapes (the kernel's case); a `None` from it is a failure.
+        // Broadcasting is a gap: the CPU computes it and `edge()` applies the policy.
+        if device.is_gpu() && b.device().is_gpu() && sa == sb {
+            let out = Self::gpu_compare(&da, &db, op).unwrap_or_else(|| kernel_failed(&name()));
+            return edge(
+                [a.clone(), b.clone()],
+                out,
+                sa,
+                device,
+                GradFn::Compare(CompareGradFn { op }),
+            );
+        }
+        let (da, db) = (da.to_device(&Device::CPU), db.to_device(&Device::CPU));
         let out_shape = Self::broadcast_shape(sa.truncate_rank(), sb.truncate_rank());
         let result: Vec<bool> = dispatch_elem!(dtype, T => {
             let host = |s: &Storage| -> Vec<T> {
