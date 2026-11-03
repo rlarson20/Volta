@@ -3,8 +3,11 @@ use crate::device::Device;
 use crate::index::{fetch, signed, slot, unsigned};
 use crate::io::{StateDict, TensorData};
 use crate::nn::{Layer, Module};
+use crate::real::{Real, compute_dtype, dispatch_real};
 use crate::shape::Axis;
+use crate::shape::Shape;
 use crate::spec::ConvTranspose2dSpec;
+use crate::storage::Storage;
 use crate::tensor::{RawTensor, Tensor};
 
 /// Transposed 2D convolution (also called deconvolution)
@@ -62,7 +65,7 @@ impl ConvTranspose2d {
     ///
     /// `col` is the column matrix `[B*H_in*W_in, C_out*K*K]`; the geometry
     /// (including the output size) comes from `spec`.
-    fn col2im_transpose(col: &[f32], spec: &ConvTranspose2dSpec) -> Vec<f32> {
+    fn col2im_transpose<T: Real>(col: &[T], spec: &ConvTranspose2dSpec) -> Vec<T> {
         let ConvTranspose2dSpec {
             batch,
             out_ch: out_channels,
@@ -79,7 +82,7 @@ impl ConvTranspose2d {
             ..
         } = *spec;
 
-        let mut result = vec![0.0; batch * out_channels * h_out * w_out];
+        let mut result = vec![T::ZERO; batch * out_channels * h_out * w_out];
 
         // Accumulate values from column matrix into output image
         for b in 0..batch {
@@ -174,16 +177,17 @@ impl ConvTranspose2dGradFn {
         // For transposed convolution forward: output[h_out] = input @ weight where h_out = ih*stride + kh - pad
         // So gradient w.r.t. input at (ih, iw) sums out_grad at positions ih*stride + kh - pad
         // The gradient is: grad_input[ih] = sum over kh of out_grad[ih*stride + kh - pad] * weight[kh]
-        let mut grad_input_data = vec![0.0; batch * in_channels * in_h * in_w];
+        let mut grads = dispatch_real!(out_grad.data.dtype(), T => {
+        let mut grad_input_data = vec![T::ZERO; batch * in_channels * in_h * in_w];
 
-        let out_grad_data = out_grad.data.to_vec();
-        let weight_data = self.weight.borrow().data.to_vec();
+        let out_grad_data = out_grad.data.host::<T>().to_vec();
+        let weight_data = self.weight.borrow().data.host::<T>().to_vec();
 
         for b in 0..batch {
             for c_in in 0..in_channels {
                 for ih in 0..in_h {
                     for iw in 0..in_w {
-                        let mut grad_sum = 0.0;
+                        let mut grad_sum = T::ZERO;
 
                         for c_out in 0..out_channels {
                             for kh_idx in 0..kh {
@@ -227,20 +231,20 @@ impl ConvTranspose2dGradFn {
             }
         }
 
-        let grad_input = RawTensor::new(grad_input_data, &[batch, in_channels, in_h, in_w], true);
+        let grad_input = RawTensor::new_with_storage(Storage::from_typed(grad_input_data), Shape::derived(vec![batch, in_channels, in_h, in_w]), Device::CPU, true);
 
         let mut grads = vec![Some(grad_input)];
 
         // 2. Gradient w.r.t. weight
         // grad_weight[c_in, c_out, kh, kw] = sum over b, ih, iw of input[b, c_in, ih, iw] * out_grad[b, c_out, ih*stride+kh, iw*stride+kw]
-        let mut grad_weight_data = vec![0.0; in_channels * out_channels * kh * kw];
-        let input_data = input.borrow().data.to_vec();
+        let mut grad_weight_data = vec![T::ZERO; in_channels * out_channels * kh * kw];
+        let input_data = input.borrow().data.host::<T>().to_vec();
 
         for c_in in 0..in_channels {
             for c_out in 0..out_channels {
                 for kh_idx in 0..kh {
                     for kw_idx in 0..kw {
-                        let mut grad_sum = 0.0;
+                        let mut grad_sum = T::ZERO;
 
                         for b in 0..batch {
                             for ih in 0..in_h {
@@ -291,8 +295,10 @@ impl ConvTranspose2dGradFn {
             reason = "just don't know hot to fix right now"
         )]
         let grad_weight =
-            RawTensor::new(grad_weight_data, &[in_channels, out_channels, kh, kw], true);
+            RawTensor::new_with_storage(Storage::from_typed(grad_weight_data), Shape::derived(vec![in_channels, out_channels, kh, kw]), Device::CPU, true);
         grads.push(Some(grad_weight));
+        grads
+        });
 
         // 3. Gradient w.r.t. bias (if present)
         if self.has_bias && parents.len() > 2 {
@@ -344,7 +350,10 @@ impl Module for ConvTranspose2d {
 
 impl Layer for ConvTranspose2d {
     fn forward(&self, x: &Tensor) -> Tensor {
-        crate::tensor::expect_f32(|| "ConvTranspose2d".to_string(), &[x, &self.weight]);
+        compute_dtype(
+            || "ConvTranspose2d".to_string(),
+            &[x.dtype(), self.weight.dtype()],
+        );
         let spec =
             ConvTranspose2dSpec::new(&x.shape(), &self.weight.shape(), self.stride, self.padding)
                 .unwrap_or_else(|e| panic!("{e}"));
@@ -372,7 +381,9 @@ impl Layer for ConvTranspose2d {
 
         // 4. Use col2im to convert to output shape
         let col_data = matmul_result.borrow().data.clone();
-        let output_data = Self::col2im_transpose(col_data.to_host_f32(), &spec);
+        let output_data = dispatch_real!(col_data.dtype(), T => {
+            Storage::from_typed(Self::col2im_transpose(col_data.host::<T>(), &spec))
+        });
 
         // 5. Add bias if present. The real backward for this op is the custom
         // ConvTranspose2dGradFn below (col2im isn't invertible through ordinary
@@ -380,7 +391,12 @@ impl Layer for ConvTranspose2d {
         // add — is throwaway data computation (`requires_grad: false`); only the
         // final `.data`/`.shape` are kept, and `edge()` below builds the tensor that
         // actually carries the graph.
-        let mut raw_output = RawTensor::new(output_data, &spec.output_dims(), false);
+        let mut raw_output = RawTensor::new_with_storage(
+            output_data,
+            Shape::derived(spec.output_dims()),
+            Device::CPU,
+            false,
+        );
         if let Some(ref bias) = self.bias {
             let bias_reshaped = bias.reshape(&[1, out_channels, 1, 1]);
             raw_output = raw_output.add(&bias_reshaped);

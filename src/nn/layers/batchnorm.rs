@@ -1,6 +1,7 @@
 use crate::index::{fetch, slot};
 use crate::io::{StateDict, TensorData};
 use crate::nn::{Layer, Module};
+use crate::real::{Real, dispatch_real};
 use crate::shape::Axis;
 use crate::tensor::{RawTensor, Tensor};
 
@@ -133,7 +134,7 @@ impl Layer for BatchNorm2d {
         // (C, B, H, W) -> (C, B*H*W)
         let x_shape = &x.borrow().shape;
         let [b, _, h, w] = x_shape.fixed::<4>();
-        let num_pixels = (b * h * w) as f32;
+        let num_pixels = b * h * w;
 
         let x_flat = x_perm.reshape(&[self.num_features, b * h * w]);
 
@@ -153,24 +154,27 @@ impl Layer for BatchNorm2d {
                 let _no_grad = crate::autograd::no_grad();
                 let mut rm = self.running_mean.borrow_mut();
                 let mut rv = self.running_var.borrow_mut();
+                let dtype = rm.data.dtype();
+                dispatch_real!(dtype, T => {
                 let bm_ref = batch_mean.borrow();
-                let bm_data = bm_ref.data.to_host_f32();
+                let bm_data = bm_ref.data.host::<T>();
                 let bv_ref = batch_var.borrow();
-                let bv_data = bv_ref.data.to_host_f32();
+                let bv_data = bv_ref.data.host::<T>();
 
                 // Note: PyTorch uses unbiased (N-1) for running_var update,
                 // but biased for batch norm calculation.
                 // We stick to standard implementation:
-                let m = self.momentum;
+                let m = T::from_f64(f64::from(self.momentum));
+                let num_pixels = T::from_usize(num_pixels);
 
                 let rm_host = rm
                     .data
-                    .as_host_f32_mut()
-                    .expect("BatchNorm running_mean: CPU F32 storage");
+                    .as_host_mut::<T>()
+                    .expect("BatchNorm running_mean: CPU storage in the layer's dtype");
                 let rv_host = rv
                     .data
-                    .as_host_f32_mut()
-                    .expect("BatchNorm running_var: CPU F32 storage");
+                    .as_host_mut::<T>()
+                    .expect("BatchNorm running_var: CPU storage in the layer's dtype");
                 for i in 0..self.num_features {
                     let rm_val = fetch(rm_host, i);
                     let bm_val = fetch(bm_data, i);
@@ -181,6 +185,7 @@ impl Layer for BatchNorm2d {
                     let rv_val = fetch(rv_host, i);
                     *slot(rv_host, i) = (1.0 - m).mul_add(rv_val, m * unbiased_var);
                 }
+                });
             }
 
             (batch_mean, batch_var)
@@ -189,8 +194,17 @@ impl Layer for BatchNorm2d {
             // Must reshape to (C, 1) to broadcast correctly against (C, N)
             // Running stats are host-side layer state (updated in place above), so copy
             // them onto the input's device.
-            let rm_reshaped = x.constant_like(self.running_mean.data(), &[self.num_features, 1]);
-            let rv_reshaped = x.constant_like(self.running_var.data(), &[self.num_features, 1]);
+            // In their own dtype: `constant_like(.., data())` would round f64 stats to f32.
+            let rm_reshaped = self
+                .running_mean
+                .detach()
+                .reshape(&[self.num_features, 1])
+                .to_device(x.device());
+            let rv_reshaped = self
+                .running_var
+                .detach()
+                .reshape(&[self.num_features, 1])
+                .to_device(x.device());
             (rm_reshaped, rv_reshaped)
         };
 
@@ -331,7 +345,7 @@ impl Layer for BatchNorm1d {
             self.num_features,
             "Feature mismatch"
         );
-        let batch_size = x_borrow.shape.dim_at(0) as f32;
+        let batch_size = x_borrow.shape.dim_at(0);
         drop(x_borrow);
 
         let (mean, var) = if self.training {
@@ -348,20 +362,23 @@ impl Layer for BatchNorm1d {
                 let _no_grad = crate::autograd::no_grad();
                 let mut rm = self.running_mean.borrow_mut();
                 let mut rv = self.running_var.borrow_mut();
+                let dtype = rm.data.dtype();
+                dispatch_real!(dtype, T => {
                 let bm_ref = batch_mean.borrow();
-                let bm_data = bm_ref.data.to_host_f32();
+                let bm_data = bm_ref.data.host::<T>();
                 let bv_ref = batch_var.borrow();
-                let bv_data = bv_ref.data.to_host_f32();
+                let bv_data = bv_ref.data.host::<T>();
 
-                let m = self.momentum;
+                let m = T::from_f64(f64::from(self.momentum));
+                let batch_size = T::from_usize(batch_size);
                 let rm_host = rm
                     .data
-                    .as_host_f32_mut()
-                    .expect("BatchNorm running_mean: CPU F32 storage");
+                    .as_host_mut::<T>()
+                    .expect("BatchNorm running_mean: CPU storage in the layer's dtype");
                 let rv_host = rv
                     .data
-                    .as_host_f32_mut()
-                    .expect("BatchNorm running_var: CPU F32 storage");
+                    .as_host_mut::<T>()
+                    .expect("BatchNorm running_var: CPU storage in the layer's dtype");
                 for i in 0..self.num_features {
                     let rm_val = fetch(rm_host, i);
                     let bm_val = fetch(bm_data, i);
@@ -372,6 +389,7 @@ impl Layer for BatchNorm1d {
                     let rv_val = fetch(rv_host, i);
                     *slot(rv_host, i) = (1.0 - m).mul_add(rv_val, m * unbiased_var);
                 }
+                });
             }
 
             (batch_mean, batch_var)
@@ -379,8 +397,17 @@ impl Layer for BatchNorm1d {
             // Use running stats, reshaped to [1, C] for broadcasting
             // Running stats are host-side layer state (updated in place above), so copy
             // them onto the input's device.
-            let rm_reshaped = x.constant_like(self.running_mean.data(), &[1, self.num_features]);
-            let rv_reshaped = x.constant_like(self.running_var.data(), &[1, self.num_features]);
+            // In their own dtype: `constant_like(.., data())` would round f64 stats to f32.
+            let rm_reshaped = self
+                .running_mean
+                .detach()
+                .reshape(&[1, self.num_features])
+                .to_device(x.device());
+            let rv_reshaped = self
+                .running_var
+                .detach()
+                .reshape(&[1, self.num_features])
+                .to_device(x.device());
             (rm_reshaped, rv_reshaped)
         };
 

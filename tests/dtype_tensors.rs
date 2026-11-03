@@ -147,21 +147,37 @@ fn int_reshape_panics_naming_the_op() {
     let _ = RawTensor::from_typed(vec![1i64, 2, 3, 4], &[4]).reshape(&[2, 2]);
 }
 
-/// A layer that reads its input directly names itself, not a kernel deep inside it.
+/// An f64 input to an f32 layer is a mismatch, named by the layer: `to_dtype` the layer
+/// (or the input) first.
 #[test]
-#[should_panic(expected = "Conv2d: DType mismatch: expected F32, got F64 (input 0)")]
-fn f64_conv_input_panics_naming_the_layer() {
+#[should_panic(expected = "Conv2d: DType mismatch: expected F64, got F32 (input 1)")]
+fn f64_input_to_f32_conv_panics_naming_the_layer() {
     let conv = Conv2d::new(1, 1, 1, 1, 0, false);
     let x = RawTensor::from_typed(vec![1.0f64; 4], &[1, 1, 2, 2]);
     let _ = conv.forward(&x);
 }
 
-/// An optimizer step refuses a non-f32 parameter before touching any state.
+/// An optimizer steps each parameter in its own dtype: a mixed f32/f64 list trains both.
 #[test]
-#[should_panic(expected = "SGD step: DType mismatch: expected F32, got F64 (input 1)")]
-fn sgd_step_refuses_an_f64_param() {
+fn sgd_steps_mixed_f32_and_f64_params() {
     let a = RawTensor::new(vec![1.0], &[1], true);
     let b = RawTensor::from_typed(vec![1.0f64], &[1]);
+    b.set_requires_grad(true);
+    a.set_grad(Storage::cpu(vec![0.5]));
+    b.set_grad(Storage::from_typed(vec![0.25f64]));
+    let mut opt = SGD::new(vec![a.clone(), b.clone()], 0.5, 0.0, 0.0);
+    opt.step();
+    assert_eq!(a.to_vec_as::<f32>().expect("f32"), vec![0.75]);
+    assert_eq!(b.to_vec_as::<f64>().expect("f64"), vec![0.875]);
+}
+
+/// A half-precision parameter has no optimizer kernel until P4; the step refuses it before
+/// updating anything.
+#[test]
+#[should_panic(expected = "SGD step: f16 ops are not implemented until ADDENDUM §11 P4")]
+fn sgd_step_refuses_an_f16_param() {
+    let a = RawTensor::new(vec![1.0], &[1], true);
+    let b = RawTensor::from_typed(vec![half::f16::from_f32(1.0)], &[1]);
     b.set_requires_grad(true);
     let mut opt = SGD::new(vec![a, b], 0.1, 0.0, 0.0);
     opt.step();

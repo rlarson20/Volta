@@ -43,7 +43,7 @@ pub enum Storage {
 
 This design enables:
 
-- **Typed CPU buffers**: one shared, copy-on-write `Arc<[T]>` per dtype (f16, bf16, f32, f64, i32, i64, u8, bool), so element type and alignment are part of the type. Tensors of any of these dtypes can be built (`RawTensor::from_typed`), and cast (`to_dtype`). Core-op kernels are generic over `real::Real` (f32, f64) and dispatch on the dtype; layers and optimizers are f32-only until ADDENDUM §11 P3b.
+- **Typed CPU buffers**: one shared, copy-on-write `Arc<[T]>` per dtype (f16, bf16, f32, f64, i32, i64, u8, bool), so element type and alignment are part of the type. Tensors of any of these dtypes can be built (`RawTensor::from_typed`), and cast (`to_dtype`). CPU kernels (ops, layers, optimizers) are generic over `real::Real` (f32, f64) and dispatch on the dtype; `Module::to_dtype` converts a model, buffers included.
 - **Efficient GPU↔CPU transfers**: Lazy, write-once host copy (`OnceLock`) shared by clones of a GPU storage; writes copy first
 - **SafeTensors compatibility**: the eight dtypes map one-to-one; any other SafeTensors dtype is a load error
 

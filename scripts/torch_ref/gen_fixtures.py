@@ -314,6 +314,85 @@ def group_layers():
     save("layers", t)
 
 
+def group_f64():
+    """Forward and backward in float64 for ops, every layer kind, and Adam (Volta P3b).
+
+    Inputs and weights are f32 random values widened to f64, so the f32 state dicts Volta
+    loads carry them exactly; everything after that is computed in f64. Adam's
+    hyperparameters are powers of two for the same reason (Volta's are f32). Stored in
+    native f64.
+    """
+    torch.manual_seed(SEED)
+    F = torch.nn.functional
+    t = {}
+
+    def rl(*shape):
+        return torch.randn(*shape).double().requires_grad_(True)
+
+    def case64(name, out, inputs):
+        w = torch.randn_like(out)
+        names = list(inputs)
+        grads = torch.autograd.grad((out * w).sum(), [inputs[n] for n in names])
+        t[f"{name}.out"] = out
+        t[f"{name}.w"] = w
+        for n, g in zip(names, grads):
+            t[f"{name}.grad_{n}"] = g
+
+    x = rl(3, 4)
+    t["ops.x"] = x
+    for op in ["exp", "tanh", "sigmoid", "erf"]:
+        case64(f"ops.{op}", getattr(torch, op)(x), {"x": x})
+    case64("ops.softmax", torch.softmax(x, 1), {"x": x})
+    case64("ops.log_softmax", torch.log_softmax(x, 0), {"x": x})
+    a, b = rl(2, 1, 3, 4), rl(1, 3, 4, 2)
+    t.update({"matmul.a": a, "matmul.b": b})
+    case64("matmul", a @ b, {"a": a, "b": b})
+
+    x, w, bias = rl(4, 2), rl(3, 2), rl(3)
+    t.update({"linear.x": x, "linear.weight": w, "linear.bias": bias})
+    case64("linear", F.linear(x, w, bias), {"x": x, "weight": w, "bias": bias})
+
+    x, w, bias = rl(2, 2, 5, 5), rl(3, 2, 3, 3), rl(3)
+    t.update({"conv.x": x, "conv.weight": w, "conv.bias": bias})
+    case64("conv", F.conv2d(x, w, bias, stride=2, padding=1), {"x": x, "weight": w, "bias": bias})
+
+    x, w, bias = rl(2, 2, 3, 3), rl(2, 3, 3, 3), rl(3)
+    t.update({"convt.x": x, "convt.weight": w, "convt.bias": bias})
+    case64("convt", F.conv_transpose2d(x, w, bias, stride=2, padding=1), {"x": x, "weight": w, "bias": bias})
+
+    x = rl(2, 2, 4, 4)
+    t["maxpool.x"] = x
+    case64("maxpool", F.max_pool2d(x, 2, 2), {"x": x})
+
+    x, g, bias = rl(3, 2, 2, 2), rl(2), rl(2)
+    t.update({"batchnorm.x": x, "batchnorm.gamma": g, "batchnorm.beta": bias})
+    out = F.batch_norm(x, None, None, g, bias, training=True, eps=1e-5)
+    case64("batchnorm", out, {"x": x, "gamma": g, "beta": bias})
+
+    x, g, bias = rl(3, 4), rl(4), rl(4)
+    t.update({"layernorm.x": x, "layernorm.gamma": g, "layernorm.beta": bias})
+    case64("layernorm", F.layer_norm(x, (4,), g, bias, 1e-5), {"x": x, "gamma": g, "beta": bias})
+
+    w = rl(5, 3)
+    t["embedding.weight"] = w
+    case64("embedding", F.embedding(torch.tensor([1, 3, 1]), w), {"weight": w})
+
+    p = torch.randn(2, 3).double().requires_grad_(True)
+    t["adam.init"] = p.detach().clone()
+    opt = torch.optim.Adam([p], lr=2**-7, betas=(0.875, 1 - 2**-10), eps=2**-27, weight_decay=2**-7)
+    for k in range(3):
+        g = torch.randn(2, 3).double()
+        p.grad = g.clone()
+        t[f"adam.g{k}"] = g
+        opt.step()
+        t[f"adam.after{k}"] = p.detach().clone()
+
+    OUT.mkdir(parents=True, exist_ok=True)
+    meta = {"info": f"torch={torch.__version__};seed={SEED};group=f64"}
+    save_file({k: v.detach().contiguous() for k, v in t.items()}, OUT / "f64.safetensors", metadata=meta)
+    print(f"wrote f64: {len(t)} tensors")
+
+
 # Volta's `DType` discriminants, in order: F16=0, BF16=1, F32=2, F64=3, I32=4, I64=5, U8=6, Bool=7.
 VOLTA_DTYPES = [torch.float16, torch.bfloat16, torch.float32, torch.float64, torch.int32, torch.int64, torch.uint8, torch.bool]
 
@@ -381,7 +460,7 @@ def group_casts():
     print(f"wrote casts: {len(out)} tensors")
 
 
-GROUPS = {"ops": group_ops, "reductions": group_reductions, "optim": group_optim, "layers": group_layers, "dtypes": group_dtypes, "casts": group_casts}
+GROUPS = {"ops": group_ops, "reductions": group_reductions, "optim": group_optim, "layers": group_layers, "dtypes": group_dtypes, "casts": group_casts, "f64": group_f64}
 
 if __name__ == "__main__":
     wanted = sys.argv[1:] or list(GROUPS)
