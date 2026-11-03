@@ -5,7 +5,7 @@
 
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
-use crate::real::{dispatch_elem, same_dtype};
+use crate::real::{dispatch_elem, promote_operands};
 use crate::shape::Shape;
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
@@ -57,17 +57,23 @@ impl CompareGradFn {
 }
 
 impl RawTensor {
-    /// `a <op> b` elementwise with broadcasting, as a Bool tensor. The operands share a
-    /// dtype, any dtype.
+    /// `a <op> b` elementwise with broadcasting, as a Bool tensor, on any dtype.
+    ///
+    /// Operands of different dtypes compare in [`crate::DType::promote`] of the two (under
+    /// the default [`crate::DTypePolicy`]), as in PyTorch.
     ///
     /// # Panics
-    /// If the dtypes differ (promotion is ADDENDUM §11 P6), the shapes don't broadcast, or
+    /// If the dtypes differ under `DTypePolicy::Strict`, the shapes don't broadcast, or
     /// an operand is on the GPU: Bool tensors cannot live there until P8.
     #[must_use]
     #[track_caller]
     pub fn compare(a: &Tensor, b: &Tensor, op: CmpOp) -> Tensor {
         let name = || CompareGradFn { op }.op_name();
-        let dtype = same_dtype(name, &[a.dtype(), b.dtype()]);
+        // Mixed operands compare in their promoted dtype (`DTypePolicy`), as in PyTorch.
+        let (dtype, operands) = promote_operands(name, &[a, b], false);
+        let [a, b] = operands.as_slice() else {
+            unreachable!("two operands in, two out")
+        };
         assert!(
             !a.device().is_gpu() && !b.device().is_gpu(),
             "{}: a comparison returns Bool, and Bool tensors cannot live on the GPU until \
