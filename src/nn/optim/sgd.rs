@@ -11,7 +11,7 @@ use crate::tensor::Tensor;
 /// Momentum helps accelerate convergence and dampen oscillations.
 pub struct SGD {
     /// Parameters being optimized.
-    params: Vec<Tensor>,
+    pub(super) params: Vec<Tensor>,
     /// Learning rate.
     lr: f32,
     /// Momentum coefficient; 0 disables momentum.

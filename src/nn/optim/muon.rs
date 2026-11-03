@@ -34,7 +34,7 @@ const NS_EPS: f32 = 1e-7;
 /// and update all run on the device, with no host round-trip.
 pub struct Muon {
     /// Parameters being optimized.
-    params: Vec<Tensor>,
+    pub(super) params: Vec<Tensor>,
     /// Learning rate.
     lr: f32,
     /// Momentum coefficient.
