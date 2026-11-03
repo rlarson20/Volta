@@ -1,9 +1,10 @@
-//! Tensors of non-f32 dtypes (ADDENDUM §11, P1): they can be built and read back, integer
-//! and bool tensors cannot require gradients, and every op refuses a non-f32 operand
-//! loudly instead of converting it, until the kernels learn other dtypes (P3, P4).
+//! Tensors of non-f32 dtypes (ADDENDUM §11): they can be built and read back, integer and
+//! bool tensors cannot require gradients, and an op refuses an operand it has no kernel for
+//! (half types until P4, integers and bool) or mixed dtypes (until P6) loudly, naming the
+//! op, instead of converting. f64 values are checked in `src/lib_tests/f64_tests.rs`.
 
 use half::{bf16, f16};
-use volta::{Axis, Conv2d, DType, RawTensor, SGD, Storage, Tensor, VoltaError};
+use volta::{Conv2d, DType, RawTensor, SGD, Storage, Tensor, VoltaError};
 
 /// Each dtype's tensor reports its dtype, and `data()` decodes it to f32.
 #[test]
@@ -116,24 +117,16 @@ fn mixed_dtype_binary_op_panics() {
     let _ = a.add(&b);
 }
 
-/// Two f64 operands agree, but no kernel computes in f64 yet (P3): still a loud failure.
-#[test]
-#[should_panic(expected = "Binary(Add): DType mismatch: expected F32, got F64 (input 0)")]
-fn f64_binary_op_panics_until_kernels_support_it() {
-    let a = RawTensor::from_typed(vec![1.0f64, 2.0], &[2]);
-    let _ = a.add(&a);
-}
-
 /// Unary ops read through the same check.
 #[test]
-#[should_panic(expected = "Unary(Exp): DType mismatch: expected F32, got F16 (input 0)")]
-fn f16_unary_op_panics_until_kernels_support_it() {
+#[should_panic(expected = "Unary(Exp): f16 ops are not implemented until ADDENDUM §11 P4")]
+fn f16_unary_op_panics_until_p4() {
     let _ = RawTensor::from_typed(vec![f16::from_f32(1.0)], &[1]).exp();
 }
 
 /// Matmul reads through the same check.
 #[test]
-#[should_panic(expected = "MatMul: DType mismatch: expected F32, got I64 (input 0)")]
+#[should_panic(expected = "MatMul: no i64 kernel")]
 fn int_matmul_panics() {
     let a = RawTensor::from_typed(vec![1i64, 2, 3, 4], &[2, 2]);
     let _ = a.matmul(&a);
@@ -147,19 +140,11 @@ fn set_grad_rejects_another_dtype() {
     t.set_grad(Storage::from_typed(vec![1.0f64, 1.0]));
 }
 
-/// Movement ops check at entry too; they read through the f32 kernel path until P3/P5.
+/// Movement ops check at entry too: integer tensors have no kernels until P5.
 #[test]
-#[should_panic(expected = "Reshape: DType mismatch: expected F32, got I64 (input 0)")]
+#[should_panic(expected = "Reshape: no i64 kernel")]
 fn int_reshape_panics_naming_the_op() {
     let _ = RawTensor::from_typed(vec![1i64, 2, 3, 4], &[4]).reshape(&[2, 2]);
-}
-
-/// Axis reductions name themselves.
-#[test]
-#[should_panic(expected = "SumDim: DType mismatch: expected F32, got F64 (input 0)")]
-fn f64_sum_dim_panics_naming_the_op() {
-    let t = RawTensor::from_typed(vec![1.0f64, 2.0], &[1, 2]);
-    let _ = RawTensor::sum_dim(&t, Axis(1), false);
 }
 
 /// A layer that reads its input directly names itself, not a kernel deep inside it.

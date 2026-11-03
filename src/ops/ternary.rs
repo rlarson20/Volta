@@ -1,7 +1,7 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::device_policy::{common_device, kernel_failed};
-use crate::index::slot;
+use crate::real::{Real, compute_dtype, dispatch_real};
 use crate::shape::Shape;
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
@@ -36,41 +36,27 @@ impl MulAccGradFn {
         let x_val = x_ref.borrow();
         let y_val = y_ref.borrow();
 
-        let grad_x = if x_val.requires_grad {
-            let data = out_grad
-                .data
-                .to_host_f32()
-                .iter()
-                .zip(y_val.data.to_host_f32().iter())
-                .map(|(&g, &y)| g * y)
-                .collect();
-            Some(RawTensor::from_shape(data, out_grad.shape.clone(), false))
-        } else {
-            None
-        };
-
-        let grad_y = if y_val.requires_grad {
-            let data = out_grad
-                .data
-                .to_host_f32()
-                .iter()
-                .zip(x_val.data.to_host_f32().iter())
-                .map(|(&g, &x)| g * x)
-                .collect();
-            Some(RawTensor::from_shape(data, out_grad.shape.clone(), false))
-        } else {
-            None
-        };
-
-        let grad_z = if parents.get(2).is_some_and(|p| p.borrow().requires_grad) {
-            Some(RawTensor::from_shape(
-                out_grad.data.to_vec(),
-                out_grad.shape.clone(),
-                false,
+        let dtype = out_grad.data.dtype();
+        let product = |other: &Storage| {
+            dispatch_real!(dtype, T => Storage::from_typed(
+                out_grad
+                    .data
+                    .host::<T>()
+                    .iter()
+                    .zip(other.host::<T>())
+                    .map(|(&g, &o)| g * o)
+                    .collect::<Vec<T>>(),
             ))
-        } else {
-            None
         };
+        let wrap = |data: Storage| {
+            RawTensor::new_with_storage(data, out_grad.shape.clone(), Device::CPU, false)
+        };
+        let grad_x = x_val.requires_grad.then(|| wrap(product(&y_val.data)));
+        let grad_y = y_val.requires_grad.then(|| wrap(product(&x_val.data)));
+        let grad_z = parents
+            .get(2)
+            .is_some_and(|p| p.borrow().requires_grad)
+            .then(|| wrap(out_grad.data.clone()));
 
         vec![grad_x, grad_y, grad_z]
     }
@@ -82,8 +68,8 @@ impl MulAccGradFn {
 /// along any dimensions that were broadcast.
 #[derive(Clone)]
 pub(crate) struct WhereGradFn {
-    /// Condition broadcast to the output's shape.
-    condition: Vec<f32>,
+    /// Condition broadcast to the output's shape: `true` selects the "true" branch.
+    mask: Vec<bool>,
     /// Original shape of the "true" branch.
     true_shape: Shape,
     /// Original shape of the "false" branch.
@@ -104,65 +90,27 @@ impl WhereGradFn {
         drop(true_parent);
         drop(false_parent);
 
-        #[allow(
-            clippy::useless_let_if_seq,
-            reason = "will handle idiomatically after i finish the rest of these"
-        )]
-        let mut grad_true = None;
-        if needs_true {
-            let mut data = vec![0.0; out_grad.data.len()];
-            for (i, (&g, &c)) in out_grad
-                .data
-                .to_host_f32()
-                .iter()
-                .zip(&self.condition)
-                .enumerate()
-            {
-                if c != 0.0 {
-                    *slot(&mut data, i) = g;
-                }
-            }
-            let reduced = RawTensor::sum_over_broadcast_dims(
-                &data,
-                out_grad.shape.truncate_rank(),
-                self.true_shape.truncate_rank(),
-            );
-            grad_true = Some(RawTensor::from_shape(
-                reduced,
-                self.true_shape.clone(),
-                false,
-            ));
-        }
-
-        #[allow(
-            clippy::useless_let_if_seq,
-            reason = "will handle idiomatically after i finish the rest of these"
-        )]
-        let mut grad_false = None;
-        if needs_false {
-            let mut data = vec![0.0; out_grad.data.len()];
-            for (i, (&g, &c)) in out_grad
-                .data
-                .to_host_f32()
-                .iter()
-                .zip(&self.condition)
-                .enumerate()
-            {
-                if c == 0.0 {
-                    *slot(&mut data, i) = g;
-                }
-            }
-            let reduced = RawTensor::sum_over_broadcast_dims(
-                &data,
-                out_grad.shape.truncate_rank(),
-                self.false_shape.truncate_rank(),
-            );
-            grad_false = Some(RawTensor::from_shape(
-                reduced,
-                self.false_shape.clone(),
-                false,
-            ));
-        }
+        // The gradient goes to the branch each element came from, then is summed back
+        // over the dims that branch was broadcast along.
+        let branch_grad = |take: bool, shape: &Shape| {
+            let grad = dispatch_real!(out_grad.data.dtype(), T => {
+                let data: Vec<T> = out_grad
+                    .data
+                    .host::<T>()
+                    .iter()
+                    .zip(&self.mask)
+                    .map(|(&g, &m)| if m == take { g } else { T::ZERO })
+                    .collect();
+                Storage::from_typed(RawTensor::sum_over_broadcast_dims(
+                    &data,
+                    out_grad.shape.truncate_rank(),
+                    shape.truncate_rank(),
+                ))
+            });
+            RawTensor::new_with_storage(grad, shape.clone(), Device::CPU, false)
+        };
+        let grad_true = needs_true.then(|| branch_grad(true, &self.true_shape));
+        let grad_false = needs_false.then(|| branch_grad(false, &self.false_shape));
 
         vec![grad_true, grad_false]
     }
@@ -176,9 +124,9 @@ impl RawTensor {
     /// assert shape match for `x`, `y`
     #[must_use]
     pub fn ternary_op(x: &Tensor, y: &Tensor, z: &Tensor, op: TernaryOp) -> Tensor {
-        crate::tensor::expect_f32(|| format!("{op:?}"), &[x, y, z]);
         match op {
             TernaryOp::MulAcc => {
+                let dtype = compute_dtype(|| format!("{op:?}"), &[x.dtype(), y.dtype(), z.dtype()]);
                 let (data_x, shape_x, dev_x) = {
                     let s = x.borrow();
                     (s.data.clone(), s.shape.clone(), s.device.clone())
@@ -218,24 +166,29 @@ impl RawTensor {
                 }
 
                 // CPU path (CPU inputs; mixed devices panic in `edge()`).
-                let result_data = data_x
-                    .to_host_f32()
-                    .iter()
-                    .zip(data_y.to_host_f32().iter())
-                    .zip(data_z.to_host_f32().iter())
-                    .map(|((a, b), c)| a * b + c)
-                    .collect::<Vec<_>>();
+                let result = dispatch_real!(dtype, T => Storage::from_typed(
+                    data_x
+                        .host::<T>()
+                        .iter()
+                        .zip(data_y.host::<T>())
+                        .zip(data_z.host::<T>())
+                        .map(|((&a, &b), &c)| a * b + c)
+                        .collect::<Vec<T>>(),
+                ));
                 edge(
                     [x.clone(), y.clone(), z.clone()],
-                    Storage::cpu(result_data),
+                    result,
                     shape_x,
                     Device::CPU,
                     GradFn::MulAcc(MulAccGradFn),
                 )
             }
             TernaryOp::Where => {
-                // x = condition, y = true branch, z = false branch. The condition is not a
+                // x = condition, y = true branch, z = false branch. The branches share a
+                // dtype; the condition is any float dtype, read as `c != 0`. It is not a
                 // graph input, so `edge()` can't check its device: do it here.
+                let dtype = compute_dtype(|| format!("{op:?}"), &[y.dtype(), z.dtype()]);
+                let cond_dtype = compute_dtype(|| format!("{op:?} condition"), &[x.dtype()]);
                 let _ = common_device("Where", [&x.device(), &y.device(), &z.device()]);
                 let (cond_data, cond_shape) = {
                     let s = x.borrow();
@@ -254,38 +207,40 @@ impl RawTensor {
                     Self::broadcast_shape(cond_shape.truncate_rank(), true_shape.truncate_rank());
                 let out_shape = Self::broadcast_shape(&tmp_shape, false_shape.truncate_rank());
 
-                let cond_bc = Self::broadcast_to(
-                    cond_data.to_host_f32(),
-                    cond_shape.truncate_rank(),
-                    &out_shape,
-                );
-                let true_bc = Self::broadcast_to(
-                    true_data.to_host_f32(),
-                    true_shape.truncate_rank(),
-                    &out_shape,
-                );
-                let false_bc = Self::broadcast_to(
-                    false_data.to_host_f32(),
-                    false_shape.truncate_rank(),
-                    &out_shape,
-                );
-
-                let result_data = cond_bc
-                    .iter()
-                    .zip(&true_bc)
-                    .zip(&false_bc)
-                    .map(|((&c, &t), &f)| if c == 0.0 { f } else { t })
-                    .collect::<Vec<_>>();
+                let mask: Vec<bool> = dispatch_real!(cond_dtype, C => {
+                    let host: Vec<bool> =
+                        cond_data.host::<C>().iter().map(|&c| c != C::ZERO).collect();
+                    Self::broadcast_to(&host, cond_shape.truncate_rank(), &out_shape)
+                });
+                let result = dispatch_real!(dtype, T => {
+                    let true_bc = Self::broadcast_to(
+                        true_data.host::<T>(),
+                        true_shape.truncate_rank(),
+                        &out_shape,
+                    );
+                    let false_bc = Self::broadcast_to(
+                        false_data.host::<T>(),
+                        false_shape.truncate_rank(),
+                        &out_shape,
+                    );
+                    Storage::from_typed(
+                        mask.iter()
+                            .zip(&true_bc)
+                            .zip(&false_bc)
+                            .map(|((&m, &t), &f)| if m { t } else { f })
+                            .collect::<Vec<T>>(),
+                    )
+                });
 
                 // Note: the condition (x) is never a parent — gradients only flow
                 // through whichever branch was selected, never through the mask.
                 edge(
                     [y.clone(), z.clone()],
-                    Storage::cpu(result_data),
+                    result,
                     Shape::derived(out_shape),
                     Device::CPU,
                     GradFn::Where(WhereGradFn {
-                        condition: cond_bc,
+                        mask,
                         true_shape,
                         false_shape,
                     }),

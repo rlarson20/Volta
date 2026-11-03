@@ -8,6 +8,7 @@ use crate::ops::binary::BinaryOp;
 use crate::ops::reduce::ReduceOp;
 use crate::ops::ternary::TernaryOp;
 use crate::ops::unary::UnaryOp;
+use crate::real::{Real, compute_dtype, dispatch_real};
 use crate::shape::{Axis, Shape};
 use crate::spec::PadValue;
 use crate::storage::Element;
@@ -182,13 +183,22 @@ impl Tensor {
         self.inner.borrow().grad.clone()
     }
 
-    /// A constant (no grad) on this tensor's device, for layers that combine a fixed value
-    /// with their input. Building it on the CPU instead would trip the mixed-device check.
+    /// A constant (no grad) on this tensor's device and in its dtype, for layers that
+    /// combine a fixed value with their input. Building it on the CPU, or in f32 next to an
+    /// f64 input, would trip the mixed-device or mixed-dtype check. The values are given as
+    /// f32 and widened exactly.
     ///
     /// # Panics
     /// If `data.len()` != the product of `shape`.
     pub(crate) fn constant_like(&self, data: Vec<f32>, shape: &[usize]) -> Self {
-        RawTensor::new(data, shape, false).to_device(self.device())
+        let c = RawTensor::new(data, shape, false);
+        let dtype = self.dtype();
+        let c = if dtype.is_float() && dtype != DType::F32 {
+            c.to_dtype(dtype)
+        } else {
+            c
+        };
+        c.to_device(self.device())
     }
 
     /// Set `requires_grad` on a leaf tensor.
@@ -339,9 +349,10 @@ pub struct RawTensor {
     pub device: Device,
 }
 
-/// Panics unless every input is f32, naming the op: every kernel computes in f32 only
-/// until ADDENDUM §11 P3/P4. Called at each op's entry, before any work, so the message
-/// names the op rather than the kernel read that would otherwise fail first.
+/// Panics unless every input is f32, naming the op: the f32-only check of the layers and
+/// optimizers whose kernels are not dtype-generic yet (ADDENDUM §11 P3b). Called at the
+/// entry, before any work, so the message names the op rather than a kernel read. Core ops
+/// use `real::compute_dtype` instead.
 ///
 /// # Panics
 /// If an input's dtype is not F32.
@@ -354,7 +365,7 @@ pub(crate) fn expect_f32(op: impl FnOnce() -> String, inputs: &[&Tensor]) {
         .find(|&(_, d)| d != DType::F32)
     {
         panic!(
-            "{}: {} (input {i}); ops compute in f32 only until ADDENDUM §11 P3/P4",
+            "{}: {} (input {i}); this op computes in f32 only until ADDENDUM §11 P3b",
             op(),
             VoltaError::DTypeMismatch {
                 expected: DType::F32,
@@ -555,6 +566,17 @@ impl RawTensor {
     /// If `data.len()` != `shape.numel()`.
     pub(crate) fn from_shape(data: Vec<f32>, shape: Shape, requires_grad: bool) -> Tensor {
         Self::new_with_storage(Storage::cpu(data), shape, Device::CPU, requires_grad)
+    }
+
+    /// CPU gradient (no grad of its own) of any element type, from an already-validated
+    /// `Shape`: the typed twin of [`Self::from_shape`] for backward code. A separate name,
+    /// so an untyped `vec![0.0; n]` can't become f64 by inference.
+    ///
+    /// # Panics
+    ///
+    /// If `data.len()` != `shape.numel()`.
+    pub(crate) fn from_shape_typed<T: Element>(data: Vec<T>, shape: Shape) -> Tensor {
+        Self::new_with_storage(Storage::from_typed(data), shape, Device::CPU, false)
     }
 
     /// Element count of a shape that came from the caller, checked before anything is
@@ -949,7 +971,12 @@ impl SumDimGradFn {
         out_grad: &RawTensor,
         _parents: &[Tensor],
     ) -> Vec<Option<Tensor>> {
-        let grad_data = out_grad.data.to_host_f32();
+        dispatch_real!(out_grad.data.dtype(), T => self.backward_typed::<T>(out_grad))
+    }
+
+    /// [`Self::backward`] in the gradient's dtype `T`.
+    fn backward_typed<T: Real>(&self, out_grad: &RawTensor) -> Vec<Option<Tensor>> {
+        let grad_data = out_grad.data.host::<T>();
         let grad_shape = &out_grad.shape;
 
         // If keepdim=false, we need to unsqueeze the dimension back
@@ -962,7 +989,7 @@ impl SumDimGradFn {
         // Broadcast gradient back to input shape
         // Each output element contributed to by input_shape[dim] elements
         let size = self.input_shape.numel();
-        let mut result = vec![0.0; size];
+        let mut result = vec![T::ZERO; size];
 
         let grad_strides = expanded_shape.strides();
         let grad_strides = grad_strides.truncate_rank();
@@ -988,10 +1015,9 @@ impl SumDimGradFn {
             *slot(&mut result, i) = fetch(grad_data, grad_idx);
         }
 
-        vec![Some(RawTensor::from_shape(
+        vec![Some(RawTensor::from_shape_typed(
             result,
             self.input_shape.clone(),
-            false,
         ))]
     }
 }
@@ -1016,7 +1042,12 @@ impl MaxDimGradFn {
         out_grad: &RawTensor,
         _parents: &[Tensor],
     ) -> Vec<Option<Tensor>> {
-        let grad_data = out_grad.data.to_host_f32();
+        dispatch_real!(out_grad.data.dtype(), T => self.backward_typed::<T>(out_grad))
+    }
+
+    /// [`Self::backward`] in the gradient's dtype `T`.
+    fn backward_typed<T: Real>(&self, out_grad: &RawTensor) -> Vec<Option<Tensor>> {
+        let grad_data = out_grad.data.host::<T>();
         let grad_shape = &out_grad.shape;
 
         let expanded_shape = if self.keepdim {
@@ -1026,7 +1057,7 @@ impl MaxDimGradFn {
         };
 
         let size = self.input_shape.numel();
-        let mut result = vec![0.0; size];
+        let mut result = vec![T::ZERO; size];
 
         // Only max elements receive gradient
         let grad_strides = expanded_shape.strides();
@@ -1049,10 +1080,9 @@ impl MaxDimGradFn {
             *slot(&mut result, max_lin_idx) = fetch(grad_data, grad_idx);
         }
 
-        vec![Some(RawTensor::from_shape(
+        vec![Some(RawTensor::from_shape_typed(
             result,
             self.input_shape.clone(),
-            false,
         ))]
     }
 }
@@ -1076,7 +1106,7 @@ impl RawTensor {
     ///
     /// Returns `VoltaError::DimensionOutOfBounds` if dim is >= tensor rank
     pub fn try_sum_dim(self_t: &Tensor, dim: Axis, keepdim: bool) -> Result<Tensor> {
-        expect_f32(|| "SumDim".to_string(), &[self_t]);
+        let dtype = compute_dtype(|| "SumDim".to_string(), &[self_t.dtype()]);
         let (data, shape) = {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone())
@@ -1086,26 +1116,29 @@ impl RawTensor {
         let dim = dim.0;
         let out_shape = shape.with_dim(dim, 1); // intermediate shape before squeeze
         let out_size = out_shape.numel();
-        let mut result = vec![0.0; out_size];
 
         // Optimized stride-based reduction: O(1) per element instead of O(rank) coordinate conversion
         // View data as: [outer_size, dim_size, inner_size] where we sum over dim_size
         let outer_size = shape.numel_before(dim);
         let inner_size = shape.numel_from(dim + 1);
 
-        // Sum over the target dimension using stride arithmetic
-        let data = data.to_host_f32();
-        for outer in 0..outer_size {
-            for inner in 0..inner_size {
-                let out_idx = outer * inner_size + inner;
-                let mut sum = 0.0;
-                for k in 0..dim_size {
-                    let in_idx = outer * dim_size * inner_size + k * inner_size + inner;
-                    sum += fetch(data, in_idx);
+        // Sum over the target dimension using stride arithmetic, in the input's dtype.
+        let storage = dispatch_real!(dtype, T => {
+            let mut result = vec![T::ZERO; out_size];
+            let data = data.host::<T>();
+            for outer in 0..outer_size {
+                for inner in 0..inner_size {
+                    let out_idx = outer * inner_size + inner;
+                    let mut sum = T::ZERO;
+                    for k in 0..dim_size {
+                        let in_idx = outer * dim_size * inner_size + k * inner_size + inner;
+                        sum += fetch(data, in_idx);
+                    }
+                    *slot(&mut result, out_idx) = sum;
                 }
-                *slot(&mut result, out_idx) = sum;
             }
-        }
+            Storage::from_typed(result)
+        });
 
         // Squeeze dimension if keepdim=false
         let final_shape = if keepdim {
@@ -1116,8 +1149,6 @@ impl RawTensor {
 
         // Computed on the CPU (there is no GPU kernel): `edge()` applies the device
         // policy when the input is on the GPU.
-        let storage = Storage::cpu(result);
-
         Ok(edge(
             [self_t.clone()],
             storage,
@@ -1236,7 +1267,7 @@ impl RawTensor {
     /// dim out of bounds
     #[must_use]
     pub fn max_dim(self_t: &Tensor, dim: Axis, keepdim: bool) -> Tensor {
-        expect_f32(|| "MaxDim".to_string(), &[self_t]);
+        let dtype = compute_dtype(|| "MaxDim".to_string(), &[self_t.dtype()]);
         let (data, shape) = {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone())
@@ -1246,8 +1277,6 @@ impl RawTensor {
         let dim = dim.0;
         let out_shape = shape.with_dim(dim, 1);
         let out_size = out_shape.numel();
-
-        let mut result = vec![f32::NEG_INFINITY; out_size];
         let mut max_indices = vec![0; out_size]; // track which index won
 
         // Optimized stride-based reduction: O(1) per element instead of O(rank) coordinate conversion
@@ -1255,21 +1284,25 @@ impl RawTensor {
         let outer_size = shape.numel_before(dim);
         let inner_size = shape.numel_from(dim + 1);
 
-        // Find max over the target dimension using stride arithmetic
-        let data = data.to_host_f32();
-        for outer in 0..outer_size {
-            for inner in 0..inner_size {
-                let out_idx = outer * inner_size + inner;
-                for k in 0..dim_size {
-                    let in_idx = outer * dim_size * inner_size + k * inner_size + inner;
-                    let in_val = fetch(data, in_idx);
-                    if in_val > fetch(&result, out_idx) {
-                        *slot(&mut result, out_idx) = in_val;
-                        *slot(&mut max_indices, out_idx) = in_idx;
+        // Find max over the target dimension using stride arithmetic, in the input's dtype.
+        let storage = dispatch_real!(dtype, T => {
+            let mut result = vec![T::NEG_INFINITY; out_size];
+            let data = data.host::<T>();
+            for outer in 0..outer_size {
+                for inner in 0..inner_size {
+                    let out_idx = outer * inner_size + inner;
+                    for k in 0..dim_size {
+                        let in_idx = outer * dim_size * inner_size + k * inner_size + inner;
+                        let in_val = fetch(data, in_idx);
+                        if in_val > fetch(&result, out_idx) {
+                            *slot(&mut result, out_idx) = in_val;
+                            *slot(&mut max_indices, out_idx) = in_idx;
+                        }
                     }
                 }
             }
-        }
+            Storage::from_typed(result)
+        });
 
         let final_shape = if keepdim {
             out_shape
@@ -1279,8 +1312,6 @@ impl RawTensor {
 
         // Computed on the CPU (there is no GPU kernel): `edge()` applies the device
         // policy when the input is on the GPU.
-        let storage = Storage::cpu(result);
-
         edge(
             [self_t.clone()],
             storage,

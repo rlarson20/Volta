@@ -3,6 +3,7 @@ use crate::device::Device;
 use crate::device_policy::kernel_failed;
 use crate::error::{Result, VoltaError};
 use crate::index::{fetch, slot};
+use crate::real::{Real, compute_dtype, dispatch_real};
 use crate::shape::{Axis, Shape, Strides};
 use crate::spec::PadValue;
 use crate::storage::Storage;
@@ -294,10 +295,10 @@ fn gpu_pad_supported(padding: &[(usize, usize)]) -> bool {
 /// * `output_offset` - Current linear offset in output buffer
 /// * `input_strides` - Memory strides for input tensor
 /// * `output_strides` - Memory strides for output tensor
-fn apply_movement_backward<M: BackwardIndexMapper>(
+fn apply_movement_backward<T: Copy, M: BackwardIndexMapper>(
     ctx: &MovementContext<'_>,
-    result: &mut [f32],
-    grad: &[f32],
+    result: &mut [T],
+    grad: &[T],
     dim: usize,
     mapper: &M,
     input_offset: usize,
@@ -353,10 +354,10 @@ fn apply_movement_backward<M: BackwardIndexMapper>(
 /// * `output_offset` - Current linear offset in output buffer
 /// * `input_strides` - Memory strides for input tensor
 /// * `output_strides` - Memory strides for output tensor
-fn apply_movement_forward<M: ForwardIndexMapper>(
+fn apply_movement_forward<T: Copy, M: ForwardIndexMapper>(
     ctx: &MovementContext<'_>,
-    result: &mut [f32],
-    data: &[f32],
+    result: &mut [T],
+    data: &[T],
     dim: usize,
     mapper: &M,
     input_offset: usize,
@@ -469,6 +470,11 @@ impl MovementGradFn {
         out_grad: &RawTensor,
         _parents: &[Tensor],
     ) -> Vec<Option<Tensor>> {
+        dispatch_real!(out_grad.data.dtype(), T => self.backward_typed::<T>(out_grad))
+    }
+
+    /// [`Self::backward`] in the gradient's dtype `T`.
+    fn backward_typed<T: Real>(&self, out_grad: &RawTensor) -> Vec<Option<Tensor>> {
         let grad_tensor = match &self.op {
             MovementOp::Reshape { .. } => {
                 // Reshape back to original shape: same data, same device, new shape.
@@ -504,8 +510,12 @@ impl MovementGradFn {
                 }
 
                 // CPU path
-                let grad_t =
-                    RawTensor::from_shape(out_grad.data.to_vec(), out_grad.shape.clone(), false);
+                let grad_t = RawTensor::new_with_storage(
+                    out_grad.data.clone(),
+                    out_grad.shape.clone(),
+                    Device::CPU,
+                    false,
+                );
                 let (storage, shape, device) = RawTensor::permute_impl(&grad_t, &inverse_axes);
                 return vec![Some(RawTensor::new_with_storage(
                     storage,
@@ -532,11 +542,11 @@ impl MovementGradFn {
                 }
 
                 // CPU path: Sum gradient over dimensions that were expanded (broadcast)
-                let mut grad_data = vec![0.0; self.original_shape.iter().product()];
+                let mut grad_data = vec![T::ZERO; self.original_shape.iter().product()];
                 let old_strides = self.original_shape.strides();
                 let old_strides = old_strides.truncate_rank();
 
-                let g_host = out_grad.data.to_host_f32();
+                let g_host = out_grad.data.host::<T>();
                 for i in 0..out_grad.data.len() {
                     let mut old_idx = 0;
                     let mut rem = i;
@@ -551,7 +561,7 @@ impl MovementGradFn {
                     }
                     *slot(&mut grad_data, old_idx) += fetch(g_host, i);
                 }
-                RawTensor::from_shape(grad_data, self.original_shape.clone(), false)
+                RawTensor::from_shape_typed(grad_data, self.original_shape.clone())
             }
             MovementOp::Pad { padding } => {
                 // GPU path when the kernel covers this rank; a `None` from it is a failure.
@@ -572,7 +582,7 @@ impl MovementGradFn {
                 }
 
                 // CPU path: Remove padding from gradient (extract center region)
-                let mut result = vec![0.0; self.original_shape.iter().product()];
+                let mut result = vec![T::ZERO; self.original_shape.iter().product()];
                 let old_strides = self.original_shape.strides();
                 let old_strides = old_strides.truncate_rank();
                 let new_strides = out_grad.shape.strides();
@@ -590,13 +600,13 @@ impl MovementGradFn {
                 apply_movement_backward(
                     &ctx,
                     &mut result,
-                    out_grad.data.to_host_f32(),
+                    out_grad.data.host::<T>(),
                     0,
                     &mapper,
                     0,
                     0,
                 );
-                RawTensor::from_shape(result, self.original_shape.clone(), false)
+                RawTensor::from_shape_typed(result, self.original_shape.clone())
             }
             MovementOp::Shrink { ranges } => {
                 // GPU path when the kernel covers this rank; a `None` from it is a failure.
@@ -617,7 +627,7 @@ impl MovementGradFn {
                 }
 
                 // CPU path: Pad gradient back to original size (inverse of shrink)
-                let mut result = vec![0.0; self.original_shape.iter().product()];
+                let mut result = vec![T::ZERO; self.original_shape.iter().product()];
                 let old_strides = self.original_shape.strides();
                 let old_strides = old_strides.truncate_rank();
                 let new_strides = out_grad.shape.strides();
@@ -635,13 +645,13 @@ impl MovementGradFn {
                 apply_movement_backward(
                     &ctx,
                     &mut result,
-                    out_grad.data.to_host_f32(),
+                    out_grad.data.host::<T>(),
                     0,
                     &mapper,
                     0,
                     0,
                 );
-                RawTensor::from_shape(result, self.original_shape.clone(), false)
+                RawTensor::from_shape_typed(result, self.original_shape.clone())
             }
             MovementOp::Stride { strides } => {
                 // GPU path when the kernel covers this rank; a `None` from it is a failure.
@@ -662,7 +672,7 @@ impl MovementGradFn {
                 }
 
                 // CPU path: Upsample gradient (inverse of stride/downsampling)
-                let mut result = vec![0.0; self.original_shape.iter().product()];
+                let mut result = vec![T::ZERO; self.original_shape.iter().product()];
                 let old_strides_mem = self.original_shape.strides();
                 let old_strides_mem = old_strides_mem.truncate_rank();
                 let new_strides_mem = out_grad.shape.strides();
@@ -680,13 +690,13 @@ impl MovementGradFn {
                 apply_movement_backward(
                     &ctx,
                     &mut result,
-                    out_grad.data.to_host_f32(),
+                    out_grad.data.host::<T>(),
                     0,
                     &mapper,
                     0,
                     0,
                 );
-                RawTensor::from_shape(result, self.original_shape.clone(), false)
+                RawTensor::from_shape_typed(result, self.original_shape.clone())
             }
         };
 
@@ -736,7 +746,7 @@ impl RawTensor {
     /// `VoltaError::InvalidParameter` if `new_shape` has a zero dimension, overflows, or
     /// exceeds `MAX_NUMEL` (see [`Shape::from_dims`]), or has a different element count.
     pub fn try_reshape(self_t: &Tensor, new_shape: &[usize]) -> Result<Tensor> {
-        crate::tensor::expect_f32(|| "Reshape".to_string(), &[self_t]);
+        compute_dtype(|| "Reshape".to_string(), &[self_t.dtype()]);
         // Validate before `product()` or any allocation: `new_shape` may be user data.
         let target = Shape::from_dims(new_shape)?;
         let (data, old_shape, device) = {
@@ -806,21 +816,23 @@ impl RawTensor {
         // CPU path (`movement_edge` applies the device policy to a GPU input)
         let old_strides = shape.strides();
         let old_strides = old_strides.truncate_rank();
-        let mut new_data = vec![0.0; data.len()];
+        dispatch_real!(data.dtype(), T => {
+        let mut new_data = vec![T::ZERO; data.len()];
 
-        let cpu_data = data.to_vec();
+                let cpu_data = data.host::<T>().to_vec();
 
-        for (new_idx, val) in new_data.iter_mut().enumerate() {
-            let new_coords = index_to_coords(new_idx, &new_shape);
-            // Map new coordinates back to old coordinates
-            let mut old_coords = vec![0; axes.len()];
-            for (i, &ax) in axes.iter().enumerate() {
-                *slot(&mut old_coords, ax) = fetch(&new_coords, i);
-            }
-            let old_idx = coords_to_index(&old_coords, old_strides);
-            *val = fetch(&cpu_data, old_idx);
-        }
-        (Storage::cpu(new_data), new_shape, Device::CPU)
+                for (new_idx, val) in new_data.iter_mut().enumerate() {
+                    let new_coords = index_to_coords(new_idx, &new_shape);
+                    // Map new coordinates back to old coordinates
+                    let mut old_coords = vec![0; axes.len()];
+                    for (i, &ax) in axes.iter().enumerate() {
+                        *slot(&mut old_coords, ax) = fetch(&new_coords, i);
+                    }
+                    let old_idx = coords_to_index(&old_coords, old_strides);
+                    *val = fetch(&cpu_data, old_idx);
+                }
+                (Storage::from_typed(new_data), new_shape, Device::CPU)
+        })
     }
 
     /// Permute (reorder) tensor axes
@@ -831,7 +843,7 @@ impl RawTensor {
     /// invalid permutation axes
     #[must_use]
     pub fn permute(self_t: &Tensor, axes: &[Axis]) -> Tensor {
-        crate::tensor::expect_f32(|| "Permute".to_string(), &[self_t]);
+        compute_dtype(|| "Permute".to_string(), &[self_t.dtype()]);
         let old_shape = self_t.borrow().shape.clone();
         let axes: Vec<usize> = axes.iter().map(|a| a.0).collect();
 
@@ -877,7 +889,7 @@ impl RawTensor {
     /// or has a different rank, `VoltaError::BroadcastError` if a dimension is neither
     /// `1` nor equal to the target.
     pub fn try_expand(self_t: &Tensor, new_shape: &[usize]) -> Result<Tensor> {
-        crate::tensor::expect_f32(|| "Expand".to_string(), &[self_t]);
+        let dtype = compute_dtype(|| "Expand".to_string(), &[self_t.dtype()]);
         let out_shape = Shape::from_dims(new_shape)?;
         let (data, old_shape, device) = {
             let s = self_t.borrow();
@@ -912,28 +924,30 @@ impl RawTensor {
         let (storage, out_device) = if let Some(storage) = gpu_storage {
             (storage, device)
         } else {
-            let mut result = vec![0.0; new_size];
-            let cpu_data = data.to_vec();
+            dispatch_real!(dtype, T => {
+            let mut result = vec![T::ZERO; new_size];
+                        let cpu_data = data.host::<T>().to_vec();
 
-            // Broadcast by repeating values
-            let old_strides = old_shape.strides();
-            let old_strides = old_strides.truncate_rank();
+                        // Broadcast by repeating values
+                        let old_strides = old_shape.strides();
+                        let old_strides = old_strides.truncate_rank();
 
-            for i in 0..new_size {
-                let mut old_idx = 0;
-                let mut rem = i;
-                for j in (0..new_shape.len()).rev() {
-                    let dim_size = fetch(new_shape, j);
-                    let coord = rem % dim_size;
-                    rem /= dim_size;
-                    if old_shape.dim_at(j) != 1 {
-                        let stride = fetch(old_strides, j);
-                        old_idx += coord * stride;
-                    }
-                }
-                *slot(&mut result, i) = fetch(&cpu_data, old_idx);
-            }
-            (Storage::cpu(result), Device::CPU)
+                        for i in 0..new_size {
+                            let mut old_idx = 0;
+                            let mut rem = i;
+                            for j in (0..new_shape.len()).rev() {
+                                let dim_size = fetch(new_shape, j);
+                                let coord = rem % dim_size;
+                                rem /= dim_size;
+                                if old_shape.dim_at(j) != 1 {
+                                    let stride = fetch(old_strides, j);
+                                    old_idx += coord * stride;
+                                }
+                            }
+                            *slot(&mut result, i) = fetch(&cpu_data, old_idx);
+                        }
+                        (Storage::from_typed(result), Device::CPU)
+            })
         };
 
         Ok(Self::movement_edge(
@@ -973,7 +987,7 @@ impl RawTensor {
         value: PadValue,
     ) -> Result<Tensor> {
         use crate::error::VoltaError;
-        crate::tensor::expect_f32(|| "Pad".to_string(), &[self_t]);
+        let dtype = compute_dtype(|| "Pad".to_string(), &[self_t.dtype()]);
 
         let (data, old_shape, device) = {
             let s = self_t.borrow();
@@ -1006,26 +1020,28 @@ impl RawTensor {
             (storage, device)
         } else {
             // CPU path. `PadMapper` only writes the interior, so the fill is the border.
-            let mut result = vec![value.get(); new_size];
-            let cpu_data = data.to_vec();
+            dispatch_real!(dtype, T => {
+            let mut result = vec![T::from_f64(f64::from(value.get())); new_size];
+                        let cpu_data = data.host::<T>().to_vec();
 
-            // Copy old data into padded positions
-            let old_strides = old_shape.strides();
-            let old_strides = old_strides.truncate_rank();
-            let new_strides = Strides::from_shape(&new_shape);
-            let new_strides = new_strides.truncate_rank();
-            let mapper = PadMapper {
-                padding: padding.to_vec(),
-            };
-            let ctx = MovementContext::new(
-                old_shape.truncate_rank(),
-                &new_shape,
-                old_strides,
-                new_strides,
-            );
+                        // Copy old data into padded positions
+                        let old_strides = old_shape.strides();
+                        let old_strides = old_strides.truncate_rank();
+                        let new_strides = Strides::from_shape(&new_shape);
+                        let new_strides = new_strides.truncate_rank();
+                        let mapper = PadMapper {
+                            padding: padding.to_vec(),
+                        };
+                        let ctx = MovementContext::new(
+                            old_shape.truncate_rank(),
+                            &new_shape,
+                            old_strides,
+                            new_strides,
+                        );
 
-            apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
-            (Storage::cpu(result), Device::CPU)
+                        apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
+                        (Storage::from_typed(result), Device::CPU)
+            })
         };
 
         Ok(Self::movement_edge(
@@ -1132,7 +1148,7 @@ impl RawTensor {
     ///   - Any range has `start == end` (zero-sized dimension)
     /// * `VoltaError::DimensionOutOfBounds` - If any range has `end > dimension size`
     pub fn try_shrink(self_t: &Tensor, ranges: &[(usize, usize)]) -> Result<Tensor> {
-        crate::tensor::expect_f32(|| "Shrink".to_string(), &[self_t]);
+        let dtype = compute_dtype(|| "Shrink".to_string(), &[self_t.dtype()]);
         let (data, old_shape, device) = {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone(), s.device.clone())
@@ -1152,26 +1168,28 @@ impl RawTensor {
         let (storage, out_device) = if let Some(storage) = gpu_storage {
             (storage, device)
         } else {
+            dispatch_real!(dtype, T => {
             let new_size: usize = new_shape.iter().product();
-            let mut result = vec![0.0; new_size];
-            let cpu_data = data.to_vec();
+                        let mut result = vec![T::ZERO; new_size];
+                        let cpu_data = data.host::<T>().to_vec();
 
-            let old_strides = old_shape.strides();
-            let old_strides = old_strides.truncate_rank();
-            let new_strides = Strides::from_shape(&new_shape);
-            let new_strides = new_strides.truncate_rank();
-            let mapper = ShrinkMapper {
-                ranges: ranges.to_vec(),
-            };
-            let ctx = MovementContext::new(
-                old_shape.truncate_rank(),
-                &new_shape,
-                old_strides,
-                new_strides,
-            );
+                        let old_strides = old_shape.strides();
+                        let old_strides = old_strides.truncate_rank();
+                        let new_strides = Strides::from_shape(&new_shape);
+                        let new_strides = new_strides.truncate_rank();
+                        let mapper = ShrinkMapper {
+                            ranges: ranges.to_vec(),
+                        };
+                        let ctx = MovementContext::new(
+                            old_shape.truncate_rank(),
+                            &new_shape,
+                            old_strides,
+                            new_strides,
+                        );
 
-            apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
-            (Storage::cpu(result), Device::CPU)
+                        apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
+                        (Storage::from_typed(result), Device::CPU)
+            })
         };
 
         Ok(Self::movement_edge(
@@ -1193,7 +1211,7 @@ impl RawTensor {
     /// Strides length must match rank
     #[must_use]
     pub fn stride_op(self_t: &Tensor, strides: &[usize]) -> Tensor {
-        crate::tensor::expect_f32(|| "Stride".to_string(), &[self_t]);
+        let dtype = compute_dtype(|| "Stride".to_string(), &[self_t.dtype()]);
         let (data, old_shape, device) = {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone(), s.device.clone())
@@ -1220,26 +1238,28 @@ impl RawTensor {
         let (storage, out_device) = if let Some(storage) = gpu_storage {
             (storage, device)
         } else {
+            dispatch_real!(dtype, T => {
             let new_size: usize = new_shape.iter().product();
-            let mut result = vec![0.0; new_size];
-            let cpu_data = data.to_vec();
+                        let mut result = vec![T::ZERO; new_size];
+                        let cpu_data = data.host::<T>().to_vec();
 
-            let old_strides_mem = old_shape.strides();
-            let old_strides_mem = old_strides_mem.truncate_rank();
-            let new_strides_mem = Strides::from_shape(&new_shape);
-            let new_strides_mem = new_strides_mem.truncate_rank();
-            let mapper = StrideMapper {
-                strides: strides.to_vec(),
-            };
-            let ctx = MovementContext::new(
-                old_shape.truncate_rank(),
-                &new_shape,
-                old_strides_mem,
-                new_strides_mem,
-            );
+                        let old_strides_mem = old_shape.strides();
+                        let old_strides_mem = old_strides_mem.truncate_rank();
+                        let new_strides_mem = Strides::from_shape(&new_shape);
+                        let new_strides_mem = new_strides_mem.truncate_rank();
+                        let mapper = StrideMapper {
+                            strides: strides.to_vec(),
+                        };
+                        let ctx = MovementContext::new(
+                            old_shape.truncate_rank(),
+                            &new_shape,
+                            old_strides_mem,
+                            new_strides_mem,
+                        );
 
-            apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
-            (Storage::cpu(result), Device::CPU)
+                        apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
+                        (Storage::from_typed(result), Device::CPU)
+            })
         };
 
         Self::movement_edge(

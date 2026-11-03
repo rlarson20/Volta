@@ -25,6 +25,8 @@ pub mod dtype;
 /// Error type and `Result` alias.
 pub mod error;
 pub(crate) mod index;
+/// The float types kernels compute in (`f32`, `f64`) and the dtype dispatch.
+pub(crate) mod real;
 pub mod shape;
 pub(crate) mod spec;
 pub mod storage;
@@ -187,3 +189,7 @@ mod dropout_tests;
 #[cfg(test)]
 #[path = "lib_tests/batchnorm_tests.rs"]
 mod batchnorm_tests;
+
+#[cfg(test)]
+#[path = "lib_tests/f64_tests.rs"]
+mod f64_tests;

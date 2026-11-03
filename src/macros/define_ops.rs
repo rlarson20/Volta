@@ -16,8 +16,11 @@
 /// }
 /// ```
 ///
-/// - `|x| <expr>` is the forward on one `f32`. `|g, x| <expr>` is the backward: `g` is the
-///   upstream gradient and `x` the forward input, both `f32`.
+/// - `|x| <expr>` is the forward on one element, `|g, x| <expr>` the backward: `g` is the
+///   upstream gradient and `x` the forward input. Each body is emitted twice, for `f32`
+///   (`forward`, `backward`) and `f64` (`forward_f64`, `backward_f64`), so it must not
+///   name a float type: write literals (`1.0`), and `fl::LN_2`, `fl::PI`, `fl::erf(x)`,
+///   which resolve to the type's own (`crate::real::{fl32, fl64}`).
 /// - `gpu(fwd, bwd)` names two `ComputePipelines` fields, so a kernel that doesn't exist
 ///   is a compile error rather than a string that silently misses a `match`.
 /// - `cpu_only` says outright that the op has no GPU kernel. `gpu_pipelines` returns
@@ -80,6 +83,7 @@ macro_rules! define_ops {
             /// Apply the op to one element.
             #[must_use]
             pub fn forward(self, input: f32) -> f32 {
+                use $crate::real::fl32 as fl;
                 match self {
                     $(Self::$variant => {
                         let $x = input;
@@ -91,6 +95,32 @@ macro_rules! define_ops {
             /// Chain rule for one element: `out_grad` times the op's derivative at `input`.
             #[must_use]
             pub fn backward(self, out_grad: f32, input: f32) -> f32 {
+                use $crate::real::fl32 as fl;
+                match self {
+                    $(Self::$variant => {
+                        let $g = out_grad;
+                        let $bx = input;
+                        $bwd
+                    })*
+                }
+            }
+
+            /// [`Self::forward`] in `f64`: the same row, instantiated for `f64`.
+            #[must_use]
+            pub(crate) fn forward_f64(self, input: f64) -> f64 {
+                use $crate::real::fl64 as fl;
+                match self {
+                    $(Self::$variant => {
+                        let $x = input;
+                        $fwd
+                    })*
+                }
+            }
+
+            /// [`Self::backward`] in `f64`.
+            #[must_use]
+            pub(crate) fn backward_f64(self, out_grad: f64, input: f64) -> f64 {
+                use $crate::real::fl64 as fl;
                 match self {
                     $(Self::$variant => {
                         let $g = out_grad;
@@ -187,6 +217,42 @@ macro_rules! define_ops {
             /// On a non-differentiable op. `edge()` never attaches a grad fn for one.
             #[must_use]
             pub fn backward(self, out_grad: f32, lhs: f32, rhs: f32) -> (f32, f32) {
+                match self {
+                    $(Self::$dvariant => {
+                        let $dg = out_grad;
+                        let $dga = lhs;
+                        let $dgb = rhs;
+                        $dbwd
+                    })*
+                    $(Self::$nvariant)|* => {
+                        unreachable!("{self:?} is non-differentiable and has no backward")
+                    }
+                }
+            }
+
+            /// [`Self::forward`] in `f64`: the same row, instantiated for `f64`.
+            #[must_use]
+            pub(crate) fn forward_f64(self, lhs: f64, rhs: f64) -> f64 {
+                match self {
+                    $(Self::$dvariant => {
+                        let $da = lhs;
+                        let $db = rhs;
+                        $dfwd
+                    })*
+                    $(Self::$nvariant => {
+                        let $na = lhs;
+                        let $nb = rhs;
+                        $nfwd
+                    })*
+                }
+            }
+
+            /// [`Self::backward`] in `f64`.
+            ///
+            /// # Panics
+            /// On a non-differentiable op. `edge()` never attaches a grad fn for one.
+            #[must_use]
+            pub(crate) fn backward_f64(self, out_grad: f64, lhs: f64, rhs: f64) -> (f64, f64) {
                 match self {
                     $(Self::$dvariant => {
                         let $dg = out_grad;

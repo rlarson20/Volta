@@ -2,6 +2,7 @@ use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::device_policy::kernel_failed;
 use crate::index::{fetch, slot};
+use crate::real::{Real, compute_dtype, dispatch_real};
 use crate::shape::{Shape, fixed_dims};
 use crate::spec::MatmulSpec;
 use crate::storage::Storage;
@@ -23,11 +24,16 @@ impl TransposeGradFn {
         out_grad: &RawTensor,
         _parents: &[Tensor],
     ) -> Vec<Option<Tensor>> {
-        let transposed =
-            RawTensor::transpose_2d(out_grad.data.to_host_f32(), out_grad.shape.truncate_rank());
+        let transposed = dispatch_real!(out_grad.data.dtype(), T => Storage::from_typed(
+            RawTensor::transpose_2d(out_grad.data.host::<T>(), out_grad.shape.truncate_rank()),
+        ));
         let [dim0, dim1] = out_grad.shape.fixed::<2>();
-        let new_shape = vec![dim1, dim0];
-        vec![Some(RawTensor::new(transposed, &new_shape, false))]
+        vec![Some(RawTensor::new_with_storage(
+            transposed,
+            Shape::derived(vec![dim1, dim0]),
+            Device::CPU,
+            false,
+        ))]
     }
 }
 
@@ -37,10 +43,10 @@ impl RawTensor {
     /// Transpose a 2D matrix
     ///
     /// For shape [m, n], produces shape [n, m]
-    pub(crate) fn transpose_2d(data: &[f32], shape: &[usize]) -> Vec<f32> {
+    pub(crate) fn transpose_2d<T: Real>(data: &[T], shape: &[usize]) -> Vec<T> {
         assert_eq!(shape.len(), 2, "Transpose expects 2D shape");
         let [m, n] = fixed_dims::<2>(shape);
-        let mut result = vec![0.0; m * n];
+        let mut result = vec![T::ZERO; m * n];
         for i in 0..m {
             for j in 0..n {
                 *slot(&mut result, j * m + i) = fetch(data, i * n + j);
@@ -148,6 +154,48 @@ impl RawTensor {
         }
     }
 
+    /// [`Self::matmul_raw`] in `f64`, through `matrixmultiply::dgemm` on every platform:
+    /// an Accelerate `cblas_dgemm` path would be unverifiable off macOS (ADDENDUM §11).
+    ///
+    /// # Panics
+    /// `a.len() != m * k` or `b.len() != k * n`.
+    #[must_use]
+    pub(crate) fn matmul_raw_f64(a: &[f64], b: &[f64], m: usize, k: usize, n: usize) -> Vec<f64> {
+        assert_eq!(
+            a.len(),
+            m * k,
+            "matmul_raw_f64: A has the wrong length for ({m},{k})"
+        );
+        assert_eq!(
+            b.len(),
+            k * n,
+            "matmul_raw_f64: B has the wrong length for ({k},{n})"
+        );
+        let mut result = vec![0.0; m * n];
+        // SAFETY: as in `matmul_raw`: the asserts fix the input lengths, `result` holds m*n
+        // values, the row strides (k, n, n) and unit column strides keep every access in
+        // bounds, and the three buffers are distinct allocations.
+        unsafe {
+            matrixmultiply::dgemm(
+                m,
+                k,
+                n,
+                1.0,
+                a.as_ptr(),
+                crate::index::signed(k),
+                1,
+                b.as_ptr(),
+                crate::index::signed(n),
+                1,
+                0.0,
+                result.as_mut_ptr(),
+                crate::index::signed(n),
+                1,
+            );
+        }
+        result
+    }
+
     /// Matrix multiplication with multiple cases
     ///
     /// Supports:
@@ -160,7 +208,7 @@ impl RawTensor {
     /// Dimension mismatch, or matrix operands of unequal rank (see `MatmulSpec`)
     #[must_use]
     pub fn matmul(self_t: &Tensor, other: &Tensor) -> Tensor {
-        crate::tensor::expect_f32(|| "MatMul".to_string(), &[self_t, other]);
+        let dtype = compute_dtype(|| "MatMul".to_string(), &[self_t.dtype(), other.dtype()]);
         let (data_a, shape_a) = {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone())
@@ -170,18 +218,18 @@ impl RawTensor {
             (o.data.clone(), o.shape.clone())
         };
 
-        // Handle different cases
-        match (shape_a.rank(), shape_b.rank()) {
+        // Handle different cases, in the operands' dtype.
+        dispatch_real!(dtype, T => match (shape_a.rank(), shape_b.rank()) {
             (2, 1) => {
-                let (a_host, b_host) = (data_a.to_host_f32(), data_b.to_host_f32());
+                let (a_host, b_host) = (data_a.host::<T>(), data_b.host::<T>());
                 // Matrix-vector: (m,n) @ (n,) -> (m,)
                 let [m, n] = shape_a.fixed::<2>();
                 let [n2] = shape_b.fixed::<1>();
                 assert_eq!(n, n2, "Matmul dimension mismatch: ({m},{n}) @ ({n2})");
 
-                let mut result_data = vec![0.0; m];
+                let mut result_data = vec![T::ZERO; m];
                 for i in 0..m {
-                    let mut sum = 0.0;
+                    let mut sum = T::ZERO;
                     for j in 0..n {
                         sum += fetch(a_host, i * n + j) * fetch(b_host, j);
                     }
@@ -190,22 +238,22 @@ impl RawTensor {
 
                 edge(
                     [self_t.clone(), other.clone()],
-                    Storage::cpu(result_data),
+                    Storage::from_typed(result_data),
                     Shape::derived(vec![m]),
                     Device::CPU,
                     GradFn::MatMul(MatMulGradFn::vector()),
                 )
             }
             (1, 2) => {
-                let (a_host, b_host) = (data_a.to_host_f32(), data_b.to_host_f32());
+                let (a_host, b_host) = (data_a.host::<T>(), data_b.host::<T>());
                 // Vector-matrix: (n,) @ (n,p) -> (p,)
                 let [n] = shape_a.fixed::<1>();
                 let [n2, p] = shape_b.fixed::<2>();
                 assert_eq!(n, n2, "Matmul dimension mismatch: ({n}) @ ({n2},{p})");
 
-                let mut result_data = vec![0.0; p];
+                let mut result_data = vec![T::ZERO; p];
                 for j in 0..p {
-                    let mut sum = 0.0;
+                    let mut sum = T::ZERO;
                     for i in 0..n {
                         sum += fetch(a_host, i) * fetch(b_host, i * p + j);
                     }
@@ -215,23 +263,23 @@ impl RawTensor {
 
                 edge(
                     [self_t.clone(), other.clone()],
-                    Storage::cpu(result_data),
+                    Storage::from_typed(result_data),
                     Shape::derived(vec![p]),
                     Device::CPU,
                     GradFn::MatMul(MatMulGradFn::vector()),
                 )
             }
             (1, 1) => {
-                let (a_host, b_host) = (data_a.to_host_f32(), data_b.to_host_f32());
+                let (a_host, b_host) = (data_a.host::<T>(), data_b.host::<T>());
                 // Dot product: (n,) @ (n,) -> scalar
                 let [n] = shape_a.fixed::<1>();
                 let [n2] = shape_b.fixed::<1>();
                 assert_eq!(n, n2, "Dot product dimension mismatch: ({n}) @ ({n2})");
 
-                let sum: f32 = a_host.iter().zip(b_host.iter()).map(|(a, b)| a * b).sum();
+                let sum: T = a_host.iter().zip(b_host.iter()).map(|(a, b)| a * b).sum();
                 edge(
                     [self_t.clone(), other.clone()],
-                    Storage::cpu(vec![sum]),
+                    Storage::from_typed(vec![sum]),
                     Shape::derived(vec![1]),
                     Device::CPU,
                     GradFn::MatMul(MatMulGradFn::vector()),
@@ -260,16 +308,16 @@ impl RawTensor {
                     }
 
                     // CPU path: BLAS/Accelerate or matrixmultiply on host data.
-                    let result_data = Self::matmul_raw(
-                        data_a.to_host_f32(),
-                        data_b.to_host_f32(),
+                    let result_data = T::gemm(
+                        data_a.host::<T>(),
+                        data_b.host::<T>(),
                         spec.m,
                         spec.k,
                         spec.n,
                     );
                     return edge(
                         [self_t.clone(), other.clone()],
-                        Storage::cpu(result_data),
+                        Storage::from_typed(result_data),
                         Shape::derived(spec.out_dims()),
                         Device::CPU,
                         GradFn::MatMul(MatMulGradFn::matrix(spec)),
@@ -279,12 +327,12 @@ impl RawTensor {
                 // Batched: (..b, m, k) @ (..b, k, n) -> (..b, m, n)
                 let (m, k, n) = (spec.m, spec.k, spec.n);
                 let data_a_expanded = Self::broadcast_to(
-                    data_a.to_host_f32(),
+                    data_a.host::<T>(),
                     &spec.a_dims(),
                     &spec.a_expanded_dims(),
                 );
                 let data_b_expanded = Self::broadcast_to(
-                    data_b.to_host_f32(),
+                    data_b.host::<T>(),
                     &spec.b_dims(),
                     &spec.b_expanded_dims(),
                 );
@@ -307,18 +355,18 @@ impl RawTensor {
                     .chunks_exact(stride_a)
                     .zip(data_b_expanded.chunks_exact(stride_b))
                 {
-                    result_data.extend_from_slice(&Self::matmul_raw(slice_a, slice_b, m, k, n));
+                    result_data.extend_from_slice(&T::gemm(slice_a, slice_b, m, k, n));
                 }
 
                 edge(
                     [self_t.clone(), other.clone()],
-                    Storage::cpu(result_data),
+                    Storage::from_typed(result_data),
                     Shape::derived(spec.out_dims()),
                     Device::CPU,
                     GradFn::MatMul(MatMulGradFn::matrix(spec)),
                 )
             }
-        }
+        })
     }
 
     /// Transpose a 2D tensor
@@ -332,14 +380,17 @@ impl RawTensor {
         };
 
         assert_eq!(shape.rank(), 2, "Transpose expects 2D tensor");
+        let dtype = compute_dtype(|| "Transpose".to_string(), &[self_t.dtype()]);
 
-        let transposed_data = Self::transpose_2d(data.to_host_f32(), shape.truncate_rank());
+        let transposed = dispatch_real!(dtype, T => Storage::from_typed(
+            Self::transpose_2d(data.host::<T>(), shape.truncate_rank()),
+        ));
         let [dim0, dim1] = shape.fixed::<2>();
         let new_shape = vec![dim1, dim0];
 
         edge(
             [self_t.clone()],
-            Storage::cpu(transposed_data),
+            transposed,
             Shape::derived(new_shape),
             Device::CPU,
             GradFn::Transpose(TransposeGradFn),
@@ -374,11 +425,11 @@ impl MatMulGradFn {
     }
 
     /// ∂L/∂a = ∂L/∂c @ b^T, summed back to `a`'s shape if its batch dims were broadcast.
-    fn matrix_grad_a(spec: &MatmulSpec, out_grad: &[f32], b: &[f32]) -> Vec<f32> {
+    fn matrix_grad_a<T: Real>(spec: &MatmulSpec, out_grad: &[T], b: &[T]) -> Vec<T> {
         let (m, k, n) = (spec.m, spec.k, spec.n);
         if !spec.is_batched() {
             let b_t = RawTensor::transpose_2d(b, &[k, n]);
-            return RawTensor::matmul_raw(out_grad, &b_t, m, n, k);
+            return T::gemm(out_grad, &b_t, m, n, k);
         }
         let batch_count = spec.batch_count();
         assert_eq!(
@@ -393,17 +444,17 @@ impl MatMulGradFn {
             .zip(b_expanded.chunks_exact(k * n))
         {
             let b_t = RawTensor::transpose_2d(b_slice, &[k, n]);
-            expanded.extend_from_slice(&RawTensor::matmul_raw(og, &b_t, m, n, k));
+            expanded.extend_from_slice(&T::gemm(og, &b_t, m, n, k));
         }
         RawTensor::sum_over_broadcast_dims(&expanded, &spec.a_expanded_dims(), &spec.a_dims())
     }
 
     /// ∂L/∂b = a^T @ ∂L/∂c, summed back to `b`'s shape if its batch dims were broadcast.
-    fn matrix_grad_b(spec: &MatmulSpec, a: &[f32], out_grad: &[f32]) -> Vec<f32> {
+    fn matrix_grad_b<T: Real>(spec: &MatmulSpec, a: &[T], out_grad: &[T]) -> Vec<T> {
         let (m, k, n) = (spec.m, spec.k, spec.n);
         if !spec.is_batched() {
             let a_t = RawTensor::transpose_2d(a, &[m, k]);
-            return RawTensor::matmul_raw(&a_t, out_grad, k, m, n);
+            return T::gemm(&a_t, out_grad, k, m, n);
         }
         let batch_count = spec.batch_count();
         assert_eq!(
@@ -418,7 +469,7 @@ impl MatMulGradFn {
             .zip(out_grad.chunks_exact(m * n))
         {
             let a_t = RawTensor::transpose_2d(a_slice, &[m, k]);
-            expanded.extend_from_slice(&RawTensor::matmul_raw(&a_t, og, k, m, n));
+            expanded.extend_from_slice(&T::gemm(&a_t, og, k, m, n));
         }
         RawTensor::sum_over_broadcast_dims(&expanded, &spec.b_expanded_dims(), &spec.b_dims())
     }
@@ -461,30 +512,27 @@ impl MatMulGradFn {
         // ∂L/∂x = ∂L/∂z @ y^T  -> (m,p) @ (p,n) = (m,n)
         // ∂L/∂y = x^T @ ∂L/∂z  -> (n,m) @ (m,p) = (n,p)
 
+        dispatch_real!(x.data.dtype(), T => {
         // CPU path: one host view per operand (a GPU operand syncs here, once).
-        let x_host = x.data.to_host_f32();
-        let y_host = y.data.to_host_f32();
-        let g_host = out_grad.data.to_host_f32();
+        let x_host = x.data.host::<T>();
+        let y_host = y.data.host::<T>();
+        let g_host = out_grad.data.host::<T>();
 
         let grad_x = if x.requires_grad {
             match (&self.spec, x.shape.rank(), y.shape.rank()) {
-                (Some(spec), _, _) => Some(RawTensor::from_shape(
-                    Self::matrix_grad_a(spec, g_host, y_host),
-                    x.shape.clone(),
-                    false,
-                )),
+                (Some(spec), _, _) => Some(RawTensor::from_shape_typed(Self::matrix_grad_a(spec, g_host, y_host), x.shape.clone())),
                 (None, 2, 1) => {
                     // Matrix-vector: (m,n) @ (n,) -> (m,)
                     // ∂L/∂x = ∂L/∂z[:,None] @ v[None,:] = outer(out_grad, v)
                     let [m, n] = x.shape.fixed::<2>();
-                    let mut grad_data = vec![0.0; m * n];
+                    let mut grad_data = vec![T::ZERO; m * n];
                     for i in 0..m {
                         let gz_i = fetch(g_host, i);
                         for j in 0..n {
                             *slot(&mut grad_data, i * n + j) = gz_i * fetch(y_host, j);
                         }
                     }
-                    Some(RawTensor::from_shape(grad_data, x.shape.clone(), false))
+                    Some(RawTensor::from_shape_typed(grad_data, x.shape.clone()))
                 }
                 (None, 1, 2) => {
                     // Vector-matrix: (n,) @ (n,p) -> (p,)
@@ -492,21 +540,21 @@ impl MatMulGradFn {
                     // grad_x = out_grad @ y^T -> (p,) @ (p,n) -> (n,)
                     let [len_x] = x.shape.fixed::<1>();
                     let [_, len_y_p] = y.shape.fixed::<2>();
-                    let mut grad_data = vec![0.0; len_x];
+                    let mut grad_data = vec![T::ZERO; len_x];
                     for i in 0..len_x {
                         for j in 0..len_y_p {
                             *slot(&mut grad_data, i) +=
                                 fetch(g_host, j) * fetch(y_host, i * len_y_p + j);
                         }
                     }
-                    Some(RawTensor::from_shape(grad_data, x.shape.clone(), false))
+                    Some(RawTensor::from_shape_typed(grad_data, x.shape.clone()))
                 }
                 (None, 1, 1) => {
                     // Dot: (n,) @ (n,) -> scalar
                     // ∂L/∂x = out_grad * y
                     let og = fetch(g_host, 0);
-                    let grad_data: Vec<f32> = y_host.iter().map(|&v| og * v).collect();
-                    Some(RawTensor::from_shape(grad_data, x.shape.clone(), false))
+                    let grad_data: Vec<T> = y_host.iter().map(|&v| og * v).collect();
+                    Some(RawTensor::from_shape_typed(grad_data, x.shape.clone()))
                 }
                 (None, rx, ry) => {
                     unreachable!("vector matmul backward with ranks {rx} and {ry}")
@@ -518,42 +566,38 @@ impl MatMulGradFn {
 
         let grad_y = if y.requires_grad {
             match (&self.spec, x.shape.rank(), y.shape.rank()) {
-                (Some(spec), _, _) => Some(RawTensor::from_shape(
-                    Self::matrix_grad_b(spec, x_host, g_host),
-                    y.shape.clone(),
-                    false,
-                )),
+                (Some(spec), _, _) => Some(RawTensor::from_shape_typed(Self::matrix_grad_b(spec, x_host, g_host), y.shape.clone())),
                 (None, 2, 1) => {
                     // Matrix-vector: (m,n) @ (n,) -> (m,)
                     // ∂L/∂v = X^T @ ∂L/∂z -> (n,)
                     let [m, n] = x.shape.fixed::<2>();
-                    let mut grad_data = vec![0.0; n];
+                    let mut grad_data = vec![T::ZERO; n];
                     for j in 0..n {
-                        let mut sum = 0.0;
+                        let mut sum = T::ZERO;
                         for i in 0..m {
                             sum += fetch(x_host, i * n + j) * fetch(g_host, i);
                         }
                         *slot(&mut grad_data, j) = sum;
                     }
-                    Some(RawTensor::from_shape(grad_data, y.shape.clone(), false))
+                    Some(RawTensor::from_shape_typed(grad_data, y.shape.clone()))
                 }
                 (None, 1, 2) => {
                     // grad_y = x^T @ out_grad -> (n,1) @ (1,p) -> (n,p)
                     let [dim0, dim1] = y.shape.fixed::<2>();
-                    let mut grad_data = vec![0.0; dim0 * dim1];
+                    let mut grad_data = vec![T::ZERO; dim0 * dim1];
                     for i in 0..dim0 {
                         for j in 0..dim1 {
                             *slot(&mut grad_data, i * dim1 + j) =
                                 fetch(x_host, i) * fetch(g_host, j);
                         }
                     }
-                    Some(RawTensor::from_shape(grad_data, y.shape.clone(), false))
+                    Some(RawTensor::from_shape_typed(grad_data, y.shape.clone()))
                 }
                 (None, 1, 1) => {
                     // Dot: (n,) @ (n,) -> scalar
                     let og = fetch(g_host, 0);
-                    let grad_data: Vec<f32> = x_host.iter().map(|&u| og * u).collect();
-                    Some(RawTensor::from_shape(grad_data, y.shape.clone(), false))
+                    let grad_data: Vec<T> = x_host.iter().map(|&u| og * u).collect();
+                    Some(RawTensor::from_shape_typed(grad_data, y.shape.clone()))
                 }
                 (None, rx, ry) => {
                     unreachable!("vector matmul backward with ranks {rx} and {ry}")
@@ -564,6 +608,7 @@ impl MatMulGradFn {
         };
 
         vec![grad_x, grad_y]
+        })
     }
 }
 

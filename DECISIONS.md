@@ -507,6 +507,20 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 
 **Tests:** besides the fixture, three mutants were run against it and all fail it (rounding instead of truncating float to int, saturating instead of wrapping, NaN to `false`). `tests/dtype_cast_grad.rs` covers the f64 round trip (exact values, unit gradient, gradcheck), the f16 round trip, gradient accumulation at a shared f64 node (fails if the f64 add drops a contribution), and integer and bool casts carrying no gradient.
 
+### Core ops in f64: `Real`, two instances per `define_ops!` row (P3a)
+
+**Decision:** CPU kernels are generic over a crate-private `Real` trait (f32, f64) and dispatch on the input dtype with `dispatch_real!`. `define_ops!` emits each row's body twice (`forward`/`backward` for f32, `forward_f64`/`backward_f64` for f64). A body names no float type: it uses literals and `fl::LN_2`, `fl::PI`, `fl::erf`, which a per-type `use crate::real::fl32/fl64 as fl` resolves. So the table stays one row per op, with no runtime trait object. P3 is split: P3a converts the core ops (elementwise, ternary, whole and axis reductions, movement, matmul and transpose, `contiguous`); P3b converts layers and optimizers, which keep the f32-only `expect_f32` check until then.
+
+**Dtype check:** `real::compute_dtype` replaces `expect_f32` on the core ops. All inputs must share a dtype that is F32 or F64, and the panic names the op: a mixed pair is a `DTypeMismatch` (promotion is P6), half types say "not implemented until P4", and integer/bool say "no i64 kernel". `Where`'s condition is checked separately and may be either float dtype; it is now a `Vec<bool>` mask in the grad fn, not an f32 copy.
+
+**Matmul:** f64 goes through `matrixmultiply::dgemm` on every platform. An Accelerate `cblas_dgemm` path would be faster on macOS but unverifiable from the cloud, so f32 keeps Accelerate and f64 does not.
+
+**Seeds and constants:** the backward seed is cast to the loss's dtype. `constant_like` builds its constant in the receiver's dtype (values given as f32 and widened exactly), which `mean_dim` needs.
+
+**Evidence:** `src/lib_tests/f64_tests.rs` gradchecks every core op family in f64 at a relative tolerance of 1e-7 (the f32 checks use 1e-2): all unary ops, all differentiable binary ops at equal and broadcast shapes for both operands, `Sum`/`Mean`/`Max`, `sum_dim`/`max_dim`/`mean_dim` on every axis with and without `keepdim`, softmax and log-softmax, `mulacc` for each input, `where` for both branches with a broadcast condition, every movement op, every matmul form for both operands, and transpose. Value tests pin f64 rounding (ten 0.1s, 1 + 1e-12, `exp(1e-12)`, libm's f64 `erf`) and f64 matmul against a reference loop. A mutant computing f64 `erf` through f32 fails both a value test and the gradcheck. The f32 tests pass unchanged.
+
+**Not done here:** torch fixtures in f64 (P3b): checking them from `tests/` needs a public way to read typed values back, and `data()` decodes to f32. The f64 gradcheck is test-only for the same reason.
+
 ## Errors
 
 ### Panic inside the program, `Result` where data comes from outside
