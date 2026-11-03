@@ -1,7 +1,7 @@
 //! GPU smoke tests: unary, binary, `matmul` (forward and backward), `mulacc`, and `sum_dim` / `max_dim` results are compared with the CPU, and outputs and gradients are checked to stay on the GPU. Also checks that a mixed-device binary op panics. Ops with no GPU kernel (`mulacc` backward, `sum_dim`, `max_dim`) run under `DevicePolicy::PreferGpu` and assert their fallbacks.
 //!
 //! Each test returns early when no GPU is available.
-#[cfg(feature = "gpu")]
+// `common` gates itself with `#![cfg(feature = "gpu")]`, like in the other test files.
 #[path = "common/mod.rs"]
 mod common;
 
