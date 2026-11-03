@@ -41,7 +41,7 @@ expand mod:
 validate-shaders:
 	cargo test --lib shader_template
 
-# Run only GPU integration tests
+# Run the GPU tests: the gpu_* integration targets and the GPU lib tests (gpu_tests, gpu_half_tests)
 test-gpu:
 	cargo test --test 'gpu_*' -- --nocapture
 	cargo test --lib gpu_ -- --nocapture
