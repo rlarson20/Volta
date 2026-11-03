@@ -31,13 +31,9 @@ fn leaf_from(shape: &[usize], seed: u64, f: impl Fn(f64) -> f64) -> Tensor {
     x
 }
 
-/// The f64 values of `t`.
+/// The f64 values of `t`, through the public lossless readback.
 fn values(t: &Tensor) -> Vec<f64> {
-    t.borrow()
-        .data
-        .as_host::<f64>()
-        .expect("an f64 tensor")
-        .to_vec()
+    t.to_vec_as::<f64>().expect("an f64 tensor")
 }
 
 /// Weighted sum `sum(out * w)` with fixed random f64 weights, so every output element
