@@ -509,9 +509,10 @@ impl MovementGradFn {
                     ))];
                 }
 
-                // CPU path
+                // CPU path. `out_grad` may be GPU storage (a rank the kernel doesn't
+                // cover), so copy it to the host rather than relabel it.
                 let grad_t = RawTensor::new_with_storage(
-                    out_grad.data.clone(),
+                    Storage::from_typed(out_grad.data.host::<T>().to_vec()),
                     out_grad.shape.clone(),
                     Device::CPU,
                     false,

@@ -56,7 +56,13 @@ impl MulAccGradFn {
         let grad_z = parents
             .get(2)
             .is_some_and(|p| p.borrow().requires_grad)
-            .then(|| wrap(out_grad.data.clone()));
+            // A host copy, not `out_grad.data.clone()`: on the GPU that would be GPU storage
+            // under a CPU label. This CPU gradient is the gap `accumulate_grad` handles.
+            .then(|| {
+                wrap(dispatch_real!(dtype, T => {
+                    Storage::from_typed(out_grad.data.host::<T>().to_vec())
+                }))
+            });
 
         vec![grad_x, grad_y, grad_z]
     }
