@@ -1,6 +1,8 @@
 // Operation enums and trait implementations
 /// Elementwise binary ops.
 pub mod binary;
+/// Elementwise comparisons (Bool results).
+pub mod compare;
 pub mod gpu_ops;
 /// Matrix multiplication.
 pub mod matmul;
@@ -15,6 +17,7 @@ pub mod unary;
 
 // Re-export operation types
 pub use binary::BinaryOp;
+pub use compare::CmpOp;
 pub use movement::MovementOp;
 pub use reduce::ReduceOp;
 pub use ternary::TernaryOp;
@@ -126,10 +129,10 @@ impl RawTensor {
     /// if we implement views/strides that share memory.
     #[must_use]
     pub fn contiguous(self_t: &Tensor) -> Tensor {
-        let dtype = crate::real::compute_dtype(|| "Contiguous".to_string(), &[self_t.dtype()]);
+        let dtype = self_t.dtype();
         let s = self_t.borrow();
-        let data = crate::real::dispatch_real!(dtype, T => {
-            crate::Storage::from_compute(dtype, s.data.host::<T>().to_vec())
+        let data = crate::real::dispatch_bits!(dtype, B => {
+            crate::Storage::from_bits(dtype, s.data.bits::<B>())
         });
         Self::new_with_storage(data, s.shape.clone(), crate::Device::CPU, s.requires_grad)
     }

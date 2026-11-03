@@ -2,7 +2,7 @@ use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::device_policy::kernel_failed;
 use crate::index::{fetch, slot};
-use crate::real::{Real, compute_dtype, dispatch_real};
+use crate::real::{Real, compute_dtype, dispatch_bits, dispatch_real};
 use crate::shape::{Shape, fixed_dims};
 use crate::spec::MatmulSpec;
 use crate::storage::Storage;
@@ -43,10 +43,10 @@ impl RawTensor {
     /// Transpose a 2D matrix
     ///
     /// For shape [m, n], produces shape [n, m]
-    pub(crate) fn transpose_2d<T: Real>(data: &[T], shape: &[usize]) -> Vec<T> {
+    pub(crate) fn transpose_2d<T: Copy + Default>(data: &[T], shape: &[usize]) -> Vec<T> {
         assert_eq!(shape.len(), 2, "Transpose expects 2D shape");
         let [m, n] = fixed_dims::<2>(shape);
-        let mut result = vec![T::ZERO; m * n];
+        let mut result = vec![T::default(); m * n];
         for i in 0..m {
             for j in 0..n {
                 *slot(&mut result, j * m + i) = fetch(data, i * n + j);
@@ -380,10 +380,11 @@ impl RawTensor {
         };
 
         assert_eq!(shape.rank(), 2, "Transpose expects 2D tensor");
-        let dtype = compute_dtype(|| "Transpose".to_string(), &[self_t.dtype()]);
+        let dtype = self_t.dtype();
 
-        let transposed = dispatch_real!(dtype, T => Storage::from_compute(dtype,
-            Self::transpose_2d(&data.host::<T>(), shape.truncate_rank()),
+        // A data copy, any dtype: through bit carriers (`real::Bits`), like movement ops.
+        let transposed = dispatch_bits!(dtype, B => Storage::from_bits(dtype,
+            &Self::transpose_2d(data.bits::<B>(), shape.truncate_rank()),
         ));
         let [dim0, dim1] = shape.fixed::<2>();
         let new_shape = vec![dim1, dim0];

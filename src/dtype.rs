@@ -1,10 +1,12 @@
 //! Tensor data types.
 //!
-//! A tensor of any `DType` can be built (`RawTensor::from_typed`) and read back. Of the
-//! ops, every op, layer, and optimizer computes in f32, f64, f16 or bf16 on the CPU (the
+//! A tensor of any `DType` can be built (`RawTensor::from_typed`) and read back. Every
+//! arithmetic op, layer, and optimizer computes in f32, f64, f16 or bf16 on the CPU (the
 //! GPU in f32 only). F16 and BF16 compute in f32 and round each op's output, like PyTorch
-//! on the CPU. An op panics, naming itself, on a dtype it has no kernel for (integers and
-//! bool).
+//! on the CPU. Integer and bool tensors are data: they move (reshape, permute, expand,
+//! shrink, pad, transpose), compare, select (`where`), index (`Embedding`), and act as
+//! class targets (`cross_entropy_loss`); comparisons return Bool. Arithmetic on them
+//! panics, naming the op.
 //! `load_safetensors` converts to f32. Mixed precision is planned in ADDENDUM §11.
 
 use std::fmt;

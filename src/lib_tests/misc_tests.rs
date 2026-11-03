@@ -1308,16 +1308,16 @@ fn test_pixelshuffle_values() {
 #[test]
 fn test_embedding_forward_shape() {
     let embedding = Embedding::new(100, 32);
-    let indices = vec![5, 12, 7, 99];
-    let output = embedding.forward_indices(&indices);
+    let indices = RawTensor::from_typed(vec![5i64, 12, 7, 99], &[4]);
+    let output = embedding.forward(&indices);
     assert_eq!(output.borrow().shape, vec![4, 32]);
 }
 
 #[test]
 fn test_embedding_backward_flow() {
     let embedding = Embedding::new(50, 16);
-    let indices = vec![3, 10, 3]; // Note: repeated index 3
-    let output = embedding.forward_indices(&indices);
+    let indices = RawTensor::from_typed(vec![3i64, 10, 3], &[3]); // Note: repeated index 3
+    let output = embedding.forward(&indices);
 
     // Sum and backward
     let loss = output.sum();
@@ -1348,8 +1348,8 @@ fn test_embedding_backward_flow() {
 #[test]
 fn test_embedding_gradient_accumulation() {
     let embedding = Embedding::new(10, 4);
-    let indices = vec![2, 5, 2, 2]; // Index 2 appears 3 times
-    let output = embedding.forward_indices(&indices);
+    let indices = RawTensor::from_typed(vec![2i64, 5, 2, 2], &[4]); // Index 2 appears 3 times
+    let output = embedding.forward(&indices);
 
     let loss = output.sum();
     loss.into_loss().expect("scalar loss").backward();

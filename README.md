@@ -327,7 +327,7 @@ The library is designed around a few core concepts:
 - **Tensor methods**: `Tensor` has inherent methods for all operations (e.g., `tensor.add(&other)`, `tensor.matmul(&weights)`); there is no trait to import.
 - **`nn::Module`**: The base trait for anything with learnable parameters. Provides `parameters()`, `state_dict()`, `load_state_dict()`, `zero_grad()`, `to_device()`, and `train()`/`eval()`.
 - **`nn::Layer`**: A `Module` that maps one tensor to one tensor with `forward()`. Only `Layer`s can go in a `Sequential`. Implement it to write your own layer.
-- **`nn::IndexedLayer`** (`Embedding`) and **`nn::RecurrentLayer`** (`LSTMCell`): sealed traits for layers whose input is integer indices or that carry state between steps (`forward_indices`, `initial_state`/`step`).
+- **`nn::RecurrentLayer`** (`LSTMCell`): a sealed trait for layers that carry state between steps (`initial_state`/`step`). `Embedding` is a plain `Layer` whose input is an I64 or I32 index tensor, as in PyTorch.
 - **`Sequential::builder()`**: Builder pattern for composing layers with named parameters for robust serialization. Supports both `add_named()` for human-readable state dict keys and `add_unnamed()` for activation layers.
 - **Optimizers (`Adam`, `SGD`, `Muon`)**: Structures that take a list of model parameters and update their weights based on computed gradients during `step()`.
 - **`Device`**: Abstraction for CPU/GPU compute. Tensors can be moved between devices with `to_device()`, and operations automatically dispatch to GPU kernels when available.

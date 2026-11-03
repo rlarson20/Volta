@@ -1270,9 +1270,12 @@ fn test_scalar_comparison_ops() {
     let scalar = RawTensor::new(vec![2.0], &[1], false);
     let vector = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], false);
 
-    let lt = scalar.cmplt(&vector); // [2] < [1,2,3] -> [false, false, true]
+    let lt = scalar.lt(&vector); // [2] < [1,2,3] -> [false, false, true]
     assert_eq!(lt.borrow().shape, vec![3]);
-    assert_eq!(lt.borrow().data, vec![0.0, 0.0, 1.0]);
+    assert_eq!(
+        lt.to_vec_as::<bool>().expect("bool"),
+        vec![false, false, true]
+    );
 }
 
 #[test]

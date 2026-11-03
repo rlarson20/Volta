@@ -107,12 +107,17 @@ fn modulo_forward_value() {
 }
 
 #[test]
-fn cmplt_forward_value() {
-    let a = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], false);
+fn lt_forward_value_is_bool() {
+    let a = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], true);
     let b = RawTensor::new(vec![3.0, 1.0, 3.0, 5.0], &[4], false);
-    let c = a.cmplt(&b);
+    let c = a.lt(&b);
+    assert_eq!(c.dtype(), crate::DType::Bool);
+    assert!(!c.requires_grad(), "a Bool output has no gradient");
     // 1<3=true, 2<1=false, 3<3=false, 4<5=true
-    assert_eq!(c.borrow().data.to_vec(), vec![1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(
+        c.to_vec_as::<bool>().expect("bool"),
+        vec![true, false, false, true]
+    );
 }
 
 #[test]
