@@ -116,7 +116,7 @@ impl MaxPool2d {
                                 let w_in = w_start + kw;
                                 let in_idx =
                                     (((b * channels + c) * padded_h) + h_in) * padded_w + w_in;
-                                let val = fetch(data, in_idx);
+                                let val = fetch(&data, in_idx);
                                 if val > max_val {
                                     max_val = val;
                                     max_idx = in_idx;
@@ -130,7 +130,7 @@ impl MaxPool2d {
                 }
             }
         }
-        (Storage::from_typed(out_data), max_indices)
+        (Storage::from_compute(dtype, out_data), max_indices)
         });
 
         edge(
@@ -171,10 +171,10 @@ impl MaxPool2dGradFn {
             let mut grad_input = vec![T::ZERO; input_shape.iter().product()];
             let g_host = out_grad.data.host::<T>();
             for (idx, &max_linear_idx) in self.max_indices.iter().enumerate() {
-                let grad_val = fetch(g_host, idx);
+                let grad_val = fetch(&g_host, idx);
                 *slot(&mut grad_input, max_linear_idx) += grad_val;
             }
-            vec![Some(RawTensor::from_shape_typed(grad_input, input_shape.clone()))]
+            vec![Some(RawTensor::from_shape_compute(out_grad.data.dtype(), grad_input, input_shape.clone()))]
         })
     }
 }

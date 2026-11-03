@@ -94,8 +94,10 @@ impl RawTensor {
     /// Separate from [`Self::from_vec`] on purpose: an unsuffixed float literal is `f64` in
     /// Rust, so a generic `from_vec(vec![1.0])` would build an f64 tensor unasked.
     ///
-    /// Of the ops, every op, layer, and optimizer computes in f32 or f64 on the CPU (the GPU in f32 only), and half types wait for ADDENDUM §11 P4. Other dtypes can be built, inspected, saved, and cast. An integer or bool
-    /// tensor cannot require gradients (`set_requires_grad(true)` panics).
+    /// Every op, layer, and optimizer computes in f32, f64, f16 or bf16 on the CPU (the GPU
+    /// in f32 only); half types compute in f32 and round each output. Other dtypes can be
+    /// built, inspected, saved, and cast. An integer or bool tensor cannot require
+    /// gradients (`set_requires_grad(true)` panics).
     ///
     /// # Errors
     ///
@@ -127,7 +129,7 @@ impl RawTensor {
         let dtype = crate::real::compute_dtype(|| "Contiguous".to_string(), &[self_t.dtype()]);
         let s = self_t.borrow();
         let data = crate::real::dispatch_real!(dtype, T => {
-            crate::Storage::from_typed(s.data.host::<T>().to_vec())
+            crate::Storage::from_compute(dtype, s.data.host::<T>().to_vec())
         });
         Self::new_with_storage(data, s.shape.clone(), crate::Device::CPU, s.requires_grad)
     }

@@ -167,20 +167,16 @@ impl Layer for BatchNorm2d {
                 let m = T::from_f64(f64::from(self.momentum));
                 let num_pixels = T::from_usize(num_pixels);
 
-                let rm_host = rm
-                    .data
-                    .as_host_mut::<T>()
-                    .expect("BatchNorm running_mean: CPU storage in the layer's dtype");
-                let rv_host = rv
-                    .data
-                    .as_host_mut::<T>()
-                    .expect("BatchNorm running_var: CPU storage in the layer's dtype");
+                let mut rm_guard = rm.data.host_mut::<T>();
+                let rm_host = &mut *rm_guard;
+                let mut rv_guard = rv.data.host_mut::<T>();
+                let rv_host = &mut *rv_guard;
                 for i in 0..self.num_features {
                     let rm_val = fetch(rm_host, i);
-                    let bm_val = fetch(bm_data, i);
+                    let bm_val = fetch(&bm_data, i);
                     *slot(rm_host, i) = (1.0 - m).mul_add(rm_val, m * bm_val);
                     // Bessel correction for running_var update usually applied
-                    let bv_val = fetch(bv_data, i);
+                    let bv_val = fetch(&bv_data, i);
                     let unbiased_var = bv_val * num_pixels / (num_pixels - 1.0);
                     let rv_val = fetch(rv_host, i);
                     *slot(rv_host, i) = (1.0 - m).mul_add(rv_val, m * unbiased_var);
@@ -371,20 +367,16 @@ impl Layer for BatchNorm1d {
 
                 let m = T::from_f64(f64::from(self.momentum));
                 let batch_size = T::from_usize(batch_size);
-                let rm_host = rm
-                    .data
-                    .as_host_mut::<T>()
-                    .expect("BatchNorm running_mean: CPU storage in the layer's dtype");
-                let rv_host = rv
-                    .data
-                    .as_host_mut::<T>()
-                    .expect("BatchNorm running_var: CPU storage in the layer's dtype");
+                let mut rm_guard = rm.data.host_mut::<T>();
+                let rm_host = &mut *rm_guard;
+                let mut rv_guard = rv.data.host_mut::<T>();
+                let rv_host = &mut *rv_guard;
                 for i in 0..self.num_features {
                     let rm_val = fetch(rm_host, i);
-                    let bm_val = fetch(bm_data, i);
+                    let bm_val = fetch(&bm_data, i);
                     *slot(rm_host, i) = (1.0 - m).mul_add(rm_val, m * bm_val);
                     // Bessel correction for running_var update
-                    let bv_val = fetch(bv_data, i);
+                    let bv_val = fetch(&bv_data, i);
                     let unbiased_var = bv_val * batch_size / (batch_size - 1.0);
                     let rv_val = fetch(rv_host, i);
                     *slot(rv_host, i) = (1.0 - m).mul_add(rv_val, m * unbiased_var);

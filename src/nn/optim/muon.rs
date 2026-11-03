@@ -224,9 +224,12 @@ impl Muon {
                 (widen(step.lr), widen(step.momentum), widen(step.scale), widen(step.eps));
             let coeffs = step.coeffs.map(widen);
             let grad = grad.host::<T>();
-            let velocity = velocity
-                .as_host_mut::<T>()
-                .expect("Muon velocity: CPU storage in the parameter's dtype; build the optimizer after Module::to_dtype");
+            assert_eq!(
+                velocity.dtype(),
+                p.data.dtype(),
+                "Muon velocity dtype; build the optimizer after Module::to_dtype"
+            );
+            let mut velocity = velocity.host_mut::<T>();
 
             // v ← momentum·v + g
             for (v, &g) in velocity.iter_mut().zip(grad.iter()) {
@@ -258,8 +261,7 @@ impl Muon {
             // w -= lr · scale · update
             for (w, u) in p
                 .data
-                .as_host_mut::<T>()
-                .expect("Muon update: CPU parameter")
+                .host_mut::<T>()
                 .iter_mut()
                 .zip(&update)
             {

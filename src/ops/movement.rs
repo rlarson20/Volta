@@ -512,7 +512,10 @@ impl MovementGradFn {
                 // CPU path. `out_grad` may be GPU storage (a rank the kernel doesn't
                 // cover), so copy it to the host rather than relabel it.
                 let grad_t = RawTensor::new_with_storage(
-                    Storage::from_typed(out_grad.data.host::<T>().to_vec()),
+                    Storage::from_compute(
+                        out_grad.data.dtype(),
+                        out_grad.data.host::<T>().to_vec(),
+                    ),
                     out_grad.shape.clone(),
                     Device::CPU,
                     false,
@@ -560,9 +563,13 @@ impl MovementGradFn {
                             old_idx += coord * fetch(old_strides, j);
                         }
                     }
-                    *slot(&mut grad_data, old_idx) += fetch(g_host, i);
+                    *slot(&mut grad_data, old_idx) += fetch(&g_host, i);
                 }
-                RawTensor::from_shape_typed(grad_data, self.original_shape.clone())
+                RawTensor::from_shape_compute(
+                    out_grad.data.dtype(),
+                    grad_data,
+                    self.original_shape.clone(),
+                )
             }
             MovementOp::Pad { padding } => {
                 // GPU path when the kernel covers this rank; a `None` from it is a failure.
@@ -601,13 +608,17 @@ impl MovementGradFn {
                 apply_movement_backward(
                     &ctx,
                     &mut result,
-                    out_grad.data.host::<T>(),
+                    &out_grad.data.host::<T>(),
                     0,
                     &mapper,
                     0,
                     0,
                 );
-                RawTensor::from_shape_typed(result, self.original_shape.clone())
+                RawTensor::from_shape_compute(
+                    out_grad.data.dtype(),
+                    result,
+                    self.original_shape.clone(),
+                )
             }
             MovementOp::Shrink { ranges } => {
                 // GPU path when the kernel covers this rank; a `None` from it is a failure.
@@ -646,13 +657,17 @@ impl MovementGradFn {
                 apply_movement_backward(
                     &ctx,
                     &mut result,
-                    out_grad.data.host::<T>(),
+                    &out_grad.data.host::<T>(),
                     0,
                     &mapper,
                     0,
                     0,
                 );
-                RawTensor::from_shape_typed(result, self.original_shape.clone())
+                RawTensor::from_shape_compute(
+                    out_grad.data.dtype(),
+                    result,
+                    self.original_shape.clone(),
+                )
             }
             MovementOp::Stride { strides } => {
                 // GPU path when the kernel covers this rank; a `None` from it is a failure.
@@ -691,13 +706,17 @@ impl MovementGradFn {
                 apply_movement_backward(
                     &ctx,
                     &mut result,
-                    out_grad.data.host::<T>(),
+                    &out_grad.data.host::<T>(),
                     0,
                     &mapper,
                     0,
                     0,
                 );
-                RawTensor::from_shape_typed(result, self.original_shape.clone())
+                RawTensor::from_shape_compute(
+                    out_grad.data.dtype(),
+                    result,
+                    self.original_shape.clone(),
+                )
             }
         };
 
@@ -832,7 +851,7 @@ impl RawTensor {
                     let old_idx = coords_to_index(&old_coords, old_strides);
                     *val = fetch(&cpu_data, old_idx);
                 }
-                (Storage::from_typed(new_data), new_shape, Device::CPU)
+                (Storage::from_compute(data.dtype(), new_data), new_shape, Device::CPU)
         })
     }
 
@@ -947,7 +966,7 @@ impl RawTensor {
                             }
                             *slot(&mut result, i) = fetch(&cpu_data, old_idx);
                         }
-                        (Storage::from_typed(result), Device::CPU)
+                        (Storage::from_compute(dtype, result), Device::CPU)
             })
         };
 
@@ -1041,7 +1060,7 @@ impl RawTensor {
                         );
 
                         apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
-                        (Storage::from_typed(result), Device::CPU)
+                        (Storage::from_compute(dtype, result), Device::CPU)
             })
         };
 
@@ -1189,7 +1208,7 @@ impl RawTensor {
                         );
 
                         apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
-                        (Storage::from_typed(result), Device::CPU)
+                        (Storage::from_compute(dtype, result), Device::CPU)
             })
         };
 
@@ -1259,7 +1278,7 @@ impl RawTensor {
                         );
 
                         apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
-                        (Storage::from_typed(result), Device::CPU)
+                        (Storage::from_compute(dtype, result), Device::CPU)
             })
         };
 
