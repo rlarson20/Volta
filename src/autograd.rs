@@ -75,6 +75,8 @@ pub(crate) enum GradFn {
     ToDevice(ToDeviceGradFn),
     /// Dtype conversion (`to_dtype`).
     Cast(CastGradFn),
+    /// Elementwise comparison. Never attached: its output is Bool.
+    Compare(crate::ops::compare::CompareGradFn),
 }
 
 /// Backward of `to_dtype`: the gradient is cast back to the input's dtype, as PyTorch's
@@ -151,6 +153,7 @@ impl GradFn {
             Self::Embedding(_) => "Embedding".to_string(),
             Self::ToDevice(_) => "ToDevice".to_string(),
             Self::Cast(_) => "Cast".to_string(),
+            Self::Compare(g) => g.op_name(),
         }
     }
 
@@ -177,16 +180,18 @@ impl GradFn {
             Self::Embedding(g) => g.backward(out_grad, parents),
             Self::ToDevice(g) => g.backward(out_grad, parents),
             Self::Cast(g) => g.backward(out_grad, parents),
+            Self::Compare(g) => unreachable!("{}: a Bool output has no grad fn", g.op_name()),
         }
     }
 
-    /// Whether this gradient function is a no-op (e.g. `Mod`/`Cmplt`'s comparison-like
-    /// ops, which have no useful derivative). `edge()` never attaches a trivial
+    /// Whether this gradient function is a no-op (`Mod`, which has no useful derivative,
+    /// and comparisons). `edge()` never attaches a trivial
     /// `GradFn`, even if an input requires grad. Every variant is spelled out so a new
     /// one has to decide.
     pub(crate) fn is_trivial(&self) -> bool {
         match self {
             Self::Binary(g) => g.is_trivial(),
+            Self::Compare(_) => true,
             Self::Unary(_)
             | Self::MatMul(_)
             | Self::Transpose(_)
@@ -257,10 +262,10 @@ pub(crate) fn edge(
         }
     }
 
-    // Every op but a cast keeps its inputs' dtype. A half op that forgot to round its f32
+    // Every op but a cast or a comparison keeps its inputs' dtype. A half op that forgot to round its f32
     // result (`Storage::from_compute`) would otherwise leak an f32 tensor.
     if let Some(first) = inputs.as_ref().first()
-        && !matches!(grad, GradFn::Cast(_))
+        && !matches!(grad, GradFn::Cast(_) | GradFn::Compare(_))
     {
         let want = first.borrow().data.dtype();
         assert!(

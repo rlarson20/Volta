@@ -17,6 +17,7 @@ pub(crate) trait Real:
     Element
     + bytemuck::Pod
     + PartialOrd
+    + Default
     + Debug
     + Add<Output = Self>
     + Sub<Output = Self>
@@ -122,6 +123,29 @@ pub(crate) mod fl64 {
     }
 }
 
+/// Panics unless every input has one dtype (any dtype), naming the op, and returns it:
+/// the check for data ops (comparisons, `where`'s branches), which work on every dtype.
+///
+/// # Panics
+/// If the inputs' dtypes differ.
+#[track_caller]
+pub(crate) fn same_dtype(op: impl FnOnce() -> String, dtypes: &[DType]) -> DType {
+    let first = *dtypes.first().expect("an op has at least one input");
+    if let Some((i, &d)) = dtypes.iter().enumerate().find(|&(_, &d)| d != first) {
+        mixed_dtypes(&op(), first, d, i);
+    }
+    first
+}
+
+/// The mixed-dtype panic of [`compute_dtype`] and [`same_dtype`].
+#[track_caller]
+fn mixed_dtypes(op: &str, expected: DType, actual: DType, input: usize) -> ! {
+    panic!(
+        "{op}: {} (input {input}); mixed dtypes need an explicit to_dtype until ADDENDUM §11 P6",
+        crate::VoltaError::DTypeMismatch { expected, actual }
+    )
+}
+
 /// Panics unless every input has one float dtype, naming the op, and returns it. Mixed
 /// dtypes wait for promotion (P6); integers and bool have no kernels.
 ///
@@ -131,14 +155,7 @@ pub(crate) mod fl64 {
 pub(crate) fn compute_dtype(op: impl FnOnce() -> String, dtypes: &[DType]) -> DType {
     let first = *dtypes.first().expect("an op has at least one input");
     if let Some((i, &d)) = dtypes.iter().enumerate().find(|&(_, &d)| d != first) {
-        panic!(
-            "{}: {} (input {i}); mixed dtypes need an explicit to_dtype until ADDENDUM §11 P6",
-            op(),
-            crate::VoltaError::DTypeMismatch {
-                expected: first,
-                actual: d,
-            }
-        );
+        mixed_dtypes(&op(), first, d, i);
     }
     match first {
         DType::F32 | DType::F64 | DType::F16 | DType::BF16 => first,
@@ -169,3 +186,84 @@ macro_rules! dispatch_real {
 }
 
 pub(crate) use dispatch_real;
+
+/// A carrier for an element's bits: movement ops copy elements without reading them, so
+/// every dtype of one width shares one kernel instance (`u8` for U8 and Bool, `u16` for the
+/// half types, `u32` for F32 and I32, `u64` for F64 and I64). Floats, integers and bool
+/// all move through these; only arithmetic needs [`Real`].
+pub(crate) trait Bits: bytemuck::Pod + Default {}
+impl Bits for u8 {}
+impl Bits for u16 {}
+impl Bits for u32 {}
+impl Bits for u64 {}
+
+/// Run `$body` with `$B` bound to the [`Bits`] carrier of `$dtype`'s width. Any dtype.
+macro_rules! dispatch_bits {
+    ($dtype:expr, $B:ident => $body:expr) => {
+        match $crate::dtype::DType::size_of(&$dtype) {
+            1 => {
+                type $B = u8;
+                $body
+            }
+            2 => {
+                type $B = u16;
+                $body
+            }
+            4 => {
+                type $B = u32;
+                $body
+            }
+            8 => {
+                type $B = u64;
+                $body
+            }
+            n => unreachable!("dispatch_bits: no {n}-byte dtype"),
+        }
+    };
+}
+
+pub(crate) use dispatch_bits;
+
+/// Run `$body` with `$T` bound to `$dtype`'s own element type (any dtype), for a kernel
+/// that reads values natively (comparisons). Half types compare as themselves, which is
+/// exact: `half`'s ordering is IEEE's.
+macro_rules! dispatch_elem {
+    ($dtype:expr, $T:ident => $body:expr) => {
+        match $dtype {
+            $crate::dtype::DType::F16 => {
+                type $T = half::f16;
+                $body
+            }
+            $crate::dtype::DType::BF16 => {
+                type $T = half::bf16;
+                $body
+            }
+            $crate::dtype::DType::F32 => {
+                type $T = f32;
+                $body
+            }
+            $crate::dtype::DType::F64 => {
+                type $T = f64;
+                $body
+            }
+            $crate::dtype::DType::I32 => {
+                type $T = i32;
+                $body
+            }
+            $crate::dtype::DType::I64 => {
+                type $T = i64;
+                $body
+            }
+            $crate::dtype::DType::U8 => {
+                type $T = u8;
+                $body
+            }
+            $crate::dtype::DType::Bool => {
+                type $T = bool;
+                $body
+            }
+        }
+    };
+}
+
+pub(crate) use dispatch_elem;

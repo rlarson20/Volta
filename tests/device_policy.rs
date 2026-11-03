@@ -16,10 +16,9 @@ use volta::Axis;
 use volta::nn::{MultiHeadAttention, PositionalEncoding, PositionalEncodingType};
 use volta::{
     BatchNorm1d, BatchNorm2d, Device, DevicePolicy, Dropout, Embedding, FallbackEvent, GELU,
-    IndexedLayer, LSTMCell, Layer, LayerNorm, Linear, Module, PadValue, Pass, RawTensor,
-    RecurrentLayer, Storage, Tensor, bce_loss, bce_with_logits_loss, cross_entropy_loss,
-    kl_divergence_gaussian, manual_seed, mse_loss, nll_loss, take_fallback_events,
-    with_device_policy,
+    LSTMCell, Layer, LayerNorm, Linear, Module, PadValue, Pass, RawTensor, RecurrentLayer, Storage,
+    Tensor, bce_loss, bce_with_logits_loss, cross_entropy_loss, kl_divergence_gaussian,
+    manual_seed, mse_loss, nll_loss, take_fallback_events, with_device_policy,
 };
 
 /// `to_device` is differentiable (PyTorch's `.to()`): a leaf moved to the GPU and used in
@@ -252,7 +251,7 @@ fn gpu_layers_keep_constants_on_device() {
         ("Dropout", Dropout::new(0.5).forward(&x2)),
         (
             "Embedding",
-            on_gpu(Embedding::new(10, 4)).forward_indices(&[1, 3, 3]),
+            on_gpu(Embedding::new(10, 4)).forward(&RawTensor::from_typed(vec![1i64, 3, 3], &[3])),
         ),
         (
             "MultiHeadAttention",

@@ -5,6 +5,7 @@ use crate::device_policy::{Pass, on_gap};
 use crate::dtype::DType;
 use crate::index::{fetch, slot, span};
 use crate::ops::binary::BinaryOp;
+use crate::ops::compare::CmpOp;
 use crate::ops::reduce::ReduceOp;
 use crate::ops::ternary::TernaryOp;
 use crate::ops::unary::UnaryOp;
@@ -859,25 +860,79 @@ impl RawTensor {
         squared.mean()
     }
 
-    /// Cross entropy from raw logits `[N, C]` and one-hot `targets`, averaged over the batch (applies `log_softmax` along axis 1).
+    /// Cross entropy from raw logits `[N, C]`, averaged over the batch (applies
+    /// `log_softmax` along axis 1). Like PyTorch's `cross_entropy`, `targets` is either
+    /// class indices, an I64 or I32 tensor `[N]` with values in `0..C`, or class
+    /// probabilities (one-hot or soft) `[N, C]` in the logits' dtype.
+    ///
+    /// # Panics
+    /// If integer targets are not `[N]` or hold an index outside `0..C` (there is no
+    /// `ignore_index`), or float targets don't match the logits (`elem_mul`'s checks).
     #[must_use]
+    #[track_caller]
     pub fn cross_entropy_loss(logits: &Tensor, targets: &Tensor) -> Tensor {
         // Use log_softmax for numerical stability
         let log_probs = Self::log_softmax(logits, Axis(1));
-
-        // -sum(targets * log_probs, dim=1).mean()
-        let prod = targets.elem_mul(&log_probs);
-        let sum = Self::sum_dim(&prod, Axis(1), false);
-        sum.neg().mean()
+        Self::nll_loss_named(&log_probs, targets, "cross_entropy_loss")
     }
 
-    /// Negative log likelihood loss
-    /// Takes log-probabilities and one-hot targets
-    /// Equivalent to `cross_entropy` but expects pre-computed log probabilities
+    /// Negative log likelihood from log-probabilities `[N, C]`, averaged over the batch:
+    /// [`Self::cross_entropy_loss`] without its `log_softmax`. `targets` is class indices
+    /// (I64 or I32, `[N]`) or class probabilities (`[N, C]`), as there.
+    ///
+    /// # Panics
+    /// As [`Self::cross_entropy_loss`].
     #[must_use]
+    #[track_caller]
     pub fn nll_loss(log_probs: &Tensor, targets: &Tensor) -> Tensor {
-        // -sum(targets * log_probs, dim=1).mean()
-        let prod = targets.elem_mul(log_probs);
+        Self::nll_loss_named(log_probs, targets, "nll_loss")
+    }
+
+    /// `-sum(weights * log_probs, dim=1).mean()`, with class-index targets turned into
+    /// one-hot weights first (`op` names the caller in panics). Multiplying by an exact 1
+    /// and summing exact zeros picks `-log_probs[i, t_i]` exactly, so this is PyTorch's
+    /// gather in every dtype, and the gradient flows to the picked entries only.
+    #[track_caller]
+    fn nll_loss_named(log_probs: &Tensor, targets: &Tensor, op: &str) -> Tensor {
+        let weights = if targets.dtype().is_int() {
+            let lp = log_probs.shape();
+            let [n, c] = lp.fixed::<2>();
+            let ts = targets.shape();
+            assert!(
+                ts.rank() == 1 && ts.numel() == n,
+                "{op}: class-index targets must be [N] = [{n}] for logits [{n}, {c}], got {:?}",
+                ts.truncate_rank()
+            );
+            let classes: Vec<i64> = match targets.dtype() {
+                DType::I64 => targets.to_vec_as::<i64>().expect("I64 checked"),
+                DType::I32 => targets
+                    .to_vec_as::<i32>()
+                    .expect("I32 checked")
+                    .into_iter()
+                    .map(i64::from)
+                    .collect(),
+                other @ (DType::U8
+                | DType::F16
+                | DType::BF16
+                | DType::F32
+                | DType::F64
+                | DType::Bool) => {
+                    panic!("{op}: class-index targets must be I64 or I32, got {other}")
+                }
+            };
+            let mut one_hot = vec![0.0f32; n * c];
+            for (i, &t) in classes.iter().enumerate() {
+                let class = usize::try_from(t)
+                    .ok()
+                    .filter(|&k| k < c)
+                    .unwrap_or_else(|| panic!("{op}: target {t} out of range for {c} classes"));
+                *slot(&mut one_hot, i * c + class) = 1.0;
+            }
+            log_probs.constant_like(one_hot, &[n, c])
+        } else {
+            targets.clone()
+        };
+        let prod = weights.elem_mul(log_probs);
         let sum = Self::sum_dim(&prod, Axis(1), false);
         sum.neg().mean()
     }
@@ -1611,10 +1666,41 @@ impl Tensor {
         RawTensor::binary_op(self, other, BinaryOp::Mod)
     }
 
-    /// Elementwise `self < other` as 1.0 or 0.0, with broadcasting.
+    /// Elementwise `self < other` as a Bool tensor, with broadcasting (`RawTensor::compare`).
     #[must_use]
-    pub fn cmplt(&self, other: &Self) -> Self {
-        RawTensor::binary_op(self, other, BinaryOp::Cmplt)
+    pub fn lt(&self, other: &Self) -> Self {
+        RawTensor::compare(self, other, CmpOp::Lt)
+    }
+
+    /// Elementwise `self <= other` as a Bool tensor, with broadcasting.
+    #[must_use]
+    pub fn le(&self, other: &Self) -> Self {
+        RawTensor::compare(self, other, CmpOp::Le)
+    }
+
+    /// Elementwise `self > other` as a Bool tensor, with broadcasting.
+    #[must_use]
+    pub fn gt(&self, other: &Self) -> Self {
+        RawTensor::compare(self, other, CmpOp::Gt)
+    }
+
+    /// Elementwise `self >= other` as a Bool tensor, with broadcasting.
+    #[must_use]
+    pub fn ge(&self, other: &Self) -> Self {
+        RawTensor::compare(self, other, CmpOp::Ge)
+    }
+
+    /// Elementwise `self == other` as a Bool tensor, with broadcasting (PyTorch's `eq`;
+    /// named like `elem_mul` so it can't be mistaken for `PartialEq::eq`).
+    #[must_use]
+    pub fn elem_eq(&self, other: &Self) -> Self {
+        RawTensor::compare(self, other, CmpOp::Eq)
+    }
+
+    /// Elementwise `self != other` as a Bool tensor, with broadcasting.
+    #[must_use]
+    pub fn elem_ne(&self, other: &Self) -> Self {
+        RawTensor::compare(self, other, CmpOp::Ne)
     }
 
     /// Negation, elementwise.
@@ -1719,7 +1805,13 @@ impl Tensor {
         RawTensor::ternary_op(self, y, z, TernaryOp::MulAcc)
     }
 
-    /// Selects `x` where `self` is nonzero, else `y`.
+    /// Selects `x` where `self` (a Bool condition) is true, else `y`, with broadcasting
+    /// (PyTorch's `where`). `x` and `y` share a dtype, any dtype; gradients flow to the
+    /// selected float branch.
+    ///
+    /// # Panics
+    /// If the condition is not Bool, the branches' dtypes differ, or a tensor is on the GPU
+    /// (Bool tensors cannot live there until ADDENDUM §11 P8).
     #[must_use]
     pub fn where_op(&self, x: &Self, y: &Self) -> Self {
         RawTensor::ternary_op(self, x, y, TernaryOp::Where)
@@ -2062,12 +2154,14 @@ pub fn mse_loss(pred: &Tensor, target: &Tensor) -> Tensor {
 
 /// Free-function form of [`RawTensor::cross_entropy_loss`].
 #[must_use]
+#[track_caller]
 pub fn cross_entropy_loss(logits: &Tensor, targets: &Tensor) -> Tensor {
     RawTensor::cross_entropy_loss(logits, targets)
 }
 
 /// Free-function form of [`RawTensor::nll_loss`].
 #[must_use]
+#[track_caller]
 pub fn nll_loss(log_probs: &Tensor, targets: &Tensor) -> Tensor {
     RawTensor::nll_loss(log_probs, targets)
 }

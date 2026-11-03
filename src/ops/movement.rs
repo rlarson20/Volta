@@ -3,7 +3,7 @@ use crate::device::Device;
 use crate::device_policy::kernel_failed;
 use crate::error::{Result, VoltaError};
 use crate::index::{fetch, slot};
-use crate::real::{Real, compute_dtype, dispatch_real};
+use crate::real::{Bits, Real, dispatch_bits, dispatch_real};
 use crate::shape::{Axis, Shape, Strides};
 use crate::spec::PadValue;
 use crate::storage::Storage;
@@ -277,6 +277,24 @@ fn gpu_pad_supported(padding: &[(usize, usize)]) -> bool {
             .iter()
             .skip(2)
             .all(|&(left, right)| fits(left) && fits(right))
+}
+
+/// Pad's fill `value` stored as `dtype`, as `B` bits. A float dtype rounds it (f16/bf16);
+/// an integer or bool dtype needs a finite value, which converts like `to_dtype`.
+///
+/// # Panics
+/// If `dtype` is not a float and `value` is not finite (max pooling's `-inf` border on an
+/// integer tensor).
+fn fill_bits<B: Bits>(dtype: crate::DType, value: f32) -> B {
+    assert!(
+        dtype.is_float() || value.is_finite(),
+        "Pad: a {value} fill cannot be stored in a {dtype} tensor"
+    );
+    *Storage::cpu(vec![value])
+        .cast(dtype)
+        .bits::<B>()
+        .first()
+        .expect("one element")
 }
 
 /// Unified recursive index transformation for backward movement operations
@@ -766,7 +784,6 @@ impl RawTensor {
     /// `VoltaError::InvalidParameter` if `new_shape` has a zero dimension, overflows, or
     /// exceeds `MAX_NUMEL` (see [`Shape::from_dims`]), or has a different element count.
     pub fn try_reshape(self_t: &Tensor, new_shape: &[usize]) -> Result<Tensor> {
-        compute_dtype(|| "Reshape".to_string(), &[self_t.dtype()]);
         // Validate before `product()` or any allocation: `new_shape` may be user data.
         let target = Shape::from_dims(new_shape)?;
         let (data, old_shape, device) = {
@@ -836,10 +853,10 @@ impl RawTensor {
         // CPU path (`movement_edge` applies the device policy to a GPU input)
         let old_strides = shape.strides();
         let old_strides = old_strides.truncate_rank();
-        dispatch_real!(data.dtype(), T => {
-        let mut new_data = vec![T::ZERO; data.len()];
+        dispatch_bits!(data.dtype(), B => {
+        let mut new_data = vec![B::default(); data.len()];
 
-                let cpu_data = data.host::<T>().to_vec();
+                let cpu_data = data.bits::<B>().to_vec();
 
                 for (new_idx, val) in new_data.iter_mut().enumerate() {
                     let new_coords = index_to_coords(new_idx, &new_shape);
@@ -851,7 +868,7 @@ impl RawTensor {
                     let old_idx = coords_to_index(&old_coords, old_strides);
                     *val = fetch(&cpu_data, old_idx);
                 }
-                (Storage::from_compute(data.dtype(), new_data), new_shape, Device::CPU)
+                (Storage::from_bits(data.dtype(), &new_data), new_shape, Device::CPU)
         })
     }
 
@@ -863,7 +880,6 @@ impl RawTensor {
     /// invalid permutation axes
     #[must_use]
     pub fn permute(self_t: &Tensor, axes: &[Axis]) -> Tensor {
-        compute_dtype(|| "Permute".to_string(), &[self_t.dtype()]);
         let old_shape = self_t.borrow().shape.clone();
         let axes: Vec<usize> = axes.iter().map(|a| a.0).collect();
 
@@ -909,7 +925,7 @@ impl RawTensor {
     /// or has a different rank, `VoltaError::BroadcastError` if a dimension is neither
     /// `1` nor equal to the target.
     pub fn try_expand(self_t: &Tensor, new_shape: &[usize]) -> Result<Tensor> {
-        let dtype = compute_dtype(|| "Expand".to_string(), &[self_t.dtype()]);
+        let dtype = self_t.dtype();
         let out_shape = Shape::from_dims(new_shape)?;
         let (data, old_shape, device) = {
             let s = self_t.borrow();
@@ -944,9 +960,9 @@ impl RawTensor {
         let (storage, out_device) = if let Some(storage) = gpu_storage {
             (storage, device)
         } else {
-            dispatch_real!(dtype, T => {
-            let mut result = vec![T::ZERO; new_size];
-                        let cpu_data = data.host::<T>().to_vec();
+            dispatch_bits!(dtype, B => {
+            let mut result = vec![B::default(); new_size];
+                        let cpu_data = data.bits::<B>().to_vec();
 
                         // Broadcast by repeating values
                         let old_strides = old_shape.strides();
@@ -966,7 +982,7 @@ impl RawTensor {
                             }
                             *slot(&mut result, i) = fetch(&cpu_data, old_idx);
                         }
-                        (Storage::from_compute(dtype, result), Device::CPU)
+                        (Storage::from_bits(dtype, &result), Device::CPU)
             })
         };
 
@@ -1007,7 +1023,7 @@ impl RawTensor {
         value: PadValue,
     ) -> Result<Tensor> {
         use crate::error::VoltaError;
-        let dtype = compute_dtype(|| "Pad".to_string(), &[self_t.dtype()]);
+        let dtype = self_t.dtype();
 
         let (data, old_shape, device) = {
             let s = self_t.borrow();
@@ -1040,9 +1056,9 @@ impl RawTensor {
             (storage, device)
         } else {
             // CPU path. `PadMapper` only writes the interior, so the fill is the border.
-            dispatch_real!(dtype, T => {
-            let mut result = vec![T::from_f64(f64::from(value.get())); new_size];
-                        let cpu_data = data.host::<T>().to_vec();
+            dispatch_bits!(dtype, B => {
+            let mut result = vec![fill_bits::<B>(dtype, value.get()); new_size];
+                        let cpu_data = data.bits::<B>().to_vec();
 
                         // Copy old data into padded positions
                         let old_strides = old_shape.strides();
@@ -1060,7 +1076,7 @@ impl RawTensor {
                         );
 
                         apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
-                        (Storage::from_compute(dtype, result), Device::CPU)
+                        (Storage::from_bits(dtype, &result), Device::CPU)
             })
         };
 
@@ -1168,7 +1184,7 @@ impl RawTensor {
     ///   - Any range has `start == end` (zero-sized dimension)
     /// * `VoltaError::DimensionOutOfBounds` - If any range has `end > dimension size`
     pub fn try_shrink(self_t: &Tensor, ranges: &[(usize, usize)]) -> Result<Tensor> {
-        let dtype = compute_dtype(|| "Shrink".to_string(), &[self_t.dtype()]);
+        let dtype = self_t.dtype();
         let (data, old_shape, device) = {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone(), s.device.clone())
@@ -1188,10 +1204,10 @@ impl RawTensor {
         let (storage, out_device) = if let Some(storage) = gpu_storage {
             (storage, device)
         } else {
-            dispatch_real!(dtype, T => {
+            dispatch_bits!(dtype, B => {
             let new_size: usize = new_shape.iter().product();
-                        let mut result = vec![T::ZERO; new_size];
-                        let cpu_data = data.host::<T>().to_vec();
+                        let mut result = vec![B::default(); new_size];
+                        let cpu_data = data.bits::<B>().to_vec();
 
                         let old_strides = old_shape.strides();
                         let old_strides = old_strides.truncate_rank();
@@ -1208,7 +1224,7 @@ impl RawTensor {
                         );
 
                         apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
-                        (Storage::from_compute(dtype, result), Device::CPU)
+                        (Storage::from_bits(dtype, &result), Device::CPU)
             })
         };
 
@@ -1231,7 +1247,7 @@ impl RawTensor {
     /// Strides length must match rank
     #[must_use]
     pub fn stride_op(self_t: &Tensor, strides: &[usize]) -> Tensor {
-        let dtype = compute_dtype(|| "Stride".to_string(), &[self_t.dtype()]);
+        let dtype = self_t.dtype();
         let (data, old_shape, device) = {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone(), s.device.clone())
@@ -1258,10 +1274,10 @@ impl RawTensor {
         let (storage, out_device) = if let Some(storage) = gpu_storage {
             (storage, device)
         } else {
-            dispatch_real!(dtype, T => {
+            dispatch_bits!(dtype, B => {
             let new_size: usize = new_shape.iter().product();
-                        let mut result = vec![T::ZERO; new_size];
-                        let cpu_data = data.host::<T>().to_vec();
+                        let mut result = vec![B::default(); new_size];
+                        let cpu_data = data.bits::<B>().to_vec();
 
                         let old_strides_mem = old_shape.strides();
                         let old_strides_mem = old_strides_mem.truncate_rank();
@@ -1278,7 +1294,7 @@ impl RawTensor {
                         );
 
                         apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
-                        (Storage::from_compute(dtype, result), Device::CPU)
+                        (Storage::from_bits(dtype, &result), Device::CPU)
             })
         };
 

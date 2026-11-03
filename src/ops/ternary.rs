@@ -1,7 +1,8 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
-use crate::device_policy::{common_device, kernel_failed};
-use crate::real::{Real, compute_dtype, dispatch_real};
+use crate::device_policy::kernel_failed;
+use crate::dtype::DType;
+use crate::real::{Real, compute_dtype, dispatch_bits, dispatch_real, same_dtype};
 use crate::shape::Shape;
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
@@ -190,12 +191,21 @@ impl RawTensor {
                 )
             }
             TernaryOp::Where => {
-                // x = condition, y = true branch, z = false branch. The branches share a
-                // dtype; the condition is any float dtype, read as `c != 0`. It is not a
-                // graph input, so `edge()` can't check its device: do it here.
-                let dtype = compute_dtype(|| format!("{op:?}"), &[y.dtype(), z.dtype()]);
-                let cond_dtype = compute_dtype(|| format!("{op:?} condition"), &[x.dtype()]);
-                let _ = common_device("Where", [&x.device(), &y.device(), &z.device()]);
+                // x = condition (Bool), y = true branch, z = false branch. The branches share
+                // a dtype, any dtype: selecting copies bits (`real::Bits`). The condition is
+                // not a graph input, so `edge()` can't check its device: do it here.
+                assert!(
+                    x.dtype() == DType::Bool,
+                    "Where: the condition must be Bool, got {}; compare (`lt`, `elem_eq`, ..) \
+                     or cast with `to_dtype(DType::Bool)`",
+                    x.dtype()
+                );
+                assert!(
+                    ![x, y, z].iter().any(|t| t.device().is_gpu()),
+                    "Where: its Bool condition cannot live on the GPU until ADDENDUM §11 P8; \
+                     select on the CPU"
+                );
+                let dtype = same_dtype(|| format!("{op:?}"), &[y.dtype(), z.dtype()]);
                 let (cond_data, cond_shape) = {
                     let s = x.borrow();
                     (s.data.clone(), s.shape.clone())
@@ -213,29 +223,25 @@ impl RawTensor {
                     Self::broadcast_shape(cond_shape.truncate_rank(), true_shape.truncate_rank());
                 let out_shape = Self::broadcast_shape(&tmp_shape, false_shape.truncate_rank());
 
-                let mask: Vec<bool> = dispatch_real!(cond_dtype, C => {
-                    let host: Vec<bool> =
-                        cond_data.host::<C>().iter().map(|&c| c != C::ZERO).collect();
-                    Self::broadcast_to(&host, cond_shape.truncate_rank(), &out_shape)
-                });
-                let result = dispatch_real!(dtype, T => {
-                    let true_bc = Self::broadcast_to(
-                        &true_data.host::<T>(),
-                        true_shape.truncate_rank(),
-                        &out_shape,
-                    );
-                    let false_bc = Self::broadcast_to(
-                        &false_data.host::<T>(),
-                        false_shape.truncate_rank(),
-                        &out_shape,
-                    );
-                    Storage::from_compute(dtype,
-                        mask.iter()
-                            .zip(&true_bc)
-                            .zip(&false_bc)
-                            .map(|((&m, &t), &f)| if m { t } else { f })
-                            .collect::<Vec<T>>(),
-                    )
+                let mask = Self::broadcast_to(
+                    cond_data
+                        .as_host::<bool>()
+                        .expect("Where: Bool condition checked"),
+                    cond_shape.truncate_rank(),
+                    &out_shape,
+                );
+                let result = dispatch_bits!(dtype, B => {
+                    let true_bc =
+                        Self::broadcast_to(true_data.bits::<B>(), true_shape.truncate_rank(), &out_shape);
+                    let false_bc =
+                        Self::broadcast_to(false_data.bits::<B>(), false_shape.truncate_rank(), &out_shape);
+                    let picked: Vec<B> = mask
+                        .iter()
+                        .zip(&true_bc)
+                        .zip(&false_bc)
+                        .map(|((&m, &t), &f)| if m { t } else { f })
+                        .collect();
+                    Storage::from_bits(dtype, &picked)
                 });
 
                 // Note: the condition (x) is never a parent — gradients only flow

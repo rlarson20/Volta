@@ -174,11 +174,105 @@ fn set_grad_rejects_another_dtype() {
     t.set_grad(Storage::from_typed(vec![1.0f64, 1.0]));
 }
 
-/// Movement ops check at entry too: integer tensors have no kernels until P5.
+/// Movement ops are data copies, so they work on every dtype and move values exactly:
+/// i64 beyond 2^53 and the bool pattern survive permute, expand, shrink, pad and transpose.
 #[test]
-#[should_panic(expected = "Reshape: no i64 kernel")]
-fn int_reshape_panics_naming_the_op() {
-    let _ = RawTensor::from_typed(vec![1i64, 2, 3, 4], &[4]).reshape(&[2, 2]);
+fn int_and_bool_movement_ops_copy_exactly() {
+    let big = 1i64 << 60;
+    let x = RawTensor::from_typed(vec![big, -1, big + 1, 7, i64::MIN, 0], &[2, 3]);
+    assert_eq!(
+        x.reshape(&[3, 2]).to_vec_as::<i64>().expect("i64"),
+        x.to_vec_as::<i64>().expect("i64")
+    );
+    assert_eq!(
+        x.permute(&[volta::Axis(1), volta::Axis(0)])
+            .to_vec_as::<i64>()
+            .expect("i64"),
+        vec![big, 7, -1, i64::MIN, big + 1, 0]
+    );
+    assert_eq!(
+        x.transpose().to_vec_as::<i64>().expect("i64"),
+        vec![big, 7, -1, i64::MIN, big + 1, 0]
+    );
+    assert_eq!(
+        x.shrink(&[(1, 2), (0, 2)]).to_vec_as::<i64>().expect("i64"),
+        vec![7, i64::MIN]
+    );
+    assert_eq!(
+        x.shrink(&[(0, 1), (0, 3)])
+            .expand(&[2, 3])
+            .to_vec_as::<i64>()
+            .expect("i64"),
+        vec![big, -1, big + 1, big, -1, big + 1]
+    );
+
+    let m = RawTensor::from_typed(vec![true, false], &[2]);
+    let padded = m.pad_with(&[(1, 1)], volta::PadValue::ZERO);
+    assert_eq!(padded.dtype(), DType::Bool);
+    assert_eq!(
+        padded.to_vec_as::<bool>().expect("bool"),
+        vec![false, true, false, false]
+    );
+}
+
+/// Max pooling's `-inf` border has no integer value: padding an integer tensor with it
+/// panics instead of wrapping.
+#[test]
+#[should_panic(expected = "Pad: a -inf fill cannot be stored in a i32 tensor")]
+fn int_pad_with_neg_inf_panics() {
+    let _ =
+        RawTensor::from_typed(vec![1i32, 2], &[2]).pad_with(&[(1, 0)], volta::PadValue::NEG_INF);
+}
+
+/// Comparisons return Bool on every dtype, with broadcasting; NaN compares false except
+/// under `elem_ne`.
+#[test]
+fn comparisons_return_bool_on_every_dtype() {
+    let a = RawTensor::from_typed(vec![1i64, 5, -3], &[3]);
+    let b = RawTensor::from_typed(vec![2i64], &[1]);
+    let get = |t: &Tensor| {
+        assert_eq!(t.dtype(), DType::Bool);
+        t.to_vec_as::<bool>().expect("bool")
+    };
+    assert_eq!(get(&a.lt(&b)), vec![true, false, true]);
+    assert_eq!(get(&a.ge(&b)), vec![false, true, false]);
+    assert_eq!(get(&a.elem_eq(&a)), vec![true, true, true]);
+
+    let h = RawTensor::from_typed(vec![bf16::from_f32(1.0), bf16::NAN], &[2]);
+    let one = RawTensor::from_typed(vec![bf16::from_f32(1.0)], &[1]);
+    assert_eq!(get(&h.le(&one)), vec![true, false]);
+    assert_eq!(get(&h.elem_ne(&h)), vec![false, true]);
+
+    let p = RawTensor::from_typed(vec![true, false], &[2]);
+    let q = RawTensor::from_typed(vec![false], &[1]);
+    assert_eq!(get(&p.gt(&q)), vec![true, false]);
+}
+
+/// Comparisons need one dtype until promotion (P6).
+#[test]
+#[should_panic(expected = "Compare(Lt): DType mismatch: expected I64, got F32 (input 1)")]
+fn comparison_of_mixed_dtypes_panics() {
+    let a = RawTensor::from_typed(vec![1i64], &[1]);
+    let _ = a.lt(&RawTensor::new(vec![1.0], &[1], false));
+}
+
+/// `where` selects from branches of any dtype under a Bool condition.
+#[test]
+fn where_selects_int_branches_under_a_bool_condition() {
+    let cond = RawTensor::from_typed(vec![true, false, true], &[3]);
+    let x = RawTensor::from_typed(vec![1i64 << 60, 2, 3], &[3]);
+    let y = RawTensor::from_typed(vec![-1i64], &[1]);
+    let out = cond.where_op(&x, &y);
+    assert_eq!(out.to_vec_as::<i64>().expect("i64"), vec![1 << 60, -1, 3]);
+}
+
+/// A float condition is refused (PyTorch's `where` takes bool), naming the fix.
+#[test]
+#[should_panic(expected = "Where: the condition must be Bool, got f32")]
+fn where_with_float_condition_panics() {
+    let cond = RawTensor::new(vec![1.0, 0.0], &[2], false);
+    let x = RawTensor::new(vec![1.0, 2.0], &[2], false);
+    let _ = cond.where_op(&x, &x);
 }
 
 /// An f64 input to an f32 layer is a mismatch, named by the layer: `to_dtype` the layer
@@ -271,4 +365,69 @@ fn to_vec_as_refuses_another_dtype() {
         ),
         "{err}"
     );
+}
+
+/// `Embedding` is a `Layer`: in a `Sequential` with a `Linear` head, trained with
+/// class-index (I64) cross-entropy, it learns an arbitrary token-to-class map, and the
+/// gradient reaches the embedding table.
+#[test]
+fn embedding_in_sequential_trains_with_class_index_targets() {
+    use volta::{Adam, Embedding, Layer, Linear, Module, Sequential};
+    volta::manual_seed(7);
+    let model = Sequential::new(vec![
+        Box::new(Embedding::new(8, 6)),
+        Box::new(Linear::new(6, 3, true)),
+    ]);
+    let tokens = RawTensor::from_typed((0..8i64).collect(), &[8]);
+    let classes: Vec<i64> = (0..8i64).map(|i| (i * 5 + 1) % 3).collect();
+    let targets = RawTensor::from_typed(classes.clone(), &[8]);
+    let mut opt = Adam::new(model.parameters(), 0.05, (0.9, 0.999), 1e-8, 0.0);
+
+    let loss_of = || RawTensor::cross_entropy_loss(&model.forward(&tokens), &targets);
+    let first = loss_of().item();
+    for _ in 0..150 {
+        opt.zero_grad();
+        loss_of().into_loss().expect("scalar").backward();
+        opt.step();
+    }
+    let last = loss_of().item();
+    assert!(first > 0.9, "starts near ln 3, got {first}");
+    assert!(last < 0.05, "loss {first} -> {last}");
+
+    let logits = model.forward(&tokens).data();
+    for (i, &c) in classes.iter().enumerate() {
+        let row = &logits[i * 3..i * 3 + 3];
+        let best = (0..3)
+            .max_by(|&a, &b| row[a].total_cmp(&row[b]))
+            .expect("three classes");
+        assert_eq!(i64::try_from(best).expect("small"), c, "token {i}");
+    }
+    let emb_grad_seen = model.parameters()[0].grad_storage().is_some();
+    assert!(emb_grad_seen, "the embedding table received a gradient");
+}
+
+/// Class-index targets give exactly the one-hot loss and gradient (I64 and I32), and an
+/// out-of-range target panics instead of indexing past the row.
+#[test]
+fn cross_entropy_class_indices_match_one_hot() {
+    let logits = [0.3f32, -1.2, 2.0, 0.5, 0.1, -0.7];
+    let run = |targets: &Tensor| {
+        let x = RawTensor::new(logits.to_vec(), &[2, 3], true);
+        let loss = RawTensor::cross_entropy_loss(&x, targets);
+        let v = loss.item();
+        loss.into_loss().expect("scalar").backward();
+        (v, x.grad().expect("a gradient"))
+    };
+    let one_hot = RawTensor::new(vec![0.0, 0.0, 1.0, 1.0, 0.0, 0.0], &[2, 3], false);
+    let want = run(&one_hot);
+    assert_eq!(run(&RawTensor::from_typed(vec![2i64, 0], &[2])), want);
+    assert_eq!(run(&RawTensor::from_typed(vec![2i32, 0], &[2])), want);
+}
+
+/// A class index outside `0..C` is refused, naming the loss.
+#[test]
+#[should_panic(expected = "cross_entropy_loss: target 3 out of range for 3 classes")]
+fn cross_entropy_out_of_range_target_panics() {
+    let x = RawTensor::new(vec![0.0; 6], &[2, 3], false);
+    let _ = RawTensor::cross_entropy_loss(&x, &RawTensor::from_typed(vec![0i64, 3], &[2]));
 }
