@@ -53,7 +53,7 @@ impl SumGradFn {
 
         // CPU path, in the gradient's dtype.
         let grad = dispatch_real!(out_grad.data.dtype(), T => {
-            Storage::from_typed(vec![fetch(out_grad.data.host::<T>(), 0); size])
+            Storage::from_compute(out_grad.data.dtype(), vec![fetch(&out_grad.data.host::<T>(), 0); size])
         });
         vec![Some(RawTensor::new_with_storage(
             grad,
@@ -99,8 +99,8 @@ impl MaxReduceGradFn {
         // CPU path, in the gradient's dtype.
         let grad = dispatch_real!(out_grad.data.dtype(), T => {
             let mut grad_data = vec![T::ZERO; size];
-            *slot(&mut grad_data, self.max_index) = fetch(out_grad.data.host::<T>(), 0);
-            Storage::from_typed(grad_data)
+            *slot(&mut grad_data, self.max_index) = fetch(&out_grad.data.host::<T>(), 0);
+            Storage::from_compute(out_grad.data.dtype(), grad_data)
         });
         vec![Some(RawTensor::new_with_storage(
             grad,
@@ -143,8 +143,8 @@ impl MeanGradFn {
 
         // CPU path, in the gradient's dtype.
         let grad = dispatch_real!(out_grad.data.dtype(), T => {
-            let g = fetch(out_grad.data.host::<T>(), 0) / T::from_usize(size);
-            Storage::from_typed(vec![g; size])
+            let g = fetch(&out_grad.data.host::<T>(), 0) / T::from_usize(size);
+            Storage::from_compute(out_grad.data.dtype(), vec![g; size])
         });
         vec![Some(RawTensor::new_with_storage(
             grad,
@@ -181,7 +181,7 @@ impl RawTensor {
                     on_gpu(Self::gpu_sum_reduce(&data).unwrap_or_else(|| kernel_failed("Sum")))
                 } else {
                     dispatch_real!(dtype, T => {
-                        Storage::from_typed(vec![data.host::<T>().iter().copied().sum::<T>()])
+                        Storage::from_compute(dtype, vec![data.host::<T>().iter().copied().sum::<T>()])
                     })
                 };
                 (sum, GradFn::Sum(SumGradFn { input_shape: shape }))
@@ -199,7 +199,7 @@ impl RawTensor {
                             .enumerate()
                             .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
                             .unwrap();
-                        (Storage::from_typed(vec![max_val]), max_idx)
+                        (Storage::from_compute(dtype, vec![max_val]), max_idx)
                     })
                 };
                 (
@@ -216,7 +216,7 @@ impl RawTensor {
                 } else {
                     dispatch_real!(dtype, T => {
                         let sum: T = data.host::<T>().iter().copied().sum();
-                        Storage::from_typed(vec![sum / T::from_usize(data.len())])
+                        Storage::from_compute(dtype, vec![sum / T::from_usize(data.len())])
                     })
                 };
                 (mean, GradFn::Mean(MeanGradFn { input_shape: shape }))

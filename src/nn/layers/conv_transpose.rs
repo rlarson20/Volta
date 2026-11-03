@@ -231,7 +231,7 @@ impl ConvTranspose2dGradFn {
             }
         }
 
-        let grad_input = RawTensor::new_with_storage(Storage::from_typed(grad_input_data), Shape::derived(vec![batch, in_channels, in_h, in_w]), Device::CPU, true);
+        let grad_input = RawTensor::new_with_storage(Storage::from_compute(out_grad.data.dtype(), grad_input_data), Shape::derived(vec![batch, in_channels, in_h, in_w]), Device::CPU, true);
 
         let mut grads = vec![Some(grad_input)];
 
@@ -295,7 +295,7 @@ impl ConvTranspose2dGradFn {
             reason = "just don't know hot to fix right now"
         )]
         let grad_weight =
-            RawTensor::new_with_storage(Storage::from_typed(grad_weight_data), Shape::derived(vec![in_channels, out_channels, kh, kw]), Device::CPU, true);
+            RawTensor::new_with_storage(Storage::from_compute(out_grad.data.dtype(), grad_weight_data), Shape::derived(vec![in_channels, out_channels, kh, kw]), Device::CPU, true);
         grads.push(Some(grad_weight));
         grads
         });
@@ -382,7 +382,7 @@ impl Layer for ConvTranspose2d {
         // 4. Use col2im to convert to output shape
         let col_data = matmul_result.borrow().data.clone();
         let output_data = dispatch_real!(col_data.dtype(), T => {
-            Storage::from_typed(Self::col2im_transpose(col_data.host::<T>(), &spec))
+            Storage::from_compute(col_data.dtype(), Self::col2im_transpose(&col_data.host::<T>(), &spec))
         });
 
         // 5. Add bias if present. The real backward for this op is the custom

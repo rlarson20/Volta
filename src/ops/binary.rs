@@ -81,12 +81,12 @@ impl BinaryGradFn {
         let op = self.op;
         dispatch_real!(x.data.dtype(), T => {
             let x_bc = RawTensor::broadcast_to(
-                x.data.host::<T>(),
+                &x.data.host::<T>(),
                 x.shape.truncate_rank(),
                 out_grad.shape.truncate_rank(),
             );
             let y_bc = RawTensor::broadcast_to(
-                y.data.host::<T>(),
+                &y.data.host::<T>(),
                 y.shape.truncate_rank(),
                 out_grad.shape.truncate_rank(),
             );
@@ -106,7 +106,7 @@ impl BinaryGradFn {
                     operand.shape.truncate_rank(),
                 );
                 RawTensor::new_with_storage(
-                    Storage::from_typed(summed),
+                    Storage::from_compute(x.data.dtype(), summed),
                     operand.shape.clone(),
                     Device::CPU,
                     false,
@@ -351,10 +351,10 @@ impl RawTensor {
 
         let result = dispatch_real!(dtype, T => {
             let bc_data_a =
-                Self::broadcast_to(data_a.host::<T>(), shape_a.truncate_rank(), &out_shape);
+                Self::broadcast_to(&data_a.host::<T>(), shape_a.truncate_rank(), &out_shape);
             let bc_data_b =
-                Self::broadcast_to(data_b.host::<T>(), shape_b.truncate_rank(), &out_shape);
-            Storage::from_typed(
+                Self::broadcast_to(&data_b.host::<T>(), shape_b.truncate_rank(), &out_shape);
+            Storage::from_compute(dtype,
                 bc_data_a
                     .iter()
                     .zip(&bc_data_b)

@@ -582,15 +582,24 @@ impl RawTensor {
         Self::new_with_storage(Storage::cpu(data), shape, Device::CPU, requires_grad)
     }
 
-    /// CPU gradient (no grad of its own) of any element type, from an already-validated
-    /// `Shape`: the typed twin of [`Self::from_shape`] for backward code. A separate name,
-    /// so an untyped `vec![0.0; n]` can't become f64 by inference.
+    /// CPU gradient (no grad of its own) of `dtype` from a kernel's `T` result and an
+    /// already-validated `Shape`: the typed twin of [`Self::from_shape`] for backward code,
+    /// rounded to a half dtype like any kernel output (`Storage::from_compute`).
     ///
     /// # Panics
     ///
-    /// If `data.len()` != `shape.numel()`.
-    pub(crate) fn from_shape_typed<T: Element>(data: Vec<T>, shape: Shape) -> Tensor {
-        Self::new_with_storage(Storage::from_typed(data), shape, Device::CPU, false)
+    /// If `data.len()` != `shape.numel()`, or `dtype` cannot hold a `T` result.
+    pub(crate) fn from_shape_compute<T: crate::real::Real>(
+        dtype: DType,
+        data: Vec<T>,
+        shape: Shape,
+    ) -> Tensor {
+        Self::new_with_storage(
+            Storage::from_compute(dtype, data),
+            shape,
+            Device::CPU,
+            false,
+        )
     }
 
     /// Element count of a shape that came from the caller, checked before anything is
@@ -1026,10 +1035,11 @@ impl SumDimGradFn {
                 .zip(grad_strides)
                 .map(|(c, s)| c * s)
                 .sum();
-            *slot(&mut result, i) = fetch(grad_data, grad_idx);
+            *slot(&mut result, i) = fetch(&grad_data, grad_idx);
         }
 
-        vec![Some(RawTensor::from_shape_typed(
+        vec![Some(RawTensor::from_shape_compute(
+            out_grad.data.dtype(),
             result,
             self.input_shape.clone(),
         ))]
@@ -1091,10 +1101,11 @@ impl MaxDimGradFn {
                 .zip(grad_strides)
                 .map(|(c, s)| c * s)
                 .sum();
-            *slot(&mut result, max_lin_idx) = fetch(grad_data, grad_idx);
+            *slot(&mut result, max_lin_idx) = fetch(&grad_data, grad_idx);
         }
 
-        vec![Some(RawTensor::from_shape_typed(
+        vec![Some(RawTensor::from_shape_compute(
+            out_grad.data.dtype(),
             result,
             self.input_shape.clone(),
         ))]
@@ -1146,12 +1157,12 @@ impl RawTensor {
                     let mut sum = T::ZERO;
                     for k in 0..dim_size {
                         let in_idx = outer * dim_size * inner_size + k * inner_size + inner;
-                        sum += fetch(data, in_idx);
+                        sum += fetch(&data, in_idx);
                     }
                     *slot(&mut result, out_idx) = sum;
                 }
             }
-            Storage::from_typed(result)
+            Storage::from_compute(dtype, result)
         });
 
         // Squeeze dimension if keepdim=false
@@ -1307,7 +1318,7 @@ impl RawTensor {
                     let out_idx = outer * inner_size + inner;
                     for k in 0..dim_size {
                         let in_idx = outer * dim_size * inner_size + k * inner_size + inner;
-                        let in_val = fetch(data, in_idx);
+                        let in_val = fetch(&data, in_idx);
                         if in_val > fetch(&result, out_idx) {
                             *slot(&mut result, out_idx) = in_val;
                             *slot(&mut max_indices, out_idx) = in_idx;
@@ -1315,7 +1326,7 @@ impl RawTensor {
                     }
                 }
             }
-            Storage::from_typed(result)
+            Storage::from_compute(dtype, result)
         });
 
         let final_shape = if keepdim {
@@ -1475,15 +1486,14 @@ impl RawTensor {
                 let step = T::from_f64(f64::from(epsilon));
                 let perturbed = |i: usize, up: bool| {
                     let mut data = original_data.clone();
-                    let x = slot(
-                        data.as_host_mut::<T>()
-                            .expect("check_gradients: CPU float input"),
-                        i,
-                    );
-                    if up {
-                        *x += step;
-                    } else {
-                        *x -= step;
+                    {
+                        let mut host = data.host_mut::<T>();
+                        let x = slot(&mut host, i);
+                        if up {
+                            *x += step;
+                        } else {
+                            *x -= step;
+                        }
                     }
                     Self::new_with_storage(data, original_shape.clone(), Device::CPU, requires_grad)
                 };

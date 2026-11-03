@@ -257,6 +257,20 @@ pub(crate) fn edge(
         }
     }
 
+    // Every op but a cast keeps its inputs' dtype. A half op that forgot to round its f32
+    // result (`Storage::from_compute`) would otherwise leak an f32 tensor.
+    if let Some(first) = inputs.as_ref().first()
+        && !matches!(grad, GradFn::Cast(_))
+    {
+        let want = first.borrow().data.dtype();
+        assert!(
+            data.dtype() == want,
+            "{}: {want} inputs produced a {} output (an op keeps its dtype)",
+            grad.op_name(),
+            data.dtype()
+        );
+    }
+
     // A non-float output (an integer cast, later a comparison) has no gradient, whatever
     // its inputs: PyTorch's rule, and the reason integer tensors can't require grad.
     let requires_grad = is_grad_enabled()

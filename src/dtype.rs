@@ -1,14 +1,17 @@
 //! Tensor data types.
 //!
 //! A tensor of any `DType` can be built (`RawTensor::from_typed`) and read back. Of the
-//! ops, every op, layer, and optimizer computes in f32 or f64 on the CPU (the GPU in f32 only), and half types wait for ADDENDUM §11 P4; an op panics, naming itself, on a dtype it has no kernel for.
+//! ops, every op, layer, and optimizer computes in f32, f64, f16 or bf16 on the CPU (the
+//! GPU in f32 only). F16 and BF16 compute in f32 and round each op's output, like PyTorch
+//! on the CPU. An op panics, naming itself, on a dtype it has no kernel for (integers and
+//! bool).
 //! `load_safetensors` converts to f32. Mixed precision is planned in ADDENDUM §11.
 
 use std::fmt;
 
 /// Element types a tensor can hold.
 ///
-/// Only `F32` can go through ops today (see the module docs).
+/// The float dtypes go through ops; the others are data (see the module docs).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
