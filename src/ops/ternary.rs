@@ -254,17 +254,17 @@ impl RawTensor {
                 let out_shape = Self::broadcast_shape(&tmp_shape, false_shape.truncate_rank());
 
                 let cond_bc = Self::broadcast_to(
-                    &cond_data.to_host_f32(),
+                    cond_data.to_host_f32(),
                     cond_shape.truncate_rank(),
                     &out_shape,
                 );
                 let true_bc = Self::broadcast_to(
-                    &true_data.to_host_f32(),
+                    true_data.to_host_f32(),
                     true_shape.truncate_rank(),
                     &out_shape,
                 );
                 let false_bc = Self::broadcast_to(
-                    &false_data.to_host_f32(),
+                    false_data.to_host_f32(),
                     false_shape.truncate_rank(),
                     &out_shape,
                 );

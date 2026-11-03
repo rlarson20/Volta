@@ -78,12 +78,12 @@ impl BinaryGradFn {
         // CPU path: the table gives the per-element (∂a, ∂b) at the broadcast shape;
         // each is then summed back down to its operand's shape.
         let x_bc = RawTensor::broadcast_to(
-            &x.data.to_host_f32(),
+            x.data.to_host_f32(),
             x.shape.truncate_rank(),
             out_grad.shape.truncate_rank(),
         );
         let y_bc = RawTensor::broadcast_to(
-            &y.data.to_host_f32(),
+            y.data.to_host_f32(),
             y.shape.truncate_rank(),
             out_grad.shape.truncate_rank(),
         );
@@ -332,9 +332,9 @@ impl RawTensor {
         assert!(out_size > 0, "Invalid broadcast result size");
 
         let bc_data_a =
-            Self::broadcast_to(&data_a.to_host_f32(), shape_a.truncate_rank(), &out_shape);
+            Self::broadcast_to(data_a.to_host_f32(), shape_a.truncate_rank(), &out_shape);
         let bc_data_b =
-            Self::broadcast_to(&data_b.to_host_f32(), shape_b.truncate_rank(), &out_shape);
+            Self::broadcast_to(data_b.to_host_f32(), shape_b.truncate_rank(), &out_shape);
 
         let result_data: Vec<f32> = bc_data_a
             .iter()

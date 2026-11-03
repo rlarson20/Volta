@@ -19,7 +19,7 @@ log = "0.4"
 
 # Dtype support
 half = { version = "2.7.1", features = ["bytemuck"] }
-bytemuck = { version = "1.24.0", features = ["derive"] }
+bytemuck = { version = "1.24.0", features = ["derive", "extern_crate_alloc"] }
 
 # GPU support
 wgpu = { version = "27.0.1", optional = true }

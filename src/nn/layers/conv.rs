@@ -171,7 +171,7 @@ impl Im2colGradFn {
                 .unwrap_or_else(|| kernel_failed("Im2col"));
             (storage, out_grad.device.clone())
         } else {
-            let col = Conv2d::col2im(&out_grad.data.to_host_f32(), &self.spec);
+            let col = Conv2d::col2im(out_grad.data.to_host_f32(), &self.spec);
             (crate::storage::Storage::cpu(col), crate::Device::CPU)
         };
 

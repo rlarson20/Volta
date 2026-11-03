@@ -302,7 +302,7 @@ mod tests {
         assert_ne!(data_before, data_after);
 
         // Verify Newton-Schulz didn't explode values (regularization property)
-        for v in data_after.to_host_f32().iter() {
+        for v in data_after.to_host_f32() {
             assert!(v.abs() < 2.0);
         }
     }

@@ -549,7 +549,7 @@ impl MovementGradFn {
                             old_idx += coord * fetch(old_strides, j);
                         }
                     }
-                    *slot(&mut grad_data, old_idx) += fetch(&g_host, i);
+                    *slot(&mut grad_data, old_idx) += fetch(g_host, i);
                 }
                 RawTensor::from_shape(grad_data, self.original_shape.clone(), false)
             }
@@ -590,7 +590,7 @@ impl MovementGradFn {
                 apply_movement_backward(
                     &ctx,
                     &mut result,
-                    &out_grad.data.to_host_f32(),
+                    out_grad.data.to_host_f32(),
                     0,
                     &mapper,
                     0,
@@ -635,7 +635,7 @@ impl MovementGradFn {
                 apply_movement_backward(
                     &ctx,
                     &mut result,
-                    &out_grad.data.to_host_f32(),
+                    out_grad.data.to_host_f32(),
                     0,
                     &mapper,
                     0,
@@ -680,7 +680,7 @@ impl MovementGradFn {
                 apply_movement_backward(
                     &ctx,
                     &mut result,
-                    &out_grad.data.to_host_f32(),
+                    out_grad.data.to_host_f32(),
                     0,
                     &mapper,
                     0,

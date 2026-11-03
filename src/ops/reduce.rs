@@ -36,7 +36,7 @@ impl SumGradFn {
         _parents: &[Tensor],
     ) -> Vec<Option<Tensor>> {
         let size: usize = self.input_shape.iter().product();
-        let grad_val: f32 = fetch(&out_grad.data.to_host_f32(), 0);
+        let grad_val: f32 = fetch(out_grad.data.to_host_f32(), 0);
 
         // GPU path for a GPU gradient; a `None` from the kernel is a failure.
         if out_grad.device.is_gpu() {
@@ -78,7 +78,7 @@ impl MaxReduceGradFn {
         _parents: &[Tensor],
     ) -> Vec<Option<Tensor>> {
         let size: usize = self.input_shape.iter().product();
-        let grad_val: f32 = fetch(&out_grad.data.to_host_f32(), 0);
+        let grad_val: f32 = fetch(out_grad.data.to_host_f32(), 0);
 
         // GPU path for a GPU gradient; a `None` from the kernel is a failure.
         if out_grad.device.is_gpu() {
@@ -120,7 +120,7 @@ impl MeanGradFn {
         _parents: &[Tensor],
     ) -> Vec<Option<Tensor>> {
         let size: usize = self.input_shape.iter().product();
-        let grad_val: f32 = fetch(&out_grad.data.to_host_f32(), 0);
+        let grad_val: f32 = fetch(out_grad.data.to_host_f32(), 0);
 
         // GPU path for a GPU gradient; a `None` from the kernel is a failure.
         if out_grad.device.is_gpu() {

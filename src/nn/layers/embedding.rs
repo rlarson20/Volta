@@ -89,7 +89,7 @@ impl IndexedLayer for Embedding {
         assert!(!indices.is_empty(), "indices cannot be empty");
 
         let weight_borrowed = self.weight.borrow();
-        let weight_data = &*weight_borrowed.data.to_host_f32();
+        let weight_data = weight_borrowed.data.to_host_f32();
 
         // Gather operation: select rows from weight matrix
         let mut output_data = Vec::with_capacity(indices.len() * self.dim);
@@ -176,7 +176,7 @@ impl EmbeddingGradFn {
             for d in 0..self.embedding_dim {
                 let out_grad_idx = i * self.embedding_dim + d;
                 let weight_idx = idx * self.embedding_dim + d;
-                *slot(&mut grad_weight, weight_idx) += fetch(&g_host, out_grad_idx);
+                *slot(&mut grad_weight, weight_idx) += fetch(g_host, out_grad_idx);
             }
         }
 

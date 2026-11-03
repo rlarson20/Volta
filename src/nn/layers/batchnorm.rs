@@ -147,9 +147,9 @@ impl Layer for BatchNorm2d {
                 let mut rm = self.running_mean.borrow_mut();
                 let mut rv = self.running_var.borrow_mut();
                 let bm_ref = batch_mean.borrow();
-                let bm_data = &*bm_ref.data.to_host_f32();
+                let bm_data = bm_ref.data.to_host_f32();
                 let bv_ref = batch_var.borrow();
-                let bv_data = &*bv_ref.data.to_host_f32();
+                let bv_data = bv_ref.data.to_host_f32();
 
                 // Note: PyTorch uses unbiased (N-1) for running_var update,
                 // but biased for batch norm calculation.
@@ -335,9 +335,9 @@ impl Layer for BatchNorm1d {
                 let mut rm = self.running_mean.borrow_mut();
                 let mut rv = self.running_var.borrow_mut();
                 let bm_ref = batch_mean.borrow();
-                let bm_data = &*bm_ref.data.to_host_f32();
+                let bm_data = bm_ref.data.to_host_f32();
                 let bv_ref = batch_var.borrow();
-                let bv_data = &*bv_ref.data.to_host_f32();
+                let bv_data = bv_ref.data.to_host_f32();
 
                 let m = self.momentum;
                 let rm_host = rm
