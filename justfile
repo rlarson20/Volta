@@ -39,16 +39,12 @@ expand mod:
 
 # Validate all WGSL shaders in src/gpu/shaders/
 validate-shaders:
-	@echo "Validating shaders..."
-	@for f in src/gpu/shaders/*.wgsl; do \
-		echo "Checking $f..."; \
-		naga $f || (echo "Failed: $f" && exit 1); \
-	done
-	@echo "All shaders valid."
+	cargo test --lib shader_template
 
 # Run only GPU integration tests
 test-gpu:
 	cargo test --test 'gpu_*' -- --nocapture
+	cargo test --lib gpu_ -- --nocapture
 
 # Regenerate the PyTorch reference fixtures in tests/fixtures/torch/ (needs uv; pinned torch)
 torch-fixtures:

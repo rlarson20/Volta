@@ -3,7 +3,7 @@
 // parallel reduction with shared memory for better performance.
 
 @group(0) @binding(0) var<storage, read> input: array<ELEM>;
-@group(0) @binding(1) var<storage, read_write> result: array<ELEM>;
+@group(0) @binding(1) var<storage, read_write> result: array<ELEM2>; // f32: the reduction is returned in f32 and rounded on the host
 
 struct Params {
     input_size: u32,
