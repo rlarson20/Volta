@@ -1,5 +1,6 @@
 use crate::device::Device;
 use crate::device_policy::{Pass, common_device, kernel_failed, on_gap};
+use crate::dtype::DType;
 use crate::error::{Result, VoltaError};
 use crate::nn::layers::conv::{DirectConvGradFn, IGEMMGradFn, Im2colGradFn};
 use crate::nn::layers::conv_transpose::ConvTranspose2dGradFn;
@@ -12,8 +13,9 @@ use crate::ops::reduce::{MaxReduceGradFn, MeanGradFn, SumGradFn};
 use crate::ops::ternary::{MulAccGradFn, WhereGradFn};
 use crate::ops::unary::UnaryGradFn;
 use crate::shape::Shape;
-use crate::storage::Storage;
+use crate::storage::{Element, Storage};
 use crate::tensor::{MaxDimGradFn, RawTensor, SumDimGradFn, Tensor};
+use half::{bf16, f16};
 use std::cell::Cell;
 use std::collections::HashSet;
 use std::marker::PhantomData;
@@ -71,6 +73,33 @@ pub(crate) enum GradFn {
     Embedding(EmbeddingGradFn),
     /// Device transfer (exempt from `edge()`'s input-to-output device check).
     ToDevice(ToDeviceGradFn),
+    /// Dtype conversion (`to_dtype`).
+    Cast(CastGradFn),
+}
+
+/// Backward of `to_dtype`: the gradient is cast back to the input's dtype, as PyTorch's
+/// `.to(dtype)` backward does. Only built between float dtypes: a cast to an integer or
+/// bool output carries no gradient (`edge()` never attaches one to a non-float output).
+#[derive(Clone)]
+pub(crate) struct CastGradFn {
+    /// The input's dtype.
+    pub(crate) source: DType,
+}
+
+impl CastGradFn {
+    /// Casts `out_grad` to the source dtype.
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        _parents: &[Tensor],
+    ) -> Vec<Option<Tensor>> {
+        vec![Some(RawTensor::new_with_storage(
+            out_grad.data.cast(self.source),
+            out_grad.shape.clone(),
+            out_grad.device.clone(),
+            false,
+        ))]
+    }
 }
 
 /// Backward of `to_device`: the gradient goes back to the device the tensor came from. A
@@ -121,6 +150,7 @@ impl GradFn {
             Self::MaxPool2d(_) => "MaxPool2d".to_string(),
             Self::Embedding(_) => "Embedding".to_string(),
             Self::ToDevice(_) => "ToDevice".to_string(),
+            Self::Cast(_) => "Cast".to_string(),
         }
     }
 
@@ -146,6 +176,7 @@ impl GradFn {
             Self::MaxPool2d(g) => g.backward(out_grad, parents),
             Self::Embedding(g) => g.backward(out_grad, parents),
             Self::ToDevice(g) => g.backward(out_grad, parents),
+            Self::Cast(g) => g.backward(out_grad, parents),
         }
     }
 
@@ -173,7 +204,8 @@ impl GradFn {
             | Self::ConvTranspose2d(_)
             | Self::MaxPool2d(_)
             | Self::Embedding(_)
-            | Self::ToDevice(_) => false,
+            | Self::ToDevice(_)
+            | Self::Cast(_) => false,
         }
     }
 }
@@ -225,7 +257,10 @@ pub(crate) fn edge(
         }
     }
 
+    // A non-float output (an integer cast, later a comparison) has no gradient, whatever
+    // its inputs: PyTorch's rule, and the reason integer tensors can't require grad.
     let requires_grad = is_grad_enabled()
+        && data.dtype().is_float()
         && inputs.as_ref().iter().any(Tensor::requires_grad)
         && !grad.is_trivial();
 
@@ -530,19 +565,42 @@ impl RawTensor {
             return;
         }
 
-        // CPU: element-wise addition on host data.
-        let mut accum = existing.to_vec();
-        let add = new_grad.to_vec();
+        // CPU: element-wise addition in the gradient's own dtype. Half types add in f32
+        // and round the sum (ADDENDUM §11), like every half-precision op.
         assert_eq!(
-            accum.len(),
-            add.len(),
+            existing.dtype(),
+            new_grad.dtype(),
+            "accumulate_grad: gradient contributions of different dtypes"
+        );
+        assert_eq!(
+            existing.len(),
+            new_grad.len(),
             "Gradient size mismatch during accumulation"
         );
-        for (a, b) in accum.iter_mut().zip(add.iter()) {
-            *a += *b;
-        }
-        *existing = Storage::cpu(accum);
+        *existing = match existing.dtype() {
+            DType::F32 => Storage::cpu(add_host::<f32>(existing, new_grad, |a, b| a + b)),
+            DType::F64 => Storage::from_typed(add_host::<f64>(existing, new_grad, |a, b| a + b)),
+            DType::F16 => Storage::from_typed(add_host::<f16>(existing, new_grad, |a, b| {
+                f16::from_f32(a.to_f32() + b.to_f32())
+            })),
+            DType::BF16 => Storage::from_typed(add_host::<bf16>(existing, new_grad, |a, b| {
+                bf16::from_f32(a.to_f32() + b.to_f32())
+            })),
+            other @ (DType::I32 | DType::I64 | DType::U8 | DType::Bool) => {
+                panic!("accumulate_grad: a {other} gradient (only floats have gradients)")
+            }
+        };
     }
+}
+
+/// Elementwise `add(a, b)` of two CPU gradients of type `T`.
+///
+/// # Panics
+/// If either is not CPU storage of `T` (callers check the dtype first).
+fn add_host<T: Element>(a: &Storage, b: &Storage, add: impl Fn(T, T) -> T) -> Vec<T> {
+    let a = a.as_host::<T>().expect("accumulate_grad: dtype checked");
+    let b = b.as_host::<T>().expect("accumulate_grad: dtype checked");
+    a.iter().zip(b).map(|(&x, &y)| add(x, y)).collect()
 }
 
 #[cfg(test)]
