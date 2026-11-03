@@ -348,8 +348,11 @@ impl RawTensor {
     /// 3. For each node, call its `grad_fn` to compute parent gradients
     /// 4. Accumulate gradients in each parent tensor
     pub(crate) fn run_backward(tensor_ref: &Tensor) {
+        /// A step of the iterative post-order DFS that builds the topological order.
         enum Action {
+            /// First reach of a node: schedule its post-visit, then its parents.
             Visit(Tensor),
+            /// All parents done: append the node to the order.
             PostVisit(Tensor),
         }
 

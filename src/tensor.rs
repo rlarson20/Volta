@@ -214,7 +214,7 @@ impl Tensor {
             "set_requires_grad called on a non-leaf tensor"
         );
         assert!(
-            !(on && !t.data.dtype().is_float()),
+            !on || t.data.dtype().is_float(),
             "set_requires_grad: {}",
             VoltaError::NotDifferentiable {
                 dtype: t.data.dtype()
