@@ -1,102 +1,102 @@
 // Unary operations
 // Each thread processes one element
 
-@group(0) @binding(0) var<storage, read> input: array<f32>;
-@group(0) @binding(1) var<storage, read_write> result: array<f32>;
+@group(0) @binding(0) var<storage, read> input: array<ELEM>;
+@group(0) @binding(1) var<storage, read_write> result: array<ELEM>;
 
 @compute @workgroup_size(256)
 fn neg(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx < arrayLength(&input)) {
-        result[idx] = -input[idx];
+    if (idx < len_input()) {
+        st_result(idx, -ld_input(idx));
     }
 }
 
 @compute @workgroup_size(256)
 fn exp_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx < arrayLength(&input)) {
-        result[idx] = exp(input[idx]);
+    if (idx < len_input()) {
+        st_result(idx, exp(ld_input(idx)));
     }
 }
 
 @compute @workgroup_size(256)
 fn log_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx < arrayLength(&input)) {
-        result[idx] = log(input[idx]);
+    if (idx < len_input()) {
+        st_result(idx, log(ld_input(idx)));
     }
 }
 
 @compute @workgroup_size(256)
 fn relu(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx < arrayLength(&input)) {
-        result[idx] = max(input[idx], 0.0);
+    if (idx < len_input()) {
+        st_result(idx, max(ld_input(idx), 0.0));
     }
 }
 
 @compute @workgroup_size(256)
 fn sigmoid(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx < arrayLength(&input)) {
-        result[idx] = 1.0 / (1.0 + exp(-input[idx]));
+    if (idx < len_input()) {
+        st_result(idx, 1.0 / (1.0 + exp(-ld_input(idx))));
     }
 }
 
 @compute @workgroup_size(256)
 fn tanh_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx < arrayLength(&input)) {
-        result[idx] = tanh(input[idx]);
+    if (idx < len_input()) {
+        st_result(idx, tanh(ld_input(idx)));
     }
 }
 
 @compute @workgroup_size(256)
 fn sqrt_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx < arrayLength(&input)) {
-        result[idx] = sqrt(input[idx]);
+    if (idx < len_input()) {
+        st_result(idx, sqrt(ld_input(idx)));
     }
 }
 
 @compute @workgroup_size(256)
 fn recip(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx < arrayLength(&input)) {
-        result[idx] = 1.0 / input[idx];
+    if (idx < len_input()) {
+        st_result(idx, 1.0 / ld_input(idx));
     }
 }
 
 @compute @workgroup_size(256)
 fn exp2_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx < arrayLength(&input)) {
-        result[idx] = pow(2.0, input[idx]);
+    if (idx < len_input()) {
+        st_result(idx, pow(2.0, ld_input(idx)));
     }
 }
 
 @compute @workgroup_size(256)
 fn log2_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx < arrayLength(&input)) {
-        result[idx] = log2(input[idx]);
+    if (idx < len_input()) {
+        st_result(idx, log2(ld_input(idx)));
     }
 }
 
 @compute @workgroup_size(256)
 fn sin_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx < arrayLength(&input)) {
-        result[idx] = sin(input[idx]);
+    if (idx < len_input()) {
+        st_result(idx, sin(ld_input(idx)));
     }
 }
 
 @compute @workgroup_size(256)
 fn cos_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx < arrayLength(&input)) {
-        result[idx] = cos(input[idx]);
+    if (idx < len_input()) {
+        st_result(idx, cos(ld_input(idx)));
     }
 }
 
@@ -113,7 +113,7 @@ fn erf_approx(x: f32) -> f32 {
 @compute @workgroup_size(256)
 fn erf_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    if (idx < arrayLength(&input)) {
-        result[idx] = erf_approx(input[idx]);
+    if (idx < len_input()) {
+        st_result(idx, erf_approx(ld_input(idx)));
     }
 }

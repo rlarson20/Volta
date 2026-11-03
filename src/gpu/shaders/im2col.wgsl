@@ -2,8 +2,8 @@
 // Transforms 4D input (B, C, H, W) into 2D matrix (B*H_out*W_out, C*K_h*K_w)
 // Each row represents a flattened receptive field for one output position
 
-@group(0) @binding(0) var<storage, read> input: array<f32>;
-@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(0) var<storage, read> input: array<ELEM>;
+@group(0) @binding(1) var<storage, read_write> output: array<ELEM>;
 
 struct Im2colParams {
     batch_size: u32,
@@ -67,10 +67,10 @@ fn im2col_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         // Read input value
         let in_idx = coords_to_idx_4d(b, c, h_pos, w_pos);
-        let value = input[in_idx];
+        let value = ld_input(in_idx);
 
         // Write to output matrix
         let out_idx = output_row * cols + col_idx;
-        output[out_idx] = value;
+        st_output(out_idx, value);
     }
 }

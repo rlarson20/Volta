@@ -6,6 +6,7 @@
 use wgpu::PipelineCompilationOptions;
 
 use super::pool::{BufferPool, BufferPoolConfig};
+use super::shader_template::Elem;
 use super::staging_pool::StagingBufferPool;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -354,7 +355,7 @@ impl GpuContext {
             .await
             .map_err(|e| format!("Failed to create device: {e}"))?;
         // Step 4: Compile all our compute shaders
-        let pipelines = Self::create_pipelines(&device);
+        let pipelines = Self::create_pipelines(&device, Elem::F32);
 
         // Step 5: Create the buffer pool for memory reuse
         let buffer_pool = Arc::new(BufferPool::new(BufferPoolConfig::default()));
@@ -607,101 +608,144 @@ impl GpuContext {
     }
 
     /// Create all compute pipelines by compiling shaders
-    fn create_pipelines(device: &wgpu::Device) -> ComputePipelines {
+    fn create_pipelines(device: &wgpu::Device, elem: Elem) -> ComputePipelines {
+        use super::shader_template::expand;
         // Load and compile shader modules
         let elementwise_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Elementwise Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/elementwise.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/elementwise.wgsl"), elem, elem).into(),
+            ),
         });
 
         let unary_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Unary Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/unary.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/unary.wgsl"), elem, elem).into(),
+            ),
         });
 
         let reduce_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Reduce Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/reduce.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/reduce.wgsl"), elem, elem).into(),
+            ),
         });
 
         let matmul_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("MatMul Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/matmul.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/matmul.wgsl"), elem, elem).into(),
+            ),
         });
 
         let movement_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Movement Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/movement.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/movement.wgsl"), elem, elem).into(),
+            ),
         });
 
         let movement_backward_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Movement Backward Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/movement_backward.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/movement_backward.wgsl"), elem, elem).into(),
+            ),
         });
 
         let unary_backward_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Unary Backward Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/unary_backward.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/unary_backward.wgsl"), elem, elem).into(),
+            ),
         });
 
         let binary_backward_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Binary Backward Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/binary_backward.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/binary_backward.wgsl"), elem, elem).into(),
+            ),
         });
 
         let binary_backward_safe_shader =
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("Binary Backward Safe Shader"),
                 source: wgpu::ShaderSource::Wgsl(
-                    include_str!("shaders/binary_backward_safe.wgsl").into(),
+                    expand(
+                        include_str!("shaders/binary_backward_safe.wgsl"),
+                        elem,
+                        elem,
+                    )
+                    .into(),
                 ),
             });
 
         let matmul_backward_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("MatMul Backward Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/matmul_backward.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/matmul_backward.wgsl"), elem, elem).into(),
+            ),
         });
 
         let reduce_backward_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Reduce Backward Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/reduce_backward.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/reduce_backward.wgsl"), elem, elem).into(),
+            ),
         });
 
         let optimizer_step_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Optimizer Step Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/optimizer_step.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/optimizer_step.wgsl"), elem, elem).into(),
+            ),
         });
 
         let muon_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Muon Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/muon.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/muon.wgsl"), elem, elem).into(),
+            ),
         });
 
         let im2col_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Im2col Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/im2col.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/im2col.wgsl"), elem, elem).into(),
+            ),
         });
 
         let col2im_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Col2im Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/col2im.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/col2im.wgsl"), elem, elem).into(),
+            ),
         });
 
         let direct_conv_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Direct Conv Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/direct_conv.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/direct_conv.wgsl"), elem, elem).into(),
+            ),
         });
 
         let igemm_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("iGEMM Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/igemm.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/igemm.wgsl"), elem, elem).into(),
+            ),
         });
 
         let igemm_backward_input_shader =
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("iGEMM Backward Input Shader"),
                 source: wgpu::ShaderSource::Wgsl(
-                    include_str!("shaders/igemm_backward_input.wgsl").into(),
+                    expand(
+                        include_str!("shaders/igemm_backward_input.wgsl"),
+                        elem,
+                        elem,
+                    )
+                    .into(),
                 ),
             });
 
@@ -709,7 +753,12 @@ impl GpuContext {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("iGEMM Backward Weight Shader"),
                 source: wgpu::ShaderSource::Wgsl(
-                    include_str!("shaders/igemm_backward_weight.wgsl").into(),
+                    expand(
+                        include_str!("shaders/igemm_backward_weight.wgsl"),
+                        elem,
+                        elem,
+                    )
+                    .into(),
                 ),
             });
 
@@ -717,7 +766,7 @@ impl GpuContext {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("Conv Backward Input Shader"),
                 source: wgpu::ShaderSource::Wgsl(
-                    include_str!("shaders/conv_backward_input.wgsl").into(),
+                    expand(include_str!("shaders/conv_backward_input.wgsl"), elem, elem).into(),
                 ),
             });
 
@@ -725,7 +774,12 @@ impl GpuContext {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("Conv Backward Weight Shader"),
                 source: wgpu::ShaderSource::Wgsl(
-                    include_str!("shaders/conv_backward_weight.wgsl").into(),
+                    expand(
+                        include_str!("shaders/conv_backward_weight.wgsl"),
+                        elem,
+                        elem,
+                    )
+                    .into(),
                 ),
             });
 
