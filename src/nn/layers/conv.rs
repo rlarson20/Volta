@@ -1343,8 +1343,12 @@ impl Conv2d {
     /// # Panics
     /// Input needs to be 4D
     pub fn forward(&self, x: &Tensor) -> Tensor {
-        compute_dtype(|| "Conv2d".to_string(), &[x.dtype(), self.weight.dtype()]);
-        let spec = Conv2dSpec::new(&x.shape(), &self.weight.shape(), self.stride, self.padding)
+        // One low-precision op under `amp::autocast`: input, weight and bias are cast
+        // together (PyTorch's convolutions).
+        let (x, weight, bias) = crate::amp::lower_layer(x, &self.weight, self.bias.as_ref());
+        let x = &x;
+        compute_dtype(|| "Conv2d".to_string(), &[x.dtype(), weight.dtype()]);
+        let spec = Conv2dSpec::new(&x.shape(), &weight.shape(), self.stride, self.padding)
             .unwrap_or_else(|e| panic!("{e}"));
 
         // Algorithm selection
@@ -1368,15 +1372,15 @@ impl Conv2d {
                 // Check if we're on GPU
                 if x.borrow().device.is_gpu() {
                     // GPU Direct Convolution
-                    Self::gpu_direct_conv_internal(x, &self.weight, &spec)
+                    Self::gpu_direct_conv_internal(x, &weight, &spec)
                 } else {
                     // CPU Direct Convolution (existing)
-                    Self::direct_conv(x, &self.weight, &spec)
+                    Self::direct_conv(x, &weight, &spec)
                 }
             }
             ConvAlgo::IGEMM => {
                 // Implicit GEMM convolution
-                Self::igemm_forward(x, &self.weight, &spec, IGEMMVariant::default())
+                Self::igemm_forward(x, &weight, &spec, IGEMMVariant::default())
             }
             ConvAlgo::Im2col | ConvAlgo::Auto => {
                 // Auto already converted, but kept for exhaustiveness
@@ -1414,7 +1418,7 @@ impl Conv2d {
         };
 
         // Add bias if present (common to both algorithms)
-        if let Some(ref b) = self.bias {
+        if let Some(b) = &bias {
             // Reshape bias from (out_channels,) to (1, out_channels, 1, 1)
             let bias_reshaped = b.reshape(&[1, spec.out_ch, 1, 1]);
 

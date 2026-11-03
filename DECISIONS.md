@@ -597,6 +597,30 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 
 **Evidence:** `tests/torch_ref_promotion.rs` (fixture group `promotion`, torch 2.15) runs add, mul, div, lt and where on all 64 ordered dtype pairs and matches torch's result dtype and values exactly; where torch's add/mul result is an integer or bool dtype, it checks the op panics naming the missing kernel. For the 16 float pairs, the gradients of `sum(a * b * w)` have each operand's dtype and torch's values, and the product has the promoted dtype. Mutants: promoting to the first operand's dtype, and dropping true division, each fail the 64-pair test. `tests/dtype_tensors.rs` checks an f32 × f64 product's value and per-operand gradient dtypes, the Strict refusal and the guard's restore, int true division, the `i64 + i64` panic, an i64/f32 comparison in f32 (2^24 + 1 equals 2^24), and the new layer message. `guards_not_send` pins the new guard as `!Send`.
 
+### Autocast with f32 parameters, `GradScaler`, an `Optimizer` trait (P7)
+
+**Decision:** mixed precision follows PyTorch's autocast, not "convert the model and keep master weights". `amp::autocast(DType::BF16 | F16)` is a thread-local, nesting, `!Send` guard. Inside it, `matmul`, `Linear`, `Conv2d` and `ConvTranspose2d` cast their float inputs (not f64) to the low dtype, and the losses (`mse_loss`, `cross_entropy_loss`, `nll_loss`, `bce_loss`, `bce_with_logits_loss`, `kl_divergence_gaussian`) cast theirs to f32; every other op runs in its inputs' dtype. The casts are `to_dtype` graph nodes, so parameters stay f32, receive f32 gradients, and the optimizers are unchanged: there are no master weights to keep. `GradScaler` (torch's defaults: scale 2^16, growth 2, backoff 0.5, interval 2000) scales the loss, unscales the gradients in their dtype, skips a step whose gradients hold an inf or NaN, and adapts the scale; it drives an optimizer through the new `Optimizer` trait (`step`, `zero_grad`, `parameters`), which SGD, Adam and Muon implement by forwarding to their inherent methods. Decided with the maintainer, with the next three.
+
+**Choices made here:**
+- **PyTorch's CPU op lists, not its CUDA ones.** Measured on torch 2.15: on the CPU, softmax, log_softmax, layer/batch norm, sum, mean, exp, relu and max pooling stay in the half dtype; only the losses go to f32. The CUDA lists also force softmax, norms and reductions to f32, which suits f16 better, but there is no CUDA here to test against; P8 can revisit them for the GPU.
+- **Layers are cast as units.** `Linear` is a matmul plus a bias add, so casting only the matmul would promote the add back to f32 against the f32 bias; torch's fused `linear` returns the low dtype. `Linear` and the convolutions cast input, weight and bias together (`amp::lower_layer`). Composites built on `matmul` (attention, LSTM) follow it.
+- **Autocast's casts are explicit,** so `DTypePolicy::Strict` does not refuse them; only implicit promotion is affected by that policy.
+- **Master weights for half-converted models are a TODO,** as are torch's per-scope weight-cast cache and norm layers returning the input's dtype under mixed inputs (Volta's promote to f32; the next low-precision op casts back, so values agree).
+- **`GradScaler` checks inf/NaN after rounding** to the gradient's dtype (a finite f32 product can overflow f16), refuses a second `unscale` or an `update` before `step` (as torch does), and is meant for f16: bf16 has f32's exponent range.
+
+**The MNIST criterion and its margin** were fixed before autocast was written, from measurements on the same MLP (784 → 256 → ReLU → 10, Adam lr 1e-3, batch 64, 3 epochs, 5 seeds, one core, release):
+
+| Run | Test accuracy, seeds 1-5 (%) | Mean |
+| --- | --- | --- |
+| torch 2.15, f32 | 97.18 97.39 97.46 97.39 97.44 | 97.37 |
+| torch 2.15, bf16 autocast | 97.13 97.50 97.42 97.40 97.36 | 97.36 |
+| Volta, f32 (harness) | 97.40 97.46 97.47 97.48 97.23 | 97.41 |
+| Volta, model stored in bf16 (no f32 parameters) | 97.06 97.13 96.99 97.11 96.82 | 97.02 |
+
+Seeds spread about 0.25 points, so a 5-seed mean has a standard error near 0.05; torch's own gap is 0.01; storing the model in bf16 loses 0.39. The criterion, `|mean(f32) - mean(bf16 autocast)| <= 0.2` points with the same seeds, initializations and data order, passes torch's behavior and rejects the bf16-stored one by about three standard errors. `examples/mnist_autocast.rs` (`just mnist-autocast`, after `just mnist-data` downloads and checks the files) measured, on 2026-11-03: f32 97.56 97.51 97.56 97.54 97.61 (mean 97.56), bf16 autocast 97.61 97.51 97.50 97.61 97.60 (mean 97.57), gap -0.01, in about 27 s per seed pair. (The harness and the example shuffle differently, hence the different f32 means.) It is not in CI; a nightly lane is a TODO.
+
+**Evidence:** `tests/amp.rs` checks every output dtype in the measured torch table under bf16 and f16, f32 gradients for every parameter of an autocast MLP, nesting and f64 eligibility, and the scaler: a loss scaled by 2e-8 loses every f16 weight gradient to underflow and keeps them under a 2^16 scale (within f16 precision of the f32 run), an inf or NaN gradient skips the step and halves the scale, three clean steps grow a scale with interval 3 and a skip resets the count, and misuse panics. `tests/torch_ref_autocast.rs` (fixture group `autocast`) matches torch under bf16 and f16 for an MLP's loss and the f32 gradients of its input and parameters, Conv2d (all three algorithms) and ConvTranspose2d outputs and gradients, and broadcast batched matmul, within 2 eps of the low dtype except the f16 MLP's gradients (up to 4.55 eps, 0.44% relative; Volta's `Linear` rounds the product and the bias add apart where torch's `addmm` rounds once). Mutants: leaving `Linear`'s bias uncast and casting to bf16 whatever the scope's dtype each fail `tests/amp.rs`.
+
 ## Errors
 
 ### Panic inside the program, `Result` where data comes from outside

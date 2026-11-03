@@ -6,7 +6,7 @@ use crate::tensor::Tensor;
 /// Adam optimizer (Kingma & Ba): per-parameter step sizes from running first and second moments of the gradient.
 pub struct Adam {
     /// Parameters being optimized.
-    params: Vec<Tensor>,
+    pub(super) params: Vec<Tensor>,
     /// Learning rate.
     lr: f32,
     /// Decay rates `(beta1, beta2)` of the first and second moment estimates.
