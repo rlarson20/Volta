@@ -1,6 +1,7 @@
 //! GPU smoke tests: unary, binary, `matmul` (forward and backward), `mulacc`, and `sum_dim` / `max_dim` results are compared with the CPU, and outputs and gradients are checked to stay on the GPU. Also checks that a mixed-device binary op panics. Ops with no GPU kernel (`mulacc` backward, `sum_dim`, `max_dim`) run under `DevicePolicy::PreferGpu` and assert their fallbacks.
 //!
-//! Each test returns early when no GPU is available.
+//! Each test returns early when no GPU is available, except one: with `VOLTA_REQUIRE_GPU`
+//! set (CI's GPU lanes), a missing adapter fails the run instead of skipping it.
 // `common` gates itself with `#![cfg(feature = "gpu")]`, like in the other test files.
 #[path = "common/mod.rs"]
 mod common;
@@ -9,6 +10,25 @@ mod common;
 use common::expect_gaps;
 #[cfg(feature = "gpu")]
 use volta::Axis;
+
+/// GPU tests skip silently without an adapter, so a CI lane meant to run them sets
+/// `VOLTA_REQUIRE_GPU`: then a missing adapter is a failure, not a green, empty run.
+#[test]
+#[cfg(feature = "gpu")]
+fn an_adapter_is_present_when_required() {
+    if std::env::var_os("VOLTA_REQUIRE_GPU").is_some() {
+        assert!(
+            volta::gpu::is_gpu_available(),
+            "VOLTA_REQUIRE_GPU is set but wgpu found no adapter"
+        );
+        println!(
+            "GPU adapter: {}",
+            volta::gpu::get_gpu_context()
+                .expect("an adapter")
+                .device_name()
+        );
+    }
+}
 #[test]
 #[cfg(feature = "gpu")]
 fn test_tensor_gpu_unary_add_binary_smoke() {

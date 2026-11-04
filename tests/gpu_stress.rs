@@ -6,6 +6,18 @@
 mod gpu_stress_tests {
     use volta::{Device, RawTensor, gpu, gpu_pending_count, gpu_sync, gpu_sync_threshold};
 
+    /// Serializes this module's tests: they read and assert the process-wide
+    /// pending-submission counter, which any test running in parallel moves.
+    static COUNTER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Hold the counter lock for the rest of the test (poison-tolerant: a failed test
+    /// must not cascade into the others).
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        COUNTER_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Helper to create a test tensor on GPU
     ///
     /// Note: This function assumes GPU is available. Callers must check
@@ -21,6 +33,7 @@ mod gpu_stress_tests {
     /// This should trigger the timeout if the issue still exists.
     #[test]
     fn test_many_small_ops_pattern() {
+        let _serial = serial();
         if !gpu::is_gpu_available() {
             println!("Skipping GPU stress test - no GPU available");
             return;
@@ -64,6 +77,7 @@ mod gpu_stress_tests {
     /// versus what the pending counter shows.
     #[test]
     fn test_submission_tracking_accuracy() {
+        let _serial = serial();
         if !gpu::is_gpu_available() {
             println!("Skipping GPU stress test - no GPU available");
             return;
@@ -93,6 +107,7 @@ mod gpu_stress_tests {
     /// Stresses the buffer pool by creating and dropping many tensors.
     #[test]
     fn test_buffer_pool_churn() {
+        let _serial = serial();
         if !gpu::is_gpu_available() {
             println!("Skipping GPU stress test - no GPU available");
             return;
@@ -125,6 +140,7 @@ mod gpu_stress_tests {
     /// exceed the threshold.
     #[test]
     fn test_auto_sync_threshold() {
+        let _serial = serial();
         if !gpu::is_gpu_available() {
             println!("Skipping GPU stress test - no GPU available");
             return;
@@ -168,6 +184,7 @@ mod gpu_stress_tests {
     /// Run a very long chain to see if we can cause a timeout
     #[test]
     fn test_long_operation_chain() {
+        let _serial = serial();
         if !gpu::is_gpu_available() {
             println!("Skipping GPU stress test - no GPU available");
             return;
@@ -196,6 +213,7 @@ mod gpu_stress_tests {
     /// Tests with both small and large tensors to see if size matters
     #[test]
     fn test_mixed_operation_sizes() {
+        let _serial = serial();
         if !gpu::is_gpu_available() {
             println!("Skipping GPU stress test - no GPU available");
             return;
@@ -225,6 +243,7 @@ mod gpu_stress_tests {
     /// Specifically test whether `copy_region` and `to_vec` track their submissions
     #[test]
     fn test_copy_operations_tracking() {
+        let _serial = serial();
         if !gpu::is_gpu_available() {
             println!("Skipping GPU stress test - no GPU available");
             return;
@@ -255,6 +274,7 @@ mod gpu_stress_tests {
     /// Verify staging buffers are reused across multiple GPU→CPU transfers
     #[test]
     fn test_staging_buffer_pooling() {
+        let _serial = serial();
         if !gpu::is_gpu_available() {
             println!("Skipping GPU stress test - no GPU available");
             return;
@@ -295,6 +315,7 @@ mod gpu_stress_tests {
     #[test]
     fn test_sync_checked_timeout_handling() {
         use volta::get_gpu_context;
+        let _serial = serial();
 
         if !gpu::is_gpu_available() {
             println!("Skipping GPU stress test - no GPU available");
@@ -350,6 +371,7 @@ mod gpu_stress_tests {
     #[test]
     fn test_resource_monitoring() {
         use volta::gpu::monitor::{ResourceStatus, check_system_resources, get_process_memory_mb};
+        let _serial = serial();
 
         if !gpu::is_gpu_available() {
             println!("Skipping GPU stress test - no GPU available");
@@ -413,6 +435,7 @@ mod gpu_stress_tests {
     #[test]
     fn test_many_small_ops_with_monitoring() {
         use volta::gpu::monitor::{ResourceStatus, check_system_resources};
+        let _serial = serial();
 
         if !gpu::is_gpu_available() {
             println!("Skipping GPU stress test - no GPU available");
@@ -460,6 +483,7 @@ mod gpu_stress_tests {
     #[test]
     fn test_system_monitor_profiling() {
         use volta::gpu::system_monitor::SystemMonitor;
+        let _serial = serial();
 
         if !gpu::is_gpu_available() {
             println!("Skipping GPU stress test - no GPU available");
@@ -505,6 +529,7 @@ mod gpu_stress_tests {
     #[test]
     fn test_early_warning_trend_detection() {
         use volta::gpu::early_warning::{EarlyWarningSystem, HealthStatus};
+        let _serial = serial();
 
         if !gpu::is_gpu_available() {
             println!("Skipping GPU stress test - no GPU available");
@@ -568,6 +593,7 @@ mod gpu_stress_tests {
         use volta::gpu::early_warning::{EarlyWarningSystem, HealthStatus as EWSHealthStatus};
         use volta::gpu::monitor::{ResourceStatus, check_system_resources};
         use volta::gpu::system_monitor::SystemMonitor;
+        let _serial = serial();
 
         if !gpu::is_gpu_available() {
             println!("Skipping GPU stress test - no GPU available");
