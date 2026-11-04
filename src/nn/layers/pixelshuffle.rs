@@ -144,7 +144,7 @@ mod tests {
     fn test_pixelshuffle_gradient_flow() {
         let layer = PixelShuffle::new(2);
         let x = RawTensor::randn(&[1, 4, 3, 3]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         let y = layer.forward(&x);
         let loss = y.sum();

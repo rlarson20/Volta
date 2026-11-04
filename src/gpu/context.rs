@@ -134,8 +134,6 @@ pub struct ComputePipelines {
     pub max: wgpu::ComputePipeline,
     /// Elementwise `a mod b`.
     pub mod_op: wgpu::ComputePipeline,
-    /// Elementwise the comparison `a < b` (f32 0/1 output; unused since P5's Bool comparisons).
-    pub cmplt: wgpu::ComputePipeline,
     /// Bool `a < b` (`compare.wgsl`).
     pub cmp_lt: wgpu::ComputePipeline,
     /// Bool `a <= b`.
@@ -986,7 +984,6 @@ impl GpuContext {
             div: create_pipeline(&elementwise_shader, "div", "Div Pipeline"),
             max: create_pipeline(&elementwise_shader, "max_elem", "Max Pipeline"),
             mod_op: create_pipeline(&elementwise_shader, "mod_op", "Mod Pipeline"),
-            cmplt: create_pipeline(&elementwise_shader, "cmplt", "Cmplt Pipeline"),
 
             // Unary ops
             neg: create_pipeline(&unary_shader, "neg", "Neg Pipeline"),

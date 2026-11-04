@@ -32,8 +32,14 @@ impl MulAccGradFn {
             parents.len() >= 2,
             "MulAcc grad requires at least 2 parents"
         );
-        let x_ref = parents.first().cloned().unwrap();
-        let y_ref = parents.get(1).cloned().unwrap();
+        let x_ref = parents
+            .first()
+            .cloned()
+            .expect("MulAcc backward: three parents");
+        let y_ref = parents
+            .get(1)
+            .cloned()
+            .expect("MulAcc backward: three parents");
         let x_val = x_ref.borrow();
         let y_val = y_ref.borrow();
 
@@ -88,8 +94,14 @@ impl WhereGradFn {
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         // SAFETY: Where operation always creates exactly 2 parents (true_branch, false_branch)
         debug_assert!(parents.len() >= 2, "Where grad requires 2 parents");
-        let true_ref = parents.first().cloned().unwrap();
-        let false_ref = parents.get(1).cloned().unwrap();
+        let true_ref = parents
+            .first()
+            .cloned()
+            .expect("Where backward: two branch parents");
+        let false_ref = parents
+            .get(1)
+            .cloned()
+            .expect("Where backward: two branch parents");
         let true_parent = true_ref.borrow();
         let false_parent = false_ref.borrow();
         let needs_true = true_parent.requires_grad;

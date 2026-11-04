@@ -54,10 +54,10 @@ impl LayerNorm {
 
         // Initialize gamma to 1, beta to 0
         let gamma = RawTensor::ones(&[num_features]);
-        gamma.borrow_mut().requires_grad = true;
+        gamma.set_requires_grad(true);
 
         let beta = RawTensor::zeros(&[num_features]);
-        beta.borrow_mut().requires_grad = true;
+        beta.set_requires_grad(true);
 
         Self {
             normalized_shape,

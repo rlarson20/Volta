@@ -4,7 +4,7 @@
 ///
 /// # Unary rows
 ///
-/// ```ignore
+/// ```text
 /// define_ops! {
 ///     /// Doc comment for the enum.
 ///     unary UnaryOp {
@@ -32,7 +32,7 @@
 ///
 /// Two sections, so "has no derivative" is part of the grammar instead of a flag:
 ///
-/// ```ignore
+/// ```text
 /// define_ops! {
 ///     binary BinaryOp {
 ///         differentiable {

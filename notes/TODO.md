@@ -47,11 +47,8 @@ Evidence in `docs/audits/2026-11-post-phase5.md`; repros (`#[ignore = "A<n>: ...
 
 - [ ] **A6: `check_gradients` on f16/bf16 reports a correct gradient as failing,** silently (torch's `gradcheck` warns that the input is not double). Warn, refuse, or document.
 - [ ] **A7: class-index `cross_entropy_loss` builds a dense `[N, C]` one-hot** (exact, but O(N·C) memory). Gather the target log-probabilities instead once a gather op exists.
-- [ ] **A9: 43 bare `.unwrap()`s in library code** without messages (A3's GPU crash was one). Enable `clippy::unwrap_used` for the library and give each an `expect` that names the broken contract.
-- [ ] **Invariant debts.** Invariant 2: 17 constructor sites in `src/nn/layers/` set `requires_grad` through `borrow_mut()` instead of `set_requires_grad`. Invariant 3: `zero_grad` writes `grad = None` directly (`nn/mod.rs`, `Adam`, `SGD`, `RawTensor`); route it through one method or name it in the invariant. `src/utils/progress.rs` opts out of the print lint module-wide without a `reason`.
 - [ ] **Shader validation covers a hand-kept list** (`shader_template::tests::SHADERS`); compare it with `src/gpu/shaders/` in the test, so a new shader can't skip validation and the direct-access check.
-- [ ] **About 15 doc examples are ` ```ignore ` but pass with an adapter** (`src/gpu/*`, `storage.rs`, `tensor.rs`, `define_ops!`), so CI never compiles them. Make them `no_run` or guard them on `is_gpu_available()`.
-- [ ] **Dead code:** the `cmplt` WGSL entry and pipeline (unused since P5, now compiled once per element type).
+- [ ] **Invariant 2, remaining `borrow_mut()` sites:** optimizer steps write parameter data in place (`SGD`, `Adam`, `Muon`, `nn/mod.rs`), `BatchNorm` updates its running stats, and `conv.rs` tests overwrite weights. Each wants a `Tensor` method (an in-place data update), not a borrow.
 - [ ] **S24 is Metal-specific:** its repro passes on lavapipe. Keep the ignore; confirm on the Mac.
 
 ## GPU

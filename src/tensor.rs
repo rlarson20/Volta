@@ -166,7 +166,12 @@ impl Tensor {
             VoltaError::NotDifferentiable { dtype }
         );
         t.data = t.data.cast(dtype);
-        t.grad = t.grad.as_ref().map(|g| g.cast(dtype));
+        let grad = t.grad.clone();
+        drop(t);
+        // Through `set_grad`, one of the sanctioned writers of `grad` (invariant 3).
+        if let Some(g) = grad {
+            self.set_grad(g.cast(dtype));
+        }
     }
 
     /// This tensor's data in its own dtype, without conversion: the lossless counterpart of
@@ -836,11 +841,16 @@ impl RawTensor {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// From outside the crate this is reached through
+    /// `volta::gpu::invalidate_all_tensor_caches`:
+    ///
+    /// ```no_run
+    /// use volta::{Device, RawTensor, gpu::invalidate_all_tensor_caches};
+    ///
     /// let t = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], false)
-    ///     .to_device(Device::gpu().unwrap());
-    /// let _ = t.borrow().data.to_host_f32(); // Populates CPU cache
-    /// t.borrow_mut().invalidate_gpu_cache(); // Releases CPU copy
+    ///     .to_device(Device::gpu().expect("a GPU"));
+    /// let _ = t.data(); // Populates the CPU cache
+    /// invalidate_all_tensor_caches(&[&t]); // Releases the CPU copy
     /// ```
     pub fn invalidate_gpu_cache(&mut self) {
         self.data.invalidate_cpu_cache();
@@ -1635,6 +1645,7 @@ impl RawTensor {
     /// training loops that own raw tensors (not wrapped in modules) can
     /// reset gradients before a new backward pass.
     pub fn zero_grad(self_t: &Tensor) {
+        // The one writer that clears `grad` (invariant 3).
         self_t.borrow_mut().grad = None;
     }
 }

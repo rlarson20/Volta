@@ -20,7 +20,7 @@ Never violate these. If a task seems to require it, stop and ask.
 
 1. `autograd::edge()` is the only code that attaches `parents`/`grad_fn`. Never build an op or layer output by copying data into `RawTensor::new` (that is how B2/B3 shipped).
 2. A `borrow_mut()` outside `src/autograd.rs` and `src/ops/` means `Tensor` is missing a method. Add the method instead.
-3. Only `accumulate_grad` and `set_grad` write `grad`.
+3. Only `accumulate_grad` and `set_grad` write `grad`, and only `zero_grad` (`RawTensor::zero_grad`, which `Tensor`, `Module` and the optimizers call) clears it.
 4. Library code never prints: use `log::` (lint-enforced).
 5. Numeric code fails loudly (ADDENDUM §8). Library code reads and writes through `crate::index::{fetch, slot, span}`, which panic on an out-of-bounds index in every profile; `#[cfg(test)]` code in `src/` uses `fetch` too, `tests/` and `#[test]` fns index with `v[i]` (`clippy.toml` allows `indexing_slicing` in tests), or zip expected against actual after asserting equal lengths. `examples/` and `benches/` (public API only, not covered by `clippy.toml`) read a scalar with `Tensor::item()` and anything else with `.expect(..)`. Every target reads a scalar with `Tensor::item()`. Never use `.get(i).unwrap_or(0.0)`, and never write an `if let Some` that silently skips a read or write. A zero that means padding gets an explicit coordinate check. Silent zeros are how wrong gradients pass tests. `just check-fallbacks` (in `just ci` and pre-commit) enforces it; opt out per line with `// index-ok: <reason>`.
 6. Never write a test that asserts a known bug's behavior. Use `#[ignore = "<defect ID>: <why>"]` instead.
