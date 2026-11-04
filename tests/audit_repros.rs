@@ -51,12 +51,11 @@ fn conv_transpose2d_with_bias_runs_on_the_gpu_under_prefer_gpu() {
     }
 }
 
-/// S13 (confirmed by this audit): `Sequential` overrides `to_dtype` to reach each child
+/// S13 (confirmed by this audit, fixed): `Sequential` overrides `to_dtype` to reach each child
 /// but not `to_device`, so the default moves only parameters and `PositionalEncoding`'s
 /// sinusoid table (a buffer) stays on the CPU: `forward` on a GPU input panics.
 #[cfg(feature = "gpu")]
 #[test]
-#[ignore = "S13: Sequential::to_device moves parameters only, so a child's buffers (PositionalEncoding's table) stay on the CPU"]
 fn sequential_to_device_moves_child_buffers() {
     use volta::nn::{PositionalEncoding, PositionalEncodingType};
     use volta::{Layer, Module, Sequential};
@@ -113,22 +112,20 @@ fn gpu_elementwise_and_cast_cover_a_4096_square() {
     assert_eq!(g[last], 2.0 * want(last));
 }
 
-/// A3: a negative momentum is silently ignored on the CPU (the momentum branch tests
+/// A3 (fixed): a negative momentum was silently ignored on the CPU (the momentum branch tests
 /// `> 0`) and panics on an `unwrap()` on the GPU (no velocity was allocated). PyTorch
 /// refuses it at construction: `ValueError: Invalid momentum value: -0.5`.
 #[test]
-#[ignore = "A3: SGD accepts a negative momentum (ignored on the CPU, an unwrap panic on the GPU); torch refuses it"]
 #[should_panic(expected = "momentum")]
 fn sgd_refuses_a_negative_momentum() {
     let p = RawTensor::new(vec![1.0], &[1], true);
     let _ = SGD::new(vec![p], 0.1, -0.5, 0.0);
 }
 
-/// A4: `GradScaler` unscales f16 gradients; PyTorch refuses (`ValueError: Attempting to
+/// A4 (fixed): `GradScaler` unscaled f16 gradients; PyTorch refuses (`ValueError: Attempting to
 /// unscale FP16 gradients.`), because the unscaled gradient of an f16 parameter can
 /// underflow or overflow in f16 itself. Loss scaling is for autocast's f32 parameters.
 #[test]
-#[ignore = "A4: GradScaler unscales f16 parameters' gradients; torch refuses them"]
 #[should_panic(expected = "FP16")]
 fn grad_scaler_refuses_f16_gradients() {
     use volta::GradScaler;
@@ -139,4 +136,66 @@ fn grad_scaler_refuses_f16_gradients() {
     p.set_grad(Storage::cpu(vec![1.0]).cast(DType::F16));
     let mut opt = SGD::new(vec![p], 0.1, 0.0, 0.0);
     let _ = GradScaler::new().step(&mut opt);
+}
+
+/// A3's rule for every optimizer: a negative (or NaN) hyperparameter, or an Adam beta
+/// outside `[0, 1)`, is refused by `try_new` with PyTorch's message, before any state is
+/// allocated; valid ones build.
+#[test]
+fn optimizers_validate_hyperparameters_like_torch() {
+    use volta::{Adam, Muon, VoltaError};
+    let p = || vec![RawTensor::new(vec![1.0], &[1], true)];
+    let msg = |r: volta::Result<()>| match r {
+        Err(VoltaError::InvalidParameter(m)) => m,
+        other => panic!("expected InvalidParameter, got {other:?}"),
+    };
+    assert_eq!(
+        msg(SGD::try_new(p(), -0.1, 0.0, 0.0).map(drop)),
+        "Invalid learning rate value: -0.1"
+    );
+    assert_eq!(
+        msg(SGD::try_new(p(), 0.1, -0.5, 0.0).map(drop)),
+        "Invalid momentum value: -0.5"
+    );
+    assert_eq!(
+        msg(SGD::try_new(p(), 0.1, f32::NAN, 0.0).map(drop)),
+        "Invalid momentum value: NaN"
+    );
+    assert_eq!(
+        msg(SGD::try_new(p(), 0.1, 0.0, -1.0).map(drop)),
+        "Invalid weight_decay value: -1"
+    );
+    assert_eq!(
+        msg(Adam::try_new(p(), 0.1, (1.0, 0.999), 1e-8, 0.0).map(drop)),
+        "Invalid beta parameter at index 0: 1"
+    );
+    assert_eq!(
+        msg(Adam::try_new(p(), 0.1, (0.9, -0.1), 1e-8, 0.0).map(drop)),
+        "Invalid beta parameter at index 1: -0.1"
+    );
+    assert_eq!(
+        msg(Adam::try_new(p(), 0.1, (0.9, 0.999), -1e-8, 0.0).map(drop)),
+        "Invalid epsilon value: -0.00000001"
+    );
+    assert_eq!(
+        msg(Muon::try_new(p(), 0.02, -0.95, true, 5).map(drop)),
+        "Invalid momentum value: -0.95"
+    );
+    assert!(SGD::try_new(p(), 0.1, 0.9, 1e-4).is_ok());
+    assert!(Adam::try_new(p(), 1e-3, (0.9, 0.999), 1e-8, 0.0).is_ok());
+    assert!(Muon::try_new(p(), 0.02, 0.95, true, 5).is_ok());
+}
+
+/// A4's boundary: bf16 gradients are accepted, as in PyTorch (only f16 is refused).
+#[test]
+fn grad_scaler_accepts_bf16_gradients() {
+    use volta::GradScaler;
+    let p = RawTensor::new(vec![1.0], &[1], false)
+        .to_dtype(DType::BF16)
+        .detach();
+    p.set_requires_grad(true);
+    p.set_grad(Storage::cpu(vec![65536.0]).cast(DType::BF16));
+    let mut opt = SGD::new(vec![p.clone()], 0.5, 0.0, 0.0);
+    assert!(GradScaler::new().step(&mut opt));
+    assert_eq!(p.data(), vec![0.5]);
 }

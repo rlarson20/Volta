@@ -51,13 +51,17 @@ impl Muon {
     /// Create a Muon optimizer.
     ///
     /// # Arguments
-    /// * `params` - Parameters to optimize (f32, CPU or GPU)
+    /// * `params` - Parameters to optimize (any float dtype, CPU or GPU)
     /// * `lr` - Learning rate. The step is orthogonalized, so its size does not follow the
     ///   gradient's; the reference uses about 0.02
     /// * `momentum` - Momentum coefficient (typical: 0.95)
     /// * `nesterov` - Use the Nesterov update `momentum·v + g` instead of `v`
     /// * `ns_steps` - Newton-Schulz iterations (typical: 5)
+    ///
+    /// # Panics
+    /// If a hyperparameter is invalid; see [`Self::try_new`].
     #[must_use]
+    #[track_caller]
     pub fn new(
         params: Vec<Tensor>,
         lr: f32,
@@ -65,6 +69,23 @@ impl Muon {
         nesterov: bool,
         ns_steps: usize,
     ) -> Self {
+        Self::try_new(params, lr, momentum, nesterov, ns_steps)
+            .unwrap_or_else(|e| panic!("Muon: {e}"))
+    }
+
+    /// [`Self::new`], checking the hyperparameters first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` if `lr` or `momentum` is negative or NaN.
+    pub fn try_new(
+        params: Vec<Tensor>,
+        lr: f32,
+        momentum: f32,
+        nesterov: bool,
+        ns_steps: usize,
+    ) -> crate::Result<Self> {
+        super::check_non_negative("learning rate", lr)?;
+        super::check_non_negative("momentum", momentum)?;
         // Velocity lives where its parameter does.
         let velocity = params
             .iter()
@@ -74,14 +95,14 @@ impl Muon {
                 Storage::new_zeros(p.data.len(), &p.device).cast(p.data.dtype())
             })
             .collect();
-        Self {
+        Ok(Self {
             params,
             lr,
             momentum,
             nesterov,
             ns_steps,
             velocity,
-        }
+        })
     }
 
     /// Clear every parameter's gradient.
