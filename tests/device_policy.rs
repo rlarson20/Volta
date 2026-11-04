@@ -15,10 +15,11 @@ use common::{
 use volta::Axis;
 use volta::nn::{MultiHeadAttention, PositionalEncoding, PositionalEncodingType};
 use volta::{
-    BatchNorm1d, BatchNorm2d, Device, DevicePolicy, Dropout, Embedding, FallbackEvent, GELU,
-    LSTMCell, Layer, LayerNorm, Linear, Module, PadValue, Pass, RawTensor, RecurrentLayer, Storage,
-    Tensor, bce_loss, bce_with_logits_loss, cross_entropy_loss, kl_divergence_gaussian,
-    manual_seed, mse_loss, nll_loss, take_fallback_events, with_device_policy,
+    BatchNorm1d, BatchNorm2d, ConvTranspose2d, Device, DevicePolicy, Dropout, Embedding,
+    FallbackEvent, GELU, LSTMCell, Layer, LayerNorm, Linear, Module, PadValue, Pass, RawTensor,
+    RecurrentLayer, Storage, Tensor, bce_loss, bce_with_logits_loss, cross_entropy_loss,
+    kl_divergence_gaussian, manual_seed, mse_loss, nll_loss, take_fallback_events,
+    with_device_policy,
 };
 
 /// `to_device` is differentiable (PyTorch's `.to()`): a leaf moved to the GPU and used in
@@ -248,6 +249,14 @@ fn gpu_layers_keep_constants_on_device() {
         ("LayerNorm", on_gpu(LayerNorm::new(vec![4])).forward(&x2)),
         ("BatchNorm1d", on_gpu(BatchNorm1d::new(4)).forward(&x2)),
         ("BatchNorm2d", on_gpu(BatchNorm2d::new(2)).forward(&x4)),
+        (
+            "ConvTranspose2d (bias)",
+            on_gpu(ConvTranspose2d::new(2, 3, 3, 2, 1, true)).forward(&x4),
+        ),
+        (
+            "ConvTranspose2d (no bias)",
+            on_gpu(ConvTranspose2d::new(2, 3, 3, 2, 1, false)).forward(&x4),
+        ),
         ("Dropout", Dropout::new(0.5).forward(&x2)),
         (
             "Embedding",
