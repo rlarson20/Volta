@@ -16,7 +16,11 @@ struct WhereParams {
 @group(0) @binding(4) var<uniform> params: WhereParams;
 
 @compute @workgroup_size(256)
-fn where_select(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn where_select(
+    @builtin(global_invocation_id) gid_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let gid = flat_global_id(gid_2d, num_wg);
     let i = gid.x;
     if (i < params.n) {
         st_result(i, select(ld_y(i), ld_x(i), cond[i] != 0u));

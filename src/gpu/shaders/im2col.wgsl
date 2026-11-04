@@ -30,7 +30,11 @@ fn coords_to_idx_4d(n: u32, c: u32, h: u32, w: u32) -> u32 {
 
 // Main im2col transformation
 @compute @workgroup_size(256, 1, 1)
-fn im2col_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn im2col_main(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     // Each thread handles one output position (one row of the output matrix)
     let output_row = global_id.x;
     let total_outputs = params.batch_size * params.h_out * params.w_out;
