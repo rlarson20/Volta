@@ -382,32 +382,26 @@ impl Layer for ConvTranspose2d {
         // 3. Matrix multiplication: [B*H*W, C_in] @ [C_in, C_out*K*K] → [B*H*W, C_out*K*K]
         let matmul_result = input_reshaped.matmul(&weight_reshaped);
 
-        // 4. Use col2im to convert to output shape
+        // 4. col2im to the output shape, then 5. the bias per output channel, in one host
+        // computation (rounded once for half types). There is no GPU kernel for this
+        // layer: the output is CPU storage and `edge()` applies the device policy. The
+        // bias is read from the host (a GPU bias syncs), never combined with the CPU
+        // result as a tensor, which would mix devices (audit A1).
         let col_data = matmul_result.borrow().data.clone();
-        let output_data = dispatch_real!(col_data.dtype(), T => {
-            Storage::from_compute(col_data.dtype(), Self::col2im_transpose(&col_data.host::<T>(), &spec))
+        let out_dims = spec.output_dims();
+        let plane: usize = out_dims.iter().skip(2).product();
+        let final_data = dispatch_real!(col_data.dtype(), T => {
+            let mut out = Self::col2im_transpose(&col_data.host::<T>(), &spec);
+            if let Some(bias) = &bias {
+                let b = bias.borrow().data.host::<T>().into_owned();
+                assert_eq!(b.len(), out_channels, "ConvTranspose2d bias length");
+                for (i, v) in out.iter_mut().enumerate() {
+                    *v += fetch(&b, (i / plane) % out_channels);
+                }
+            }
+            Storage::from_compute(col_data.dtype(), out)
         });
-
-        // 5. Add bias if present. The real backward for this op is the custom
-        // ConvTranspose2dGradFn below (col2im isn't invertible through ordinary
-        // matmul/reshape autograd), so everything up to here — including this bias
-        // add — is throwaway data computation (`requires_grad: false`); only the
-        // final `.data`/`.shape` are kept, and `edge()` below builds the tensor that
-        // actually carries the graph.
-        let mut raw_output = RawTensor::new_with_storage(
-            output_data,
-            Shape::derived(spec.output_dims()),
-            Device::CPU,
-            false,
-        );
-        if let Some(bias) = &bias {
-            let bias_reshaped = bias.reshape(&[1, out_channels, 1, 1]);
-            raw_output = raw_output.add(&bias_reshaped);
-        }
-        let (final_data, final_shape) = {
-            let b = raw_output.borrow();
-            (b.data.clone(), b.shape.clone())
-        };
+        let final_shape = Shape::derived(out_dims);
 
         let has_bias = bias.is_some();
 
