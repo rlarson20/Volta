@@ -5,7 +5,11 @@
 @group(0) @binding(1) var<storage, read_write> result: array<ELEM>;
 
 @compute @workgroup_size(256)
-fn neg(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn neg(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_input()) {
         st_result(idx, -ld_input(idx));
@@ -13,7 +17,11 @@ fn neg(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn exp_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn exp_op(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_input()) {
         st_result(idx, exp(ld_input(idx)));
@@ -21,7 +29,11 @@ fn exp_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn log_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn log_op(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_input()) {
         st_result(idx, log(ld_input(idx)));
@@ -29,7 +41,11 @@ fn log_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn relu(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn relu(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_input()) {
         st_result(idx, max(ld_input(idx), 0.0));
@@ -37,7 +53,11 @@ fn relu(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn sigmoid(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn sigmoid(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_input()) {
         st_result(idx, 1.0 / (1.0 + exp(-ld_input(idx))));
@@ -45,7 +65,11 @@ fn sigmoid(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn tanh_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn tanh_op(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_input()) {
         st_result(idx, tanh(ld_input(idx)));
@@ -53,7 +77,11 @@ fn tanh_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn sqrt_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn sqrt_op(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_input()) {
         st_result(idx, sqrt(ld_input(idx)));
@@ -61,7 +89,11 @@ fn sqrt_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn recip(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn recip(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_input()) {
         st_result(idx, 1.0 / ld_input(idx));
@@ -69,7 +101,11 @@ fn recip(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn exp2_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn exp2_op(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_input()) {
         st_result(idx, pow(2.0, ld_input(idx)));
@@ -77,7 +113,11 @@ fn exp2_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn log2_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn log2_op(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_input()) {
         st_result(idx, log2(ld_input(idx)));
@@ -85,7 +125,11 @@ fn log2_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn sin_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn sin_op(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_input()) {
         st_result(idx, sin(ld_input(idx)));
@@ -93,7 +137,11 @@ fn sin_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn cos_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn cos_op(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_input()) {
         st_result(idx, cos(ld_input(idx)));
@@ -111,7 +159,11 @@ fn erf_approx(x: f32) -> f32 {
 }
 
 @compute @workgroup_size(256)
-fn erf_op(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn erf_op(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_input()) {
         st_result(idx, erf_approx(ld_input(idx)));

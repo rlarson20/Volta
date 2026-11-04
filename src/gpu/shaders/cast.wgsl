@@ -14,7 +14,11 @@ struct CastParams {
 @group(0) @binding(2) var<uniform> params: CastParams;
 
 @compute @workgroup_size(256)
-fn cast_elements(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn cast_elements(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < params.n) {
         st_output(idx, ld_input(idx));
@@ -28,7 +32,11 @@ fn cast_elements(@builtin(global_invocation_id) global_id: vec3<u32>) {
 @group(0) @binding(1) var<storage, read_write> bool_out: array<u32>;
 
 @compute @workgroup_size(256)
-fn from_bool(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn from_bool(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < params.n) {
         st_output(idx, select(0.0, 1.0, bool_in[idx] != 0u));
@@ -36,7 +44,11 @@ fn from_bool(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn to_bool(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn to_bool(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < params.n) {
         let bits = bitcast<u32>(ld_input(idx)) & 0x7fffffffu;
