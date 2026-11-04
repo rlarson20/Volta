@@ -27,7 +27,7 @@ pub struct RawTensor {
 **Key design choices:**
 
 - **Rc<RefCell>** for dynamic computation graphs (single-threaded)
-- **Gradient functions as trait objects** for polymorphic backpropagation
+- **A closed `GradFn` enum** for backpropagation (one variant per op; `edge()` is the only constructor of graph edges)
 - **Storage abstraction** for CPU/GPU portability
 - **Row-major flat vectors** for efficient memory layout
 
@@ -37,13 +37,13 @@ pub struct RawTensor {
 pub enum Storage {
     Cpu(HostBuf), // F16(Arc<[f16]>) | BF16(..) | F32(..) | F64(..) | I32(..) | I64(..) | U8(..) | Bool(..)
     #[cfg(feature = "gpu")]
-    Gpu(Arc<GpuStorage>) // GpuStorage { buffer: GpuBuffer, host: OnceLock<Vec<f32>> }, f32 only
+    Gpu(Arc<GpuStorage>) // GpuStorage { buffer: GpuBuffer, host: OnceLock<HostBuf> }; F32, F16, BF16 or Bool
 }
 ```
 
 This design enables:
 
-- **Typed CPU buffers**: one shared, copy-on-write `Arc<[T]>` per dtype (f16, bf16, f32, f64, i32, i64, u8, bool), so element type and alignment are part of the type. Tensors of any of these dtypes can be built (`RawTensor::from_typed`), and cast (`to_dtype`). CPU kernels (ops, layers, optimizers) are generic over `real::Real` (f32, f64) and dispatch on the dtype; `Module::to_dtype` converts a model, buffers included.
+- **Typed CPU buffers**: one shared, copy-on-write `Arc<[T]>` per dtype (f16, bf16, f32, f64, i32, i64, u8, bool), so element type and alignment are part of the type. Tensors of any of these dtypes can be built (`RawTensor::from_typed`), and cast (`to_dtype`). CPU kernels (ops, layers, optimizers) are generic over `real::Real` (f32, f64) and dispatch on the dtype; f16 and bf16 run the f32 instance and round each output; integer and bool tensors are data (movement copies bits, comparisons, `where`, indices). `Module::to_dtype` converts a model, buffers included. On the GPU, every shader is expanded per element type (`gpu::shader_template`): f32, native f16, and f16/bf16 packed two per `u32`.
 - **Efficient GPU↔CPU transfers**: Lazy, write-once host copy (`OnceLock`) shared by clones of a GPU storage; writes copy first
 - **SafeTensors compatibility**: the eight dtypes map one-to-one; any other SafeTensors dtype is a load error
 
@@ -162,9 +162,11 @@ pub struct GpuBuffer {
 
 ### GPU-accelerated Operations
 
-**✅ Fully GPU-accelerated:**
+**✅ GPU kernels** (in f32, f16 and bf16; Bool for comparisons and `where`):
 
-- **Binary ops**: add, sub, mul, div, max, mod, cmplt
+- **Binary ops**: add, sub, mul, div, max, mod (equal shapes; broadcasting is a device-policy gap)
+- **Comparisons and `where`**: lt, le, gt, ge, eq, ne, `where` (equal shapes)
+- **Casts**: `to_dtype` between f32, f16, bf16 and Bool
 - **Unary ops**: neg, exp, log, relu, sigmoid, tanh, sqrt, recip, exp2, log2, sin, cos
 - **Reduction ops**: sum, max, mean
 - **Matrix multiplication**: matmul with configurable workgroup sizes
@@ -175,11 +177,11 @@ pub struct GpuBuffer {
   - Backward passes (input and weight gradients) for all three algorithms
   - Auto-selection prefers iGEMM on GPU for inputs >1M elements
 
-**❌ Still CPU-only:**
+**❌ Gaps** (a panic under `DevicePolicy::Strict`, CPU under `PreferGpu`; the full list is in `notes/TODO.md`, "Kernel gaps that `Strict` rejects"):
 
-- Linear backward pass (gradient computation for Linear layers)
-- Broadcasting preprocessing
-- Loss functions
+- Broadcasting binary ops, forward and backward (`Linear`'s bias add, the norm layers, GELU's constants)
+- `sum_dim`/`max_dim` (so softmax and the norms), batched and 1-D `matmul`, movement above rank 4
+- `Embedding`, `MaxPool2d`, `ConvTranspose2d` (which also panics with a bias: audit A1)
 
 ### GPU Development Guidelines
 

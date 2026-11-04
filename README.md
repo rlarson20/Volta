@@ -8,7 +8,7 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/rlarson20/Volta)
 
 Volta is a minimal deep learning and automatic differentiation library for Rust, heavily inspired by PyTorch.
-Built from scratch to expose the internals - DAG linearization, GradFn trait dispatch, and SafeTensors interop - that production frameworks abstract away.
+Built from scratch to expose the internals - DAG linearization, `GradFn` dispatch, and SafeTensors interop - that production frameworks abstract away.
 It provides a dynamic computation graph, NumPy-style broadcasting, and common neural network primitives.
 
 This project is an educational endeavor to demystify the inner workings of modern autograd engines. It prioritizes correctness, clarity, and a clean API over raw performance, while still providing hooks for hardware acceleration.

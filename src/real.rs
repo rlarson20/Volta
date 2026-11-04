@@ -185,7 +185,8 @@ pub(crate) fn compute_dtype(op: impl FnOnce() -> String, dtypes: &[DType]) -> DT
     match first {
         DType::F32 | DType::F64 | DType::F16 | DType::BF16 => first,
         DType::I32 | DType::I64 | DType::U8 | DType::Bool => panic!(
-            "{}: no {first} kernel; ops compute in f32 or f64 (ADDENDUM §11)",
+            "{}: no {first} kernel; arithmetic computes in f32, f64, f16 or bf16 (integer and \
+             bool tensors are data: move, compare, select, index; ADDENDUM §11)",
             op()
         ),
     }
