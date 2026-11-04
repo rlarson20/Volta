@@ -30,8 +30,30 @@ impl SGD {
     /// * `lr` - Learning rate (typical: 0.01 to 0.1)
     /// * `momentum` - Momentum coefficient (typical: 0.9, or 0.0 for no momentum)
     /// * `weight_decay` - L2 penalty (typical: 1e-4, or 0.0 for none)
+    ///
+    /// # Panics
+    /// If a hyperparameter is invalid; see [`Self::try_new`].
     #[must_use]
+    #[track_caller]
     pub fn new(params: Vec<Tensor>, lr: f32, momentum: f32, weight_decay: f32) -> Self {
+        Self::try_new(params, lr, momentum, weight_decay).unwrap_or_else(|e| panic!("SGD: {e}"))
+    }
+
+    /// [`Self::new`], checking the hyperparameters first, as PyTorch does.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` if `lr`, `momentum` or `weight_decay` is negative
+    /// or NaN. A negative momentum used to be ignored on the CPU and to panic on the GPU
+    /// (audit A3).
+    pub fn try_new(
+        params: Vec<Tensor>,
+        lr: f32,
+        momentum: f32,
+        weight_decay: f32,
+    ) -> crate::Result<Self> {
+        super::check_non_negative("learning rate", lr)?;
+        super::check_non_negative("momentum", momentum)?;
+        super::check_non_negative("weight_decay", weight_decay)?;
         // Create velocity state matching the device and dtype of each parameter
         let velocity = if momentum > 0.0 {
             params
@@ -50,13 +72,13 @@ impl SGD {
             vec![]
         };
 
-        Self {
+        Ok(Self {
             params,
             lr,
             momentum,
             weight_decay,
             velocity,
-        }
+        })
     }
 
     /// Zero all parameter gradients
