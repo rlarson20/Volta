@@ -82,7 +82,7 @@ pub trait Module {
     /// Clears the gradient of every parameter.
     fn zero_grad(&mut self) {
         for p in self.parameters() {
-            p.borrow_mut().grad = None;
+            p.zero_grad();
         }
     }
 

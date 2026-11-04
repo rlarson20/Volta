@@ -64,7 +64,7 @@ impl Embedding {
         });
 
         let weight = RawTensor::new(data, &[vocab_size, embedding_dim], false);
-        weight.borrow_mut().requires_grad = true;
+        weight.set_requires_grad(true);
 
         Self {
             weight,

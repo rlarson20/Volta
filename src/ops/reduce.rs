@@ -204,8 +204,8 @@ impl RawTensor {
                             .host::<T>()
                             .iter()
                             .enumerate()
-                            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
-                            .unwrap();
+                            .max_by(|(_, a), (_, b)| a.partial_cmp(b).expect("MaxReduce: a NaN input has no maximum (S3: PyTorch propagates NaN)"))
+                            .expect("MaxReduce: a tensor has at least one element");
                         (Storage::from_compute(dtype, vec![max_val]), max_idx)
                     })
                 };

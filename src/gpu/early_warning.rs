@@ -25,8 +25,8 @@ pub enum HealthStatus {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use volta::gpu::early_warning::EarlyWarningSystem;
+/// ```no_run
+/// use volta::gpu::early_warning::{EarlyWarningSystem, HealthStatus};
 ///
 /// let mut ews = EarlyWarningSystem::new();
 ///

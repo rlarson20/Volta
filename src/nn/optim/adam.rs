@@ -99,7 +99,7 @@ impl Adam {
     /// Clears the gradient of every parameter.
     pub fn zero_grad(&self) {
         for param in &self.params {
-            param.borrow_mut().grad = None;
+            param.zero_grad();
         }
     }
 
@@ -117,7 +117,7 @@ impl Adam {
         for i in 0..self.params.len() {
             // SAFETY: We're iterating over valid indices 0..self.params.len()
             debug_assert!(i < self.params.len(), "Parameter index out of bounds");
-            let param = self.params.get(i).unwrap();
+            let param = self.params.get(i).expect("Adam: a parameter per index");
             let p = param.borrow();
 
             // Skip parameters without gradients
@@ -146,7 +146,7 @@ impl Adam {
     fn step_gpu_param(&mut self, i: usize) {
         use crate::gpu::OptimizerStepParams;
 
-        let param = self.params.get(i).unwrap();
+        let param = self.params.get(i).expect("Adam: a parameter per index");
         let mut p = param.borrow_mut();
 
         let grad = match &p.grad {
@@ -155,8 +155,14 @@ impl Adam {
         };
 
         // State is already on GPU (stored as Storage)
-        let m_state = self.m.get_mut(i).unwrap();
-        let v_state = self.v.get_mut(i).unwrap();
+        let m_state = self
+            .m
+            .get_mut(i)
+            .expect("Adam: first-moment state per parameter");
+        let v_state = self
+            .v
+            .get_mut(i)
+            .expect("Adam: second-moment state per parameter");
 
         // Setup optimizer parameters
         let opt_params = OptimizerStepParams {
@@ -178,7 +184,7 @@ impl Adam {
 
     /// CPU update for a single parameter
     fn step_cpu_param(&mut self, i: usize) {
-        let param = self.params.get(i).unwrap();
+        let param = self.params.get(i).expect("Adam: a parameter per index");
         let mut p = param.borrow_mut();
 
         let grad = match &p.grad {

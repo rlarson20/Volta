@@ -38,10 +38,10 @@ impl BatchNorm2d {
     #[must_use]
     pub fn new_with_params(num_features: usize, eps: f32, momentum: f32) -> Self {
         let gamma = RawTensor::ones(&[num_features]);
-        gamma.borrow_mut().requires_grad = true;
+        gamma.set_requires_grad(true);
 
         let beta = RawTensor::zeros(&[num_features]);
-        beta.borrow_mut().requires_grad = true;
+        beta.set_requires_grad(true);
 
         // Running stats are buffers, so they don't require grad
         let running_mean = RawTensor::zeros(&[num_features]);
@@ -269,10 +269,10 @@ impl BatchNorm1d {
     #[must_use]
     pub fn new_with_params(num_features: usize, eps: f32, momentum: f32) -> Self {
         let gamma = RawTensor::ones(&[num_features]);
-        gamma.borrow_mut().requires_grad = true;
+        gamma.set_requires_grad(true);
 
         let beta = RawTensor::zeros(&[num_features]);
-        beta.borrow_mut().requires_grad = true;
+        beta.set_requires_grad(true);
 
         let running_mean = RawTensor::zeros(&[num_features]);
         let running_var = RawTensor::ones(&[num_features]);
