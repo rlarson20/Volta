@@ -20,6 +20,25 @@ pub use transformer::{
     ScaledDotProductAttention, TransformerBlock, causal_mask,
 };
 
+/// PyTorch's mixed-dtype rule for the norm layers (audit A5): a half (f16/bf16) input
+/// with f32 parameters is normalized in f32 and returned in the input's dtype, so a norm
+/// under `amp::autocast` keeps the activations low, and its parameters keep f32 gradients.
+/// The casts are explicit graph nodes, so `DTypePolicy::Strict` accepts them. Any other
+/// pair goes straight to `f`, which promotes or refuses as usual.
+pub(crate) fn norm_mixed(
+    x: &Tensor,
+    param: crate::DType,
+    f: impl FnOnce(&Tensor) -> Tensor,
+) -> Tensor {
+    use crate::DType;
+    let d = x.dtype();
+    if matches!(d, DType::F16 | DType::BF16) && param == DType::F32 {
+        f(&x.to_dtype(DType::F32)).to_dtype(d)
+    } else {
+        f(x)
+    }
+}
+
 /// Private supertrait that keeps [`RecurrentLayer`] implementable only inside
 /// this crate. `Module` and [`Layer`] stay open so users can write custom layers.
 mod sealed {

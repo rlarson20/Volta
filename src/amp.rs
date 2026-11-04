@@ -5,7 +5,9 @@
 //! scope's dtype (F16 or BF16), and the losses (`mse_loss`, `cross_entropy_loss`,
 //! `nll_loss`, `bce_loss`, `bce_with_logits_loss`, `kl_divergence_gaussian`) cast theirs to
 //! F32. Every other op runs in its inputs' dtype, promoting mixed operands as usual: on the
-//! CPU, PyTorch keeps softmax, norms and reductions in the half dtype too. The casts are
+//! CPU, PyTorch keeps softmax, norms and reductions in the half dtype too. The norm layers
+//! take a half input with f32 parameters as torch's kernels do: normalized in f32, returned
+//! in the half dtype (`nn::norm_mixed`). The casts are
 //! `to_dtype` graph nodes, so parameters stay f32 and receive f32 gradients: there are no
 //! master weights to keep, and the optimizer is unchanged. F64 tensors are never cast,
 //! as in PyTorch.

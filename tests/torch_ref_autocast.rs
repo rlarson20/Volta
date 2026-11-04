@@ -15,8 +15,8 @@ use volta::amp::autocast;
 use volta::io::{StateDict, TensorData, TypedTensorData, load_safetensors_raw};
 use volta::storage::Element;
 use volta::{
-    Conv2d, ConvAlgo, ConvTranspose2d, DType, Layer, Linear, Module, RawTensor, ReLU, Sequential,
-    Tensor,
+    BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, DType, Layer, LayerNorm, Linear, Module,
+    RawTensor, ReLU, Sequential, Tensor,
 };
 
 /// The low dtypes under test: fixture prefix, dtype, machine epsilon.
@@ -29,13 +29,17 @@ const LOW: [(&str, DType, f64); 2] = [
 /// error measured over both dtypes. The MLP's gradients are the loosest (4.55 f16 eps,
 /// 0.44% relative, on `w1`): Volta's `Linear` rounds the product and the bias add apart,
 /// torch's `addmm` once, and the difference grows through two layers of backward. In
-/// bf16 the same cases stay within 1.01 eps.
+/// bf16 the same cases stay within 1.01 eps. The norms after a low-precision op match
+/// within 0.99 eps (`LayerNorm`) and 0.001 eps (`BatchNorm2d`): one f32 normalization and
+/// one rounding, as torch's kernels do.
 const BOUNDS: &[(&str, f64)] = &[
     ("mlp.loss", 2.0),
     ("mlp.", 9.0),
     ("conv.", 2.0),
     ("convt.", 2.0),
     ("matmul.", 2.0),
+    ("ln.", 2.0),
+    ("bn.", 1.0),
 ];
 
 /// The `autocast` fixture group.
@@ -291,5 +295,95 @@ fn matmul_under_autocast_matches_torch() {
         backprop_weighted(&f, p, "matmul", &out);
         assert_close(&f, low, "matmul.grad_a", &grad(&a));
         assert_close(&f, low, "matmul.grad_b", &grad(&b));
+    }
+}
+
+/// `LayerNorm` after a `Linear` under autocast: the norm takes the half activation with
+/// f32 parameters, normalizes in f32 and returns the half dtype, as torch does (audit A5);
+/// the parameters get f32 gradients.
+#[test]
+fn layernorm_after_linear_under_autocast_matches_torch() {
+    let f = Fixture::load();
+    for low in LOW {
+        let (p, dtype, _) = low;
+        let mut lin = Linear::new(6, 5, true);
+        lin.load_state_dict(&state(vec![
+            (
+                "weight",
+                transpose(&f.f32s(&format!("{p}.ln.weight")), 5, 6),
+                vec![6, 5],
+            ),
+            ("bias", f.f32s(&format!("{p}.ln.bias")), vec![5]),
+        ]))
+        .expect("load");
+        let mut ln = LayerNorm::new(vec![5]);
+        ln.load_state_dict(&state(vec![
+            ("gamma", f.f32s(&format!("{p}.ln.gamma")), vec![5]),
+            ("beta", f.f32s(&format!("{p}.ln.beta")), vec![5]),
+        ]))
+        .expect("load");
+        let x = f.tensor::<f32>(&format!("{p}.ln.x"), true);
+        let out = {
+            let _ac = autocast(dtype);
+            ln.forward(&lin.forward(&x))
+        };
+        assert_close(&f, low, "ln.out", &out);
+        backprop_weighted(&f, p, "ln", &out);
+        let lp = lin.parameters();
+        let [w, b] = lp.as_slice() else {
+            panic!("two parameters")
+        };
+        let np = ln.parameters();
+        let [g, be] = np.as_slice() else {
+            panic!("two parameters")
+        };
+        let wt = RawTensor::new(transpose(&w.grad().expect("grad"), 6, 5), &[30], false);
+        assert_close(&f, low, "ln.grad_x", &grad(&x));
+        assert_eq!(grad(w).dtype(), DType::F32);
+        assert_close(&f, low, "ln.grad_weight", &wt);
+        assert_close(&f, low, "ln.grad_bias", &grad(b));
+        assert_close(&f, low, "ln.grad_gamma", &grad(g));
+        assert_close(&f, low, "ln.grad_beta", &grad(be));
+    }
+}
+
+/// `BatchNorm2d` (training) after a `Conv2d` under autocast, likewise.
+#[test]
+fn batchnorm_after_conv_under_autocast_matches_torch() {
+    let f = Fixture::load();
+    for low in LOW {
+        let (p, dtype, _) = low;
+        let mut c = Conv2d::new(2, 2, 3, 1, 1, false);
+        c.load_state_dict(&state(vec![(
+            "weight",
+            f.f32s(&format!("{p}.bn.weight")),
+            vec![2, 2, 3, 3],
+        )]))
+        .expect("load");
+        let mut bn = BatchNorm2d::new(2);
+        bn.load_state_dict(&state(vec![
+            ("gamma", f.f32s(&format!("{p}.bn.gamma")), vec![2]),
+            ("beta", f.f32s(&format!("{p}.bn.beta")), vec![2]),
+        ]))
+        .expect("load");
+        let x = f.tensor::<f32>(&format!("{p}.bn.x"), true);
+        let out = {
+            let _ac = autocast(dtype);
+            bn.forward(&c.forward(&x))
+        };
+        assert_close(&f, low, "bn.out", &out);
+        backprop_weighted(&f, p, "bn", &out);
+        let cp = c.parameters();
+        let [w] = cp.as_slice() else {
+            panic!("one parameter")
+        };
+        let np = bn.parameters();
+        let [g, be] = np.as_slice() else {
+            panic!("two parameters")
+        };
+        assert_close(&f, low, "bn.grad_x", &grad(&x));
+        assert_close(&f, low, "bn.grad_weight", &grad(w));
+        assert_close(&f, low, "bn.grad_gamma", &grad(g));
+        assert_close(&f, low, "bn.grad_beta", &grad(be));
     }
 }
