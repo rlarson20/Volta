@@ -1,16 +1,14 @@
-//! Data type support for tensors
+//! Tensor data types.
 //!
-//! This module provides the `DType` enum for representing tensor data types,
-//! enabling Volta to work with different precisions (f16, bf16, f32, f64)
-//! and load models from formats like `SafeTensors`.
+//! Today a `DType` labels bytes in [`Storage`](crate::Storage) and in `SafeTensors`
+//! files; every `Tensor` holds and computes in f32, and other dtypes are converted to
+//! f32 when loaded. Real dtypes and mixed precision are planned in ADDENDUM §11.
 
 use std::fmt;
 
-/// Supported tensor data types
+/// Element types that `Storage` and the `SafeTensors` loaders can hold.
 ///
-/// Volta internally uses a byte buffer + dtype tag approach, allowing
-/// runtime flexibility for mixed-precision operations and easy loading
-/// of external model formats.
+/// Only `F32` reaches a `Tensor` today (see the module docs).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
@@ -73,31 +71,30 @@ impl DType {
         matches!(self, Self::I32 | Self::I64 | Self::U8)
     }
 
-    /// Determines the result dtype when two dtypes are combined in an operation.
-    /// Follows type promotion rules similar to PyTorch/NumPy.
+    /// The dtype PyTorch gives an operation on two tensors of these dtypes.
+    ///
+    /// Matches `torch.result_type` for two dimensioned tensors on all 64 pairs
+    /// (`tests/torch_ref_dtypes.rs`): `Bool` yields to anything; a float beats any
+    /// integer, whatever its width (`F16` with `I64` is `F16`); `F16` with `BF16` is
+    /// `F32`; otherwise the wider type of the same kind wins. Zero-dim tensors and Rust
+    /// scalars promote by a different rule, which this does not model.
+    ///
+    /// Nothing calls this yet: ops require one dtype until implicit promotion lands
+    /// (ADDENDUM §11, P6).
     #[must_use]
     pub fn promote(a: Self, b: Self) -> Self {
-        use DType::{Bool, F32, F64, I32, I64, U8};
+        use DType::{BF16, Bool, F16, F32, F64, I32, I64, U8};
 
-        // Same type -> same type
-        if a == b {
-            return a;
-        }
-
-        // Float types promote to wider float
         match (a, b) {
-            // F64 dominates everything
+            _ if a == b => a,
+            (Bool, other) | (other, Bool) => other,
             (F64, _) | (_, F64) => F64,
-
-            // Int types promote to wider int
-            (I64, I32 | U8 | Bool) | (I32 | U8 | Bool, I64) => I64,
-            (I32, U8 | Bool) | (U8 | Bool, I32) => I32,
-            (U8, Bool) | (Bool, U8) => U8,
-
-            // F32 dominates F16/BF16 and integers
-            // F16 and BF16 promote to F32 for safety (including with ints)
-            // Fallback (shouldn't reach here due to if a == b check)
-            _ => F32,
+            (F32, _) | (_, F32) | (F16, BF16) | (BF16, F16) => F32,
+            (F16 | BF16, _) => a,
+            (_, F16 | BF16) => b,
+            (I64, _) | (_, I64) => I64,
+            (I32, _) | (_, I32) => I32,
+            (U8, U8) => U8,
         }
     }
 }
@@ -148,6 +145,12 @@ mod tests {
         // Int promotion
         assert_eq!(DType::promote(DType::I32, DType::I64), DType::I64);
         assert_eq!(DType::promote(DType::U8, DType::I32), DType::I32);
+
+        // Half floats beat integers and bool (torch), rather than widening to F32
+        assert_eq!(DType::promote(DType::F16, DType::I64), DType::F16);
+        assert_eq!(DType::promote(DType::I32, DType::BF16), DType::BF16);
+        assert_eq!(DType::promote(DType::Bool, DType::F16), DType::F16);
+        assert_eq!(DType::promote(DType::Bool, DType::U8), DType::U8);
     }
 
     #[test]

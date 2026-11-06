@@ -470,6 +470,25 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 
 **Not done:** the lint stays an allow, not a convention, so an `as f32` that ever feeds an integer-exact comparison is not caught. Revisit if one appears.
 
+### compile_fail requires `rust-src` (2026-11-06)
+
+**Decision:** the pinned `tests/compile_fail/*.stderr` are blessed with the `rust-src` component installed, CI installs it, and `tests/compile_fail.rs` panics with an install hint when it is missing.
+
+**Why:** rustc quotes libcore (`pub struct PhantomData<T: PointeeSized>;`) under the `$RUST/core/src/marker.rs` note in `guards_not_send` only when `rust-src` is present. The files were first blessed without it, so `just ci` failed on every machine that had it.
+
+**Rejected:** changing the guards' non-`Send` marker so the diagnostic never reaches libcore. That edits library code to suit a test, and the output that avoids libcore can only be found by trial.
+
+## Dtypes (ADDENDUM §11)
+
+### Mixed precision: four decisions (2026-11-02)
+
+**Context:** `DType` was decorative (`notes/TODO.md`): every `Tensor` is f32 and the tag only labels bytes in `Storage` and safetensors. The two honest options were to shrink it to an interchange tag or make it real. The maintainer chose full mixed precision (ADDENDUM §11), against the recommendation to shrink it first and treat mixed precision as backlog.
+
+1. **Half types compute in f32 and round the output** (PyTorch CPU semantics), rather than rounding after every element operation. It reuses the f32 kernels, and torch fixtures can check it. Per-step rounding would show precision loss more vividly but disagree with torch, leaving nothing to check it against.
+2. **Promotion is implicit and follows `torch.result_type`,** implemented by inserting differentiable `Cast` nodes so kernels only ever see one dtype. Rejected: strict `DTypeMismatch` on every mixed op. It is more explicit, but less like the PyTorch API the project teaches. Until P6 lands, mixed operands are a `DTypeMismatch`.
+3. **The `improvements` → `main` gate waits for §11** (the maintainer's call; the recommendation was to let P0 clear the "decorative" item and merge meanwhile).
+4. **GPU f16 is in scope** (P8, wgpu `SHADER_F16`). An unsupported dtype or adapter is an error at `to_device`, never the old silent upcast to f32. The cloud can write P8 but not verify it.
+
 ## Errors
 
 ### Panic inside the program, `Result` where data comes from outside

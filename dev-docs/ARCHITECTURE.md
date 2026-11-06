@@ -35,7 +35,7 @@ pub struct RawTensor {
 
 ```rust
 pub enum Storage {
-    Cpu { data: Vec<u8>, dtype: DType },
+    Cpu { data: Arc<[u8]>, dtype: DType },
     #[cfg(feature = "gpu")]
     Gpu(Arc<GpuStorage>) // GpuStorage { buffer: GpuBuffer, host: OnceLock<Vec<f32>> }, f32 only
 }
@@ -43,10 +43,9 @@ pub enum Storage {
 
 This byte-level storage design enables:
 
-- **Runtime dtype flexibility**: Data stored as `Vec<u8>` with separate `dtype` tag
-- **Supported dtypes**: f16, bf16, f32, f64, i32, i64, u8, bool
+- **A dtype tag on bytes**: CPU data is `Arc<[u8]>` (copy-on-write) with a `dtype` tag. It can hold f16, bf16, f32, f64, i32, i64, u8, and bool, but only f32 reaches a `Tensor`; the rest is converted on load. ADDENDUM §11 replaces this with a typed buffer.
 - **Efficient GPU↔CPU transfers**: Lazy, write-once host copy (`OnceLock`) shared by clones of a GPU storage; writes copy first
-- **SafeTensors compatibility**: Direct mapping to SafeTensors format dtype specification
+- **SafeTensors compatibility**: the eight dtypes map one-to-one; any other SafeTensors dtype is a load error
 
 ### Device Abstraction (`src/device.rs`)
 

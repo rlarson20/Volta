@@ -37,7 +37,7 @@ pub enum Storage {
     /// GPU storage - data lives in GPU memory, always f32.
     ///
     /// Shared like the CPU variant: `clone` bumps a refcount, and the only write path is
-    /// [`Storage::gpu_buffer_mut`], which copies the buffer first if it is shared. So a
+    /// `Storage::gpu_buffer_mut`, which copies the buffer first if it is shared. So a
     /// shared buffer never changes, and the host copy cached beside it never goes stale.
     #[cfg(feature = "gpu")]
     Gpu(Arc<GpuStorage>),

@@ -314,7 +314,24 @@ def group_layers():
     save("layers", t)
 
 
-GROUPS = {"ops": group_ops, "reductions": group_reductions, "optim": group_optim, "layers": group_layers}
+# Volta's `DType` discriminants, in order: F16=0, BF16=1, F32=2, F64=3, I32=4, I64=5, U8=6, Bool=7.
+VOLTA_DTYPES = [torch.float16, torch.bfloat16, torch.float32, torch.float64, torch.int32, torch.int64, torch.uint8, torch.bool]
+
+
+def group_dtypes():
+    """`promotion[i, j]` is the Volta code of `torch.result_type` for two 1-element tensors.
+
+    Dimensioned tensors on purpose: zero-dim tensors and Python scalars promote by category
+    only, which is a separate rule (ADDENDUM §11, P6).
+    """
+    codes = [
+        [VOLTA_DTYPES.index(torch.result_type(torch.zeros(1, dtype=a), torch.zeros(1, dtype=b))) for b in VOLTA_DTYPES]
+        for a in VOLTA_DTYPES
+    ]
+    save("dtypes", {"promotion": torch.tensor(codes, dtype=torch.float32)})
+
+
+GROUPS = {"ops": group_ops, "reductions": group_reductions, "optim": group_optim, "layers": group_layers, "dtypes": group_dtypes}
 
 if __name__ == "__main__":
     wanted = sys.argv[1:] or list(GROUPS)

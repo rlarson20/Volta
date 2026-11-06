@@ -131,6 +131,7 @@ fn get_process_memory_ratio() -> f64 {
     rss_kb as f64 / SYSTEM_MEMORY_KB as f64
 }
 
+/// Not measured off macOS: always `0.0`, which callers read as no memory pressure.
 #[cfg(not(target_os = "macos"))]
 fn get_process_memory_ratio() -> f64 {
     0.0 // Not implemented for non-macOS, return healthy

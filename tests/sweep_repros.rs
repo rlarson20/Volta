@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 use volta::io::mapping::StateDictMapper;
-use volta::io::{TensorData, load_safetensors};
+use volta::io::{TensorData, load_safetensors, load_safetensors_raw};
 use volta::nn::{FeedForward, MultiHeadAttention, ScaledDotProductAttention, TransformerBlock};
 use volta::{BatchNorm1d, DataLoader, Layer, Module, RawTensor, SGD, Storage};
 
@@ -138,32 +138,44 @@ fn write_raw(
     path
 }
 
-#[test]
-#[ignore = "S18: U32 is read as f32 bit patterns (1u32 becomes 1.4e-45); numpy/torch would give 1.0"]
-fn u32_safetensors_is_converted_by_value_or_rejected() {
-    let bytes: Vec<u8> = [1u32, 2u32].iter().flat_map(|v| v.to_le_bytes()).collect();
-    let path = write_raw("u32", safetensors::Dtype::U32, vec![2], &bytes);
-    let loaded = load_safetensors(&path);
+/// S18: an unsupported dtype is rejected by name, by both loaders, rather than read as
+/// f32 bit patterns. Converting by value was the alternative; it is lossy for U32/U64.
+fn assert_rejected(name: &str, dtype: safetensors::Dtype, shape: Vec<usize>, bytes: &[u8]) {
+    let path = write_raw(name, dtype, shape, bytes);
+    let f32_load = load_safetensors(&path).map(|_| ());
+    let raw_load = load_safetensors_raw(&path).map(|_| ());
     let _ = std::fs::remove_file(&path);
-    if let Ok(state) = loaded {
-        assert_eq!(state["t"].data, vec![1.0, 2.0]);
+    for (loader, result) in [
+        ("load_safetensors", f32_load),
+        ("load_safetensors_raw", raw_load),
+    ] {
+        let err = result.expect_err(&format!("{loader} accepted a {dtype:?} tensor"));
+        assert_eq!(
+            err.kind(),
+            std::io::ErrorKind::InvalidData,
+            "{loader}: {err}"
+        );
+        assert!(
+            err.to_string().contains(&format!("{dtype:?}")),
+            "{loader}'s error should name the dtype: {err}"
+        );
     }
 }
 
+/// U32 has no Volta dtype; it used to load as bit patterns (1 became 1.4e-45).
 #[test]
-#[ignore = "S18: I8 is treated as 4-byte f32, so [4] i8 values load as 1 value with shape [4] (3 i8 values panic)"]
-fn i8_safetensors_is_converted_by_value_or_rejected() {
-    let bytes: Vec<u8> = vec![1, 2, 3, 4];
-    let path = write_raw("i8", safetensors::Dtype::I8, vec![4], &bytes);
-    let loaded = std::panic::catch_unwind(|| load_safetensors(&path));
-    let _ = std::fs::remove_file(&path);
-    match loaded {
-        Ok(Ok(state)) => assert_eq!(state["t"].data, vec![1.0, 2.0, 3.0, 4.0]),
-        Ok(Err(_)) => {}
-        Err(_) => panic!(
-            "load_safetensors panicked on an I8 tensor instead of converting or returning Err"
-        ),
-    }
+fn u32_safetensors_is_rejected() {
+    let bytes: Vec<u8> = [1u32, 2u32].iter().flat_map(|v| v.to_le_bytes()).collect();
+    assert_rejected("u32", safetensors::Dtype::U32, vec![2], &bytes);
+}
+
+/// I8 has no Volta dtype; it used to be read as 4-byte f32.
+#[test]
+fn i8_safetensors_is_rejected() {
+    // Four I8 values: the byte length a 4-byte f32 read used to accept as one value.
+    assert_rejected("i8", safetensors::Dtype::I8, vec![4], &[1, 2, 3, 4]);
+    // Three I8 values: a length an f32 read would have panicked on.
+    assert_rejected("i8_odd", safetensors::Dtype::I8, vec![3], &[1, 2, 3]);
 }
 
 #[test]
