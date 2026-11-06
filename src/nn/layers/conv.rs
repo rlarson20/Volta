@@ -2,6 +2,7 @@ use crate::Storage;
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::device_policy::kernel_failed;
+use crate::dtype::DType;
 use crate::index::{fetch, signed, slot, unsigned};
 use crate::io::{StateDict, TensorData};
 use crate::nn::{Layer, Module};
@@ -173,7 +174,7 @@ impl Im2colGradFn {
             (storage, out_grad.device.clone())
         } else {
             let col = dispatch_real!(out_grad.data.dtype(), T => {
-                Storage::from_typed(Conv2d::col2im(out_grad.data.host::<T>(), &self.spec))
+                Storage::from_compute(out_grad.data.dtype(), Conv2d::col2im(&out_grad.data.host::<T>(), &self.spec))
             });
             (col, crate::Device::CPU)
         };
@@ -234,8 +235,9 @@ impl DirectConvGradFn {
                 )
             } else {
                 dispatch_real!(out_grad.data.dtype(), T => self.compute_input_gradient_cpu::<T>(
-                    out_grad.data.host::<T>(),
-                    weight.as_ref().unwrap().borrow().data.host::<T>(),
+                    out_grad.data.dtype(),
+                    &out_grad.data.host::<T>(),
+                    &weight.as_ref().unwrap().borrow().data.host::<T>(),
                 ))
             })
         } else {
@@ -261,8 +263,9 @@ impl DirectConvGradFn {
                 )
             } else {
                 dispatch_real!(out_grad.data.dtype(), T => self.compute_weight_gradient_cpu::<T>(
-                    out_grad.data.host::<T>(),
-                    x.as_ref().unwrap().borrow().data.host::<T>(),
+                    out_grad.data.dtype(),
+                    &out_grad.data.host::<T>(),
+                    &x.as_ref().unwrap().borrow().data.host::<T>(),
                 ))
             })
         } else {
@@ -301,6 +304,7 @@ impl DirectConvGradFn {
     /// CPU implementation of input gradient computation
     fn compute_input_gradient_cpu<T: Real>(
         &self,
+        dtype: DType,
         out_grad_data: &[T],
         weight_data: &[T],
     ) -> Tensor {
@@ -362,11 +366,16 @@ impl DirectConvGradFn {
             }
         }
 
-        RawTensor::from_shape_typed(grad_x_data, Shape::derived(self.spec.input_dims()))
+        RawTensor::from_shape_compute(dtype, grad_x_data, Shape::derived(self.spec.input_dims()))
     }
 
     /// CPU implementation of weight gradient computation
-    fn compute_weight_gradient_cpu<T: Real>(&self, out_grad_data: &[T], x_data: &[T]) -> Tensor {
+    fn compute_weight_gradient_cpu<T: Real>(
+        &self,
+        dtype: DType,
+        out_grad_data: &[T],
+        x_data: &[T],
+    ) -> Tensor {
         let Conv2dSpec {
             batch,
             in_ch,
@@ -440,7 +449,7 @@ impl DirectConvGradFn {
             }
         }
 
-        RawTensor::from_shape_typed(grad_w_data, Shape::derived(self.spec.weight_dims()))
+        RawTensor::from_shape_compute(dtype, grad_w_data, Shape::derived(self.spec.weight_dims()))
     }
 }
 
@@ -515,7 +524,7 @@ impl IGEMMGradFn {
                                     );
                                 }
 
-                                Some(RawTensor::from_shape_typed(grad_x_data, Shape::derived(self.spec.input_dims())))
+                                Some(RawTensor::from_shape_compute(out_grad.data.dtype(), grad_x_data, Shape::derived(self.spec.input_dims())))
                 })
             }
         } else {
@@ -559,7 +568,7 @@ impl IGEMMGradFn {
                                     );
                                 }
 
-                                Some(RawTensor::from_shape_typed(grad_w_data, Shape::derived(self.spec.weight_dims())))
+                                Some(RawTensor::from_shape_compute(out_grad.data.dtype(), grad_w_data, Shape::derived(self.spec.weight_dims())))
                 })
             }
         } else {
@@ -939,7 +948,7 @@ impl Conv2d {
             }
         }
 
-        Storage::from_typed(result)
+        Storage::from_compute(data.dtype(), result)
         });
 
         edge(
@@ -1097,7 +1106,7 @@ impl Conv2d {
             }
         }
 
-        Storage::from_typed(output)
+        Storage::from_compute(x_data.dtype(), output)
         });
 
         // Create output tensor. `edge()` requires grad if *either* x or weight does —
@@ -1206,7 +1215,7 @@ impl Conv2d {
                 }
             }
 
-            Storage::from_typed(output)
+            Storage::from_compute(x_data.dtype(), output)
             });
 
             // Create output tensor
@@ -2497,7 +2506,7 @@ mod conv2d_tests {
             let label = format!("{spec:?}");
 
             let direct = DirectConvGradFn { spec }
-                .compute_input_gradient_cpu(&out_grad, &w)
+                .compute_input_gradient_cpu(crate::DType::F32, &out_grad, &w)
                 .borrow()
                 .data
                 .to_vec();

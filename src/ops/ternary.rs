@@ -38,12 +38,12 @@ impl MulAccGradFn {
 
         let dtype = out_grad.data.dtype();
         let product = |other: &Storage| {
-            dispatch_real!(dtype, T => Storage::from_typed(
+            dispatch_real!(dtype, T => Storage::from_compute(dtype,
                 out_grad
                     .data
                     .host::<T>()
                     .iter()
-                    .zip(other.host::<T>())
+                    .zip(other.host::<T>().iter())
                     .map(|(&g, &o)| g * o)
                     .collect::<Vec<T>>(),
             ))
@@ -60,7 +60,7 @@ impl MulAccGradFn {
             // under a CPU label. This CPU gradient is the gap `accumulate_grad` handles.
             .then(|| {
                 wrap(dispatch_real!(dtype, T => {
-                    Storage::from_typed(out_grad.data.host::<T>().to_vec())
+                    Storage::from_compute(dtype, out_grad.data.host::<T>().to_vec())
                 }))
             });
 
@@ -107,7 +107,7 @@ impl WhereGradFn {
                     .zip(&self.mask)
                     .map(|(&g, &m)| if m == take { g } else { T::ZERO })
                     .collect();
-                Storage::from_typed(RawTensor::sum_over_broadcast_dims(
+                Storage::from_compute(out_grad.data.dtype(), RawTensor::sum_over_broadcast_dims(
                     &data,
                     out_grad.shape.truncate_rank(),
                     shape.truncate_rank(),
@@ -172,12 +172,12 @@ impl RawTensor {
                 }
 
                 // CPU path (CPU inputs; mixed devices panic in `edge()`).
-                let result = dispatch_real!(dtype, T => Storage::from_typed(
+                let result = dispatch_real!(dtype, T => Storage::from_compute(dtype,
                     data_x
                         .host::<T>()
                         .iter()
-                        .zip(data_y.host::<T>())
-                        .zip(data_z.host::<T>())
+                        .zip(data_y.host::<T>().iter())
+                        .zip(data_z.host::<T>().iter())
                         .map(|((&a, &b), &c)| a * b + c)
                         .collect::<Vec<T>>(),
                 ));
@@ -220,16 +220,16 @@ impl RawTensor {
                 });
                 let result = dispatch_real!(dtype, T => {
                     let true_bc = Self::broadcast_to(
-                        true_data.host::<T>(),
+                        &true_data.host::<T>(),
                         true_shape.truncate_rank(),
                         &out_shape,
                     );
                     let false_bc = Self::broadcast_to(
-                        false_data.host::<T>(),
+                        &false_data.host::<T>(),
                         false_shape.truncate_rank(),
                         &out_shape,
                     );
-                    Storage::from_typed(
+                    Storage::from_compute(dtype,
                         mask.iter()
                             .zip(&true_bc)
                             .zip(&false_bc)

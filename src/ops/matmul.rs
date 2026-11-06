@@ -24,8 +24,8 @@ impl TransposeGradFn {
         out_grad: &RawTensor,
         _parents: &[Tensor],
     ) -> Vec<Option<Tensor>> {
-        let transposed = dispatch_real!(out_grad.data.dtype(), T => Storage::from_typed(
-            RawTensor::transpose_2d(out_grad.data.host::<T>(), out_grad.shape.truncate_rank()),
+        let transposed = dispatch_real!(out_grad.data.dtype(), T => Storage::from_compute(out_grad.data.dtype(),
+            RawTensor::transpose_2d(&out_grad.data.host::<T>(), out_grad.shape.truncate_rank()),
         ));
         let [dim0, dim1] = out_grad.shape.fixed::<2>();
         vec![Some(RawTensor::new_with_storage(
@@ -231,14 +231,14 @@ impl RawTensor {
                 for i in 0..m {
                     let mut sum = T::ZERO;
                     for j in 0..n {
-                        sum += fetch(a_host, i * n + j) * fetch(b_host, j);
+                        sum += fetch(&a_host, i * n + j) * fetch(&b_host, j);
                     }
                     *slot(&mut result_data, i) = sum;
                 }
 
                 edge(
                     [self_t.clone(), other.clone()],
-                    Storage::from_typed(result_data),
+                    Storage::from_compute(dtype, result_data),
                     Shape::derived(vec![m]),
                     Device::CPU,
                     GradFn::MatMul(MatMulGradFn::vector()),
@@ -255,7 +255,7 @@ impl RawTensor {
                 for j in 0..p {
                     let mut sum = T::ZERO;
                     for i in 0..n {
-                        sum += fetch(a_host, i) * fetch(b_host, i * p + j);
+                        sum += fetch(&a_host, i) * fetch(&b_host, i * p + j);
                     }
 
                     *slot(&mut result_data, j) = sum;
@@ -263,7 +263,7 @@ impl RawTensor {
 
                 edge(
                     [self_t.clone(), other.clone()],
-                    Storage::from_typed(result_data),
+                    Storage::from_compute(dtype, result_data),
                     Shape::derived(vec![p]),
                     Device::CPU,
                     GradFn::MatMul(MatMulGradFn::vector()),
@@ -279,7 +279,7 @@ impl RawTensor {
                 let sum: T = a_host.iter().zip(b_host.iter()).map(|(a, b)| a * b).sum();
                 edge(
                     [self_t.clone(), other.clone()],
-                    Storage::from_typed(vec![sum]),
+                    Storage::from_compute(dtype, vec![sum]),
                     Shape::derived(vec![1]),
                     Device::CPU,
                     GradFn::MatMul(MatMulGradFn::vector()),
@@ -309,15 +309,15 @@ impl RawTensor {
 
                     // CPU path: BLAS/Accelerate or matrixmultiply on host data.
                     let result_data = T::gemm(
-                        data_a.host::<T>(),
-                        data_b.host::<T>(),
+                        &data_a.host::<T>(),
+                        &data_b.host::<T>(),
                         spec.m,
                         spec.k,
                         spec.n,
                     );
                     return edge(
                         [self_t.clone(), other.clone()],
-                        Storage::from_typed(result_data),
+                        Storage::from_compute(dtype, result_data),
                         Shape::derived(spec.out_dims()),
                         Device::CPU,
                         GradFn::MatMul(MatMulGradFn::matrix(spec)),
@@ -327,12 +327,12 @@ impl RawTensor {
                 // Batched: (..b, m, k) @ (..b, k, n) -> (..b, m, n)
                 let (m, k, n) = (spec.m, spec.k, spec.n);
                 let data_a_expanded = Self::broadcast_to(
-                    data_a.host::<T>(),
+                    &data_a.host::<T>(),
                     &spec.a_dims(),
                     &spec.a_expanded_dims(),
                 );
                 let data_b_expanded = Self::broadcast_to(
-                    data_b.host::<T>(),
+                    &data_b.host::<T>(),
                     &spec.b_dims(),
                     &spec.b_expanded_dims(),
                 );
@@ -360,7 +360,7 @@ impl RawTensor {
 
                 edge(
                     [self_t.clone(), other.clone()],
-                    Storage::from_typed(result_data),
+                    Storage::from_compute(dtype, result_data),
                     Shape::derived(spec.out_dims()),
                     Device::CPU,
                     GradFn::MatMul(MatMulGradFn::matrix(spec)),
@@ -382,8 +382,8 @@ impl RawTensor {
         assert_eq!(shape.rank(), 2, "Transpose expects 2D tensor");
         let dtype = compute_dtype(|| "Transpose".to_string(), &[self_t.dtype()]);
 
-        let transposed = dispatch_real!(dtype, T => Storage::from_typed(
-            Self::transpose_2d(data.host::<T>(), shape.truncate_rank()),
+        let transposed = dispatch_real!(dtype, T => Storage::from_compute(dtype,
+            Self::transpose_2d(&data.host::<T>(), shape.truncate_rank()),
         ));
         let [dim0, dim1] = shape.fixed::<2>();
         let new_shape = vec![dim1, dim0];
@@ -520,19 +520,19 @@ impl MatMulGradFn {
 
         let grad_x = if x.requires_grad {
             match (&self.spec, x.shape.rank(), y.shape.rank()) {
-                (Some(spec), _, _) => Some(RawTensor::from_shape_typed(Self::matrix_grad_a(spec, g_host, y_host), x.shape.clone())),
+                (Some(spec), _, _) => Some(RawTensor::from_shape_compute(x.data.dtype(), Self::matrix_grad_a(spec, &g_host, &y_host), x.shape.clone())),
                 (None, 2, 1) => {
                     // Matrix-vector: (m,n) @ (n,) -> (m,)
                     // ∂L/∂x = ∂L/∂z[:,None] @ v[None,:] = outer(out_grad, v)
                     let [m, n] = x.shape.fixed::<2>();
                     let mut grad_data = vec![T::ZERO; m * n];
                     for i in 0..m {
-                        let gz_i = fetch(g_host, i);
+                        let gz_i = fetch(&g_host, i);
                         for j in 0..n {
-                            *slot(&mut grad_data, i * n + j) = gz_i * fetch(y_host, j);
+                            *slot(&mut grad_data, i * n + j) = gz_i * fetch(&y_host, j);
                         }
                     }
-                    Some(RawTensor::from_shape_typed(grad_data, x.shape.clone()))
+                    Some(RawTensor::from_shape_compute(x.data.dtype(), grad_data, x.shape.clone()))
                 }
                 (None, 1, 2) => {
                     // Vector-matrix: (n,) @ (n,p) -> (p,)
@@ -544,17 +544,17 @@ impl MatMulGradFn {
                     for i in 0..len_x {
                         for j in 0..len_y_p {
                             *slot(&mut grad_data, i) +=
-                                fetch(g_host, j) * fetch(y_host, i * len_y_p + j);
+                                fetch(&g_host, j) * fetch(&y_host, i * len_y_p + j);
                         }
                     }
-                    Some(RawTensor::from_shape_typed(grad_data, x.shape.clone()))
+                    Some(RawTensor::from_shape_compute(x.data.dtype(), grad_data, x.shape.clone()))
                 }
                 (None, 1, 1) => {
                     // Dot: (n,) @ (n,) -> scalar
                     // ∂L/∂x = out_grad * y
-                    let og = fetch(g_host, 0);
+                    let og = fetch(&g_host, 0);
                     let grad_data: Vec<T> = y_host.iter().map(|&v| og * v).collect();
-                    Some(RawTensor::from_shape_typed(grad_data, x.shape.clone()))
+                    Some(RawTensor::from_shape_compute(x.data.dtype(), grad_data, x.shape.clone()))
                 }
                 (None, rx, ry) => {
                     unreachable!("vector matmul backward with ranks {rx} and {ry}")
@@ -566,7 +566,7 @@ impl MatMulGradFn {
 
         let grad_y = if y.requires_grad {
             match (&self.spec, x.shape.rank(), y.shape.rank()) {
-                (Some(spec), _, _) => Some(RawTensor::from_shape_typed(Self::matrix_grad_b(spec, x_host, g_host), y.shape.clone())),
+                (Some(spec), _, _) => Some(RawTensor::from_shape_compute(x.data.dtype(), Self::matrix_grad_b(spec, &x_host, &g_host), y.shape.clone())),
                 (None, 2, 1) => {
                     // Matrix-vector: (m,n) @ (n,) -> (m,)
                     // ∂L/∂v = X^T @ ∂L/∂z -> (n,)
@@ -575,11 +575,11 @@ impl MatMulGradFn {
                     for j in 0..n {
                         let mut sum = T::ZERO;
                         for i in 0..m {
-                            sum += fetch(x_host, i * n + j) * fetch(g_host, i);
+                            sum += fetch(&x_host, i * n + j) * fetch(&g_host, i);
                         }
                         *slot(&mut grad_data, j) = sum;
                     }
-                    Some(RawTensor::from_shape_typed(grad_data, y.shape.clone()))
+                    Some(RawTensor::from_shape_compute(x.data.dtype(), grad_data, y.shape.clone()))
                 }
                 (None, 1, 2) => {
                     // grad_y = x^T @ out_grad -> (n,1) @ (1,p) -> (n,p)
@@ -588,16 +588,16 @@ impl MatMulGradFn {
                     for i in 0..dim0 {
                         for j in 0..dim1 {
                             *slot(&mut grad_data, i * dim1 + j) =
-                                fetch(x_host, i) * fetch(g_host, j);
+                                fetch(&x_host, i) * fetch(&g_host, j);
                         }
                     }
-                    Some(RawTensor::from_shape_typed(grad_data, y.shape.clone()))
+                    Some(RawTensor::from_shape_compute(x.data.dtype(), grad_data, y.shape.clone()))
                 }
                 (None, 1, 1) => {
                     // Dot: (n,) @ (n,) -> scalar
-                    let og = fetch(g_host, 0);
+                    let og = fetch(&g_host, 0);
                     let grad_data: Vec<T> = x_host.iter().map(|&u| og * u).collect();
-                    Some(RawTensor::from_shape_typed(grad_data, y.shape.clone()))
+                    Some(RawTensor::from_shape_compute(x.data.dtype(), grad_data, y.shape.clone()))
                 }
                 (None, rx, ry) => {
                     unreachable!("vector matmul backward with ranks {rx} and {ry}")

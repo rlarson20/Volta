@@ -1,7 +1,8 @@
 //! Tensors of non-f32 dtypes (ADDENDUM §11): they can be built and read back, integer and
-//! bool tensors cannot require gradients, and an op refuses an operand it has no kernel for
-//! (half types until P4, integers and bool) or mixed dtypes (until P6) loudly, naming the
-//! op, instead of converting. f64 values are checked in `src/lib_tests/f64_tests.rs`.
+//! bool tensors cannot require gradients, half ops compute in f32 and round each output,
+//! and an op refuses an operand it has no kernel for (integers and bool) or mixed dtypes
+//! (until P6) loudly, naming the op, instead of converting. f64 values are checked in
+//! `src/lib_tests/f64_tests.rs`, f16/bf16 against torch in `tests/torch_ref_half.rs`.
 
 use half::{bf16, f16};
 use volta::{Conv2d, DType, RawTensor, SGD, Storage, Tensor, VoltaError};
@@ -117,11 +118,44 @@ fn mixed_dtype_binary_op_panics() {
     let _ = a.add(&b);
 }
 
-/// Unary ops read through the same check.
+/// A half op decodes to f32, computes there, and rounds the output once (PyTorch CPU).
+/// `x * y` for these bf16 values differs from the bf16 product rounded twice.
 #[test]
-#[should_panic(expected = "Unary(Exp): f16 ops are not implemented until ADDENDUM §11 P4")]
-fn f16_unary_op_panics_until_p4() {
-    let _ = RawTensor::from_typed(vec![f16::from_f32(1.0)], &[1]).exp();
+fn half_ops_compute_in_f32_and_round_the_output() {
+    let xs = [1.007_812_5_f32, 3.0, -0.3, 1e-3];
+    let ys = [1.007_812_5_f32, 0.1, 7.0, 3e4];
+    let x = RawTensor::from_typed(xs.map(bf16::from_f32).to_vec(), &[4]);
+    let y = RawTensor::from_typed(ys.map(bf16::from_f32).to_vec(), &[4]);
+    let got = x.elem_mul(&y).to_vec_as::<bf16>().expect("bf16");
+    let want: Vec<bf16> = xs
+        .iter()
+        .zip(&ys)
+        .map(|(&a, &b)| bf16::from_f32(bf16::from_f32(a).to_f32() * bf16::from_f32(b).to_f32()))
+        .collect();
+    assert_eq!(got, want);
+
+    let h = RawTensor::from_typed(xs.map(f16::from_f32).to_vec(), &[4]);
+    let got = h.exp().to_vec_as::<f16>().expect("f16");
+    let want: Vec<f16> = xs
+        .iter()
+        .map(|&a| f16::from_f32(f16::from_f32(a).to_f32().exp()))
+        .collect();
+    assert_eq!(got, want);
+}
+
+/// A half tensor's gradient is half too, and a second contribution is added in f32 and
+/// rounded.
+#[test]
+fn half_gradient_has_the_tensor_dtype() {
+    let x = RawTensor::from_typed(vec![bf16::from_f32(1.5), bf16::from_f32(-2.0)], &[2]);
+    x.set_requires_grad(true);
+    x.elem_mul(&x).sum().into_loss().expect("scalar").backward();
+    let g = x.grad_storage().expect("a gradient");
+    assert_eq!(g.dtype(), DType::BF16);
+    assert_eq!(
+        g.as_host::<bf16>().expect("bf16"),
+        &[bf16::from_f32(3.0), bf16::from_f32(-4.0)]
+    );
 }
 
 /// Matmul reads through the same check.
@@ -171,16 +205,23 @@ fn sgd_steps_mixed_f32_and_f64_params() {
     assert_eq!(b.to_vec_as::<f64>().expect("f64"), vec![0.875]);
 }
 
-/// A half-precision parameter has no optimizer kernel until P4; the step refuses it before
-/// updating anything.
+/// An f16 parameter steps in f32 and rounds once: the update `1 - 0.1 * g` is the f32
+/// result rounded to f16, next to an f32 parameter in the same optimizer.
 #[test]
-#[should_panic(expected = "SGD step: f16 ops are not implemented until ADDENDUM §11 P4")]
-fn sgd_step_refuses_an_f16_param() {
+fn sgd_steps_an_f16_param_in_f32_and_rounds_once() {
     let a = RawTensor::new(vec![1.0], &[1], true);
-    let b = RawTensor::from_typed(vec![half::f16::from_f32(1.0)], &[1]);
+    let b = RawTensor::from_typed(vec![f16::from_f32(1.0)], &[1]);
     b.set_requires_grad(true);
-    let mut opt = SGD::new(vec![a, b], 0.1, 0.0, 0.0);
+    let g = f16::from_f32(0.3);
+    a.set_grad(Storage::cpu(vec![0.3]));
+    b.set_grad(Storage::from_typed(vec![g]));
+    let mut opt = SGD::new(vec![a.clone(), b.clone()], 0.1, 0.0, 0.0);
     opt.step();
+    assert_eq!(a.dtype(), DType::F32);
+    assert_eq!(
+        b.to_vec_as::<f16>().expect("f16"),
+        vec![f16::from_f32(0.1f32.mul_add(-g.to_f32(), 1.0))]
+    );
 }
 
 /// `to_vec_as` returns the values in their own dtype, exactly: no f32 decode.
