@@ -1,8 +1,8 @@
 // Movement operations - permute, expand, pad, shrink, stride
 // These operations manipulate how data is indexed rather than computing new values
 
-@group(0) @binding(0) var<storage, read> input: array<f32>;
-@group(0) @binding(1) var<storage, read_write> result: array<f32>;
+@group(0) @binding(0) var<storage, read> input: array<ELEM>;
+@group(0) @binding(1) var<storage, read_write> result: array<ELEM>;
 
 // Parameters for movement operations (up to 4 dimensions)
 struct MovementParams {
@@ -82,7 +82,7 @@ fn permute(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let old_strides = compute_strides(params.old_shape, params.rank);
         let old_idx = coords_to_idx(old_coords, old_strides, params.rank);
-        result[idx] = input[old_idx];
+        st_result(idx, ld_input(old_idx));
     }
 }
 
@@ -107,7 +107,7 @@ fn expand(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
 
         let old_idx = coords_to_idx(old_coords, old_strides, params.rank);
-        result[idx] = input[old_idx];
+        st_result(idx, ld_input(old_idx));
     }
 }
 
@@ -154,9 +154,9 @@ fn pad(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (in_bounds) {
             let old_strides = compute_strides(params.old_shape, params.rank);
             let old_idx = coords_to_idx(old_coords, old_strides, params.rank);
-            result[idx] = input[old_idx];
+            st_result(idx, ld_input(old_idx));
         } else {
-            result[idx] = bitcast<f32>(params._padding[1]);
+            st_result(idx, bitcast<f32>(params._padding[1]));
         }
     }
 }
@@ -178,7 +178,7 @@ fn shrink(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let old_strides = compute_strides(params.old_shape, params.rank);
         let old_idx = coords_to_idx(old_coords, old_strides, params.rank);
-        result[idx] = input[old_idx];
+        st_result(idx, ld_input(old_idx));
     }
 }
 
@@ -199,6 +199,6 @@ fn stride(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let old_strides = compute_strides(params.old_shape, params.rank);
         let old_idx = coords_to_idx(old_coords, old_strides, params.rank);
-        result[idx] = input[old_idx];
+        st_result(idx, ld_input(old_idx));
     }
 }

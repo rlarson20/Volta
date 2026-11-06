@@ -40,8 +40,8 @@ impl SumGradFn {
         let size: usize = self.input_shape.iter().product();
         // GPU path for a GPU gradient; a `None` from the kernel is a failure.
         if out_grad.device.is_gpu() {
-            let grad_val: f32 = fetch(out_grad.data.to_host_f32(), 0);
-            let storage = crate::RawTensor::gpu_sum_backward(grad_val, size)
+            let grad_val: f32 = fetch(&out_grad.data.host::<f32>(), 0);
+            let storage = crate::RawTensor::gpu_sum_backward(out_grad.data.dtype(), grad_val, size)
                 .unwrap_or_else(|| kernel_failed("Sum"));
             return vec![Some(RawTensor::new_with_storage(
                 storage,
@@ -85,9 +85,14 @@ impl MaxReduceGradFn {
         let size: usize = self.input_shape.iter().product();
         // GPU path for a GPU gradient; a `None` from the kernel is a failure.
         if out_grad.device.is_gpu() {
-            let grad_val: f32 = fetch(out_grad.data.to_host_f32(), 0);
-            let storage = crate::RawTensor::gpu_max_backward(grad_val, size, self.max_index)
-                .unwrap_or_else(|| kernel_failed("MaxReduce"));
+            let grad_val: f32 = fetch(&out_grad.data.host::<f32>(), 0);
+            let storage = crate::RawTensor::gpu_max_backward(
+                out_grad.data.dtype(),
+                grad_val,
+                size,
+                self.max_index,
+            )
+            .unwrap_or_else(|| kernel_failed("MaxReduce"));
             return vec![Some(RawTensor::new_with_storage(
                 storage,
                 self.input_shape.clone(),
@@ -130,9 +135,10 @@ impl MeanGradFn {
         let size: usize = self.input_shape.iter().product();
         // GPU path for a GPU gradient; a `None` from the kernel is a failure.
         if out_grad.device.is_gpu() {
-            let grad_val: f32 = fetch(out_grad.data.to_host_f32(), 0);
-            let storage = crate::RawTensor::gpu_mean_backward(grad_val, size)
-                .unwrap_or_else(|| kernel_failed("Mean"));
+            let grad_val: f32 = fetch(&out_grad.data.host::<f32>(), 0);
+            let storage =
+                crate::RawTensor::gpu_mean_backward(out_grad.data.dtype(), grad_val, size)
+                    .unwrap_or_else(|| kernel_failed("Mean"));
             return vec![Some(RawTensor::new_with_storage(
                 storage,
                 self.input_shape.clone(),
@@ -171,10 +177,11 @@ impl RawTensor {
             (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
-        // On the GPU (f32 only), a `None` from the kernel is a failure. The kernels return a
-        // host scalar, which goes back on the input's device: not a fallback, because the
-        // reduction itself ran there.
-        let on_gpu = |v: f32| Storage::cpu(vec![v]).to_device(&device);
+        // On the GPU, a `None` from the kernel is a failure. The kernels accumulate in f32
+        // and return a host scalar, rounded here to the input's dtype (as the CPU rounds a
+        // half reduction once) and put back on the input's device: not a fallback, because
+        // the reduction itself ran there.
+        let on_gpu = |v: f32| Storage::from_compute(dtype, vec![v]).to_device(&device);
         let (storage, grad_fn): (Storage, GradFn) = match op {
             ReduceOp::Sum => {
                 let sum = if device.is_gpu() {

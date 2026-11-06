@@ -1544,6 +1544,7 @@ dependencies = [
  "libm",
  "log",
  "matrixmultiply",
+ "naga",
  "pollster",
  "rand",
  "rand_distr",

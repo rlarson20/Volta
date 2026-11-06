@@ -22,9 +22,9 @@ struct BackwardParams {
 // We compute grad @ B^T which is [M,N] @ [N,K] = [M,K]
 // To avoid explicit transpose, we read B column-major during tile load
 
-@group(0) @binding(0) var<storage, read> grad_a: array<f32>;
-@group(0) @binding(1) var<storage, read> b: array<f32>;
-@group(0) @binding(2) var<storage, read_write> dA: array<f32>;
+@group(0) @binding(0) var<storage, read> grad_a: array<ELEM>;
+@group(0) @binding(1) var<storage, read> b: array<ELEM>;
+@group(0) @binding(2) var<storage, read_write> dA: array<ELEM>;
 @group(0) @binding(3) var<uniform> params_a: BackwardParams;
 
 const TILE_SIZE: u32 = 16u;
@@ -52,7 +52,7 @@ fn matmul_backward_a(
         let grad_row = row;
         let grad_col = t * TILE_SIZE + local_col;
         if (grad_row < params_a.m && grad_col < params_a.n) {
-            tile_grad[local_row * TILE_SIZE + local_col] = grad_a[grad_row * params_a.n + grad_col];
+            tile_grad[local_row * TILE_SIZE + local_col] = ld_grad_a(grad_row * params_a.n + grad_col);
         } else {
             tile_grad[local_row * TILE_SIZE + local_col] = 0.0;
         }
@@ -66,7 +66,7 @@ fn matmul_backward_a(
         let bt_col = col;
         if (bt_row < params_a.n && bt_col < params_a.k) {
             // Read B[bt_col, bt_row] to get B^T[bt_row, bt_col]
-            tile_b[local_row * TILE_SIZE + local_col] = b[bt_col * params_a.n + bt_row];
+            tile_b[local_row * TILE_SIZE + local_col] = ld_b(bt_col * params_a.n + bt_row);
         } else {
             tile_b[local_row * TILE_SIZE + local_col] = 0.0;
         }
@@ -83,7 +83,7 @@ fn matmul_backward_a(
 
     // Write result
     if (row < params_a.m && col < params_a.k) {
-        dA[row * params_a.k + col] = sum;
+        st_dA(row * params_a.k + col, sum);
     }
 }
 
@@ -91,9 +91,9 @@ fn matmul_backward_a(
 // A: [M, K], grad: [M, N], dB: [K, N]
 // We compute A^T @ grad which is [K,M] @ [M,N] = [K,N]
 
-@group(0) @binding(0) var<storage, read> a: array<f32>;
-@group(0) @binding(1) var<storage, read> grad_b: array<f32>;
-@group(0) @binding(2) var<storage, read_write> dB: array<f32>;
+@group(0) @binding(0) var<storage, read> a: array<ELEM>;
+@group(0) @binding(1) var<storage, read> grad_b: array<ELEM>;
+@group(0) @binding(2) var<storage, read_write> dB: array<ELEM>;
 @group(0) @binding(3) var<uniform> params_b: BackwardParams;
 
 @compute @workgroup_size(16, 16)
@@ -121,7 +121,7 @@ fn matmul_backward_b(
         let at_col = t * TILE_SIZE + local_col;
         if (at_row < params_b.k && at_col < params_b.m) {
             // Read A[at_col, at_row] to get A^T[at_row, at_col]
-            tile_a[local_row * TILE_SIZE + local_col] = a[at_col * params_b.k + at_row];
+            tile_a[local_row * TILE_SIZE + local_col] = ld_a(at_col * params_b.k + at_row);
         } else {
             tile_a[local_row * TILE_SIZE + local_col] = 0.0;
         }
@@ -130,7 +130,7 @@ fn matmul_backward_b(
         let grad_row = t * TILE_SIZE + local_row;
         let grad_col = col;
         if (grad_row < params_b.m && grad_col < params_b.n) {
-            tile_grad[local_row * TILE_SIZE + local_col] = grad_b[grad_row * params_b.n + grad_col];
+            tile_grad[local_row * TILE_SIZE + local_col] = ld_grad_b(grad_row * params_b.n + grad_col);
         } else {
             tile_grad[local_row * TILE_SIZE + local_col] = 0.0;
         }
@@ -147,7 +147,7 @@ fn matmul_backward_b(
 
     // Write result
     if (row < params_b.k && col < params_b.n) {
-        dB[row * params_b.n + col] = sum;
+        st_dB(row * params_b.n + col, sum);
     }
 }
 

@@ -155,6 +155,10 @@ mod axis_reduce_tests;
 #[path = "lib_tests/gpu_tests.rs"]
 mod gpu_tests;
 
+#[cfg(test)]
+#[path = "lib_tests/gpu_half_tests.rs"]
+mod gpu_half_tests;
+
 // ===== EXPANDED COVERAGE (P1) =====
 //
 // The following modules add direct unit tests for foundational ops and core

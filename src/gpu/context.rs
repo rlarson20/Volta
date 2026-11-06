@@ -6,12 +6,31 @@
 use wgpu::PipelineCompilationOptions;
 
 use super::pool::{BufferPool, BufferPoolConfig};
+use super::shader_template::Elem;
 use super::staging_pool::StagingBufferPool;
+use crate::dtype::DType;
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 /// Manages the GPU device, queue, and compiled compute pipelines
+/// Forces f16 buffers through the packed (emulated) shaders even where the device has
+/// native f16, so tests can check that path on hardware that never needs it. Both paths
+/// use the same byte layout, so flipping it never invalidates a buffer.
+static F16_EMULATION: AtomicBool = AtomicBool::new(false);
+
+/// Route f16 buffers through the packed shaders (`true`) or native f16 where available.
+#[cfg(test)]
+pub(crate) fn set_f16_emulation(on: bool) {
+    F16_EMULATION.store(on, Ordering::Relaxed);
+}
+
+/// Compiled cast pipelines by (input, output element type, entry point).
+type CastPipelines = HashMap<(Elem, Elem, &'static str), Arc<wgpu::ComputePipeline>>;
+
 /// Default threshold for pending submissions before forcing a sync.
 /// This prevents GPU command queue exhaustion during rapid-fire operations.
 const DEFAULT_SYNC_THRESHOLD: u32 = 16;
@@ -66,6 +85,12 @@ pub struct GpuContext {
     adapter_info: wgpu::AdapterInfo,
     /// Pre-compiled compute pipelines for common operations
     pipelines: ComputePipelines,
+    /// Whether the device has `SHADER_F16` (native f16 storage).
+    f16_native: bool,
+    /// Pipelines for native f16, packed f16 and packed bf16, built on first use.
+    half_pipelines: [OnceLock<ComputePipelines>; 3],
+    /// Cast pipelines by (input, output element type, entry point), built on first use.
+    cast_pipelines: Mutex<CastPipelines>,
     /// Buffer pool for reusing GPU memory allocations
     buffer_pool: Arc<BufferPool>,
     /// Staging buffer pool for GPU→CPU transfers
@@ -109,8 +134,24 @@ pub struct ComputePipelines {
     pub max: wgpu::ComputePipeline,
     /// Elementwise `a mod b`.
     pub mod_op: wgpu::ComputePipeline,
-    /// Elementwise the comparison `a < b`.
+    /// Elementwise the comparison `a < b` (f32 0/1 output; unused since P5's Bool comparisons).
     pub cmplt: wgpu::ComputePipeline,
+    /// Bool `a < b` (`compare.wgsl`).
+    pub cmp_lt: wgpu::ComputePipeline,
+    /// Bool `a <= b`.
+    pub cmp_le: wgpu::ComputePipeline,
+    /// Bool `a > b`.
+    pub cmp_gt: wgpu::ComputePipeline,
+    /// Bool `a >= b`.
+    pub cmp_ge: wgpu::ComputePipeline,
+    /// Bool `a == b`.
+    pub cmp_eq: wgpu::ComputePipeline,
+    /// Bool `a != b`.
+    pub cmp_ne: wgpu::ComputePipeline,
+    /// `where(cond, x, y)` with a Bool condition (`where_select.wgsl`).
+    pub where_select: wgpu::ComputePipeline,
+    /// `GradScaler`'s fused unscale and inf/NaN check (`amp_unscale.wgsl`).
+    pub amp_unscale: wgpu::ComputePipeline,
 
     // Unary operations
     /// Elementwise `-x`.
@@ -341,9 +382,16 @@ impl GpuContext {
 
         // Step 3: Request a device (logical connection to the GPU)
 
+        // Native f16 storage where the adapter has it; f16 falls back to packed words
+        // otherwise, and bf16 is always packed (`shader_template`).
+        let f16_native = adapter.features().contains(wgpu::Features::SHADER_F16);
         let device_descriptor = wgpu::DeviceDescriptor {
             label: Some("Volta GPU Device"),
-            required_features: wgpu::Features::empty(),
+            required_features: if f16_native {
+                wgpu::Features::SHADER_F16
+            } else {
+                wgpu::Features::empty()
+            },
             required_limits: wgpu::Limits::default(),
             memory_hints: wgpu::MemoryHints::Performance,
             ..Default::default()
@@ -354,7 +402,7 @@ impl GpuContext {
             .await
             .map_err(|e| format!("Failed to create device: {e}"))?;
         // Step 4: Compile all our compute shaders
-        let pipelines = Self::create_pipelines(&device);
+        let pipelines = Self::create_pipelines(&device, Elem::F32);
 
         // Step 5: Create the buffer pool for memory reuse
         let buffer_pool = Arc::new(BufferPool::new(BufferPoolConfig::default()));
@@ -367,6 +415,9 @@ impl GpuContext {
             queue,
             adapter_info,
             pipelines,
+            f16_native,
+            half_pipelines: [OnceLock::new(), OnceLock::new(), OnceLock::new()],
+            cast_pipelines: Mutex::new(HashMap::new()),
             buffer_pool,
             staging_pool,
             pending_submissions: AtomicU32::new(0),
@@ -393,6 +444,86 @@ impl GpuContext {
     /// Get the compiled pipelines
     pub const fn pipelines(&self) -> &ComputePipelines {
         &self.pipelines
+    }
+
+    /// The shader element type for GPU buffers of `dtype`: native f16 where the device
+    /// has `SHADER_F16` (unless [`set_f16_emulation`] forces the packed path), packed
+    /// otherwise; bf16 is always packed.
+    ///
+    /// # Panics
+    /// If `dtype` is not F32, F16 or BF16 (Bool and the rest have no float pipelines).
+    pub(crate) fn elem_for(&self, dtype: DType) -> Elem {
+        match dtype {
+            DType::F32 => Elem::F32,
+            DType::F16 if self.f16_native && !F16_EMULATION.load(Ordering::Relaxed) => Elem::F16,
+            DType::F16 => Elem::F16Packed,
+            DType::BF16 => Elem::Bf16Packed,
+            other @ (DType::F64 | DType::I32 | DType::I64 | DType::U8 | DType::Bool) => {
+                panic!("GPU kernels compute on f32, f16 and bf16 buffers, not {other}")
+            }
+        }
+    }
+
+    /// The pipelines for buffers of `dtype` (see [`Self::elem_for`]); half sets are
+    /// compiled on first use.
+    ///
+    /// # Panics
+    /// As [`Self::elem_for`].
+    pub(crate) fn pipelines_for(&self, dtype: DType) -> &ComputePipelines {
+        let elem = self.elem_for(dtype);
+        let slot = match elem {
+            Elem::F32 => return &self.pipelines,
+            Elem::F16 => 0,
+            Elem::F16Packed => 1,
+            Elem::Bf16Packed => 2,
+        };
+        self.half_pipelines
+            .get(slot)
+            .expect("three half pipeline slots")
+            .get_or_init(|| {
+                log::info!("[GPU] compiling {elem:?} pipelines");
+                Self::create_pipelines(&self.device, elem)
+            })
+    }
+
+    /// The `cast.wgsl` pipeline `entry` from `input` to `output` element types, compiled
+    /// on first use.
+    pub(crate) fn cast_pipeline(
+        &self,
+        input: Elem,
+        output: Elem,
+        entry: &'static str,
+    ) -> Arc<wgpu::ComputePipeline> {
+        let mut cache = self
+            .cast_pipelines
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Arc::clone(cache.entry((input, output, entry)).or_insert_with(|| {
+            let module = self
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("Cast Shader"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        super::shader_template::expand(
+                            include_str!("shaders/cast.wgsl"),
+                            input,
+                            output,
+                        )
+                        .into(),
+                    ),
+                });
+            Arc::new(
+                self.device
+                    .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: Some("Cast Pipeline"),
+                        layout: None,
+                        module: &module,
+                        entry_point: Some(entry),
+                        compilation_options: PipelineCompilationOptions::default(),
+                        cache: None,
+                    }),
+            )
+        }))
     }
 
     /// Get a reference to the buffer pool
@@ -607,101 +738,164 @@ impl GpuContext {
     }
 
     /// Create all compute pipelines by compiling shaders
-    fn create_pipelines(device: &wgpu::Device) -> ComputePipelines {
+    fn create_pipelines(device: &wgpu::Device, elem: Elem) -> ComputePipelines {
+        use super::shader_template::expand;
         // Load and compile shader modules
         let elementwise_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Elementwise Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/elementwise.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/elementwise.wgsl"), elem, Elem::F32).into(),
+            ),
         });
 
         let unary_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Unary Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/unary.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/unary.wgsl"), elem, Elem::F32).into(),
+            ),
         });
 
         let reduce_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Reduce Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/reduce.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/reduce.wgsl"), elem, Elem::F32).into(),
+            ),
         });
 
         let matmul_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("MatMul Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/matmul.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/matmul.wgsl"), elem, Elem::F32).into(),
+            ),
         });
 
         let movement_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Movement Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/movement.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/movement.wgsl"), elem, Elem::F32).into(),
+            ),
         });
 
         let movement_backward_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Movement Backward Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/movement_backward.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(
+                    include_str!("shaders/movement_backward.wgsl"),
+                    elem,
+                    Elem::F32,
+                )
+                .into(),
+            ),
         });
 
         let unary_backward_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Unary Backward Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/unary_backward.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/unary_backward.wgsl"), elem, Elem::F32).into(),
+            ),
         });
 
         let binary_backward_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Binary Backward Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/binary_backward.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(
+                    include_str!("shaders/binary_backward.wgsl"),
+                    elem,
+                    Elem::F32,
+                )
+                .into(),
+            ),
         });
 
         let binary_backward_safe_shader =
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("Binary Backward Safe Shader"),
                 source: wgpu::ShaderSource::Wgsl(
-                    include_str!("shaders/binary_backward_safe.wgsl").into(),
+                    expand(
+                        include_str!("shaders/binary_backward_safe.wgsl"),
+                        elem,
+                        elem,
+                    )
+                    .into(),
                 ),
             });
 
         let matmul_backward_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("MatMul Backward Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/matmul_backward.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(
+                    include_str!("shaders/matmul_backward.wgsl"),
+                    elem,
+                    Elem::F32,
+                )
+                .into(),
+            ),
         });
 
         let reduce_backward_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Reduce Backward Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/reduce_backward.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(
+                    include_str!("shaders/reduce_backward.wgsl"),
+                    elem,
+                    Elem::F32,
+                )
+                .into(),
+            ),
         });
 
         let optimizer_step_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Optimizer Step Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/optimizer_step.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/optimizer_step.wgsl"), elem, Elem::F32).into(),
+            ),
         });
 
         let muon_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Muon Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/muon.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/muon.wgsl"), elem, Elem::F32).into(),
+            ),
         });
 
         let im2col_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Im2col Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/im2col.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/im2col.wgsl"), elem, elem).into(),
+            ),
         });
 
         let col2im_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Col2im Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/col2im.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/col2im.wgsl"), elem, elem).into(),
+            ),
         });
 
         let direct_conv_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Direct Conv Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/direct_conv.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/direct_conv.wgsl"), elem, Elem::F32).into(),
+            ),
         });
 
         let igemm_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("iGEMM Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/igemm.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/igemm.wgsl"), elem, Elem::F32).into(),
+            ),
         });
 
         let igemm_backward_input_shader =
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("iGEMM Backward Input Shader"),
                 source: wgpu::ShaderSource::Wgsl(
-                    include_str!("shaders/igemm_backward_input.wgsl").into(),
+                    expand(
+                        include_str!("shaders/igemm_backward_input.wgsl"),
+                        elem,
+                        elem,
+                    )
+                    .into(),
                 ),
             });
 
@@ -709,7 +903,12 @@ impl GpuContext {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("iGEMM Backward Weight Shader"),
                 source: wgpu::ShaderSource::Wgsl(
-                    include_str!("shaders/igemm_backward_weight.wgsl").into(),
+                    expand(
+                        include_str!("shaders/igemm_backward_weight.wgsl"),
+                        elem,
+                        elem,
+                    )
+                    .into(),
                 ),
             });
 
@@ -717,7 +916,12 @@ impl GpuContext {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("Conv Backward Input Shader"),
                 source: wgpu::ShaderSource::Wgsl(
-                    include_str!("shaders/conv_backward_input.wgsl").into(),
+                    expand(
+                        include_str!("shaders/conv_backward_input.wgsl"),
+                        elem,
+                        Elem::F32,
+                    )
+                    .into(),
                 ),
             });
 
@@ -725,7 +929,12 @@ impl GpuContext {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("Conv Backward Weight Shader"),
                 source: wgpu::ShaderSource::Wgsl(
-                    include_str!("shaders/conv_backward_weight.wgsl").into(),
+                    expand(
+                        include_str!("shaders/conv_backward_weight.wgsl"),
+                        elem,
+                        elem,
+                    )
+                    .into(),
                 ),
             });
 
@@ -741,7 +950,35 @@ impl GpuContext {
             })
         };
 
+        let compare_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Compare Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/compare.wgsl"), elem, Elem::F32).into(),
+            ),
+        });
+        let where_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Where Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/where_select.wgsl"), elem, Elem::F32).into(),
+            ),
+        });
+
+        let amp_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("AMP Unscale Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/amp_unscale.wgsl"), elem, Elem::F32).into(),
+            ),
+        });
+
         ComputePipelines {
+            amp_unscale: create_pipeline(&amp_shader, "amp_unscale", "AMP Unscale Pipeline"),
+            cmp_lt: create_pipeline(&compare_shader, "lt", "Compare Lt Pipeline"),
+            cmp_le: create_pipeline(&compare_shader, "le", "Compare Le Pipeline"),
+            cmp_gt: create_pipeline(&compare_shader, "gt", "Compare Gt Pipeline"),
+            cmp_ge: create_pipeline(&compare_shader, "ge", "Compare Ge Pipeline"),
+            cmp_eq: create_pipeline(&compare_shader, "eq", "Compare Eq Pipeline"),
+            cmp_ne: create_pipeline(&compare_shader, "ne", "Compare Ne Pipeline"),
+            where_select: create_pipeline(&where_shader, "where_select", "Where Pipeline"),
             // Element-wise binary ops
             add: create_pipeline(&elementwise_shader, "add", "Add Pipeline"),
             sub: create_pipeline(&elementwise_shader, "sub", "Sub Pipeline"),

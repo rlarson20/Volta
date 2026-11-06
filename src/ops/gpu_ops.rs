@@ -101,6 +101,50 @@ impl RawTensor {
         Self::gpu_binary(a, b, BinaryOp::Mul)
     }
 
+    /// `GradScaler::unscale` of a GPU gradient: `g * inv` on the device and whether any
+    /// result is inf or NaN.
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_amp_unscale(g: &Storage, inv: f32) -> Option<(Storage, bool)> {
+        let (out, found) = GpuKernels::amp_unscale(g.gpu_buffer()?, inv)?;
+        Some((Storage::from_gpu_buffer(out), found))
+    }
+
+    /// Not-gpu stub for `gpu_amp_unscale`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_amp_unscale(_g: &Storage, _inv: f32) -> Option<(Storage, bool)> {
+        None
+    }
+
+    /// GPU elementwise comparison of equal-length storages (one float dtype) into Bool.
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_compare(a: &Storage, b: &Storage, op: crate::ops::CmpOp) -> Option<Storage> {
+        let out = GpuKernels::compare(a.gpu_buffer()?, b.gpu_buffer()?, op)?;
+        Some(Storage::from_gpu_buffer(out))
+    }
+
+    /// Not-gpu stub for `gpu_compare`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_compare(
+        _a: &Storage,
+        _b: &Storage,
+        _op: crate::ops::CmpOp,
+    ) -> Option<Storage> {
+        None
+    }
+
+    /// GPU `where(cond, x, y)` for equal lengths: a Bool condition, one float dtype.
+    #[cfg(feature = "gpu")]
+    pub(crate) fn gpu_where(cond: &Storage, x: &Storage, y: &Storage) -> Option<Storage> {
+        let out = GpuKernels::where_select(cond.gpu_buffer()?, x.gpu_buffer()?, y.gpu_buffer()?)?;
+        Some(Storage::from_gpu_buffer(out))
+    }
+
+    /// Not-gpu stub for `gpu_where`.
+    #[cfg(not(feature = "gpu"))]
+    pub(crate) fn gpu_where(_cond: &Storage, _x: &Storage, _y: &Storage) -> Option<Storage> {
+        None
+    }
+
     /// GPU-accelerated sum reduction - returns the scalar sum
     #[cfg(feature = "gpu")]
     pub(crate) fn gpu_sum_reduce(data: &Storage) -> Option<f32> {
@@ -115,8 +159,9 @@ impl RawTensor {
         let buf = data.gpu_buffer()?;
         let max_val = GpuKernels::max(buf)?;
 
-        // Find the index of the max value on CPU (using cached data)
-        let cpu_data = data.to_vec();
+        // Find the index of the max value on CPU (using cached data, decoded: exact for
+        // half dtypes)
+        let cpu_data = data.to_f32_vec();
         let max_idx = cpu_data
             .iter()
             .enumerate()
@@ -546,8 +591,12 @@ impl RawTensor {
     ///
     /// Broadcasts scalar gradient to all elements
     #[cfg(feature = "gpu")]
-    pub(crate) fn gpu_sum_backward(grad: f32, input_size: usize) -> Option<Storage> {
-        let result = GpuKernels::sum_backward(grad, input_size)?;
+    pub(crate) fn gpu_sum_backward(
+        dtype: crate::DType,
+        grad: f32,
+        input_size: usize,
+    ) -> Option<Storage> {
+        let result = GpuKernels::sum_backward(dtype, grad, input_size)?;
         Some(Storage::from_gpu_buffer(result))
     }
 
@@ -555,8 +604,12 @@ impl RawTensor {
     ///
     /// Broadcasts scalar gradient / count to all elements
     #[cfg(feature = "gpu")]
-    pub(crate) fn gpu_mean_backward(grad: f32, input_size: usize) -> Option<Storage> {
-        let result = GpuKernels::mean_backward(grad, input_size)?;
+    pub(crate) fn gpu_mean_backward(
+        dtype: crate::DType,
+        grad: f32,
+        input_size: usize,
+    ) -> Option<Storage> {
+        let result = GpuKernels::mean_backward(dtype, grad, input_size)?;
         Some(Storage::from_gpu_buffer(result))
     }
 
@@ -565,11 +618,12 @@ impl RawTensor {
     /// Sparse gradient - only max element receives gradient
     #[cfg(feature = "gpu")]
     pub(crate) fn gpu_max_backward(
+        dtype: crate::DType,
         grad: f32,
         input_size: usize,
         max_index: usize,
     ) -> Option<Storage> {
-        let result = GpuKernels::max_backward(grad, input_size, max_index)?;
+        let result = GpuKernels::max_backward(dtype, grad, input_size, max_index)?;
         Some(Storage::from_gpu_buffer(result))
     }
 
@@ -608,6 +662,19 @@ impl RawTensor {
         step: &MuonStep,
     ) -> Option<()> {
         use crate::gpu::{GpuBuffer, OptimizerStepParams};
+
+        // Muon's kernels compute in f32. A half parameter, its gradient and its velocity are
+        // cast up on the device, stepped, and cast back, so each is rounded once per step,
+        // as the CPU step rounds a half parameter.
+        let dtype = param.dtype();
+        if dtype != crate::DType::F32 {
+            let f32 = crate::DType::F32;
+            let (mut p32, g32, mut v32) = (param.cast(f32), grad.cast(f32), velocity.cast(f32));
+            Self::gpu_muon_step(&mut p32, &g32, &mut v32, step)?;
+            *param = p32.cast(dtype);
+            *velocity = v32.cast(dtype);
+            return Some(());
+        }
 
         let buf_grad = grad.gpu_buffer()?;
         let buf_velocity = velocity.gpu_buffer_mut()?;
@@ -918,19 +985,28 @@ impl RawTensor {
 
     /// Not-gpu stub for `gpu_sum_backward`.
     #[cfg(not(feature = "gpu"))]
-    pub(crate) fn gpu_sum_backward(_grad: f32, _input_size: usize) -> Option<Storage> {
+    pub(crate) fn gpu_sum_backward(
+        _dtype: crate::DType,
+        _grad: f32,
+        _input_size: usize,
+    ) -> Option<Storage> {
         None
     }
 
     /// Not-gpu stub for `gpu_mean_backward`.
     #[cfg(not(feature = "gpu"))]
-    pub(crate) fn gpu_mean_backward(_grad: f32, _input_size: usize) -> Option<Storage> {
+    pub(crate) fn gpu_mean_backward(
+        _dtype: crate::DType,
+        _grad: f32,
+        _input_size: usize,
+    ) -> Option<Storage> {
         None
     }
 
     /// Not-gpu stub for `gpu_max_backward`.
     #[cfg(not(feature = "gpu"))]
     pub(crate) fn gpu_max_backward(
+        _dtype: crate::DType,
         _grad: f32,
         _input_size: usize,
         _max_index: usize,

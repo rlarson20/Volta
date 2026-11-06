@@ -3,6 +3,14 @@
 //! `GpuBuffer` wraps a wgpu buffer and provides methods for
 //! transferring data between CPU and GPU.
 //!
+//! # Element types (ADDENDUM §11 P8)
+//!
+//! A buffer holds F32, F16, BF16 or Bool elements ([`GpuBuffer::dtype`]). F32 is four
+//! bytes per element; F16 and BF16 are two, packed two per 32-bit word low half first
+//! (the CPU's byte layout, so a transfer is a byte copy) and padded to a whole word;
+//! Bool is one `u32` (0 or 1) per element, so a shader can write any element without
+//! touching its neighbors. `shader_template` expands each shader for the element type.
+//!
 //! # Buffer Pooling
 //!
 //! `GpuBuffers` are automatically returned to a pool when dropped, enabling
@@ -11,13 +19,15 @@
 
 use super::get_gpu_context;
 use super::pool::BufferPool;
+use crate::dtype::DType;
+use crate::storage::HostBuf;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
 /// A buffer that lives on the GPU
 ///
-/// This is analogous to a `Vec<f32>` but the data lives in GPU memory.
+/// This is analogous to a `Vec<T>` but the data lives in GPU memory.
 /// We need to explicitly copy data to/from the CPU.
 ///
 /// When dropped, the buffer is returned to the pool for reuse rather than
@@ -26,133 +36,136 @@ use std::time::Duration;
 pub struct GpuBuffer {
     /// The actual GPU buffer (Option to allow taking on Drop)
     buffer: Option<wgpu::Buffer>,
-    /// Size in number of f32 elements
+    /// Size in elements
     len: usize,
+    /// Element type: F32, F16, BF16 or Bool
+    dtype: DType,
     /// Reference to the pool for returning the buffer on drop
     pool: Option<Arc<BufferPool>>,
 }
 
+/// Bytes `len` elements of `dtype` occupy on the GPU (16-bit types padded to a word).
+///
+/// # Panics
+/// If `dtype` has no GPU representation.
+fn gpu_bytes(dtype: DType, len: usize) -> usize {
+    match dtype {
+        DType::F32 | DType::Bool => len * 4,
+        DType::F16 | DType::BF16 => len.div_ceil(2) * 4,
+        other @ (DType::F64 | DType::I32 | DType::I64 | DType::U8) => {
+            panic!("GPU buffers hold f32, f16, bf16 or bool, not {other}")
+        }
+    }
+}
+
 impl GpuBuffer {
-    /// Create a new GPU buffer from CPU data
+    /// A pooled or fresh storage buffer of at least `byte_size` bytes.
+    fn allocate(byte_size: usize, label: &str) -> Option<wgpu::Buffer> {
+        let ctx = get_gpu_context()?;
+        if let Some(buffer) = ctx.buffer_pool().acquire(byte_size) {
+            return Some(buffer);
+        }
+        // Allocate with the bucket size (power of 2) for consistent pooling
+        let alloc_size = BufferPool::allocation_size(byte_size);
+        Some(ctx.device().create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: alloc_size as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }))
+    }
+
+    /// A buffer of `len` `dtype` elements holding `bytes` (already in the GPU layout,
+    /// `gpu_bytes(dtype, len)` long).
+    fn upload(dtype: DType, len: usize, bytes: &[u8], label: &str) -> Option<Self> {
+        let ctx = get_gpu_context()?;
+        debug_assert_eq!(bytes.len(), gpu_bytes(dtype, len));
+        let buffer = Self::allocate(bytes.len(), label)?;
+        ctx.queue().write_buffer(&buffer, 0, bytes);
+        ctx.increment_pending();
+        ctx.maybe_sync();
+        Some(Self {
+            buffer: Some(buffer),
+            len,
+            dtype,
+            pool: Some(ctx.buffer_pool_arc()),
+        })
+    }
+
+    /// Create a new f32 GPU buffer from CPU data
     ///
     /// This copies the data from CPU to GPU memory.
     #[must_use]
     pub fn from_slice(data: &[f32]) -> Option<Self> {
-        let ctx = get_gpu_context()?;
-        let byte_size = std::mem::size_of_val(data);
-
-        // Try to get a buffer from the pool first
-        if let Some(buffer) = ctx.buffer_pool().acquire(byte_size) {
-            // Write data to the pooled buffer
-            ctx.queue()
-                .write_buffer(&buffer, 0, bytemuck::cast_slice(data));
-            ctx.increment_pending();
-            ctx.maybe_sync();
-
-            return Some(Self {
-                buffer: Some(buffer),
-                len: data.len(),
-                pool: Some(ctx.buffer_pool_arc()),
-            });
-        }
-
-        // Allocate with the bucket size (power of 2) for consistent pooling
-        let alloc_size = BufferPool::allocation_size(byte_size);
-
-        // Create a buffer with the STORAGE usage (for compute shaders)
-        // and COPY_SRC/COPY_DST for data transfer
-        let buffer = ctx.device().create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Tensor Buffer"),
-            size: alloc_size as u64,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        // Write the actual data
-        ctx.queue()
-            .write_buffer(&buffer, 0, bytemuck::cast_slice(data));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
-        Some(Self {
-            buffer: Some(buffer),
-            len: data.len(),
-            pool: Some(ctx.buffer_pool_arc()),
-        })
+        Self::upload(
+            DType::F32,
+            data.len(),
+            bytemuck::cast_slice(data),
+            "Tensor Buffer",
+        )
     }
 
-    /// Create an empty (zeroed) GPU buffer of a given size
+    /// A GPU copy of `host` (F32, F16, BF16 or Bool).
     ///
-    /// First attempts to acquire a buffer from the pool for reuse.
-    /// If none available, allocates a new buffer with power-of-2 size
-    /// for efficient pooling.
+    /// # Panics
+    /// If `host` has another dtype (callers check: `Storage::to_device`).
+    #[must_use]
+    pub(crate) fn from_host(host: &HostBuf) -> Option<Self> {
+        let dtype = host.dtype();
+        let len = host.len();
+        match host {
+            HostBuf::Bool(b) => {
+                let words: Vec<u32> = b.iter().map(|&v| u32::from(v)).collect();
+                Self::upload(
+                    dtype,
+                    len,
+                    bytemuck::cast_slice(&words),
+                    "Tensor Buffer (bool)",
+                )
+            }
+            HostBuf::F32(_) => Self::upload(dtype, len, host.as_bytes(), "Tensor Buffer"),
+            HostBuf::F16(_) | HostBuf::BF16(_) => {
+                let mut bytes = host.as_bytes().to_vec();
+                bytes.resize(gpu_bytes(dtype, len), 0);
+                Self::upload(dtype, len, &bytes, "Tensor Buffer (16-bit)")
+            }
+            HostBuf::F64(_) | HostBuf::I32(_) | HostBuf::I64(_) | HostBuf::U8(_) => {
+                panic!("GPU buffers hold f32, f16, bf16 or bool, not {dtype}")
+            }
+        }
+    }
+
+    /// Create a zero-initialized f32 GPU buffer
+    ///
+    /// Useful for output buffers that will be written by shaders.
     #[must_use]
     pub fn zeros(len: usize) -> Option<Self> {
-        let ctx = get_gpu_context()?;
-        let byte_size = len * std::mem::size_of::<f32>();
-
-        // Try to get a buffer from the pool first
-        if let Some(buffer) = ctx.buffer_pool().acquire(byte_size) {
-            // Zero-initialize the pooled buffer (only the portion we'll use)
-            let zeros = vec![0.0f32; len];
-            ctx.queue()
-                .write_buffer(&buffer, 0, bytemuck::cast_slice(&zeros));
-            ctx.increment_pending();
-            ctx.maybe_sync();
-
-            return Some(Self {
-                buffer: Some(buffer),
-                len,
-                pool: Some(ctx.buffer_pool_arc()),
-            });
-        }
-
-        // Allocate with the bucket size (power of 2) for consistent pooling
-        let alloc_size = BufferPool::allocation_size(byte_size);
-
-        // Allocate a new buffer
-        let buffer = ctx.device().create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Tensor Buffer (zeros)"),
-            size: alloc_size as u64,
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        // Zero-initialize by writing zeros (only the portion we'll use)
-        let zeros = vec![0.0f32; len];
-        ctx.queue()
-            .write_buffer(&buffer, 0, bytemuck::cast_slice(&zeros));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
-        Some(Self {
-            buffer: Some(buffer),
-            len,
-            pool: Some(ctx.buffer_pool_arc()),
-        })
+        Self::zeros_of(DType::F32, len)
     }
 
-    /// Copy data from GPU back to CPU
-    ///
-    /// This is a relatively expensive operation - try to minimize transfers!
-    /// # Panics
-    /// Panics if GPU context does not exist
+    /// A zero-initialized buffer of `len` `dtype` elements (all-zero bits are 0.0 or
+    /// `false` in every GPU element type).
     #[must_use]
-    pub fn to_vec(&self) -> Vec<f32> {
-        // SAFETY: Buffer should only exist if GPU context is available
+    pub(crate) fn zeros_of(dtype: DType, len: usize) -> Option<Self> {
+        let bytes = vec![0u8; gpu_bytes(dtype, len)];
+        Self::upload(dtype, len, &bytes, "Tensor Buffer (zeros)")
+    }
+
+    /// The element type.
+    #[must_use]
+    pub const fn dtype(&self) -> DType {
+        self.dtype
+    }
+
+    /// The buffer's bytes in the GPU layout (`gpu_bytes` long).
+    fn download(&self) -> Vec<u8> {
         let ctx = get_gpu_context().expect("GPU context should exist if buffer exists");
-        debug_assert!(self.buffer.is_some(), "Buffer should not be taken");
-        let buffer = self.buffer.as_ref().expect("Buffer should not be taken");
+        let buffer = self.buffer();
+        let byte_size = gpu_bytes(self.dtype, self.len) as u64;
 
-        let byte_size = (self.len * std::mem::size_of::<f32>()) as u64;
-
-        // Try to acquire staging buffer from pool first, create new if pool full
-        // GPU buffers with STORAGE usage can't be mapped directly, so we need
-        // a staging buffer with MAP_READ usage for GPU→CPU transfers
+        // Try to get a staging buffer from the pool
         let staging_buffer = ctx.staging_pool().acquire(byte_size).unwrap_or_else(|| {
             ctx.device().create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Staging Buffer"),
@@ -162,65 +175,97 @@ impl GpuBuffer {
             })
         });
 
-        // Create a command encoder and copy data
         let mut encoder = ctx
             .device()
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Read Buffer Encoder"),
             });
-
-        encoder.copy_buffer_to_buffer(
-            buffer,
-            0,
-            &staging_buffer,
-            0,
-            (self.len * std::mem::size_of::<f32>()) as u64,
-        );
-
-        // Submit the copy command
+        encoder.copy_buffer_to_buffer(buffer, 0, &staging_buffer, 0, byte_size);
         ctx.queue().submit(Some(encoder.finish()));
         ctx.increment_pending();
-        // Note: We don't call maybe_sync() here because we're about to
-        // block on device.poll() anyway to read the buffer back
 
-        // Map the staging buffer and read the data
-        let buffer_slice = staging_buffer.slice(..);
-
-        // This is async, but we can synchronously block because the GPU feature pulls in pollster.
-
+        // Map the staging buffer and wait for the copy (and everything before it).
+        let buffer_slice = staging_buffer.slice(..byte_size);
         let (sender, receiver) = mpsc::channel();
         buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
             sender
                 .send(result)
                 .expect("map_async callback receiver dropped");
         });
-
-        // Wait for the GPU to complete the mapping operation.
         ctx.device()
             .poll(wgpu::PollType::Wait {
                 submission_index: None,
                 timeout: Some(Duration::from_secs(5)),
             })
             .expect("Failed to poll device");
-
         receiver
             .recv()
             .expect("map_async result channel closed")
             .expect("Failed to map buffer");
-        // Read the data
 
         let data = buffer_slice.get_mapped_range();
-        let result: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
-
-        // Unmap before returning to pool
+        let bytes = data.to_vec();
         drop(data);
         staging_buffer.unmap();
-
-        // Return staging buffer to pool for reuse
-        // (if pool is full, buffer will be dropped and freed)
         ctx.staging_pool().release(staging_buffer, byte_size);
+        bytes
+    }
 
-        result
+    /// Copy f32 data from GPU back to CPU
+    ///
+    /// This is a relatively expensive operation - try to minimize transfers!
+    /// # Panics
+    /// Panics if GPU context does not exist, or the buffer is not F32 (use
+    /// `to_host` for any element type).
+    #[must_use]
+    pub fn to_vec(&self) -> Vec<f32> {
+        assert_eq!(
+            self.dtype,
+            DType::F32,
+            "GpuBuffer::to_vec: an f32 read of a {} buffer",
+            self.dtype
+        );
+        bytemuck::pod_collect_to_vec(&self.download())
+    }
+
+    /// Copy the buffer to the host in its own element type.
+    ///
+    /// # Panics
+    /// If the GPU context is gone, or a Bool word is not 0 or 1 (a kernel bug).
+    #[must_use]
+    pub(crate) fn to_host(&self) -> HostBuf {
+        let bytes = self.download();
+        let host = match self.dtype {
+            DType::Bool => {
+                let words: Vec<u32> = bytemuck::pod_collect_to_vec(&bytes);
+                let bytes: Vec<u8> = words
+                    .iter()
+                    .map(|&w| {
+                        assert!(w <= 1, "GPU bool buffer holds {w}, not 0 or 1");
+                        u8::from(w == 1)
+                    })
+                    .collect();
+                crate::storage::Storage::try_from_bytes(&bytes, DType::Bool)
+            }
+            dtype @ (DType::F16
+            | DType::BF16
+            | DType::F32
+            | DType::F64
+            | DType::I32
+            | DType::I64
+            | DType::U8) => {
+                let n = self.len * dtype.size_of();
+                crate::storage::Storage::try_from_bytes(
+                    bytes.get(..n).expect("download covers the elements"),
+                    dtype,
+                )
+            }
+        };
+        match host.expect("valid bytes for the buffer's dtype") {
+            crate::storage::Storage::Cpu(h) => h,
+            #[cfg(feature = "gpu")]
+            crate::storage::Storage::Gpu(_) => unreachable!("try_from_bytes builds CPU storage"),
+        }
     }
 
     /// Get the underlying wgpu buffer (for use in compute passes)
@@ -244,44 +289,45 @@ impl GpuBuffer {
         self.len == 0
     }
 
-    /// Copy a region of this buffer to a new GPU buffer
+    /// Copy a region of this buffer to a new GPU buffer of the same element type
     ///
     /// # Arguments
     /// * `offset` - Starting element offset in this buffer
     /// * `len` - Number of elements to copy
     /// # Panics
-    /// Panics if buffer is taken
+    /// Panics if buffer is taken, or (16-bit types) `offset` is odd: a copy starts on a
+    /// 4-byte boundary, which is a whole word of two elements.
     #[must_use]
     pub fn copy_region(&self, offset: usize, len: usize) -> Option<Self> {
         let ctx = get_gpu_context()?;
-        debug_assert!(self.buffer.is_some(), "Buffer should not be taken");
-        let src_buffer = self.buffer.as_ref().expect("Buffer should not be taken");
-        let byte_size = len * std::mem::size_of::<f32>();
-
-        // Try to get a buffer from the pool first
-        let new_buffer = ctx.buffer_pool().acquire(byte_size).unwrap_or_else(|| {
-            // Allocate with the bucket size (power of 2) for consistent pooling
-            let alloc_size = BufferPool::allocation_size(byte_size);
-            ctx.device().create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Copied Buffer Region"),
-                size: alloc_size as u64,
-                usage: wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_SRC
-                    | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
-        });
+        let src_buffer = self.buffer();
+        let byte_size = gpu_bytes(self.dtype, len);
+        let byte_offset = match self.dtype {
+            DType::F16 | DType::BF16 => {
+                assert!(
+                    offset.is_multiple_of(2),
+                    "copy_region: odd offset {offset} into a 16-bit buffer"
+                );
+                offset * 2
+            }
+            DType::F32 | DType::Bool | DType::F64 | DType::I32 | DType::I64 | DType::U8 => {
+                offset * 4
+            }
+        };
+        let new_buffer = Self::allocate(byte_size, "Copied Buffer Region")?;
 
         let mut encoder = ctx
             .device()
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Copy Buffer Region Encoder"),
             });
-
-        let byte_offset = (offset * std::mem::size_of::<f32>()) as u64;
-
-        encoder.copy_buffer_to_buffer(src_buffer, byte_offset, &new_buffer, 0, byte_size as u64);
-
+        encoder.copy_buffer_to_buffer(
+            src_buffer,
+            byte_offset as u64,
+            &new_buffer,
+            0,
+            byte_size as u64,
+        );
         ctx.queue().submit(Some(encoder.finish()));
         ctx.increment_pending();
         ctx.maybe_sync();
@@ -289,6 +335,7 @@ impl GpuBuffer {
         Some(Self {
             buffer: Some(new_buffer),
             len,
+            dtype: self.dtype,
             pool: Some(ctx.buffer_pool_arc()),
         })
     }
@@ -300,13 +347,8 @@ impl Drop for GpuBuffer {
         if let Some(buffer) = self.buffer.take()
             && let Some(pool) = &self.pool
         {
-            let byte_size = self.len * std::mem::size_of::<f32>();
             // Try to return to pool; if pool is full, buffer is dropped normally
-            pool.release(buffer, byte_size);
+            pool.release(buffer, gpu_bytes(self.dtype, self.len));
         }
-        // If no pool reference or pool rejected, buffer drops normally
     }
 }
-
-// We need this trait for wgpu buffer initialization
-// use wgpu::util::DeviceExt; //I think we still need this but I'm getting errors with it rn
