@@ -42,6 +42,16 @@ fn op_dtypes(low: DType) {
         ("exp(half)", h.exp(), low),
         ("half + f32", h.add(&x), DType::F32),
         (
+            "LayerNorm(half, f32 params)",
+            volta::LayerNorm::new(vec![8]).forward(&h),
+            low,
+        ),
+        (
+            "BatchNorm1d(half, f32 params)",
+            volta::BatchNorm1d::new(8).forward(&h),
+            low,
+        ),
+        (
             "MaxPool2d(half)",
             MaxPool2d::new(2, 2, 0).forward(&img.to_dtype(low)),
             low,
@@ -260,4 +270,42 @@ fn optimizer_trait_exposes_parameters() {
     let params = Optimizer::parameters(&opt);
     assert_eq!(params.len(), 1);
     assert_eq!(params[0].data(), p.data());
+}
+
+/// A5 (fixed): `DTypePolicy::Strict` and autocast work through norm layers, whose
+/// half-input, f32-parameter mix is explicit casts now (PyTorch's norm rule), and the
+/// parameters keep f32 gradients.
+#[test]
+fn strict_policy_and_autocast_run_through_norm_layers() {
+    volta::manual_seed(6);
+    let _strict = volta::with_dtype_policy(volta::DTypePolicy::Strict);
+    let model = volta::Sequential::new(vec![
+        Box::new(Linear::new(4, 6, true)),
+        Box::new(volta::LayerNorm::new(vec![6])),
+        Box::new(ReLU),
+        Box::new(volta::BatchNorm1d::new(6)),
+        Box::new(Linear::new(6, 3, true)),
+    ]);
+    let x = randn(&[5, 4]);
+    let y = RawTensor::from_typed(vec![0i64, 1, 2, 1, 0], &[5]);
+    let loss = {
+        let _ac = autocast(DType::BF16);
+        RawTensor::cross_entropy_loss(&model.forward(&x), &y)
+    };
+    assert_eq!(loss.dtype(), DType::F32);
+    loss.into_loss().expect("scalar").backward();
+    for p in model.parameters() {
+        assert_eq!(p.grad_storage().expect("a gradient").dtype(), DType::F32);
+    }
+}
+
+/// The norm rule applies only to a half input with f32 parameters: an f64 input to an
+/// f32 `LayerNorm` still promotes (to f64), as before.
+#[test]
+fn norm_mixed_rule_is_only_half_input_f32_params() {
+    let x = randn(&[2, 4]).to_dtype(DType::F64);
+    assert_eq!(
+        volta::LayerNorm::new(vec![4]).forward(&x).dtype(),
+        DType::F64
+    );
 }

@@ -615,7 +615,8 @@ def group_autocast():
     `torch.autocast("cpu", dtype=..)`, backward outside it. Cases: an MLP (Linear, ReLU,
     Linear) with class-index cross-entropy (loss and every parameter's f32 gradient),
     Conv2d and ConvTranspose2d (output in the low dtype and the f32 gradients of input,
-    weight and bias under a weighted sum), and broadcast batched matmul. Keys prefixed
+    weight and bias under a weighted sum), broadcast batched matmul, and LayerNorm after
+    a Linear and BatchNorm2d after a Conv2d (half input, f32 parameters). Keys prefixed
     `bf16.` / `f16.`; stored in native dtypes.
     """
     F = torch.nn.functional
@@ -657,6 +658,15 @@ def group_autocast():
         a, bm = rl(2, 1, 3, 4), rl(1, 3, 4, 2)
         t.update({f"{dname}.matmul.a": a, f"{dname}.matmul.b": bm})
         case("matmul", lambda: a @ bm, {"a": a, "b": bm})
+
+        # Norms after a low-precision op: torch normalizes the half input with f32
+        # parameters in f32 and returns the input's dtype (Volta P8 audit A5).
+        x, w, b, g, be = rl(4, 6), rl(5, 6), rl(5), rl(5), rl(5)
+        t.update({f"{dname}.ln.{k}": v for k, v in dict(x=x, weight=w, bias=b, gamma=g, beta=be).items()})
+        case("ln", lambda: F.layer_norm(F.linear(x, w, b), (5,), g, be, 1e-5), {"x": x, "weight": w, "bias": b, "gamma": g, "beta": be})
+        x, w, g, be = rl(3, 2, 4, 4), rl(2, 2, 3, 3), rl(2), rl(2)
+        t.update({f"{dname}.bn.{k}": v for k, v in dict(x=x, weight=w, gamma=g, beta=be).items()})
+        case("bn", lambda: F.batch_norm(F.conv2d(x, w, None, padding=1), None, None, g, be, training=True, eps=1e-5), {"x": x, "weight": w, "gamma": g, "beta": be})
 
     OUT.mkdir(parents=True, exist_ok=True)
     meta = {"info": f"torch={torch.__version__};seed={SEED};group=autocast"}
