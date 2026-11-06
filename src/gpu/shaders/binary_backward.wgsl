@@ -18,7 +18,11 @@ fn force_use_bindings(x: f32, y: f32) {
 
 // For add: d(a+b)/da = 1
 @compute @workgroup_size(256)
-fn add_backward_a(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn add_backward_a(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         // Force use of a and b to ensure all bindings are included in layout
@@ -29,7 +33,11 @@ fn add_backward_a(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 // For add: d(a+b)/db = 1
 @compute @workgroup_size(256)
-fn add_backward_b(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn add_backward_b(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         force_use_bindings(ld_a(idx), ld_b(idx));
@@ -39,7 +47,11 @@ fn add_backward_b(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 // For sub: d(a-b)/da = 1
 @compute @workgroup_size(256)
-fn sub_backward_a(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn sub_backward_a(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         force_use_bindings(ld_a(idx), ld_b(idx));
@@ -49,7 +61,11 @@ fn sub_backward_a(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 // For sub: d(a-b)/db = -1
 @compute @workgroup_size(256)
-fn sub_backward_b(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn sub_backward_b(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         force_use_bindings(ld_a(idx), ld_b(idx));
@@ -59,7 +75,11 @@ fn sub_backward_b(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 // For mul: d(a*b)/da = b
 @compute @workgroup_size(256)
-fn mul_backward_a(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn mul_backward_a(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         force_use_bindings(ld_a(idx), ld_b(idx));
@@ -69,7 +89,11 @@ fn mul_backward_a(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 // For mul: d(a*b)/db = a
 @compute @workgroup_size(256)
-fn mul_backward_b(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn mul_backward_b(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         force_use_bindings(ld_a(idx), ld_b(idx));
@@ -79,7 +103,11 @@ fn mul_backward_b(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 // For div: d(a/b)/da = 1/b
 @compute @workgroup_size(256)
-fn div_backward_a(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn div_backward_a(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         force_use_bindings(ld_a(idx), ld_b(idx));
@@ -89,7 +117,11 @@ fn div_backward_a(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 // For div: d(a/b)/db = -a/b²
 @compute @workgroup_size(256)
-fn div_backward_b(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn div_backward_b(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         let b_inv = 1.0 / ld_b(idx);
@@ -99,7 +131,11 @@ fn div_backward_b(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 // For max: d(max(a,b))/da = 1 if a >= b else 0
 @compute @workgroup_size(256)
-fn max_backward_a(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn max_backward_a(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         let grad = select(0.0, ld_out_grad(idx), ld_a(idx) >= ld_b(idx));
@@ -109,7 +145,11 @@ fn max_backward_a(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 // For max: d(max(a,b))/db = 1 if b > a else 0
 @compute @workgroup_size(256)
-fn max_backward_b(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn max_backward_b(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         let grad = select(0.0, ld_out_grad(idx), ld_b(idx) > ld_a(idx));

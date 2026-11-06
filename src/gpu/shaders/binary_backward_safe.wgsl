@@ -104,7 +104,11 @@ fn pad_shape(shape: vec4<u32>, rank: u32, target_rank: u32) -> vec4<u32> {
 // Each thread computes (target_idx_a, target_idx_b, grad_value) and stores in temp buffer
 
 @compute @workgroup_size(256)
-fn add_broadcast_pass1(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn add_broadcast_pass1(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let out_idx = global_id.x;
     let out_size = params.out_shape[0u] * params.out_shape[1u] * params.out_shape[2u] * params.out_shape[3u];
 
@@ -168,7 +172,11 @@ fn add_broadcast_pass1(@builtin(global_invocation_id) global_id: vec3<u32>) {
 // Each thread processes one gradient position and sums all contributions
 
 @compute @workgroup_size(256)
-fn add_broadcast_pass2(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn add_broadcast_pass2(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     // Process both a_grad and b_grad in one pass
     // First half of threads process a_grad, second half process b_grad
     let thread_idx = global_id.x;
@@ -215,7 +223,11 @@ fn add_broadcast_pass2(@builtin(global_invocation_id) global_id: vec3<u32>) {
 // Subtraction: a - b
 // grad_a = +out_grad, grad_b = -out_grad
 @compute @workgroup_size(256)
-fn sub_broadcast_pass1(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn sub_broadcast_pass1(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let out_idx = global_id.x;
     let out_size = params.out_shape[0u] * params.out_shape[1u] * params.out_shape[2u] * params.out_shape[3u];
 
@@ -260,7 +272,11 @@ fn sub_broadcast_pass1(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn sub_broadcast_pass2(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn sub_broadcast_pass2(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let thread_idx = global_id.x;
     let a_size = params.a_shape[0u] * params.a_shape[1u] * params.a_shape[2u] * params.a_shape[3u];
     let b_size = params.b_shape[0u] * params.b_shape[1u] * params.b_shape[2u] * params.b_shape[3u];
@@ -301,7 +317,11 @@ fn sub_broadcast_pass2(@builtin(global_invocation_id) global_id: vec3<u32>) {
 // Multiplication: a * b
 // grad_a = out_grad * b, grad_b = out_grad * a
 @compute @workgroup_size(256)
-fn mul_broadcast_pass1(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn mul_broadcast_pass1(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let out_idx = global_id.x;
     let out_size = params.out_shape[0u] * params.out_shape[1u] * params.out_shape[2u] * params.out_shape[3u];
 
@@ -348,7 +368,11 @@ fn mul_broadcast_pass1(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn mul_broadcast_pass2(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn mul_broadcast_pass2(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let thread_idx = global_id.x;
     let a_size = params.a_shape[0u] * params.a_shape[1u] * params.a_shape[2u] * params.a_shape[3u];
     let b_size = params.b_shape[0u] * params.b_shape[1u] * params.b_shape[2u] * params.b_shape[3u];
@@ -391,7 +415,11 @@ fn mul_broadcast_pass2(@builtin(global_invocation_id) global_id: vec3<u32>) {
 // Division: a / b
 // grad_a = out_grad / b, grad_b = -out_grad * a / b^2
 @compute @workgroup_size(256)
-fn div_broadcast_pass1(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn div_broadcast_pass1(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let out_idx = global_id.x;
     let out_size = params.out_shape[0u] * params.out_shape[1u] * params.out_shape[2u] * params.out_shape[3u];
 
@@ -438,7 +466,11 @@ fn div_broadcast_pass1(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn div_broadcast_pass2(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn div_broadcast_pass2(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let thread_idx = global_id.x;
     let a_size = params.a_shape[0u] * params.a_shape[1u] * params.a_shape[2u] * params.a_shape[3u];
     let b_size = params.b_shape[0u] * params.b_shape[1u] * params.b_shape[2u] * params.b_shape[3u];
@@ -483,7 +515,11 @@ fn div_broadcast_pass2(@builtin(global_invocation_id) global_id: vec3<u32>) {
 // grad_a = out_grad if a > b else 0
 // grad_b = out_grad if b >= a else 0
 @compute @workgroup_size(256)
-fn max_broadcast_pass1(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn max_broadcast_pass1(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let out_idx = global_id.x;
     let out_size = params.out_shape[0u] * params.out_shape[1u] * params.out_shape[2u] * params.out_shape[3u];
 
@@ -534,7 +570,11 @@ fn max_broadcast_pass1(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn max_broadcast_pass2(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn max_broadcast_pass2(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let thread_idx = global_id.x;
     let a_size = params.a_shape[0u] * params.a_shape[1u] * params.a_shape[2u] * params.a_shape[3u];
     let b_size = params.b_shape[0u] * params.b_shape[1u] * params.b_shape[2u] * params.b_shape[3u];

@@ -73,24 +73,44 @@ fn sequential_to_device_moves_child_buffers() {
     assert!(out.device().is_gpu());
 }
 
-/// A2: elementwise GPU kernels dispatch `len / 256` workgroups with no check against
+/// A2 (fixed): elementwise GPU kernels dispatched `len / 256` workgroups with no check against
 /// wgpu's 65535 limit, so a tensor of 16,776,961 elements or more (a 4096 x 4096 matrix
 /// is 16,777,216) aborts with an opaque `wgpu error: Validation Error`; the cast, compare,
 /// where and unscale kernels refuse the same sizes with a message that names Muon. The
 /// kernels should cover any size (a 2-D dispatch or a strided loop).
 #[cfg(feature = "gpu")]
 #[test]
-#[ignore = "A2: GPU elementwise, cast, compare, where and unscale kernels fail at >= 65535 * 256 elements (a 4096 x 4096 tensor)"]
 fn gpu_elementwise_and_cast_cover_a_4096_square() {
     let Some(gpu) = gpu_or_skip("gpu_elementwise_and_cast_cover_a_4096_square") else {
         return;
     };
     let n = 4096 * 4096;
-    let a = RawTensor::new(vec![1.5; n], &[4096, 4096], false).to_device(gpu);
-    let sum = a.add(&a);
-    assert_eq!(*sum.data().last().expect("elements"), 3.0);
-    let half = a.to_dtype(DType::F16);
-    assert_eq!(*half.data().last().expect("elements"), 1.5);
+    // Distinct values near the end, so a wrong flat index shows up as a wrong value.
+    let data: Vec<f32> = (0..n).map(|i| (i % 1000) as f32 * 0.25).collect();
+    let a = RawTensor::new(data.clone(), &[4096, 4096], false).to_device(gpu);
+    let last = n - 1;
+    let want = |i: usize| (i % 1000) as f32 * 0.25;
+
+    let sum = a.add(&a).data();
+    assert_eq!(sum[last], 2.0 * want(last));
+    assert_eq!(sum[n - 300_000], 2.0 * want(n - 300_000));
+    let exp = a.relu().data();
+    assert_eq!(exp[last], want(last));
+    let half = a.to_dtype(DType::F16).data();
+    assert_eq!(half[last], want(last));
+    let lt = a.lt(&a.add(&a)).to_vec_as::<bool>().expect("bool");
+    assert_eq!(lt[last], want(last) > 0.0);
+    let picked = a.lt(&a).where_op(&a, &a.neg()).data();
+    assert_eq!(picked[last], -want(last));
+    let permuted = a.permute(&[volta::Axis(1), volta::Axis(0)]).data();
+    assert_eq!(permuted[last], want(last));
+
+    // Backward through a GPU unary op over the same size.
+    let x = a.detach();
+    x.set_requires_grad(true);
+    x.elem_mul(&x).sum().into_loss().expect("scalar").backward();
+    let g = x.grad().expect("grad");
+    assert_eq!(g[last], 2.0 * want(last));
 }
 
 /// A3: a negative momentum is silently ignored on the CPU (the momentum branch tests

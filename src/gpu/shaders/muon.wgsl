@@ -26,7 +26,11 @@ struct MuonParams {
 
 // v <- alpha * v + g;  update = Nesterov ? alpha * v + g : v
 @compute @workgroup_size(256)
-fn momentum(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn momentum(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx >= params.n) {
         return;
@@ -67,7 +71,11 @@ fn sum_squares(@builtin(local_invocation_id) local_id: vec3<u32>) {
 
 // buf2[i] = buf0[i] / (sqrt(buf1[0]) + alpha)
 @compute @workgroup_size(256)
-fn normalize(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn normalize(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx >= params.n) {
         return;
@@ -77,7 +85,11 @@ fn normalize(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
 // buf2[i] = alpha * buf0[i] + beta * buf1[i]
 @compute @workgroup_size(256)
-fn axpby(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn axpby(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx >= params.n) {
         return;

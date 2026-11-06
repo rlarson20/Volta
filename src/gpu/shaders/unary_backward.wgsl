@@ -7,7 +7,11 @@
 @group(0) @binding(2) var<storage, read_write> result: array<ELEM>;
 
 @compute @workgroup_size(256)
-fn exp_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn exp_backward(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         // d(e^x)/dx = e^x
@@ -16,7 +20,11 @@ fn exp_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn log_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn log_backward(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         // d(ln(x))/dx = 1/x
@@ -25,7 +33,11 @@ fn log_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn relu_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn relu_backward(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         // d(max(0, x))/dx = x > 0 ? 1 : 0
@@ -34,7 +46,11 @@ fn relu_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn sigmoid_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn sigmoid_backward(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         // d(sigmoid(x))/dx = sigmoid(x) * (1 - sigmoid(x))
@@ -44,7 +60,11 @@ fn sigmoid_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn tanh_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn tanh_backward(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         // d(tanh(x))/dx = 1 - tanh²(x)
@@ -54,7 +74,11 @@ fn tanh_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn sqrt_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn sqrt_backward(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         // d(sqrt(x))/dx = 1 / (2 * sqrt(x))
@@ -63,7 +87,11 @@ fn sqrt_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn sin_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn sin_backward(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         // d(sin(x))/dx = cos(x)
@@ -72,7 +100,11 @@ fn sin_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn cos_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn cos_backward(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         // d(cos(x))/dx = -sin(x)
@@ -81,7 +113,11 @@ fn cos_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn neg_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn neg_backward(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         // d(-x)/dx = -1
@@ -91,7 +127,11 @@ fn neg_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn recip_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn recip_backward(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         // d(1/x)/dx = -1/x²
@@ -101,7 +141,11 @@ fn recip_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn exp2_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn exp2_backward(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         // d(2^x)/dx = 2^x * ln(2)
@@ -110,7 +154,11 @@ fn exp2_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn log2_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn log2_backward(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         // d(log2(x))/dx = 1 / (x * ln(2))
@@ -119,7 +167,11 @@ fn log2_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 
 @compute @workgroup_size(256)
-fn erf_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn erf_backward(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         // d erf(x)/dx = 2/sqrt(pi) * exp(-x^2)

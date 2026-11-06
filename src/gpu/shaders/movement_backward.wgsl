@@ -67,7 +67,11 @@ fn compute_strides(shape: vec4<u32>, rank: u32) -> vec4<u32> {
 // Backward: old_coords[axes[i]] = new_coords[i]
 // This is equivalent to permuting with inverse axes
 @compute @workgroup_size(256)
-fn permute_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn permute_backward(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     let out_size = output_size(params.old_shape, params.rank);
 
@@ -93,7 +97,11 @@ fn permute_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
 // Forward: old_coords[i] = new_coords[i] * stride[i]
 // Backward: Place gradient at strided positions, zero elsewhere
 @compute @workgroup_size(256)
-fn stride_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn stride_backward(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     let out_size = output_size(params.old_shape, params.rank);
 
@@ -126,7 +134,11 @@ fn stride_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
 // Forward: old_coords[i] = new_coords[i] + range_start[i]
 // Backward: Place gradient in window, zero outside
 @compute @workgroup_size(256)
-fn shrink_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn shrink_backward(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     let out_size = output_size(params.old_shape, params.rank);
 
@@ -159,7 +171,11 @@ fn shrink_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
 // Forward: Adds padding around edges
 // Backward: Remove padding, extract center
 @compute @workgroup_size(256)
-fn pad_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn pad_backward(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     let out_size = output_size(params.old_shape, params.rank);
 
@@ -195,7 +211,11 @@ fn pad_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
 // Backward: Reduce gradients back to size 1 dimensions
 // This requires accumulation - we iterate over output gradient and accumulate into result
 @compute @workgroup_size(256)
-fn expand_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn expand_backward(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let thread_idx = global_id.x;
     let old_size = output_size(params.old_shape, params.rank);
 
