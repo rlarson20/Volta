@@ -181,7 +181,7 @@ pub struct GpuBuffer {
 
 - Broadcasting binary ops, forward and backward (`Linear`'s bias add, the norm layers, GELU's constants)
 - `sum_dim`/`max_dim` (so softmax and the norms), batched and 1-D `matmul`, movement above rank 4
-- `Embedding`, `MaxPool2d`, `ConvTranspose2d` (which also panics with a bias: audit A1)
+- `Embedding`, `MaxPool2d`, `ConvTranspose2d`
 
 ### GPU Development Guidelines
 

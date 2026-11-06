@@ -22,13 +22,12 @@ fn gpu_or_skip(name: &str) -> Option<Device> {
     gpu
 }
 
-/// A1: `ConvTranspose2d` with a bias builds its pre-bias output on the CPU and adds the
-/// GPU bias to it, so a GPU model panics with "expected all inputs on one device" under
-/// every device policy. Under `PreferGpu` a layer with no GPU kernel must still run (on
-/// the CPU, moved back) and match the CPU.
+/// A1 (fixed): `ConvTranspose2d` with a bias built its pre-bias output on the CPU and
+/// added the GPU bias to it, so a GPU model panicked with "expected all inputs on one
+/// device" under every device policy. Under `PreferGpu` a layer with no GPU kernel must
+/// still run (on the CPU, moved back) and match the CPU.
 #[cfg(feature = "gpu")]
 #[test]
-#[ignore = "A1: ConvTranspose2d with bias on the GPU adds a GPU bias to a CPU intermediate (mixed-device panic, even under PreferGpu)"]
 fn conv_transpose2d_with_bias_runs_on_the_gpu_under_prefer_gpu() {
     use volta::{ConvTranspose2d, DevicePolicy, Layer, Module, with_device_policy};
     let Some(gpu) = gpu_or_skip("conv_transpose2d_with_bias_runs_on_the_gpu_under_prefer_gpu")
