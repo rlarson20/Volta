@@ -36,14 +36,14 @@ impl LSTMCell {
         let weight_ih = RawTensor::xavier_uniform(&[4 * hidden_size, input_size]);
         let weight_hh = RawTensor::xavier_uniform(&[4 * hidden_size, hidden_size]);
 
-        weight_ih.borrow_mut().requires_grad = true;
-        weight_hh.borrow_mut().requires_grad = true;
+        weight_ih.set_requires_grad(true);
+        weight_hh.set_requires_grad(true);
 
         let (bias_ih, bias_hh) = if bias {
             let b_ih = RawTensor::zeros(&[4 * hidden_size]);
             let b_hh = RawTensor::zeros(&[4 * hidden_size]);
-            b_ih.borrow_mut().requires_grad = true;
-            b_hh.borrow_mut().requires_grad = true;
+            b_ih.set_requires_grad(true);
+            b_hh.set_requires_grad(true);
             (Some(b_ih), Some(b_hh))
         } else {
             (None, None)
@@ -161,13 +161,19 @@ impl Module for LSTMCell {
         if let Some(b) = state.get("bias_ih")
             && self.bias_ih.is_some()
         {
-            let bias_tensor = self.bias_ih.as_ref().unwrap();
+            let bias_tensor = self
+                .bias_ih
+                .as_ref()
+                .expect("LSTMCell: bias_ih exists when a bias entry is loaded");
             bias_tensor.load_weight("bias_ih", b)?;
         }
         if let Some(b) = state.get("bias_hh")
             && self.bias_hh.is_some()
         {
-            let bias_tensor = self.bias_hh.as_ref().unwrap();
+            let bias_tensor = self
+                .bias_hh
+                .as_ref()
+                .expect("LSTMCell: bias_hh exists when a bias entry is loaded");
             bias_tensor.load_weight("bias_hh", b)?;
         }
         Ok(())

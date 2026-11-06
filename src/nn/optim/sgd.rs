@@ -87,7 +87,7 @@ impl SGD {
     /// across multiple batches.
     pub fn zero_grad(&self) {
         for param in &self.params {
-            param.borrow_mut().grad = None;
+            param.zero_grad();
         }
     }
 
@@ -104,7 +104,7 @@ impl SGD {
         }
         // Process each parameter based on its device
         for i in 0..self.params.len() {
-            let param = self.params.get(i).unwrap();
+            let param = self.params.get(i).expect("SGD: a parameter per index");
             let p = param.borrow();
 
             // Skip parameters without gradients
@@ -133,7 +133,7 @@ impl SGD {
     fn step_gpu_param(&mut self, i: usize) {
         use crate::gpu::OptimizerStepParams;
 
-        let param = self.params.get(i).unwrap();
+        let param = self.params.get(i).expect("SGD: a parameter per index");
         let mut p = param.borrow_mut();
 
         let grad = match &p.grad {
@@ -152,7 +152,13 @@ impl SGD {
             (0, 0.0, &mut dummy_state1)
         } else {
             // Velocity is already on the GPU, with the parameter.
-            (1, self.momentum, self.velocity.get_mut(i).unwrap())
+            (
+                1,
+                self.momentum,
+                self.velocity
+                    .get_mut(i)
+                    .expect("SGD: velocity per parameter when momentum > 0"),
+            )
         };
 
         let opt_params = OptimizerStepParams {
@@ -180,7 +186,7 @@ impl SGD {
 
     /// CPU update for a single parameter
     fn step_cpu_param(&mut self, i: usize) {
-        let param = self.params.get(i).unwrap();
+        let param = self.params.get(i).expect("SGD: a parameter per index");
         let mut p = param.borrow_mut();
 
         let grad = match &p.grad {

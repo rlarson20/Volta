@@ -40,11 +40,11 @@ impl ConvTranspose2d {
     ) -> Self {
         // Weight shape for transpose conv: [in_channels, out_channels, K, K]
         let w = RawTensor::he_initialization(&[in_ch, out_ch, kernel, kernel]);
-        w.borrow_mut().requires_grad = true;
+        w.set_requires_grad(true);
 
         let b = if use_bias {
             let b = RawTensor::zeros(&[out_ch]);
-            b.borrow_mut().requires_grad = true;
+            b.set_requires_grad(true);
             Some(b)
         } else {
             None
@@ -341,7 +341,10 @@ impl Module for ConvTranspose2d {
         if let Some(b) = state.get("bias")
             && self.bias.is_some()
         {
-            let bias_tensor = self.bias.as_ref().unwrap();
+            let bias_tensor = self
+                .bias
+                .as_ref()
+                .expect("ConvTranspose2d: a bias entry is loaded only into a layer with a bias");
             bias_tensor.load_weight("bias", b)?;
         }
         Ok(())
@@ -663,7 +666,7 @@ mod tests {
         // Test that gradients flow through the entire network
         let conv = ConvTranspose2d::new(2, 4, 3, 1, 0, true);
         let x = RawTensor::randn(&[1, 2, 5, 5]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         let y = conv.forward(&x);
         let loss = y.sum();
@@ -692,7 +695,7 @@ mod tests {
         crate::tensor::manual_seed(0xC7D0);
         let conv = ConvTranspose2d::new(2, 4, 3, 1, 1, true);
         let x = RawTensor::randn(&[1, 2, 6, 6]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         // Seeded; measured max relative error 1.4e-5, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) = RawTensor::check_gradients(
@@ -717,7 +720,7 @@ mod tests {
         crate::tensor::manual_seed(0xC7D2);
         let conv = ConvTranspose2d::new(2, 4, 3, 2, 1, true);
         let x = RawTensor::randn(&[1, 2, 4, 4]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         // Seeded; measured max relative error 3.2e-5, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
@@ -738,7 +741,7 @@ mod tests {
         crate::tensor::manual_seed(0xC7DB);
         let conv = ConvTranspose2d::new(2, 4, 3, 1, 0, false);
         let x = RawTensor::randn(&[1, 2, 5, 5]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         // Seeded; measured max relative error 2.0e-6, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
@@ -759,7 +762,7 @@ mod tests {
         crate::tensor::manual_seed(0xC7D1);
         let conv = ConvTranspose2d::new(2, 4, 1, 1, 0, true);
         let x = RawTensor::randn(&[1, 2, 8, 8]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         // Seeded; measured max relative error 6.2e-6, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
@@ -781,7 +784,7 @@ mod tests {
         crate::tensor::manual_seed(0x5B5);
         let conv = ConvTranspose2d::new(2, 4, 5, 1, 2, true);
         let x = RawTensor::randn(&[1, 2, 6, 6]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         // Seeded; measured max relative error 1.1e-3, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
@@ -806,7 +809,7 @@ mod tests {
         crate::tensor::manual_seed(0xC7);
         let conv = ConvTranspose2d::new(4, 8, 3, 1, 1, true);
         let x = RawTensor::randn(&[1, 4, 6, 6]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         // Seeded; measured max relative error 5.6e-5, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
@@ -823,7 +826,7 @@ mod tests {
         // Test that parameter gradients have the correct shape
         let conv = ConvTranspose2d::new(3, 6, 3, 2, 1, true);
         let x = RawTensor::randn(&[2, 3, 8, 8]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         let y = conv.forward(&x);
         let loss = y.sum();
@@ -877,7 +880,7 @@ mod tests {
         // Test gradient correctness with non-square input
         let conv = ConvTranspose2d::new(2, 4, 3, 2, 1, true);
         let x = RawTensor::randn(&[1, 2, 6, 10]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         let y = conv.forward(&x);
         let loss = y.sum();

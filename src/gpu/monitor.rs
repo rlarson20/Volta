@@ -41,7 +41,7 @@ pub enum ResourceStatus {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use volta::gpu::monitor::{check_system_resources, ResourceStatus};
 ///
 /// match check_system_resources() {
@@ -144,7 +144,7 @@ fn get_process_memory_ratio() -> f64 {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use volta::gpu::monitor::get_process_memory_mb;
 ///
 /// println!("Current memory usage: {}MB", get_process_memory_mb());

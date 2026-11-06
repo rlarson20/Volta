@@ -55,10 +55,10 @@ impl Linear {
     #[must_use]
     pub fn new(in_features: usize, out_features: usize, use_bias: bool) -> Self {
         let w = RawTensor::xavier_uniform(&[in_features, out_features]);
-        w.borrow_mut().requires_grad = true;
+        w.set_requires_grad(true);
         let b = if use_bias {
             let b = RawTensor::zeros(&[out_features]);
-            b.borrow_mut().requires_grad = true;
+            b.set_requires_grad(true);
             Some(b)
         } else {
             None

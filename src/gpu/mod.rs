@@ -71,12 +71,13 @@ pub fn is_gpu_available() -> bool {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use volta::{gpu_sync, RawTensor, Device};
+/// ```no_run
+/// use volta::{Device, gpu_sync, randn};
 ///
+/// let tensor = randn(&[64, 64]).to_device(Device::gpu().expect("a GPU"));
 /// // Run many GPU operations
 /// for _ in 0..100 {
-///     tensor.relu();
+///     let _ = tensor.relu();
 /// }
 ///
 /// // Ensure all work completes before timing next section
@@ -98,10 +99,10 @@ pub fn gpu_sync() -> bool {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use volta::{gpu_pending_count, RawTensor, Device};
+/// ```no_run
+/// use volta::{Device, gpu_pending_count, randn};
 ///
-/// let t = tensor.to_device(Device::gpu().unwrap());
+/// let t = randn(&[64, 64]).to_device(Device::gpu().expect("a GPU"));
 /// let _ = t.relu();
 /// println!("Pending ops: {}", gpu_pending_count());
 /// ```
@@ -133,7 +134,7 @@ pub fn gpu_sync_threshold() -> u32 {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use volta::gpu_cleanup;
 ///
 /// // After a batch of GPU operations
@@ -167,7 +168,7 @@ pub fn gpu_cleanup() -> bool {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use volta::gpu_compact;
 ///
 /// // After a heavy benchmark group
@@ -219,7 +220,7 @@ pub fn gpu_compact() -> bool {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use volta::gpu_pool_stats;
 ///
 /// if let Some((buffers, staging)) = gpu_pool_stats() {
@@ -248,11 +249,12 @@ pub fn gpu_pool_stats() -> Option<(usize, usize)> {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use volta::{Device, Tensor, gpu::invalidate_all_tensor_caches};
+/// ```no_run
+/// use volta::{Device, gpu::invalidate_all_tensor_caches, randn};
 ///
-/// let a = tensor.to_device(Device::gpu().unwrap());
-/// let b = tensor.to_device(Device::gpu().unwrap());
+/// let gpu = Device::gpu().expect("a GPU");
+/// let a = randn(&[64, 64]).to_device(gpu.clone());
+/// let b = randn(&[64, 64]).to_device(gpu);
 ///
 /// // ... run benchmarks that may populate CPU caches ...
 ///

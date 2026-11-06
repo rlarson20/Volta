@@ -52,6 +52,11 @@ impl Default for BufferPoolConfig {
 ///
 /// All operations are protected by a Mutex, making the pool safe for concurrent
 /// access (though Volta is currently single-threaded, this future-proofs the design).
+///
+/// A poisoned lock is recovered rather than propagated: each critical section only
+/// pushes, pops, or adjusts a count, with nothing in between that can panic, so the
+/// pool is consistent after a panic elsewhere; and one panicking thread (a failing
+/// test) must not break every later GPU call.
 pub struct BufferPool {
     /// Free buffers organized by size bucket (key = log2(size))
     buckets: Mutex<HashMap<u32, VecDeque<wgpu::Buffer>>>,
@@ -127,10 +132,17 @@ impl BufferPool {
 
         let bucket = Self::size_to_bucket(min_size);
 
-        if let Some(queue) = self.buckets.lock().unwrap().get_mut(&bucket)
+        if let Some(queue) = self
+            .buckets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_mut(&bucket)
             && let Some(buffer) = queue.pop_front()
         {
-            let mut count = self.total_count.lock().unwrap();
+            let mut count = self
+                .total_count
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             *count = count.saturating_sub(1);
             drop(count);
             return Some(buffer);
@@ -160,8 +172,14 @@ impl BufferPool {
         }
 
         let bucket = Self::size_to_bucket(size);
-        let mut buckets = self.buckets.lock().unwrap();
-        let mut count = self.total_count.lock().unwrap();
+        let mut buckets = self
+            .buckets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut count = self
+            .total_count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         // Check total capacity
         if *count >= self.config.total_capacity {
@@ -187,8 +205,14 @@ impl BufferPool {
     /// # Panics
     /// Unwrapping bucket mutex
     pub fn clear(&self) {
-        self.buckets.lock().unwrap().clear();
-        *self.total_count.lock().unwrap() = 0;
+        self.buckets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        *self
+            .total_count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = 0;
     }
 
     /// Get statistics about pool usage
@@ -196,12 +220,15 @@ impl BufferPool {
     /// Unwrapping bucket mutex
     #[allow(dead_code)]
     pub fn stats(&self) -> BufferPoolStats {
-        let total = *self.total_count.lock().unwrap();
+        let total = *self
+            .total_count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let bucket_stats: Vec<(usize, usize)> = self
             .buckets
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .map(|(&bucket, queue)| (Self::bucket_to_size(bucket), queue.len()))
             .collect();
