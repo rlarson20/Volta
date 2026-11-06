@@ -25,7 +25,11 @@ pub struct Adam {
 
 impl Adam {
     /// Optimizer over `params` with zeroed moment estimates on each parameter's device.
+    ///
+    /// # Panics
+    /// If a hyperparameter is invalid; see [`Self::try_new`].
     #[must_use]
+    #[track_caller]
     pub fn new(
         params: Vec<Tensor>,
         lr: f32,
@@ -33,6 +37,26 @@ impl Adam {
         eps: f32,
         weight_decay: f32,
     ) -> Self {
+        Self::try_new(params, lr, betas, eps, weight_decay).unwrap_or_else(|e| panic!("Adam: {e}"))
+    }
+
+    /// [`Self::new`], checking the hyperparameters first, as PyTorch does.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` if `lr`, `eps` or `weight_decay` is negative or NaN,
+    /// or a beta is outside `[0, 1)` (a beta of 1 makes the bias correction divide by 0).
+    pub fn try_new(
+        params: Vec<Tensor>,
+        lr: f32,
+        betas: (f32, f32),
+        eps: f32,
+        weight_decay: f32,
+    ) -> crate::Result<Self> {
+        super::check_non_negative("learning rate", lr)?;
+        super::check_non_negative("epsilon", eps)?;
+        super::check_beta(0, betas.0)?;
+        super::check_beta(1, betas.1)?;
+        super::check_non_negative("weight_decay", weight_decay)?;
         // Create state matching the device of each parameter
         let m: Vec<Storage> = params
             .iter()
@@ -60,7 +84,7 @@ impl Adam {
             })
             .collect();
 
-        Self {
+        Ok(Self {
             params,
             lr,
             betas,
@@ -69,7 +93,7 @@ impl Adam {
             m,
             v,
             t: 0,
-        }
+        })
     }
 
     /// Clears the gradient of every parameter.
