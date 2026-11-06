@@ -579,7 +579,7 @@ Today `DType` only tags bytes: every `Tensor` is f32, `Storage`'s typed construc
 - f16/bf16 ops decode to f32, compute in f32, and round the output to the storage dtype (PyTorch CPU). Reductions over half inputs accumulate in f32. f64 computes in f64. Torch fixtures check each dtype with its own tolerance.
 - A gradient has its tensor's dtype. Only float tensors may `requires_grad`; asking for it on an int or bool tensor is a `VoltaError`.
 - `to_dtype` is a differentiable op (`GradFn::Cast`, built by `edge()`); its backward casts the gradient back. Mixed-dtype operands never reach a kernel: promotion inserts `Cast` nodes, so every kernel sees one dtype.
-- Promotion follows `torch.result_type` for two dimensioned tensors. The rule for zero-dim tensors and Rust scalars is settled in P6.
+- Promotion follows `torch.result_type` for two dimensioned tensors. Settled in P6: Volta has no zero-dim tensors or scalar ops, so a `[1]` tensor is dimensioned and promotes fully (`f16[n] * f32[1]` is f32, as in torch). Scalar ops with torch's wrapped-number rule are a TODO. `DTypePolicy::Strict` turns promotion off.
 - I64 and Bool tensors are data, not parameters: `Embedding` takes I64 indices, cross-entropy takes I64 targets, comparisons return Bool, and `where` takes a Bool condition.
 - On the GPU, f32 and f16 are supported (wgpu `SHADER_F16`). An unsupported dtype or adapter panics at `to_device` (like a missing adapter today; `to_device` takes tensors the program built), never a silent upcast.
 
