@@ -188,18 +188,19 @@ pub fn load_state_dict(path: &str) -> Result<StateDict> {
 
 // ========== SafeTensors Support ==========
 
-/// Convert `SafeTensors` dtype to Volta `DType`
-const fn safetensors_dtype_to_volta(dtype: safetensors::Dtype) -> DType {
+/// Convert a `SafeTensors` dtype to Volta's, or `None` if Volta has no such dtype.
+const fn safetensors_dtype_to_volta(dtype: safetensors::Dtype) -> Option<DType> {
     match dtype {
-        safetensors::Dtype::F16 => DType::F16,
-        safetensors::Dtype::BF16 => DType::BF16,
-        safetensors::Dtype::F64 => DType::F64,
-        safetensors::Dtype::I32 => DType::I32,
-        safetensors::Dtype::I64 => DType::I64,
-        safetensors::Dtype::U8 => DType::U8,
-        safetensors::Dtype::BOOL => DType::Bool,
-        safetensors::Dtype::F32
-        | safetensors::Dtype::F4
+        safetensors::Dtype::F16 => Some(DType::F16),
+        safetensors::Dtype::BF16 => Some(DType::BF16),
+        safetensors::Dtype::F32 => Some(DType::F32),
+        safetensors::Dtype::F64 => Some(DType::F64),
+        safetensors::Dtype::I32 => Some(DType::I32),
+        safetensors::Dtype::I64 => Some(DType::I64),
+        safetensors::Dtype::U8 => Some(DType::U8),
+        safetensors::Dtype::BOOL => Some(DType::Bool),
+        // Listed so a new safetensors dtype is a deliberate choice, not a silent f32 (S18).
+        safetensors::Dtype::F4
         | safetensors::Dtype::F6_E2M3
         | safetensors::Dtype::F6_E3M2
         | safetensors::Dtype::I8
@@ -211,8 +212,26 @@ const fn safetensors_dtype_to_volta(dtype: safetensors::Dtype) -> DType {
         | safetensors::Dtype::U32
         | safetensors::Dtype::C64
         | safetensors::Dtype::U64
-        | _ => DType::F32, // Fallback for unsupported types
+        | _ => None,
     }
+}
+
+/// Volta's dtype for one safetensors entry.
+///
+/// # Errors
+/// `InvalidData` if the dtype has no Volta equivalent. Reading it as f32 bytes instead
+/// gave plausible wrong values (S18).
+fn entry_dtype(name: &str, tensor: &safetensors::tensor::TensorView<'_>) -> Result<DType> {
+    safetensors_dtype_to_volta(tensor.dtype()).ok_or_else(|| {
+        Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "SafeTensors entry '{name}' has dtype {:?}, which Volta does not support \
+                 (supported: F16, BF16, F32, F64, I32, I64, U8, BOOL)",
+                tensor.dtype()
+            ),
+        )
+    })
 }
 
 /// Convert Volta `DType` to `SafeTensors` dtype
@@ -236,7 +255,8 @@ const fn volta_dtype_to_safetensors(dtype: DType) -> safetensors::Dtype {
 ///
 /// For native dtype loading, use `load_safetensors_raw()`.
 /// # Errors
-/// file opening errors
+/// The file can't be read or parsed, or an entry has a dtype Volta does not support
+/// (`InvalidData`; I8, U16, U32, U64, the f8 formats, ...).
 pub fn load_safetensors<P: AsRef<Path>>(path: P) -> Result<StateDict> {
     let mut file = File::open(path)?;
     let mut buffer = Vec::new();
@@ -249,10 +269,11 @@ pub fn load_safetensors<P: AsRef<Path>>(path: P) -> Result<StateDict> {
 
     for (name, tensor) in tensors.tensors() {
         let shape: Vec<usize> = tensor.shape().to_vec();
-        let dtype = safetensors_dtype_to_volta(tensor.dtype());
-
-        // Create Storage from raw bytes and convert to f32
-        let storage = Storage::from_bytes(tensor.data().to_vec(), dtype);
+        let dtype = entry_dtype(&name, &tensor)?;
+        // safetensors has checked the byte length against shape and dtype; this
+        // check repeats it so a mismatch is an error here too, not a panic.
+        let storage = Storage::try_from_bytes(tensor.data().to_vec(), dtype)
+            .map_err(|e| Error::new(std::io::ErrorKind::InvalidData, format!("'{name}': {e}")))?;
         let f32_data = storage.to_f32_vec();
 
         state_dict.insert(
@@ -307,7 +328,8 @@ impl TypedTensorData {
 /// Returns a map of tensor names to `TypedTensorData`, preserving the original
 /// dtype (F16, BF16, etc.) without conversion.
 /// # Errors
-/// file opening errors
+/// The file can't be read or parsed, or an entry has a dtype Volta does not support
+/// (`InvalidData`; I8, U16, U32, U64, the f8 formats, ...).
 pub fn load_safetensors_raw<P: AsRef<Path>>(path: P) -> Result<BTreeMap<String, TypedTensorData>> {
     let mut file = File::open(path)?;
     let mut buffer = Vec::new();
@@ -319,12 +341,13 @@ pub fn load_safetensors_raw<P: AsRef<Path>>(path: P) -> Result<BTreeMap<String, 
     let mut result = BTreeMap::new();
 
     for (name, tensor) in tensors.tensors() {
+        let dtype = entry_dtype(&name, &tensor)?;
         result.insert(
             name.clone(),
             TypedTensorData {
                 data: tensor.data().to_vec(),
                 shape: tensor.shape().to_vec(),
-                dtype: safetensors_dtype_to_volta(tensor.dtype()),
+                dtype,
             },
         );
     }
@@ -442,7 +465,7 @@ pub fn load_state_dict_with_mapping<P: AsRef<Path>>(
 /// # Ok::<(), std::io::Error>(())
 /// ```
 /// # Errors
-/// returns result state dict
+/// Same as [`load_safetensors`].
 pub fn load_safetensors_with_mapping<P: AsRef<Path>>(
     path: P,
     mapper: &mapping::StateDictMapper,

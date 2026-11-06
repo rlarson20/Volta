@@ -27,7 +27,7 @@ This project is an educational endeavor to demystify the inner workings of moder
 - **Optimizers:** `SGD` (momentum + weight decay), `Adam` (bias-corrected + weight decay), and experimental `Muon`.
 - **External Model Loading:** Load weights from PyTorch, HuggingFace, and other frameworks via `StateDictMapper` with automatic weight transposition and key remapping. Supports SafeTensors format.
 - **Named Layers:** Human-readable state dict keys with `Sequential::builder()` pattern for robust serialization.
-- **Multi-dtype Support:** Initial support for f16, bf16, f32, f64, i32, i64, u8, and bool tensors.
+- **SafeTensors dtypes:** f16, bf16, f64, i32, i64, u8, and bool files load (converted to f32); every tensor computes in f32 today. Real dtypes and mixed precision are in progress (`docs/plans/ADDENDUM.md` §11).
 - **IO System:** Save and load model weights (state dicts) via `bincode` or SafeTensors format.
 - **BLAS Acceleration (macOS):** Optional acceleration for matrix multiplication via Apple's Accelerate framework.
 - **GPU Acceleration:** Experimental WGPU-based GPU support for core tensor operations (elementwise, matmul, reductions, movement ops) with automatic backward pass on GPU.
@@ -323,7 +323,7 @@ fn main() {
 
 The library is designed around a few core concepts:
 
-- **`Tensor`**: The central data structure, an `Rc<RefCell<RawTensor>>`, which holds data, shape, gradient information, and device location. Supports multiple data types (f32, f16, bf16, f64, i32, i64, u8, bool).
+- **`Tensor`**: The central data structure, an `Rc<RefCell<RawTensor>>`, which holds data, shape, gradient information, and device location. Always f32 today.
 - **Tensor methods**: `Tensor` has inherent methods for all operations (e.g., `tensor.add(&other)`, `tensor.matmul(&weights)`); there is no trait to import.
 - **`nn::Module`**: The base trait for anything with learnable parameters. Provides `parameters()`, `state_dict()`, `load_state_dict()`, `zero_grad()`, `to_device()`, and `train()`/`eval()`.
 - **`nn::Layer`**: A `Module` that maps one tensor to one tensor with `forward()`. Only `Layer`s can go in a `Sequential`. Implement it to write your own layer.
@@ -410,7 +410,7 @@ The next major steps for Volta are focused on expanding its capabilities to hand
 
 - **Conv2d Memory Inefficiency**: `im2col` implementation in `src/nn/layers/conv.rs` materializes the entire matrix in memory. Large batch sizes or high-resolution images will easily OOM even on high-end machines. Somewhat mitigated through algorithm selection in convolutional layer.
 - **GPU Kernel Efficiency**: Current GPU matmul uses naive implementation without shared memory tiling. Significant performance gains possible with optimized GEMM kernels.
-- **Multi-dtype Completeness**: While storage supports multiple dtypes (f16, bf16, f64, etc.), most operations still assume f32. Full dtype support requires operation kernels for each type.
+- **f32 only**: `Storage` can hold other dtypes, but every `Tensor` and every operation is f32. Real dtypes and mixed precision are planned (`docs/plans/ADDENDUM.md` §11).
 - **Single-threaded**: Uses `Rc<RefCell>` instead of `Arc<Mutex>`, limiting to single-threaded execution on CPU.
 
 ## Contributing

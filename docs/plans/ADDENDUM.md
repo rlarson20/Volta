@@ -568,12 +568,48 @@ Supporting cast: `insta` snapshot for `state_dict()` round-trips (catches key-fo
 
 ---
 
+## 11. Dtypes and mixed precision
+
+_Added 2026-11-02. Decided with the maintainer: half types accumulate in f32, promotion is implicit by torch's rules, the `improvements` → `main` gate waits for this phase, and GPU f16 is in scope. The reasons are in `DECISIONS.md`, "Mixed precision: four decisions"._
+
+Today `DType` only tags bytes: every `Tensor` is f32, `Storage`'s typed constructors never reach a `Tensor`, and the GPU is f32-only. This section makes it real in the PyTorch sense: tensors of every listed dtype, differentiable casts, promotion, then autocast with loss scaling and f32 master weights.
+
+**Semantics (what "correct" means, so tests can check it):**
+
+- f16/bf16 ops decode to f32, compute in f32, and round the output to the storage dtype (PyTorch CPU). Reductions over half inputs accumulate in f32. f64 computes in f64. Torch fixtures check each dtype with its own tolerance.
+- A gradient has its tensor's dtype. Only float tensors may `requires_grad`; asking for it on an int or bool tensor is a `VoltaError`.
+- `to_dtype` is a differentiable op (`GradFn::Cast`, built by `edge()`); its backward casts the gradient back. Mixed-dtype operands never reach a kernel: promotion inserts `Cast` nodes, so every kernel sees one dtype.
+- Promotion follows `torch.result_type` for two dimensioned tensors. The rule for zero-dim tensors and Rust scalars is settled in P6.
+- I64 and Bool tensors are data, not parameters: `Embedding` takes I64 indices, cross-entropy takes I64 targets, comparisons return Bool, and `where` takes a Bool condition.
+- On the GPU, f32 and f16 are supported (wgpu `SHADER_F16`). An unsupported dtype or adapter is a `VoltaError` at `to_device`, never a silent upcast.
+
+**Storage.** A typed host buffer replaces `Arc<[u8]>` plus a tag: `HostBuf::{F32(Arc<[f32]>), F64(Arc<[f64]>), F16(..), BF16(..), I32(..), I64(..), U8(..), Bool(..)}`. Alignment becomes a type guarantee rather than an allocator accident (`DECISIONS.md`, "CPU storage"), which starts to matter once f64 is computed on. GPU buffers carry their dtype.
+
+**Kernels.** CPU kernels become generic over a sealed accumulator trait implemented for `f32` and `f64`. Half dtypes run the `f32` instance and load and round at the edges. That doubles the instances, not the source.
+
+**Autocast and scaling (P7).** A scoped guard (like `NoGrad`) casts the inputs of matmul, conv, and `Linear` to the low-precision dtype, and keeps reductions, softmax, norms, and losses in f32. `GradScaler` scales the loss, unscales the gradients, skips a step on inf/NaN, and adapts the scale. Optimizers keep f32 master weights and state for half parameters.
+
+**PRs (stacked, one task each):**
+
+| PR | Delivers | Done when |
+| -- | -------- | --------- |
+| P0 | S18 fix; `DType::promote` matches `torch.result_type`; this plan | S18 tests un-ignored; a torch-generated table checks all 64 dtype pairs |
+| P1 | Typed `HostBuf`; `Tensor::dtype()`; same-dtype checks (`DTypeMismatch`); `requires_grad` only on floats | Existing tests pass unchanged; mismatch and int-grad tests |
+| P2 | Differentiable `to_dtype` (`GradFn::Cast`) | Gradcheck through f32 → f64 → f32 |
+| P3 | Kernels generic over the accumulator; f64 end to end | Every op family gradchecks in f64 with tight tolerances; torch fixtures in f64 |
+| P4 | f16/bf16 tensors | Torch fixtures in f16 and bf16 for every op family |
+| P5 | I64/Bool tensors; `Embedding` becomes a `Layer` (§3.2) | `Embedding` in `Sequential` trains; comparisons, `where`, cross-entropy against torch |
+| P6 | Implicit promotion | Mixed-dtype ops match torch's result dtype and values |
+| P7 | Autocast, `GradScaler`, master weights | MNIST under bf16 autocast reaches f32 accuracy within a stated margin; a scaler skip-step test |
+| P8 | GPU f16 | `just test-gpu` on the Mac: GPU f16 matches CPU f16 |
+
 ## Sequencing
 
 Ordered by prevention-per-risk; each phase compiles and ships independently.
 
 | Phase                 | Contents                                                                                        | Prevents                           | Size                |
 | --------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------- | ------------------- |
+| 5 — dtypes, before 4 and `main` | Dtypes and mixed precision (§11), P0–P8 | decorative dtype, silent casts | multi-week |
 | 4 — endgame, optional | Arena graph (§6); `Backend` trait (§3.5); proptest DAG checks (§10.2) if not already in phase 2 | cycles, `Send`, memory determinism | multi-week, do last |
 
 Phases 0–3 (done) retire every prevention target that maps to a Part I blocker.
