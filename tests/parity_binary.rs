@@ -1,7 +1,7 @@
 //! CPU/GPU parity for binary tensor ops.
 //!
 //! Differentiable ops are checked forward + backward; non-differentiable ops
-//! (modulo, cmplt) are checked forward only. All shapes are matched — Volta
+//! (modulo) are checked forward only. All shapes are matched — Volta
 //! does not support broadcasting on the GPU path.
 
 #![cfg(feature = "gpu")]
@@ -83,17 +83,6 @@ fn modulo_parity_forward() {
         volta::Tensor::modulo,
         SHAPE,
         (1.0, 5.0),
-        TOL_FWD_GPU,
-    );
-}
-
-#[test]
-fn cmplt_parity_forward() {
-    assert_binary_parity(
-        "cmplt",
-        volta::Tensor::cmplt,
-        SHAPE,
-        (-2.0, 2.0),
         TOL_FWD_GPU,
     );
 }

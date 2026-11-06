@@ -507,6 +507,75 @@ def group_half():
     print(f"wrote half: {len(t)} tensors")
 
 
+def group_intbool():
+    """I64 and Bool tensors as data (Volta P5): comparisons, `where` with a bool
+    condition, cross-entropy and NLL with class-index targets, `Embedding` with 2-D
+    indices, and movement ops on i64 and bool. Stored in native dtypes.
+    """
+    torch.manual_seed(SEED)
+    F = torch.nn.functional
+    t = {}
+
+    def case(name, out, inputs):
+        w = torch.randn(out.shape)
+        names = list(inputs)
+        grads = torch.autograd.grad((out * w).sum(), [inputs[n] for n in names])
+        t[f"{name}.out"] = out
+        t[f"{name}.w"] = w
+        for n, g in zip(names, grads):
+            t[f"{name}.grad_{n}"] = g
+
+    # Floats with ties and a NaN; b broadcasts along the rows.
+    a = torch.tensor([[0.5, -1.0, 2.0, NAN], [1.5, 0.5, -1.0, 3.0], [2.0, 2.0, 0.0, -0.5]])
+    b = torch.tensor([0.5, 0.0, 2.0, 1.0])
+    ia = torch.tensor([[3, -7, 1 << 40], [0, 5, -(1 << 40)]], dtype=torch.int64)
+    ib = torch.tensor([0, 5, 1 << 40], dtype=torch.int64)
+    t.update({"cmp.a": a, "cmp.b": b, "cmp.ia": ia, "cmp.ib": ib})
+    for op in ["lt", "le", "gt", "ge", "eq", "ne"]:
+        t[f"cmp.{op}"] = getattr(torch, op)(a, b)
+        t[f"cmp.int_{op}"] = getattr(torch, op)(ia, ib)
+
+    cond = torch.tensor([[True], [False], [True]])
+    y = torch.randn(3, 4).requires_grad_(True)
+    z = torch.randn(4).requires_grad_(True)
+    t.update({"where.cond": cond, "where.y": y, "where.z": z})
+    case("where", torch.where(cond, y, z), {"y": y, "z": z})
+    iy = torch.arange(12, dtype=torch.int64).reshape(3, 4) << 33
+    t.update({"where.iy": iy, "where.int_out": torch.where(cond, iy, torch.tensor(-1, dtype=torch.int64))})
+
+    logits = torch.randn(5, 4).requires_grad_(True)
+    target = torch.tensor([3, 0, 1, 3, 2], dtype=torch.int64)
+    t.update({"ce.logits": logits, "ce.target": target})
+    out = F.cross_entropy(logits, target)
+    t["ce.out"] = out
+    t["ce.grad_logits"] = torch.autograd.grad(out, logits)[0]
+    lp = torch.log_softmax(torch.randn(5, 4), 1).requires_grad_(True)
+    t["nll.logp"] = lp
+    out = F.nll_loss(lp, target)
+    t["nll.out"] = out
+    t["nll.grad_logp"] = torch.autograd.grad(out, lp)[0]
+
+    weight = torch.randn(6, 3).requires_grad_(True)
+    idx = torch.tensor([[1, 5, 1], [0, 1, 4]], dtype=torch.int64)
+    t.update({"embedding.weight": weight, "embedding.idx": idx})
+    case("embedding", F.embedding(idx, weight), {"weight": weight})
+
+    x = (torch.arange(24, dtype=torch.int64).reshape(2, 3, 4) - 7) << 41
+    m = torch.rand(2, 3, 4) > 0.5
+    t.update({"move.x": x, "move.m": m})
+    for name, v in [("x", x), ("m", m)]:
+        t[f"move.{name}.permute"] = v.permute(2, 0, 1)
+        t[f"move.{name}.shrink"] = v[:, 1:3, 0:2]
+        t[f"move.{name}.expand"] = v[:, :1, :].expand(2, 5, 4)
+        t[f"move.{name}.transpose"] = v[0].t()
+        t[f"move.{name}.pad"] = F.pad(v[0].to(torch.int64), (1, 2)).to(v.dtype)
+
+    OUT.mkdir(parents=True, exist_ok=True)
+    meta = {"info": f"torch={torch.__version__};seed={SEED};group=intbool"}
+    save_file({k: v.detach().clone().contiguous() for k, v in t.items()}, OUT / "intbool.safetensors", metadata=meta)
+    print(f"wrote intbool: {len(t)} tensors")
+
+
 # Volta's `DType` discriminants, in order: F16=0, BF16=1, F32=2, F64=3, I32=4, I64=5, U8=6, Bool=7.
 VOLTA_DTYPES = [torch.float16, torch.bfloat16, torch.float32, torch.float64, torch.int32, torch.int64, torch.uint8, torch.bool]
 
@@ -574,7 +643,7 @@ def group_casts():
     print(f"wrote casts: {len(out)} tensors")
 
 
-GROUPS = {"ops": group_ops, "reductions": group_reductions, "optim": group_optim, "layers": group_layers, "dtypes": group_dtypes, "casts": group_casts, "f64": group_f64, "half": group_half}
+GROUPS = {"ops": group_ops, "reductions": group_reductions, "optim": group_optim, "layers": group_layers, "dtypes": group_dtypes, "casts": group_casts, "f64": group_f64, "half": group_half, "intbool": group_intbool}
 
 if __name__ == "__main__":
     wanted = sys.argv[1:] or list(GROUPS)

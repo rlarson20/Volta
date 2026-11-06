@@ -567,6 +567,39 @@ impl Storage {
         }
     }
 
+    /// The elements' bits as `B` (a `real::Bits` carrier of the dtype's width), for a
+    /// movement kernel that copies elements without reading them. GPU storage syncs.
+    ///
+    /// # Panics
+    /// If `B`'s width is not the dtype's (`dispatch_bits!` picks it).
+    #[must_use]
+    #[track_caller]
+    pub(crate) fn bits<B: crate::real::Bits>(&self) -> &[B] {
+        assert_eq!(
+            size_of::<B>(),
+            self.dtype().size_of(),
+            "bits: carrier width differs from {}",
+            self.dtype()
+        );
+        cast_slice(self.as_bytes())
+    }
+
+    /// CPU storage of `dtype` from bits a movement kernel copied out of storage of `dtype`.
+    ///
+    /// # Panics
+    /// If `B`'s width is not `dtype`'s, or (Bool) a byte is not 0 or 1, which a copy of
+    /// valid storage cannot produce.
+    #[must_use]
+    #[track_caller]
+    pub(crate) fn from_bits<B: crate::real::Bits>(dtype: DType, data: &[B]) -> Self {
+        assert_eq!(
+            size_of::<B>(),
+            dtype.size_of(),
+            "from_bits: carrier width differs from {dtype}"
+        );
+        Self::try_from_bytes(cast_slice(data), dtype).unwrap_or_else(|e| panic!("from_bits: {e}"))
+    }
+
     /// A kernel's output computed in `T`, stored as `dtype`: `T`'s own dtype as is, and
     /// F16/BF16 from `f32` rounded to nearest-even (PyTorch's CPU half ops compute in f32
     /// and round the output).
