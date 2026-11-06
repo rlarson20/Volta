@@ -93,6 +93,13 @@ pub enum VoltaError {
         /// Number of values the entry holds.
         len: usize,
     },
+
+    /// Gradients were requested for a tensor whose dtype has none (integers and bool).
+    #[error("Only floating-point tensors can require gradients, got {dtype}")]
+    NotDifferentiable {
+        /// The tensor's dtype.
+        dtype: DType,
+    },
 }
 
 impl VoltaError {

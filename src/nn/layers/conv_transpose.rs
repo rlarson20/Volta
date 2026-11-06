@@ -344,6 +344,7 @@ impl Module for ConvTranspose2d {
 
 impl Layer for ConvTranspose2d {
     fn forward(&self, x: &Tensor) -> Tensor {
+        crate::tensor::expect_f32(|| "ConvTranspose2d".to_string(), &[x, &self.weight]);
         let spec =
             ConvTranspose2dSpec::new(&x.shape(), &self.weight.shape(), self.stride, self.padding)
                 .unwrap_or_else(|e| panic!("{e}"));
@@ -371,7 +372,7 @@ impl Layer for ConvTranspose2d {
 
         // 4. Use col2im to convert to output shape
         let col_data = matmul_result.borrow().data.clone();
-        let output_data = Self::col2im_transpose(&col_data.to_host_f32(), &spec);
+        let output_data = Self::col2im_transpose(col_data.to_host_f32(), &spec);
 
         // 5. Add bias if present. The real backward for this op is the custom
         // ConvTranspose2dGradFn below (col2im isn't invertible through ordinary

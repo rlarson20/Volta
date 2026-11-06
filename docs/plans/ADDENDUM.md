@@ -581,7 +581,7 @@ Today `DType` only tags bytes: every `Tensor` is f32, `Storage`'s typed construc
 - `to_dtype` is a differentiable op (`GradFn::Cast`, built by `edge()`); its backward casts the gradient back. Mixed-dtype operands never reach a kernel: promotion inserts `Cast` nodes, so every kernel sees one dtype.
 - Promotion follows `torch.result_type` for two dimensioned tensors. The rule for zero-dim tensors and Rust scalars is settled in P6.
 - I64 and Bool tensors are data, not parameters: `Embedding` takes I64 indices, cross-entropy takes I64 targets, comparisons return Bool, and `where` takes a Bool condition.
-- On the GPU, f32 and f16 are supported (wgpu `SHADER_F16`). An unsupported dtype or adapter is a `VoltaError` at `to_device`, never a silent upcast.
+- On the GPU, f32 and f16 are supported (wgpu `SHADER_F16`). An unsupported dtype or adapter panics at `to_device` (like a missing adapter today; `to_device` takes tensors the program built), never a silent upcast.
 
 **Storage.** A typed host buffer replaces `Arc<[u8]>` plus a tag: `HostBuf::{F32(Arc<[f32]>), F64(Arc<[f64]>), F16(..), BF16(..), I32(..), I64(..), U8(..), Bool(..)}`. Alignment becomes a type guarantee rather than an allocator accident (`DECISIONS.md`, "CPU storage"), which starts to matter once f64 is computed on. GPU buffers carry their dtype.
 

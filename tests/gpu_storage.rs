@@ -138,7 +138,7 @@ fn gpu_storage_bytes_round_trip_to_the_f32_data() {
     let storage = Storage::gpu(values.clone());
     assert!(storage.is_gpu(), "storage must be on the GPU");
 
-    let bytes = storage.try_as_bytes().expect("GPU bytes");
+    let bytes = storage.as_bytes();
     assert_eq!(bytes.len(), N * 4);
     let (chunks, rest) = bytes.as_chunks::<4>();
     assert!(rest.is_empty(), "byte length is not a multiple of 4");

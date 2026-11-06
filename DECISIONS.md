@@ -489,6 +489,18 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 3. **The `improvements` → `main` gate waits for §11** (the maintainer's call; the recommendation was to let P0 clear the "decorative" item and merge meanwhile).
 4. **GPU f16 is in scope** (P8, wgpu `SHADER_F16`). An unsupported dtype or adapter is an error at `to_device`, never the old silent upcast to f32. The cloud can write P8 but not verify it.
 
+### Typed host buffer; kernels refuse other dtypes (P1, supersedes the byte layout in "CPU storage")
+
+**Decision:** `Storage::Cpu` holds a `HostBuf`, one `Arc<[T]>` variant per dtype, instead of `Arc<[u8]>` plus a tag. A sealed `Element` trait (`f16`, `bf16`, `f32`, `f64`, `i32`, `i64`, `u8`, `bool`) gives `Storage::from_typed::<T>`, `as_host::<T>`, and `as_host_mut::<T>` (copy-on-write, as before), replacing `cpu_f64`/`cpu_f16`/`cpu_bf16`/`cpu_f32` and the `as_*_slice` accessors. Bytes are decoded by copying (`try_from_bytes(&[u8], DType)`), so they need no alignment, and a `Bool` byte other than 0 or 1 is an error.
+
+**Why:** the old byte buffer relied on the allocator for alignment, which "CPU storage" called out as unguaranteed; f64 makes it load-bearing. A typed buffer makes the element type and alignment part of the type.
+
+**Kernels refuse other dtypes:** `to_host_f32`, the read every kernel uses, panics with `DTypeMismatch` on a non-f32 storage instead of converting it, and now returns `&[f32]` (it was a `Cow` only to hold conversions). `Storage::to_vec` is its owned copy, also f32-only; `to_f32_vec` is the deliberate, lossy decode of any dtype, used by `Tensor::data()` and the safetensors loader. This turns the old silent path (an f64 operand read as f32) into a panic. On top of it, every op entry calls `tensor::expect_f32` before any work (the five dispatchers, movement ops, `sum_dim`/`max_dim`, `contiguous`, `Conv2d`, `ConvTranspose2d`, `MaxPool2d`, and the optimizers' `step`), so the panic names the op and the offending input (`Binary(Add): DType mismatch: expected F32, got F64 (input 1)`) instead of a kernel line. Composite ops (`softmax`, losses, `BatchNorm`) inherit it from their primitives. The kernel-read panic stays as the backstop. Movement ops are refused too, though they only move data: their kernels read through the f32 path until P3/P5. P3/P4 replace these panics with real kernels, and P6 adds promotion.
+
+**Tensors:** `Tensor::dtype()`; `RawTensor::from_typed`/`try_from_typed` take any `Element`; `from_vec` stays f32-only, because an unsuffixed float literal is `f64` and a generic `from_vec(vec![1.0])` built an f64 tensor unasked (one existing test caught it). Integer and bool tensors cannot require gradients (`set_requires_grad(true)` panics with `NotDifferentiable`, a new `VoltaError` variant, as PyTorch raises). `set_grad` panics on a gradient of another dtype. `load_weight` returns `DTypeMismatch` for a non-f32 destination, because `TensorData` is f32. `Storage::to_device` panics instead of upcasting a non-f32 storage to the GPU.
+
+**Removed:** `Storage::to_dtype` (no callers; P2 brings a differentiable cast with checked semantics) and `try_as_bytes` (`as_bytes` cannot fail). `TypedTensorData::to_storage`/`to_tensor_data` now return `Result`, since their fields are public bytes.
+
 ## Errors
 
 ### Panic inside the program, `Result` where data comes from outside

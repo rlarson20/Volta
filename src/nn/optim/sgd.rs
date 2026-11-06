@@ -72,6 +72,10 @@ impl SGD {
     /// # Panics
     /// unwrap params
     pub fn step(&mut self) {
+        crate::tensor::expect_f32(
+            || "SGD step".to_string(),
+            &self.params.iter().collect::<Vec<_>>(),
+        );
         // Process each parameter based on its device
         for i in 0..self.params.len() {
             let param = self.params.get(i).unwrap();

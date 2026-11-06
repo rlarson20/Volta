@@ -196,6 +196,7 @@ fn test_shrink_wrong_length_too_short() {
         VoltaError::ShapeDataMismatch { .. }
         | VoltaError::DimensionOutOfBounds { .. }
         | VoltaError::DTypeMismatch { .. }
+        | VoltaError::NotDifferentiable { .. }
         | VoltaError::BroadcastError(..)
         | VoltaError::DeviceError(_)
         | VoltaError::Io(_)
@@ -234,6 +235,7 @@ fn test_shrink_wrong_length_too_long() {
         VoltaError::ShapeDataMismatch { .. }
         | VoltaError::DimensionOutOfBounds { .. }
         | VoltaError::DTypeMismatch { .. }
+        | VoltaError::NotDifferentiable { .. }
         | VoltaError::BroadcastError(..)
         | VoltaError::DeviceError(_)
         | VoltaError::Io(_)
@@ -261,6 +263,7 @@ fn test_shrink_out_of_bounds_end() {
         }
         VoltaError::ShapeDataMismatch { .. }
         | VoltaError::DTypeMismatch { .. }
+        | VoltaError::NotDifferentiable { .. }
         | VoltaError::BroadcastError(..)
         | VoltaError::DeviceError(_)
         | VoltaError::Io(_)
@@ -289,6 +292,7 @@ fn test_shrink_start_exceeds_dimension() {
         }
         VoltaError::ShapeDataMismatch { .. }
         | VoltaError::DTypeMismatch { .. }
+        | VoltaError::NotDifferentiable { .. }
         | VoltaError::BroadcastError(..)
         | VoltaError::DeviceError(_)
         | VoltaError::Io(_)
@@ -324,6 +328,7 @@ fn test_shrink_invalid_range_order() {
         VoltaError::ShapeDataMismatch { .. }
         | VoltaError::DimensionOutOfBounds { .. }
         | VoltaError::DTypeMismatch { .. }
+        | VoltaError::NotDifferentiable { .. }
         | VoltaError::BroadcastError(..)
         | VoltaError::DeviceError(_)
         | VoltaError::Io(_)
@@ -358,6 +363,7 @@ fn test_shrink_empty_range() {
         VoltaError::ShapeDataMismatch { .. }
         | VoltaError::DimensionOutOfBounds { .. }
         | VoltaError::DTypeMismatch { .. }
+        | VoltaError::NotDifferentiable { .. }
         | VoltaError::BroadcastError(..)
         | VoltaError::DeviceError(_)
         | VoltaError::Io(_)
@@ -388,6 +394,7 @@ fn test_shrink_both_empty_ranges() {
         VoltaError::ShapeDataMismatch { .. }
         | VoltaError::DimensionOutOfBounds { .. }
         | VoltaError::DTypeMismatch { .. }
+        | VoltaError::NotDifferentiable { .. }
         | VoltaError::BroadcastError(..)
         | VoltaError::DeviceError(_)
         | VoltaError::Io(_)
@@ -453,7 +460,7 @@ fn test_div_by_zero_positive() {
     let z = x.div(&y);
 
     // All results should be +inf
-    for &val in z.borrow().data.to_host_f32().iter() {
+    for &val in z.borrow().data.to_host_f32() {
         assert!(val.is_infinite(), "Expected infinity, got {val}");
         assert!(
             val.is_sign_positive(),
@@ -470,7 +477,7 @@ fn test_div_by_zero_negative() {
     let z = x.div(&y);
 
     // All results should be -inf
-    for &val in z.borrow().data.to_host_f32().iter() {
+    for &val in z.borrow().data.to_host_f32() {
         assert!(val.is_infinite(), "Expected infinity, got {val}");
         assert!(
             val.is_sign_negative(),
@@ -487,7 +494,7 @@ fn test_div_zero_by_zero() {
     let z = x.div(&y);
 
     // All results should be NaN
-    for &val in z.borrow().data.to_host_f32().iter() {
+    for &val in z.borrow().data.to_host_f32() {
         assert!(val.is_nan(), "Expected NaN, got {val}");
     }
 }
@@ -500,7 +507,7 @@ fn test_div_by_negative_zero() {
     let z = x.div(&y);
 
     // All results should be -inf
-    for &val in z.borrow().data.to_host_f32().iter() {
+    for &val in z.borrow().data.to_host_f32() {
         assert!(val.is_infinite(), "Expected infinity, got {val}");
         assert!(
             val.is_sign_negative(),
@@ -546,7 +553,7 @@ fn test_sqrt_of_negative() {
     let y = x.sqrt();
 
     // All results should be NaN
-    for &val in y.borrow().data.to_host_f32().iter() {
+    for &val in y.borrow().data.to_host_f32() {
         assert!(val.is_nan(), "sqrt of negative should be NaN, got {val}");
     }
 }
@@ -557,7 +564,7 @@ fn test_sqrt_of_zero() {
     let x = RawTensor::new(vec![0.0, 0.0, 0.0], &[3], false);
     let y = x.sqrt();
 
-    for &val in y.borrow().data.to_host_f32().iter() {
+    for &val in y.borrow().data.to_host_f32() {
         assert_eq!(val, 0.0, "sqrt(0) should be 0, got {val}");
     }
 }
@@ -621,7 +628,7 @@ fn test_log_of_zero() {
     let y = x.log();
 
     // All results should be -inf
-    for &val in y.borrow().data.to_host_f32().iter() {
+    for &val in y.borrow().data.to_host_f32() {
         assert!(val.is_infinite(), "log(0) should be infinite, got {val}");
         assert!(val.is_sign_negative(), "log(0) should be -inf, got {val}");
     }
@@ -634,7 +641,7 @@ fn test_log_of_negative() {
     let y = x.log();
 
     // All results should be NaN
-    for &val in y.borrow().data.to_host_f32().iter() {
+    for &val in y.borrow().data.to_host_f32() {
         assert!(val.is_nan(), "log of negative should be NaN, got {val}");
     }
 }
@@ -646,7 +653,7 @@ fn test_log2_of_zero() {
     let y = x.log2();
 
     // All results should be -inf
-    for &val in y.borrow().data.to_host_f32().iter() {
+    for &val in y.borrow().data.to_host_f32() {
         assert!(val.is_infinite(), "log2(0) should be infinite, got {val}");
         assert!(val.is_sign_negative(), "log2(0) should be -inf, got {val}");
     }
@@ -659,7 +666,7 @@ fn test_log2_of_negative() {
     let y = x.log2();
 
     // All results should be NaN
-    for &val in y.borrow().data.to_host_f32().iter() {
+    for &val in y.borrow().data.to_host_f32() {
         assert!(val.is_nan(), "log2 of negative should be NaN, got {val}");
     }
 }

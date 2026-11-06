@@ -55,6 +55,7 @@ impl MaxPool2d {
 
     /// Computes the pooled output and attaches the backward edge.
     fn pool_forward(&self, x: &Tensor) -> Tensor {
+        crate::tensor::expect_f32(|| "MaxPool2d".to_string(), &[x]);
         let spec = Window2dSpec::new(&x.shape(), self.kernel, self.stride, self.padding)
             .unwrap_or_else(|e| panic!("{e}"));
         let Window2dSpec {
@@ -113,7 +114,7 @@ impl MaxPool2d {
                                 let w_in = w_start + kw;
                                 let in_idx =
                                     (((b * channels + c) * padded_h) + h_in) * padded_w + w_in;
-                                let val = fetch(&data, in_idx);
+                                let val = fetch(data, in_idx);
                                 if val > max_val {
                                     max_val = val;
                                     max_idx = in_idx;
@@ -166,7 +167,7 @@ impl MaxPool2dGradFn {
 
         let g_host = out_grad.data.to_host_f32();
         for (idx, &max_linear_idx) in self.max_indices.iter().enumerate() {
-            let grad_val = fetch(&g_host, idx);
+            let grad_val = fetch(g_host, idx);
             *slot(&mut grad_input, max_linear_idx) += grad_val;
         }
 
