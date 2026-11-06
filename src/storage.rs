@@ -205,6 +205,90 @@ fn pod_from_bytes<T: bytemuck::Pod>(bytes: &[u8]) -> Arc<[T]> {
     Arc::from(bytemuck::pod_collect_to_vec::<u8, T>(bytes))
 }
 
+/// Cast exact float values (every source float widens to `f64` without loss) to `target`.
+///
+/// # Panics
+/// On a NaN, infinite, or out-of-range value bound for an integer dtype.
+#[track_caller]
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "narrowing is the cast: f64 to f32 rounds to nearest, and float to integer \
+              truncates after the range check"
+)]
+fn cast_float(values: impl Iterator<Item = f64>, target: DType) -> HostBuf {
+    // Torch rounds f64 to half precision through f32 (two roundings); so does this.
+    match target {
+        DType::F16 => HostBuf::F16(values.map(|x| f16::from_f32(x as f32)).collect()),
+        DType::BF16 => HostBuf::BF16(values.map(|x| bf16::from_f32(x as f32)).collect()),
+        DType::F32 => HostBuf::F32(values.map(|x| x as f32).collect()),
+        DType::F64 => HostBuf::F64(values.collect()),
+        DType::I32 => HostBuf::I32(
+            truncate_checked(values, -2_147_483_648.0, 2_147_483_648.0, target)
+                .map(|t| t as i32)
+                .collect(),
+        ),
+        DType::I64 => HostBuf::I64(
+            truncate_checked(
+                values,
+                -9_223_372_036_854_775_808.0,
+                9.223_372_036_854_776e18,
+                target,
+            )
+            .map(|t| t as i64)
+            .collect(),
+        ),
+        DType::U8 => HostBuf::U8(
+            truncate_checked(values, 0.0, 256.0, target)
+                .map(|t| t as u8)
+                .collect(),
+        ),
+        DType::Bool => HostBuf::Bool(values.map(|x| x != 0.0).collect()),
+    }
+}
+
+/// Truncate each value toward zero, panicking unless it lands in `[lo, hi)`. NaN fails
+/// both comparisons, so it panics too.
+#[track_caller]
+fn truncate_checked(
+    values: impl Iterator<Item = f64>,
+    lo: f64,
+    hi: f64,
+    target: DType,
+) -> impl Iterator<Item = f64> {
+    let caller = std::panic::Location::caller();
+    values.enumerate().map(move |(i, x)| {
+        let t = x.trunc();
+        assert!(
+            t >= lo && t < hi,
+            "cast to {target} at {caller}: element {i} is {x}, outside {target}'s range \
+             (PyTorch leaves this undefined)"
+        );
+        t
+    })
+}
+
+/// Cast exact integer values (every source integer and bool widens to `i128`) to `target`.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "integer narrowing wraps (two's complement), as torch's static_cast does; \
+              integer to float rounds to nearest"
+)]
+fn cast_int(values: impl Iterator<Item = i128>, target: DType) -> HostBuf {
+    // Torch converts integers to half precision through f32; so does this.
+    match target {
+        DType::F16 => HostBuf::F16(values.map(|x| f16::from_f32(x as f32)).collect()),
+        DType::BF16 => HostBuf::BF16(values.map(|x| bf16::from_f32(x as f32)).collect()),
+        DType::F32 => HostBuf::F32(values.map(|x| x as f32).collect()),
+        DType::F64 => HostBuf::F64(values.map(|x| x as f64).collect()),
+        DType::I32 => HostBuf::I32(values.map(|x| x as i32).collect()),
+        DType::I64 => HostBuf::I64(values.map(|x| x as i64).collect()),
+        DType::U8 => HostBuf::U8(values.map(|x| x as u8).collect()),
+        DType::Bool => HostBuf::Bool(values.map(|x| x != 0).collect()),
+    }
+}
+
 impl Storage {
     // ========== Constructors ==========
 
@@ -490,6 +574,50 @@ impl Storage {
             HostBuf::U8(d) => d.iter().map(|&x| f32::from(x)).collect(),
             HostBuf::Bool(d) => d.iter().map(|&x| f32::from(u8::from(x))).collect(),
         }
+    }
+
+    // ========== Casting ==========
+
+    /// This storage converted to `target`, following PyTorch's CPU `x.to(dtype)`
+    /// (`tests/torch_ref_casts.rs` checks every pair bit for bit):
+    ///
+    /// - float to float rounds to nearest, ties to even. `F64` to `F16`/`BF16` rounds
+    ///   through `f32` first, as torch does, so a value just above a half-way point can
+    ///   round down.
+    /// - integer to `F16`/`BF16` also goes through `f32`; integer to `F32`/`F64` rounds once.
+    /// - float to integer truncates toward zero. A NaN, an infinity, or a value outside the
+    ///   integer's range panics: torch leaves it undefined, and saturating would be a
+    ///   plausible wrong number.
+    /// - integer to integer wraps (two's complement), as torch's `static_cast` does.
+    /// - anything to `Bool` is `x != 0` (NaN is true); `Bool` to anything is 0 or 1.
+    ///
+    /// Same dtype returns a clone that shares the buffer.
+    ///
+    /// # Panics
+    ///
+    /// On GPU storage (f32-only until ADDENDUM §11 P8), and on a float-to-integer value
+    /// out of range, as above.
+    #[must_use]
+    #[track_caller]
+    pub fn cast(&self, target: DType) -> Self {
+        if self.dtype() == target {
+            return self.clone();
+        }
+        let buf = match self {
+            Self::Cpu(buf) => buf,
+            #[cfg(feature = "gpu")]
+            Self::Gpu(_) => panic!("cast to {target}: GPU storage is f32-only (ADDENDUM §11 P8)"),
+        };
+        Self::Cpu(match buf {
+            HostBuf::F16(d) => cast_float(d.iter().map(|x| f64::from(x.to_f32())), target),
+            HostBuf::BF16(d) => cast_float(d.iter().map(|x| f64::from(x.to_f32())), target),
+            HostBuf::F32(d) => cast_float(d.iter().map(|&x| f64::from(x)), target),
+            HostBuf::F64(d) => cast_float(d.iter().copied(), target),
+            HostBuf::I32(d) => cast_int(d.iter().map(|&x| i128::from(x)), target),
+            HostBuf::I64(d) => cast_int(d.iter().map(|&x| i128::from(x)), target),
+            HostBuf::U8(d) => cast_int(d.iter().map(|&x| i128::from(x)), target),
+            HostBuf::Bool(d) => cast_int(d.iter().map(|&x| i128::from(x)), target),
+        })
     }
 
     // ========== Length and Properties ==========

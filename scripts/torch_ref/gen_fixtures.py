@@ -331,7 +331,57 @@ def group_dtypes():
     save("dtypes", {"promotion": torch.tensor(codes, dtype=torch.float32)})
 
 
-GROUPS = {"ops": group_ops, "reductions": group_reductions, "optim": group_optim, "layers": group_layers, "dtypes": group_dtypes}
+NAMES = ["f16", "bf16", "f32", "f64", "i32", "i64", "u8", "bool"]
+
+# Inputs per source dtype, as Python values; torch rounds them into the source dtype.
+FLOAT_FULL = [
+    0.0, -0.0, 1.0, -1.5, 2.5, 0.1, 1 / 3, 65504.0, 65520.0, 1e-8, 6e-8, 3.0e38, 1e300,
+    float("inf"), float("-inf"), float("nan"),
+    # Halfway cases: 1 + 2^-11 is the f16 tie above 1; + 2^-30 is just above it, which
+    # rounds up directly but ties-to-even down if rounded through f32 first.
+    1 + 2**-11, 1 + 2**-11 + 2**-30, 1 + 2**-8 + 2**-30,
+]
+# Float values every integer dtype can hold after truncation toward zero.
+FLOAT_SIGNED = [0.0, -0.0, 0.9, -0.9, 1.5, -1.5, 2.7, -2.7, 100.9, -100.9, 127.5]
+# 250.5, not 255.9: bf16 rounds 255.9 to 256, outside u8.
+FLOAT_UNSIGNED = [0.0, 0.9, 1.5, 2.7, 100.9, 200.5, 250.5]
+INTS = {
+    torch.int32: [0, 1, -1, 127, 128, 255, 256, -129, 2**24 + 1, 2**31 - 1, -(2**31)],
+    torch.int64: [0, 1, -1, 255, 256, -129, 2**24 + 1, 2**31, 2**53 + 1, 2**63 - 1, -(2**63)],
+    torch.uint8: [0, 1, 127, 128, 255],
+    torch.bool: [True, False],
+}
+
+
+def group_casts():
+    """`x.to(dst)` for every pair of Volta dtypes, stored in their native dtypes.
+
+    `cast.<src>.<set>` is the input and `cast.<src>.<set>.<dst>` torch's result. Float
+    sources have three sets: `full` (cast to floats and bool), `signed` (to i32/i64), and
+    `unsigned` (to u8); out-of-range float-to-int is undefined in torch, so it is left out.
+    """
+    out = {}
+    for src, sname in zip(VOLTA_DTYPES, NAMES):
+        if src.is_floating_point:
+            sets = {
+                "full": (FLOAT_FULL, [d for d in VOLTA_DTYPES if d.is_floating_point or d == torch.bool]),
+                "signed": (FLOAT_SIGNED, [torch.int32, torch.int64]),
+                "unsigned": (FLOAT_UNSIGNED, [torch.uint8]),
+            }
+        else:
+            sets = {"all": (INTS[src], VOLTA_DTYPES)}
+        for set_name, (values, dsts) in sets.items():
+            x = torch.tensor(values, dtype=src)
+            out[f"cast.{sname}.{set_name}"] = x
+            for dst in dsts:
+                out[f"cast.{sname}.{set_name}.{NAMES[VOLTA_DTYPES.index(dst)]}"] = x.to(dst).clone()
+    OUT.mkdir(parents=True, exist_ok=True)
+    meta = {"info": f"torch={torch.__version__};group=casts"}
+    save_file({k: v.contiguous() for k, v in out.items()}, OUT / "casts.safetensors", metadata=meta)
+    print(f"wrote casts: {len(out)} tensors")
+
+
+GROUPS = {"ops": group_ops, "reductions": group_reductions, "optim": group_optim, "layers": group_layers, "dtypes": group_dtypes, "casts": group_casts}
 
 if __name__ == "__main__":
     wanted = sys.argv[1:] or list(GROUPS)
