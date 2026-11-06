@@ -470,6 +470,14 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 
 **Not done:** the lint stays an allow, not a convention, so an `as f32` that ever feeds an integer-exact comparison is not caught. Revisit if one appears.
 
+### compile_fail requires `rust-src` (2026-11-06)
+
+**Decision:** the pinned `tests/compile_fail/*.stderr` are blessed with the `rust-src` component installed, CI installs it, and `tests/compile_fail.rs` panics with an install hint when it is missing.
+
+**Why:** rustc quotes libcore (`pub struct PhantomData<T: PointeeSized>;`) under the `$RUST/core/src/marker.rs` note in `guards_not_send` only when `rust-src` is present. The files were first blessed without it, so `just ci` failed on every machine that had it.
+
+**Rejected:** changing the guards' non-`Send` marker so the diagnostic never reaches libcore. That edits library code to suit a test, and the output that avoids libcore can only be found by trial.
+
 ## Dtypes (ADDENDUM §11)
 
 ### Mixed precision: four decisions (2026-11-02)
