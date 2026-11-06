@@ -2,6 +2,7 @@ use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::device_policy::kernel_failed;
 use crate::macros::define_ops;
+use crate::real::{Real, compute_dtype, dispatch_real};
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
 
@@ -21,13 +22,13 @@ define_ops! {
         Sqrt => |x| x.sqrt(), |g, x| g / (2.0 * x.sqrt()), gpu(sqrt, sqrt_backward);
         /// d(2ˣ)/dx = 2ˣ·ln(2)
         Exp2 => |x| x.exp2(),
-            |g, x| g * x.exp2() * std::f32::consts::LN_2,
+            |g, x| g * x.exp2() * fl::LN_2,
             gpu(exp2, exp2_backward);
         /// d(eˣ)/dx = eˣ
         Exp => |x| x.exp(), |g, x| g * x.exp(), gpu(exp, exp_backward);
         /// d(log₂(x))/dx = 1/(x·ln(2))
         Log2 => |x| x.log2(),
-            |g, x| g / (x * std::f32::consts::LN_2),
+            |g, x| g / (x * fl::LN_2),
             gpu(log2, log2_backward);
         /// d(ln(x))/dx = 1/x
         Log => |x| x.ln(), |g, x| g / x, gpu(log, log_backward);
@@ -52,8 +53,8 @@ define_ops! {
         /// d(max(0,x))/dx = x > 0 ? 1 : 0
         ReLU => |x| x.max(0.0), |g, x| if x > 0.0 { g } else { 0.0 }, gpu(relu, relu_backward);
         /// d(erf(x))/dx = 2/√π · exp(-x²)
-        Erf => |x| libm::erff(x),
-            |g, x| g * (2.0 / std::f32::consts::PI.sqrt()) * (-x * x).exp(),
+        Erf => |x| fl::erf(x),
+            |g, x| g * (2.0 / fl::PI.sqrt()) * (-x * x).exp(),
             gpu(erf, erf_backward);
     }
 }
@@ -94,17 +95,21 @@ impl UnaryGradFn {
         }
 
         // CPU path (CPU tensors, or a `cpu_only` op). Chain rule: ∂L/∂x = ∂L/∂y · ∂y/∂x, with the derivative from
-        // the `UnaryOp` table.
-        let grad_data: Vec<f32> = out_grad
-            .data
-            .to_host_f32()
-            .iter()
-            .zip(x.data.to_host_f32().iter())
-            .map(|(&g, &x)| self.op.backward(g, x))
-            .collect();
-        vec![Some(RawTensor::from_shape(
-            grad_data,
+        // the `UnaryOp` table, in x's dtype.
+        let op = self.op;
+        let grad = dispatch_real!(x.data.dtype(), T => Storage::from_typed(
+            out_grad
+                .data
+                .host::<T>()
+                .iter()
+                .zip(x.data.host::<T>())
+                .map(|(&g, &x)| T::unary_backward(op, g, x))
+                .collect::<Vec<T>>(),
+        ));
+        vec![Some(RawTensor::new_with_storage(
+            grad,
             x.shape.clone(),
+            Device::CPU,
             false,
         ))]
     }
@@ -118,7 +123,7 @@ impl RawTensor {
     /// Creates a new tensor and sets up gradient tracking if needed.
     #[must_use]
     pub fn unary_op(t: &Tensor, op: UnaryOp) -> Tensor {
-        crate::tensor::expect_f32(|| UnaryGradFn { op }.op_name(), &[t]);
+        let dtype = compute_dtype(|| UnaryGradFn { op }.op_name(), &[t.dtype()]);
         let (data, shape, device) = {
             let s = t.borrow();
             (s.data.clone(), s.shape.clone(), s.device.clone())
@@ -139,12 +144,13 @@ impl RawTensor {
         }
 
         // CPU path (CPU tensor, or a `cpu_only` op on the GPU: `edge()` applies the policy).
-        let host_data = data.to_vec();
-        let result: Vec<f32> = host_data.iter().map(|&x| op.forward(x)).collect();
+        let result = dispatch_real!(dtype, T => Storage::from_typed(
+            data.host::<T>().iter().map(|&x| T::unary(op, x)).collect::<Vec<T>>(),
+        ));
 
         edge(
             [t.clone()],
-            Storage::cpu(result),
+            result,
             shape,
             Device::CPU,
             GradFn::Unary(UnaryGradFn { op }),
