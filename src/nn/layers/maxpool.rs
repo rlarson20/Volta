@@ -3,6 +3,7 @@ use crate::device::Device;
 use crate::index::{fetch, slot};
 use crate::io::StateDict;
 use crate::nn::{Layer, Module};
+use crate::real::{Real, compute_dtype, dispatch_real};
 use crate::shape::Shape;
 use crate::spec::{PadValue, Window2dSpec};
 use crate::storage::Storage;
@@ -55,7 +56,7 @@ impl MaxPool2d {
 
     /// Computes the pooled output and attaches the backward edge.
     fn pool_forward(&self, x: &Tensor) -> Tensor {
-        crate::tensor::expect_f32(|| "MaxPool2d".to_string(), &[x]);
+        let dtype = compute_dtype(|| "MaxPool2d".to_string(), &[x.dtype()]);
         let spec = Window2dSpec::new(&x.shape(), self.kernel, self.stride, self.padding)
             .unwrap_or_else(|e| panic!("{e}"));
         let Window2dSpec {
@@ -92,9 +93,10 @@ impl MaxPool2d {
         };
 
         let data = x_padded.borrow().data.clone();
-        let data = data.to_host_f32();
+        let (out_storage, max_indices) = dispatch_real!(dtype, T => {
+        let data = data.host::<T>();
 
-        let mut out_data = vec![0.0; batch * channels * h_out * w_out];
+        let mut out_data = vec![T::ZERO; batch * channels * h_out * w_out];
         let mut max_indices = vec![0usize; out_data.len()];
 
         for b in 0..batch {
@@ -105,7 +107,7 @@ impl MaxPool2d {
                         let h_start = oh * stride_h;
                         let w_start = ow * stride_w;
 
-                        let mut max_val = f32::NEG_INFINITY;
+                        let mut max_val = T::NEG_INFINITY;
                         let mut max_idx = 0usize;
 
                         for kh in 0..kernel_h {
@@ -128,10 +130,12 @@ impl MaxPool2d {
                 }
             }
         }
+        (Storage::from_typed(out_data), max_indices)
+        });
 
         edge(
             [x_padded],
-            Storage::cpu(out_data),
+            out_storage,
             Shape::derived(spec.output_dims()),
             Device::CPU,
             GradFn::MaxPool2d(MaxPool2dGradFn { max_indices }),
@@ -163,19 +167,15 @@ impl MaxPool2dGradFn {
     /// Scatters `out_grad` to the recorded maxima; all other input elements get zero.
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let input_shape = parents.first().unwrap().borrow().shape.clone();
-        let mut grad_input = vec![0.0; input_shape.iter().product()];
-
-        let g_host = out_grad.data.to_host_f32();
-        for (idx, &max_linear_idx) in self.max_indices.iter().enumerate() {
-            let grad_val = fetch(g_host, idx);
-            *slot(&mut grad_input, max_linear_idx) += grad_val;
-        }
-
-        vec![Some(RawTensor::from_shape(
-            grad_input,
-            input_shape.clone(),
-            false,
-        ))]
+        dispatch_real!(out_grad.data.dtype(), T => {
+            let mut grad_input = vec![T::ZERO; input_shape.iter().product()];
+            let g_host = out_grad.data.host::<T>();
+            for (idx, &max_linear_idx) in self.max_indices.iter().enumerate() {
+                let grad_val = fetch(g_host, idx);
+                *slot(&mut grad_input, max_linear_idx) += grad_val;
+            }
+            vec![Some(RawTensor::from_shape_typed(grad_input, input_shape.clone()))]
+        })
     }
 }
 

@@ -1,4 +1,5 @@
 use crate::index::{fetch, slot};
+use crate::real::{Real, dispatch_real};
 use crate::storage::Storage;
 use crate::tensor::Tensor;
 
@@ -39,9 +40,15 @@ impl Adam {
                 let param = p.borrow();
                 let len = param.data.len();
                 let device = param.device.clone();
+                let dtype = param.data.dtype();
                 drop(param);
-                // Create zero state on the same device as parameter
-                Storage::new_zeros(len, &device)
+                // Zero state on the parameter's device and in its dtype (GPU storage is
+                // f32-only).
+                if device.is_gpu() {
+                    Storage::new_zeros(len, &device)
+                } else {
+                    Storage::new_zeros(len, &device).cast(dtype)
+                }
             })
             .collect();
 
@@ -51,9 +58,15 @@ impl Adam {
                 let param = p.borrow();
                 let len = param.data.len();
                 let device = param.device.clone();
+                let dtype = param.data.dtype();
                 drop(param);
-                // Create zero state on the same device as parameter
-                Storage::new_zeros(len, &device)
+                // Zero state on the parameter's device and in its dtype (GPU storage is
+                // f32-only).
+                if device.is_gpu() {
+                    Storage::new_zeros(len, &device)
+                } else {
+                    Storage::new_zeros(len, &device).cast(dtype)
+                }
             })
             .collect();
 
@@ -79,10 +92,11 @@ impl Adam {
     /// # Panics
     /// unwrap params
     pub fn step(&mut self) {
-        crate::tensor::expect_f32(
-            || "Adam step".to_string(),
-            &self.params.iter().collect::<Vec<_>>(),
-        );
+        // Each parameter steps in its own dtype (a mixed list is fine, as in PyTorch);
+        // each must have a kernel. Checked for all before any is updated.
+        for param in &self.params {
+            crate::real::compute_dtype(|| "Adam step".to_string(), &[param.dtype()]);
+        }
         self.t += 1;
 
         // Process each parameter based on its device
@@ -158,16 +172,25 @@ impl Adam {
             None => return,
         };
 
+        let dtype = p.data.dtype();
+        dispatch_real!(dtype, T => {
+        let lr = T::from_f64(f64::from(self.lr));
+        let eps = T::from_f64(f64::from(self.eps));
+        let weight_decay = T::from_f64(f64::from(self.weight_decay));
+        let (beta1, beta2) = (
+            T::from_f64(f64::from(self.betas.0)),
+            T::from_f64(f64::from(self.betas.1)),
+        );
         // Apply weight decay to gradient
         let mut active_grad = grad;
         if self.weight_decay != 0.0 {
             for (g, theta) in active_grad
-                .as_host_f32_mut()
-                .expect("Adam weight decay: CPU F32 gradient")
+                .as_host_mut::<T>()
+                .expect("Adam weight decay: CPU gradient in the parameter's dtype")
                 .iter_mut()
-                .zip(p.data.to_host_f32().iter())
+                .zip(p.data.host::<T>().iter())
             {
-                *g += self.weight_decay * *theta;
+                *g += weight_decay * *theta;
             }
         }
 
@@ -178,44 +201,51 @@ impl Adam {
         let m_slice = self
             .m
             .get_mut(i)
-            .and_then(|s| s.as_host_f32_mut().ok())
-            .expect("State should be CPU storage");
+            .map(|s| {
+                s.as_host_mut::<T>().unwrap_or_else(|e| {
+                    panic!("Adam state: {e}; build the optimizer after Module::to_dtype")
+                })
+            })
+            .expect("Adam: state per parameter");
         let v_slice = self
             .v
             .get_mut(i)
-            .and_then(|s| s.as_host_f32_mut().ok())
-            .expect("State should be CPU storage");
+            .map(|s| {
+                s.as_host_mut::<T>().unwrap_or_else(|e| {
+                    panic!("Adam state: {e}; build the optimizer after Module::to_dtype")
+                })
+            })
+            .expect("Adam: state per parameter");
 
         // Update biased moments
-        let g_host = active_grad.to_host_f32();
+        let g_host = active_grad.host::<T>();
         for j in 0..g_host.len() {
             let m_val = fetch(m_slice, j);
             let g_val = fetch(g_host, j);
-            *slot(m_slice, j) = self.betas.0.mul_add(m_val, (1.0 - self.betas.0) * g_val);
+            *slot(m_slice, j) = beta1.mul_add(m_val, (1.0 - beta1) * g_val);
             let v_val = fetch(v_slice, j);
-            *slot(v_slice, j) = self
-                .betas
-                .1
-                .mul_add(v_val, (1.0 - self.betas.1) * g_val.powi(2));
+            *slot(v_slice, j) = beta2
+                .mul_add(v_val, (1.0 - beta2) * g_val.powi(2));
         }
 
         // Bias correction
         let t = i32::try_from(self.t).expect("Adam step count fits i32");
-        let m_hat_scale = 1.0 / (1.0 - self.betas.0.powi(t));
-        let v_hat_scale = 1.0 / (1.0 - self.betas.1.powi(t));
+        let m_hat_scale = 1.0 / (1.0 - beta1.powi(t));
+        let v_hat_scale = 1.0 / (1.0 - beta2.powi(t));
 
         // Update parameters
         let p_data = p
             .data
-            .as_host_f32_mut()
+            .as_host_mut::<T>()
             .expect("Parameter should be CPU storage");
         for j in 0..p_data.len() {
             let m_val = fetch(m_slice, j);
             let v_val = fetch(v_slice, j);
             let m_hat = m_val * m_hat_scale;
             let v_hat = v_val * v_hat_scale;
-            *slot(p_data, j) -= self.lr * m_hat / (v_hat.sqrt() + self.eps);
+            *slot(p_data, j) -= lr * m_hat / (v_hat.sqrt() + eps);
         }
+        });
     }
 }
 

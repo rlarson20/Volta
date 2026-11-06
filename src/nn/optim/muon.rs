@@ -1,4 +1,5 @@
 use crate::ops::gpu_ops::MuonStep;
+use crate::real::{Real, dispatch_real};
 use crate::storage::Storage;
 use crate::tensor::{RawTensor, Tensor};
 
@@ -69,7 +70,12 @@ impl Muon {
             .iter()
             .map(|p| {
                 let p = p.borrow();
-                Storage::new_zeros(p.data.len(), &p.device)
+                // In the parameter's dtype (GPU storage is f32-only).
+                if p.device.is_gpu() {
+                    Storage::new_zeros(p.data.len(), &p.device)
+                } else {
+                    Storage::new_zeros(p.data.len(), &p.device).cast(p.data.dtype())
+                }
             })
             .collect();
         Self {
@@ -98,13 +104,13 @@ impl Muon {
     ///
     /// `coeffs` is the quintic's `[a, b, c]` and `eps` the normalization epsilon; `step`
     /// passes the same values to the GPU kernels.
-    fn newton_schulz_with(
-        g: &mut [f32],
+    fn newton_schulz_with<T: Real>(
+        g: &mut [T],
         rows: usize,
         cols: usize,
         steps: usize,
-        coeffs: [f32; 3],
-        eps: f32,
+        coeffs: [T; 3],
+        eps: T,
     ) {
         let [a_coeff, b_coeff, c_coeff] = coeffs;
         let transposed = rows > cols;
@@ -120,8 +126,8 @@ impl Muon {
             g.to_vec()
         };
 
-        let norm = x.iter().map(|v| v * v).sum::<f32>().sqrt();
-        let inv = 1.0 / (norm + eps);
+        let norm = x.iter().map(|&v| v * v).sum::<T>().sqrt();
+        let inv = T::from_f64(1.0) / (norm + eps);
         for v in &mut x {
             *v *= inv;
         }
@@ -129,14 +135,14 @@ impl Muon {
         for _ in 0..steps {
             // A = X Xᵀ (m×m), B = b·A + c·A², X ← a·X + B·X
             let xt = RawTensor::transpose_2d(&x, &[m, n]);
-            let a = RawTensor::matmul_raw(&x, &xt, m, n, m);
-            let a2 = RawTensor::matmul_raw(&a, &a, m, m, m);
-            let b: Vec<f32> = a
+            let a = T::gemm(&x, &xt, m, n, m);
+            let a2 = T::gemm(&a, &a, m, m, m);
+            let b: Vec<T> = a
                 .iter()
                 .zip(&a2)
                 .map(|(&a, &a2)| b_coeff * a + c_coeff * a2)
                 .collect();
-            let bx = RawTensor::matmul_raw(&b, &x, m, m, n);
+            let bx = T::gemm(&b, &x, m, m, n);
             x = x
                 .iter()
                 .zip(&bx)
@@ -164,10 +170,11 @@ impl Muon {
     /// If a GPU kernel cannot run: the parameter would otherwise be silently left
     /// untrained, as in `SGD` and `Adam`.
     pub fn step(&mut self) {
-        crate::tensor::expect_f32(
-            || "Muon step".to_string(),
-            &self.params.iter().collect::<Vec<_>>(),
-        );
+        // Each parameter steps in its own dtype (a mixed list is fine, as in PyTorch);
+        // each must have a kernel. Checked for all before any is updated.
+        for param in &self.params {
+            crate::real::compute_dtype(|| "Muon step".to_string(), &[param.dtype()]);
+        }
         for (param, velocity) in self.params.iter().zip(self.velocity.iter_mut()) {
             let mut p = param.borrow_mut();
             let Some(grad) = p.grad.clone() else {
@@ -211,22 +218,27 @@ impl Muon {
                 continue;
             }
 
-            let grad = grad.to_host_f32();
+            dispatch_real!(p.data.dtype(), T => {
+            let widen = |v: f32| T::from_f64(f64::from(v));
+            let (lr, momentum, scale, eps) =
+                (widen(step.lr), widen(step.momentum), widen(step.scale), widen(step.eps));
+            let coeffs = step.coeffs.map(widen);
+            let grad = grad.host::<T>();
             let velocity = velocity
-                .as_host_f32_mut()
-                .expect("Muon velocity: CPU F32 storage");
+                .as_host_mut::<T>()
+                .expect("Muon velocity: CPU storage in the parameter's dtype; build the optimizer after Module::to_dtype");
 
             // v ← momentum·v + g
             for (v, &g) in velocity.iter_mut().zip(grad.iter()) {
-                *v = step.momentum.mul_add(*v, g);
+                *v = momentum.mul_add(*v, g);
             }
 
             // Nesterov looks one momentum step ahead: update = momentum·v + g
-            let mut update: Vec<f32> = if step.nesterov {
+            let mut update: Vec<T> = if step.nesterov {
                 velocity
                     .iter()
                     .zip(grad.iter())
-                    .map(|(&v, &g)| step.momentum * v + g)
+                    .map(|(&v, &g)| momentum * v + g)
                     .collect()
             } else {
                 velocity.to_vec()
@@ -238,21 +250,22 @@ impl Muon {
                     step.rows,
                     step.cols,
                     step.ns_steps,
-                    step.coeffs,
-                    step.eps,
+                    coeffs,
+                    eps,
                 );
             }
 
             // w -= lr · scale · update
             for (w, u) in p
                 .data
-                .as_host_f32_mut()
-                .expect("Muon update: CPU F32 parameter")
+                .as_host_mut::<T>()
+                .expect("Muon update: CPU parameter")
                 .iter_mut()
                 .zip(&update)
             {
-                *w -= step.lr * step.scale * u;
+                *w -= lr * scale * *u;
             }
+            });
         }
     }
 }

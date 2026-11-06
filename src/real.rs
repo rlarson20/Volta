@@ -45,6 +45,8 @@ pub(crate) trait Real:
     /// Per-element `(∂L/∂a, ∂L/∂b)` (the row's backward).
     fn binary_backward(op: BinaryOp, g: Self, a: Self, b: Self) -> (Self, Self);
 
+    /// Square root.
+    fn sqrt(self) -> Self;
     /// Dense row-major `(m,k) @ (k,n)`, see `RawTensor::matmul_raw`.
     fn gemm(a: &[Self], b: &[Self], m: usize, k: usize, n: usize) -> Vec<Self>;
 }
@@ -80,6 +82,9 @@ macro_rules! real {
             }
             fn binary_backward(op: BinaryOp, g: Self, a: Self, b: Self) -> (Self, Self) {
                 op.$binary_bwd(g, a, b)
+            }
+            fn sqrt(self) -> Self {
+                <$t>::sqrt(self)
             }
             fn gemm(a: &[Self], b: &[Self], m: usize, k: usize, n: usize) -> Vec<Self> {
                 crate::RawTensor::$gemm(a, b, m, k, n)

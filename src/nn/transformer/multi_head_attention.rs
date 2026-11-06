@@ -1,7 +1,7 @@
 use crate::io::StateDict;
 use crate::nn::{Layer, LayerNorm, Linear, Module};
 use crate::shape::Axis;
-use crate::tensor::{RawTensor, Tensor};
+use crate::tensor::Tensor;
 
 /// Multi-Head Attention layer
 ///
@@ -200,7 +200,7 @@ impl MultiHeadAttention {
 
         // Apply causal mask if requested
         let scores = if causal {
-            let causal_mask = self.create_causal_mask(seq_len, q.borrow().device.clone());
+            let causal_mask = self.create_causal_mask(seq_len, q);
             scores.add(&causal_mask)
         } else {
             scores
@@ -220,8 +220,9 @@ impl MultiHeadAttention {
         attention_weights.matmul(v) // [batch, num_heads, seq_len, head_dim]
     }
 
-    /// Additive mask `[seq_len, seq_len]`: `-inf` above the diagonal, 0 elsewhere, on `device`.
-    fn create_causal_mask(&self, seq_len: usize, device: crate::Device) -> Tensor {
+    /// Additive mask `[seq_len, seq_len]`: `-inf` above the diagonal, 0 elsewhere, on
+    /// `like`'s device and in its dtype.
+    fn create_causal_mask(&self, seq_len: usize, like: &Tensor) -> Tensor {
         let mut mask_data = Vec::with_capacity(seq_len * seq_len);
         for i in 0..seq_len {
             for j in 0..seq_len {
@@ -232,8 +233,7 @@ impl MultiHeadAttention {
                 }
             }
         }
-        let mask = RawTensor::new(mask_data, &[1, 1, seq_len, seq_len], false);
-        mask.to_device(device)
+        like.constant_like(mask_data, &[1, 1, seq_len, seq_len])
     }
 }
 
@@ -344,6 +344,7 @@ impl Layer for MultiHeadAttention {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RawTensor;
 
     #[test]
     fn test_mha_creation() {

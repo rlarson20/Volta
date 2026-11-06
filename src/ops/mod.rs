@@ -94,7 +94,7 @@ impl RawTensor {
     /// Separate from [`Self::from_vec`] on purpose: an unsuffixed float literal is `f64` in
     /// Rust, so a generic `from_vec(vec![1.0])` would build an f64 tensor unasked.
     ///
-    /// Of the ops, the core ops (elementwise, reductions, movement, matmul) compute in f32 or f64; layers and optimizers are f32-only until ADDENDUM §11 P3b, and half types wait for P4. Other dtypes can be built, inspected, saved, and cast. An integer or bool
+    /// Of the ops, every op, layer, and optimizer computes in f32 or f64 on the CPU (the GPU in f32 only), and half types wait for ADDENDUM §11 P4. Other dtypes can be built, inspected, saved, and cast. An integer or bool
     /// tensor cannot require gradients (`set_requires_grad(true)` panics).
     ///
     /// # Errors
