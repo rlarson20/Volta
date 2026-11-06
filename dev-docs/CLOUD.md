@@ -39,6 +39,7 @@ Work that a Linux CPU can verify, and that reviews as a PR. Current candidates f
 ## How to work there
 
 - Gate, in order: `cargo fmt --check`, `./scripts/check-fallbacks.sh`, `cargo clippy --all-targets -- -D warnings`, `cargo clippy --no-default-features --all-targets -- -D warnings`, `cargo test`, `RUSTDOCFLAGS=-D warnings cargo doc --no-deps`, `cargo build --examples`, then `cargo test --no-default-features`. This is `just ci` plus the CPU-only test; run the steps directly if `just` is missing.
+- Run `rustup component add rust-src` first. The pinned `tests/compile_fail/*.stderr` quote libcore source, which rustc prints only with that component, and the test panics without it. Bless with it installed too.
 - Ask when you'd ask locally. Make each question answerable from a phone: short, options listed, your recommendation first. Batch them, and keep working on whatever doesn't depend on the answer. Never guess past an invariant or a design decision to avoid waiting. If no answer arrives before the session ends, put the open question in the PR description.
 - The PR description must say what ran: "CPU-only, Linux, GPU tests skipped", or "GPU tests ran on lavapipe" (with `mesa-vulkan-drivers` installed), and list what was not verified (always Metal).
 - One task per session and per PR. Keep diffs reviewable.
