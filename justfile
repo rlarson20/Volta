@@ -54,6 +54,26 @@ test-gpu:
 torch-fixtures:
 	uv run scripts/torch_ref/gen_fixtures.py
 
+# Download MNIST into data/mnist (ossci mirror) and check the files' SHA-256
+mnist-data:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	mkdir -p data/mnist
+	cd data/mnist
+	for f in train-images-idx3-ubyte train-labels-idx1-ubyte t10k-images-idx3-ubyte t10k-labels-idx1-ubyte; do
+		[ -f "$f" ] || { curl -sSfL -O "https://ossci-datasets.s3.amazonaws.com/mnist/$f.gz" && gunzip -f "$f.gz"; }
+	done
+	sha256sum -c - <<'SUMS'
+	ba891046e6505d7aadcbbe25680a0738ad16aec93bde7f9b65e87a2fc25776db  train-images-idx3-ubyte
+	65a50cbbf4e906d70832878ad85ccda5333a97f0f4c3dd2ef09a8a9eef7101c5  train-labels-idx1-ubyte
+	0fa7898d509279e482958e8ce81c8e77db3f2f8254e26661ceb7762c4d494ce7  t10k-images-idx3-ubyte
+	ff7bcfd416de33731a308c3f266cc351222c34898ecbeaf847f06e48f7ec33f2  t10k-labels-idx1-ubyte
+	SUMS
+
+# MNIST under bf16 autocast vs f32 (Phase 5 P7): 5 seeds, fails if the mean gap > 0.2 points
+mnist-autocast: mnist-data
+	cargo run --release --no-default-features --example mnist_autocast
+
 # Run all tests without GPU/Accelerate features
 test-cpu:
 	cargo test --no-default-features -- --nocapture

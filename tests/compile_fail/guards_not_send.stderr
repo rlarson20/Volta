@@ -1,7 +1,7 @@
 error[E0277]: `*const ()` cannot be sent between threads safely
-  --> tests/compile_fail/guards_not_send.rs:10:17
+  --> tests/compile_fail/guards_not_send.rs:11:17
    |
-10 |     assert_send(no_grad());
+11 |     assert_send(no_grad());
    |     ----------- ^^^^^^^^^ `*const ()` cannot be sent between threads safely
    |     |
    |     required by a bound introduced by this call
@@ -18,15 +18,15 @@ note: required because it appears within the type `NoGradGuard`
    | pub struct NoGradGuard {
    |            ^^^^^^^^^^^
 note: required by a bound in `assert_send`
-  --> tests/compile_fail/guards_not_send.rs:7:19
+  --> tests/compile_fail/guards_not_send.rs:8:19
    |
- 7 | fn assert_send<T: Send>(_: T) {}
+ 8 | fn assert_send<T: Send>(_: T) {}
    |                   ^^^^ required by this bound in `assert_send`
 
 error[E0277]: `*const ()` cannot be sent between threads safely
-  --> tests/compile_fail/guards_not_send.rs:11:17
+  --> tests/compile_fail/guards_not_send.rs:12:17
    |
-11 |     assert_send(with_device_policy(DevicePolicy::Strict));
+12 |     assert_send(with_device_policy(DevicePolicy::Strict));
    |     ----------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `*const ()` cannot be sent between threads safely
    |     |
    |     required by a bound introduced by this call
@@ -43,15 +43,15 @@ note: required because it appears within the type `DevicePolicyGuard`
    | pub struct DevicePolicyGuard {
    |            ^^^^^^^^^^^^^^^^^
 note: required by a bound in `assert_send`
-  --> tests/compile_fail/guards_not_send.rs:7:19
+  --> tests/compile_fail/guards_not_send.rs:8:19
    |
- 7 | fn assert_send<T: Send>(_: T) {}
+ 8 | fn assert_send<T: Send>(_: T) {}
    |                   ^^^^ required by this bound in `assert_send`
 
 error[E0277]: `*const ()` cannot be sent between threads safely
-  --> tests/compile_fail/guards_not_send.rs:12:17
+  --> tests/compile_fail/guards_not_send.rs:13:17
    |
-12 |     assert_send(with_dtype_policy(DTypePolicy::Strict));
+13 |     assert_send(with_dtype_policy(DTypePolicy::Strict));
    |     ----------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `*const ()` cannot be sent between threads safely
    |     |
    |     required by a bound introduced by this call
@@ -68,7 +68,32 @@ note: required because it appears within the type `DTypePolicyGuard`
    | pub struct DTypePolicyGuard {
    |            ^^^^^^^^^^^^^^^^
 note: required by a bound in `assert_send`
-  --> tests/compile_fail/guards_not_send.rs:7:19
+  --> tests/compile_fail/guards_not_send.rs:8:19
    |
- 7 | fn assert_send<T: Send>(_: T) {}
+ 8 | fn assert_send<T: Send>(_: T) {}
+   |                   ^^^^ required by this bound in `assert_send`
+
+error[E0277]: `*const ()` cannot be sent between threads safely
+  --> tests/compile_fail/guards_not_send.rs:14:17
+   |
+14 |     assert_send(autocast(DType::BF16));
+   |     ----------- ^^^^^^^^^^^^^^^^^^^^^ `*const ()` cannot be sent between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: within `AutocastGuard`, the trait `Send` is not implemented for `*const ()`
+note: required because it appears within the type `PhantomData<*const ()>`
+  --> $RUST/core/src/marker.rs
+   |
+   | pub struct PhantomData<T: PointeeSized>;
+   |            ^^^^^^^^^^^
+note: required because it appears within the type `AutocastGuard`
+  --> src/amp.rs
+   |
+   | pub struct AutocastGuard {
+   |            ^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+  --> tests/compile_fail/guards_not_send.rs:8:19
+   |
+ 8 | fn assert_send<T: Send>(_: T) {}
    |                   ^^^^ required by this bound in `assert_send`

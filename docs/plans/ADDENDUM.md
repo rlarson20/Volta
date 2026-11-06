@@ -587,7 +587,7 @@ Today `DType` only tags bytes: every `Tensor` is f32, `Storage`'s typed construc
 
 **Kernels.** CPU kernels become generic over a sealed accumulator trait implemented for `f32` and `f64`. Half dtypes run the `f32` instance and load and round at the edges. That doubles the instances, not the source.
 
-**Autocast and scaling (P7).** A scoped guard (like `NoGrad`) casts the inputs of matmul, conv, and `Linear` to the low-precision dtype, and keeps reductions, softmax, norms, and losses in f32. `GradScaler` scales the loss, unscales the gradients, skips a step on inf/NaN, and adapts the scale. Optimizers keep f32 master weights and state for half parameters.
+**Autocast and scaling (P7).** A scoped guard (like `NoGrad`) casts the inputs of matmul, conv, and `Linear` to the low-precision dtype and the inputs of losses to f32; everything else runs in its inputs' dtype (PyTorch's CPU lists, decided in P7: on the CPU torch keeps softmax, norms and reductions in the half dtype). Parameters stay f32, so autocast needs no master weights. `GradScaler` scales the loss, unscales the gradients, skips a step on inf/NaN, and adapts the scale. Master weights for a model converted to half are a TODO.
 
 **PRs (stacked, one task each):**
 
@@ -601,7 +601,7 @@ Today `DType` only tags bytes: every `Tensor` is f32, `Storage`'s typed construc
 | P4 | f16/bf16 tensors | Torch fixtures in f16 and bf16 for every op family |
 | P5 | I64/Bool tensors; `Embedding` becomes a `Layer` (§3.2) | `Embedding` in `Sequential` trains; comparisons, `where`, cross-entropy against torch |
 | P6 | Implicit promotion | Mixed-dtype ops match torch's result dtype and values |
-| P7 | Autocast, `GradScaler`, master weights | MNIST under bf16 autocast reaches f32 accuracy within a stated margin; a scaler skip-step test |
+| P7 | Autocast, `GradScaler`, `Optimizer` trait | MNIST under bf16 autocast reaches f32 accuracy within a stated margin (0.2 points, 5 seeds, `just mnist-autocast`); a scaler skip-step test |
 | P8 | GPU f16 | `just test-gpu` on the Mac: GPU f16 matches CPU f16 |
 
 ## Sequencing

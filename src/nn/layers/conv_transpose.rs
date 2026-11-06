@@ -350,13 +350,16 @@ impl Module for ConvTranspose2d {
 
 impl Layer for ConvTranspose2d {
     fn forward(&self, x: &Tensor) -> Tensor {
+        // One low-precision op under `amp::autocast`: input, weight and bias are cast
+        // together (PyTorch's convolutions).
+        let (x, weight, bias) = crate::amp::lower_layer(x, &self.weight, self.bias.as_ref());
+        let x = &x;
         compute_dtype(
             || "ConvTranspose2d".to_string(),
-            &[x.dtype(), self.weight.dtype()],
+            &[x.dtype(), weight.dtype()],
         );
-        let spec =
-            ConvTranspose2dSpec::new(&x.shape(), &self.weight.shape(), self.stride, self.padding)
-                .unwrap_or_else(|e| panic!("{e}"));
+        let spec = ConvTranspose2dSpec::new(&x.shape(), &weight.shape(), self.stride, self.padding)
+            .unwrap_or_else(|e| panic!("{e}"));
         let ConvTranspose2dSpec {
             batch,
             in_ch: in_channels,
@@ -374,7 +377,7 @@ impl Layer for ConvTranspose2d {
         let input_reshaped = input_permuted.reshape(&[batch * in_h * in_w, in_channels]);
 
         // 2. Reshape weight: [C_in, C_out, K, K] → [C_in, C_out*K*K]
-        let weight_reshaped = self.weight.reshape(&[in_channels, out_channels * kh * kw]);
+        let weight_reshaped = weight.reshape(&[in_channels, out_channels * kh * kw]);
 
         // 3. Matrix multiplication: [B*H*W, C_in] @ [C_in, C_out*K*K] → [B*H*W, C_out*K*K]
         let matmul_result = input_reshaped.matmul(&weight_reshaped);
@@ -397,7 +400,7 @@ impl Layer for ConvTranspose2d {
             Device::CPU,
             false,
         );
-        if let Some(ref bias) = self.bias {
+        if let Some(bias) = &bias {
             let bias_reshaped = bias.reshape(&[1, out_channels, 1, 1]);
             raw_output = raw_output.add(&bias_reshaped);
         }
@@ -406,13 +409,13 @@ impl Layer for ConvTranspose2d {
             (b.data.clone(), b.shape.clone())
         };
 
-        let has_bias = self.bias.is_some();
+        let has_bias = bias.is_some();
 
         // `edge()` requires grad if *any* of x/weight/bias does — fixes a latent bug
         // where this used to check only `x.borrow().requires_grad`, ignoring the
         // weight and bias tensors (the same B1-class bug §1.4 targets).
-        let mut inputs = vec![x.clone(), self.weight.clone()];
-        if let Some(ref bias) = self.bias {
+        let mut inputs = vec![x.clone(), weight.clone()];
+        if let Some(bias) = &bias {
             inputs.push(bias.clone());
         }
 
@@ -423,7 +426,7 @@ impl Layer for ConvTranspose2d {
             Device::CPU,
             GradFn::ConvTranspose2d(ConvTranspose2dGradFn {
                 spec,
-                weight: self.weight.clone(),
+                weight: weight.clone(),
                 has_bias,
             }),
         )

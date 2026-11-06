@@ -208,6 +208,8 @@ impl RawTensor {
     /// Dimension mismatch, or matrix operands of unequal rank (see `MatmulSpec`)
     #[must_use]
     pub fn matmul(self_t: &Tensor, other: &Tensor) -> Tensor {
+        // A low-precision op under `amp::autocast`: f32 and half operands are cast first.
+        let (self_t, other) = (&crate::amp::lower(self_t), &crate::amp::lower(other));
         let dtype = compute_dtype(|| "MatMul".to_string(), &[self_t.dtype(), other.dtype()]);
         let (data_a, shape_a) = {
             let s = self_t.borrow();
