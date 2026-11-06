@@ -1818,12 +1818,13 @@ impl Tensor {
     }
 
     /// Selects `x` where `self` (a Bool condition) is true, else `y`, with broadcasting
-    /// (PyTorch's `where`). `x` and `y` share a dtype, any dtype; gradients flow to the
-    /// selected float branch.
+    /// (PyTorch's `where`). `x` and `y` may have any dtype; branches of different dtypes
+    /// promote (`DTypePolicy`). Gradients flow to the selected float branch. On the GPU,
+    /// equal shapes run a kernel and broadcasting is a device-policy gap.
     ///
     /// # Panics
-    /// If the condition is not Bool, the branches' dtypes differ, or a tensor is on the GPU
-    /// (Bool tensors cannot live there until ADDENDUM §11 P8).
+    /// If the condition is not Bool, the inputs are on different devices, or the
+    /// branches' dtypes differ under `DTypePolicy::Strict`.
     #[must_use]
     pub fn where_op(&self, x: &Self, y: &Self) -> Self {
         RawTensor::ternary_op(self, x, y, TernaryOp::Where)
