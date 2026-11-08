@@ -171,7 +171,7 @@ impl Im2colGradFn {
                 .unwrap_or_else(|| kernel_failed("Im2col"));
             (storage, out_grad.device.clone())
         } else {
-            let col = Conv2d::col2im(&out_grad.data.to_host_f32(), &self.spec);
+            let col = Conv2d::col2im(out_grad.data.to_host_f32(), &self.spec);
             (crate::storage::Storage::cpu(col), crate::Device::CPU)
         };
 
@@ -1311,6 +1311,7 @@ impl Conv2d {
     /// # Panics
     /// Input needs to be 4D
     pub fn forward(&self, x: &Tensor) -> Tensor {
+        crate::tensor::expect_f32(|| "Conv2d".to_string(), &[x, &self.weight]);
         let spec = Conv2dSpec::new(&x.shape(), &self.weight.shape(), self.stride, self.padding)
             .unwrap_or_else(|e| panic!("{e}"));
 

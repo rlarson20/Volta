@@ -9,7 +9,7 @@ use crate::{RawTensor, Tensor};
 ///
 /// These operations collapse all dimensions and require special gradient handling
 /// since the output shape differs from the input.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum ReduceOp {
     /// Sum of all elements; the gradient broadcasts ones.
     Sum,
@@ -36,7 +36,7 @@ impl SumGradFn {
         _parents: &[Tensor],
     ) -> Vec<Option<Tensor>> {
         let size: usize = self.input_shape.iter().product();
-        let grad_val: f32 = fetch(&out_grad.data.to_host_f32(), 0);
+        let grad_val: f32 = fetch(out_grad.data.to_host_f32(), 0);
 
         // GPU path for a GPU gradient; a `None` from the kernel is a failure.
         if out_grad.device.is_gpu() {
@@ -78,7 +78,7 @@ impl MaxReduceGradFn {
         _parents: &[Tensor],
     ) -> Vec<Option<Tensor>> {
         let size: usize = self.input_shape.iter().product();
-        let grad_val: f32 = fetch(&out_grad.data.to_host_f32(), 0);
+        let grad_val: f32 = fetch(out_grad.data.to_host_f32(), 0);
 
         // GPU path for a GPU gradient; a `None` from the kernel is a failure.
         if out_grad.device.is_gpu() {
@@ -120,7 +120,7 @@ impl MeanGradFn {
         _parents: &[Tensor],
     ) -> Vec<Option<Tensor>> {
         let size: usize = self.input_shape.iter().product();
-        let grad_val: f32 = fetch(&out_grad.data.to_host_f32(), 0);
+        let grad_val: f32 = fetch(out_grad.data.to_host_f32(), 0);
 
         // GPU path for a GPU gradient; a `None` from the kernel is a failure.
         if out_grad.device.is_gpu() {
@@ -154,6 +154,7 @@ impl RawTensor {
     /// unwrap map
     #[must_use]
     pub fn reduce_op(self_t: &Tensor, op: ReduceOp) -> Tensor {
+        crate::tensor::expect_f32(|| format!("{op:?}"), &[self_t]);
         let (data, shape, device) = {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone(), s.device.clone())

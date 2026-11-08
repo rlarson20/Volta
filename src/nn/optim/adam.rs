@@ -79,6 +79,10 @@ impl Adam {
     /// # Panics
     /// unwrap params
     pub fn step(&mut self) {
+        crate::tensor::expect_f32(
+            || "Adam step".to_string(),
+            &self.params.iter().collect::<Vec<_>>(),
+        );
         self.t += 1;
 
         // Process each parameter based on its device
@@ -186,7 +190,7 @@ impl Adam {
         let g_host = active_grad.to_host_f32();
         for j in 0..g_host.len() {
             let m_val = fetch(m_slice, j);
-            let g_val = fetch(&g_host, j);
+            let g_val = fetch(g_host, j);
             *slot(m_slice, j) = self.betas.0.mul_add(m_val, (1.0 - self.betas.0) * g_val);
             let v_val = fetch(v_slice, j);
             *slot(v_slice, j) = self

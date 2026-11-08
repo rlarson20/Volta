@@ -118,6 +118,7 @@ impl RawTensor {
     /// Creates a new tensor and sets up gradient tracking if needed.
     #[must_use]
     pub fn unary_op(t: &Tensor, op: UnaryOp) -> Tensor {
+        crate::tensor::expect_f32(|| UnaryGradFn { op }.op_name(), &[t]);
         let (data, shape, device) = {
             let s = t.borrow();
             (s.data.clone(), s.shape.clone(), s.device.clone())

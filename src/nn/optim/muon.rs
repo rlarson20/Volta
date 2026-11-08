@@ -164,6 +164,10 @@ impl Muon {
     /// If a GPU kernel cannot run: the parameter would otherwise be silently left
     /// untrained, as in `SGD` and `Adam`.
     pub fn step(&mut self) {
+        crate::tensor::expect_f32(
+            || "Muon step".to_string(),
+            &self.params.iter().collect::<Vec<_>>(),
+        );
         for (param, velocity) in self.params.iter().zip(self.velocity.iter_mut()) {
             let mut p = param.borrow_mut();
             let Some(grad) = p.grad.clone() else {
@@ -302,7 +306,7 @@ mod tests {
         assert_ne!(data_before, data_after);
 
         // Verify Newton-Schulz didn't explode values (regularization property)
-        for v in data_after.to_host_f32().iter() {
+        for v in data_after.to_host_f32() {
             assert!(v.abs() < 2.0);
         }
     }

@@ -88,12 +88,44 @@ impl RawTensor {
         Self::try_from_vec(data, shape).unwrap_or_else(|e| panic!("from_vec: {e}"))
     }
 
+    /// A CPU leaf tensor (no grad) of any [`Element`](crate::storage::Element) type; its
+    /// dtype follows `T` (fallible).
+    ///
+    /// Separate from [`Self::from_vec`] on purpose: an unsuffixed float literal is `f64` in
+    /// Rust, so a generic `from_vec(vec![1.0])` would build an f64 tensor unasked.
+    ///
+    /// Only f32 tensors can go through ops today: every kernel panics on another dtype
+    /// (ADDENDUM §11). Other dtypes can be built, inspected, and saved. An integer or bool
+    /// tensor cannot require gradients (`set_requires_grad(true)` panics).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`RawTensor::try_new`]
+    pub fn try_from_typed<T: crate::storage::Element>(
+        data: Vec<T>,
+        shape: &[usize],
+    ) -> crate::Result<Tensor> {
+        Self::try_new_typed(data, shape, false)
+    }
+
+    /// Panicking form of [`Self::try_from_typed`].
+    ///
+    /// # Panics
+    ///
+    /// If `shape` is invalid or `data.len()` != `shape.product()`.
+    #[must_use]
+    #[track_caller]
+    pub fn from_typed<T: crate::storage::Element>(data: Vec<T>, shape: &[usize]) -> Tensor {
+        Self::try_from_typed(data, shape).unwrap_or_else(|e| panic!("from_typed: {e}"))
+    }
+
     /// Ensure tensor is contiguous in memory
     ///
     /// Currently all tensors are contiguous. This would be needed
     /// if we implement views/strides that share memory.
     #[must_use]
     pub fn contiguous(self_t: &Tensor) -> Tensor {
+        crate::tensor::expect_f32(|| "Contiguous".to_string(), &[self_t]);
         let s = self_t.borrow();
         Self::from_shape(s.data.to_vec(), s.shape.clone(), s.requires_grad)
     }

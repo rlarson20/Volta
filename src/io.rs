@@ -85,6 +85,10 @@ impl fmt::Display for StateDictDiff {
 
 impl TensorData {
     /// Copies a tensor's values and shape out of the graph.
+    ///
+    /// # Panics
+    /// If the tensor is not f32: `TensorData` holds f32, and narrowing another dtype on the
+    /// way would be silent.
     #[must_use]
     pub fn from_tensor(t: &Tensor) -> Self {
         let borrowed = t.borrow();
@@ -272,7 +276,7 @@ pub fn load_safetensors<P: AsRef<Path>>(path: P) -> Result<StateDict> {
         let dtype = entry_dtype(&name, &tensor)?;
         // safetensors has checked the byte length against shape and dtype; this
         // check repeats it so a mismatch is an error here too, not a panic.
-        let storage = Storage::try_from_bytes(tensor.data().to_vec(), dtype)
+        let storage = Storage::try_from_bytes(tensor.data(), dtype)
             .map_err(|e| Error::new(std::io::ErrorKind::InvalidData, format!("'{name}': {e}")))?;
         let f32_data = storage.to_f32_vec();
 
@@ -300,20 +304,25 @@ pub struct TypedTensorData {
 }
 
 impl TypedTensorData {
-    /// Convert to f32 `TensorData`
-    #[must_use]
-    pub fn to_tensor_data(&self) -> TensorData {
-        let storage = Storage::from_bytes(self.data.clone(), self.dtype);
-        TensorData {
-            data: storage.to_f32_vec(),
+    /// Convert to f32 `TensorData`, decoding the bytes as `dtype`.
+    ///
+    /// # Errors
+    /// `InvalidParameter` if the bytes don't decode as `dtype` (see
+    /// [`Storage::try_from_bytes`]).
+    pub fn to_tensor_data(&self) -> crate::Result<TensorData> {
+        Ok(TensorData {
+            data: self.to_storage()?.to_f32_vec(),
             shape: self.shape.clone(),
-        }
+        })
     }
 
-    /// Create a Storage with native dtype
-    #[must_use]
-    pub fn to_storage(&self) -> Storage {
-        Storage::from_bytes(self.data.clone(), self.dtype)
+    /// Storage holding the data in its own dtype.
+    ///
+    /// # Errors
+    /// `InvalidParameter` if the bytes don't decode as `dtype` (see
+    /// [`Storage::try_from_bytes`]).
+    pub fn to_storage(&self) -> crate::Result<Storage> {
+        Storage::try_from_bytes(&self.data, self.dtype)
     }
 
     /// Get number of elements
@@ -683,10 +692,20 @@ mod io_tests {
         assert_eq!(loaded.get("f16_tensor").unwrap().shape, vec![2, 2]);
 
         // Verify data conversion
-        let f32_loaded = loaded.get("f32_tensor").unwrap().to_storage().to_f32_vec();
+        let f32_loaded = loaded
+            .get("f32_tensor")
+            .unwrap()
+            .to_storage()
+            .expect("valid f32 bytes")
+            .to_f32_vec();
         assert_eq!(f32_loaded, f32_data);
 
-        let f16_loaded = loaded.get("f16_tensor").unwrap().to_storage().to_f32_vec();
+        let f16_loaded = loaded
+            .get("f16_tensor")
+            .unwrap()
+            .to_storage()
+            .expect("valid f16 bytes")
+            .to_f32_vec();
         for (a, b) in f16_loaded.iter().zip([1.0f32, 2.0, 3.0, 4.0].iter()) {
             assert!((a - b).abs() < 0.01, "F16 conversion mismatch");
         }

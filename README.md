@@ -410,7 +410,7 @@ The next major steps for Volta are focused on expanding its capabilities to hand
 
 - **Conv2d Memory Inefficiency**: `im2col` implementation in `src/nn/layers/conv.rs` materializes the entire matrix in memory. Large batch sizes or high-resolution images will easily OOM even on high-end machines. Somewhat mitigated through algorithm selection in convolutional layer.
 - **GPU Kernel Efficiency**: Current GPU matmul uses naive implementation without shared memory tiling. Significant performance gains possible with optimized GEMM kernels.
-- **f32 only**: `Storage` can hold other dtypes, but every `Tensor` and every operation is f32. Real dtypes and mixed precision are planned (`docs/plans/ADDENDUM.md` §11).
+- **f32 only**: tensors of other dtypes can be built and read back (`RawTensor::from_typed`), but every operation is f32 and panics on another dtype. Real dtypes and mixed precision are planned (`docs/plans/ADDENDUM.md` §11).
 - **Single-threaded**: Uses `Rc<RefCell>` instead of `Arc<Mutex>`, limiting to single-threaded execution on CPU.
 
 ## Contributing

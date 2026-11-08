@@ -78,12 +78,12 @@ impl BinaryGradFn {
         // CPU path: the table gives the per-element (∂a, ∂b) at the broadcast shape;
         // each is then summed back down to its operand's shape.
         let x_bc = RawTensor::broadcast_to(
-            &x.data.to_host_f32(),
+            x.data.to_host_f32(),
             x.shape.truncate_rank(),
             out_grad.shape.truncate_rank(),
         );
         let y_bc = RawTensor::broadcast_to(
-            &y.data.to_host_f32(),
+            y.data.to_host_f32(),
             y.shape.truncate_rank(),
             out_grad.shape.truncate_rank(),
         );
@@ -302,6 +302,7 @@ impl RawTensor {
     /// broadcast failure
     #[must_use]
     pub fn binary_op(self_t: &Tensor, other: &Tensor, op: BinaryOp) -> Tensor {
+        crate::tensor::expect_f32(|| format!("Binary({op:?})"), &[self_t, other]);
         // If both operands are on the same GPU with equal shapes, run the kernel there;
         // otherwise (or if it fails) fall through to the CPU path.
         if let Some((shape, storage, device)) = Self::gpu_binary_forward(self_t, other, op) {
@@ -332,9 +333,9 @@ impl RawTensor {
         assert!(out_size > 0, "Invalid broadcast result size");
 
         let bc_data_a =
-            Self::broadcast_to(&data_a.to_host_f32(), shape_a.truncate_rank(), &out_shape);
+            Self::broadcast_to(data_a.to_host_f32(), shape_a.truncate_rank(), &out_shape);
         let bc_data_b =
-            Self::broadcast_to(&data_b.to_host_f32(), shape_b.truncate_rank(), &out_shape);
+            Self::broadcast_to(data_b.to_host_f32(), shape_b.truncate_rank(), &out_shape);
 
         let result_data: Vec<f32> = bc_data_a
             .iter()

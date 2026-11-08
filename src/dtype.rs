@@ -1,14 +1,14 @@
 //! Tensor data types.
 //!
-//! Today a `DType` labels bytes in [`Storage`](crate::Storage) and in `SafeTensors`
-//! files; every `Tensor` holds and computes in f32, and other dtypes are converted to
-//! f32 when loaded. Real dtypes and mixed precision are planned in ADDENDUM §11.
+//! A tensor of any `DType` can be built (`RawTensor::from_typed`) and read back, but every
+//! kernel computes in f32 and panics on another dtype; `load_safetensors` converts to f32.
+//! Real dtypes and mixed precision are planned in ADDENDUM §11.
 
 use std::fmt;
 
-/// Element types that `Storage` and the `SafeTensors` loaders can hold.
+/// Element types a tensor can hold.
 ///
-/// Only `F32` reaches a `Tensor` today (see the module docs).
+/// Only `F32` can go through ops today (see the module docs).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
