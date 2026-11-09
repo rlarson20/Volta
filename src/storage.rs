@@ -12,6 +12,7 @@ use crate::dtype::DType;
 use crate::gpu::{GpuBuffer, is_gpu_available};
 use bytemuck::cast_slice;
 use half::{bf16, f16};
+use std::borrow::Cow;
 use std::sync::Arc;
 
 #[cfg(feature = "gpu")]
@@ -526,18 +527,60 @@ impl Storage {
     }
 
     /// Host view of a kernel's input as `T` (`f32` or `f64`): [`Self::to_host_f32`] for
-    /// `f32` (which syncs GPU storage), the CPU buffer for `f64`.
+    /// `f32` (which syncs GPU storage), the CPU buffer for `f64`. F16 and BF16 storage is
+    /// decoded (exactly) into an owned `f32` copy: half types compute in the `f32` kernel
+    /// (ADDENDUM §11), and [`Self::from_compute`] rounds the result back.
     ///
     /// # Panics
-    /// If the dtype is not `T`'s. Kernels check dtypes at the op's entry
-    /// (`real::compute_dtype`), so this is the backstop.
+    /// If the dtype is neither `T`'s nor (for `T = f32`) a half type. Kernels check dtypes
+    /// at the op's entry (`real::compute_dtype`), so this is the backstop.
     #[must_use]
     #[track_caller]
-    pub(crate) fn host<T: crate::real::Real>(&self) -> &[T] {
-        if T::DTYPE == DType::F32 {
-            cast_slice(self.to_host_f32())
+    pub(crate) fn host<T: crate::real::Real>(&self) -> Cow<'_, [T]> {
+        match (T::DTYPE, self) {
+            // Half to f64 to `T = f32` is exact both ways.
+            (DType::F32, Self::Cpu(HostBuf::F16(d))) => {
+                Cow::Owned(d.iter().map(|x| T::from_f64(x.to_f64())).collect())
+            }
+            (DType::F32, Self::Cpu(HostBuf::BF16(d))) => {
+                Cow::Owned(d.iter().map(|x| T::from_f64(x.to_f64())).collect())
+            }
+            (DType::F32, _) => Cow::Borrowed(cast_slice(self.to_host_f32())),
+            _ => Cow::Borrowed(self.as_host::<T>().unwrap_or_else(|e| panic!("{e}"))),
+        }
+    }
+
+    /// Mutable host view of this CPU storage as `T`: in place for `T`'s own dtype. F16 and
+    /// BF16 storage (for `T = f32`) is decoded into an f32 copy that is rounded back into
+    /// this storage when the view drops, so an in-place update (an optimizer step, running
+    /// statistics) computes in f32 and rounds once, like every half op.
+    ///
+    /// # Panics
+    /// If the storage is not CPU storage of `T`'s dtype or (for `T = f32`) a half type.
+    #[track_caller]
+    pub(crate) fn host_mut<T: crate::real::Real>(&mut self) -> HostMut<'_, T> {
+        if self.dtype() == T::DTYPE {
+            HostMut::Native(self.as_host_mut::<T>().unwrap_or_else(|e| panic!("{e}")))
         } else {
-            self.as_host::<T>().unwrap_or_else(|e| panic!("{e}"))
+            let wide = self.host::<T>().into_owned();
+            HostMut::Wide { wide, dst: self }
+        }
+    }
+
+    /// A kernel's output computed in `T`, stored as `dtype`: `T`'s own dtype as is, and
+    /// F16/BF16 from `f32` rounded to nearest-even (PyTorch's CPU half ops compute in f32
+    /// and round the output).
+    ///
+    /// # Panics
+    /// If `dtype` is neither `T`'s nor (for `T = f32`) a half type.
+    #[must_use]
+    #[track_caller]
+    pub(crate) fn from_compute<T: crate::real::Real>(dtype: DType, data: Vec<T>) -> Self {
+        let s = Self::from_typed(data);
+        match (T::DTYPE, dtype) {
+            (a, b) if a == b => s,
+            (DType::F32, DType::F16 | DType::BF16) => s.cast(dtype),
+            (a, b) => panic!("from_compute: a {a} kernel cannot produce {b}"),
         }
     }
 
@@ -795,6 +838,46 @@ impl std::fmt::Debug for Storage {
             Self::Gpu(shared) => {
                 write!(f, "Storage::Gpu({} elements, f32)", shared.buffer.len())
             }
+        }
+    }
+}
+
+/// A mutable host view from [`Storage::host_mut`].
+pub(crate) enum HostMut<'a, T: crate::real::Real> {
+    /// The storage's own elements.
+    Native(&'a mut [T]),
+    /// A decoded f32 copy of half storage, rounded back into `dst` on drop.
+    Wide {
+        /// The decoded elements.
+        wide: Vec<T>,
+        /// The half storage they came from.
+        dst: &'a mut Storage,
+    },
+}
+
+impl<T: crate::real::Real> std::ops::Deref for HostMut<'_, T> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        match self {
+            Self::Native(s) => s,
+            Self::Wide { wide, .. } => wide,
+        }
+    }
+}
+
+impl<T: crate::real::Real> std::ops::DerefMut for HostMut<'_, T> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        match self {
+            Self::Native(s) => s,
+            Self::Wide { wide, .. } => wide,
+        }
+    }
+}
+
+impl<T: crate::real::Real> Drop for HostMut<'_, T> {
+    fn drop(&mut self) {
+        if let Self::Wide { wide, dst } = self {
+            **dst = Storage::from_compute(dst.dtype(), std::mem::take(wide));
         }
     }
 }

@@ -185,8 +185,7 @@ impl Adam {
         let mut active_grad = grad;
         if self.weight_decay != 0.0 {
             for (g, theta) in active_grad
-                .as_host_mut::<T>()
-                .expect("Adam weight decay: CPU gradient in the parameter's dtype")
+                .host_mut::<T>()
                 .iter_mut()
                 .zip(p.data.host::<T>().iter())
             {
@@ -198,30 +197,25 @@ impl Adam {
         // SAFETY: Optimizer state is created as CPU storage for CPU parameters
         debug_assert!(self.m.len() == self.params.len(), "State length mismatch");
         debug_assert!(self.v.len() == self.params.len(), "State length mismatch");
-        let m_slice = self
-            .m
-            .get_mut(i)
-            .map(|s| {
-                s.as_host_mut::<T>().unwrap_or_else(|e| {
-                    panic!("Adam state: {e}; build the optimizer after Module::to_dtype")
-                })
-            })
-            .expect("Adam: state per parameter");
-        let v_slice = self
-            .v
-            .get_mut(i)
-            .map(|s| {
-                s.as_host_mut::<T>().unwrap_or_else(|e| {
-                    panic!("Adam state: {e}; build the optimizer after Module::to_dtype")
-                })
-            })
-            .expect("Adam: state per parameter");
+        let (m, v) = (
+            self.m.get_mut(i).expect("Adam: state per parameter"),
+            self.v.get_mut(i).expect("Adam: state per parameter"),
+        );
+        for s in [&*m, &*v] {
+            assert_eq!(
+                s.dtype(),
+                dtype,
+                "Adam state dtype; build the optimizer after Module::to_dtype"
+            );
+        }
+        let (mut m_guard, mut v_guard) = (m.host_mut::<T>(), v.host_mut::<T>());
+        let (m_slice, v_slice) = (&mut *m_guard, &mut *v_guard);
 
         // Update biased moments
         let g_host = active_grad.host::<T>();
         for j in 0..g_host.len() {
             let m_val = fetch(m_slice, j);
-            let g_val = fetch(g_host, j);
+            let g_val = fetch(&g_host, j);
             *slot(m_slice, j) = beta1.mul_add(m_val, (1.0 - beta1) * g_val);
             let v_val = fetch(v_slice, j);
             *slot(v_slice, j) = beta2
@@ -234,10 +228,8 @@ impl Adam {
         let v_hat_scale = 1.0 / (1.0 - beta2.powi(t));
 
         // Update parameters
-        let p_data = p
-            .data
-            .as_host_mut::<T>()
-            .expect("Parameter should be CPU storage");
+        let mut p_guard = p.data.host_mut::<T>();
+        let p_data = &mut *p_guard;
         for j in 0..p_data.len() {
             let m_val = fetch(m_slice, j);
             let v_val = fetch(v_slice, j);

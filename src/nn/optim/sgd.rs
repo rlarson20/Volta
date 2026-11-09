@@ -176,8 +176,7 @@ impl SGD {
         let mut active_grad = grad;
         if self.weight_decay != 0.0 {
             for (g, theta) in active_grad
-                .as_host_mut::<T>()
-                .expect("SGD weight decay: CPU gradient in the parameter's dtype")
+                .host_mut::<T>()
                 .iter_mut()
                 .zip(p.data.host::<T>().iter())
             {
@@ -187,17 +186,13 @@ impl SGD {
 
         if self.momentum > 0.0 {
             // Get mutable access to CPU velocity state
-            let vel_slice = self
-                .velocity
-                .get_mut(i)
-                .map(|v| {
-                    v.as_host_mut::<T>().unwrap_or_else(|e| {
-                        panic!(
-                            "SGD velocity: {e}; build the optimizer after Module::to_dtype"
-                        )
-                    })
-                })
-                .expect("SGD: a velocity per parameter");
+            let vel = self.velocity.get_mut(i).expect("SGD: a velocity per parameter");
+            assert_eq!(
+                vel.dtype(),
+                dtype,
+                "SGD velocity dtype; build the optimizer after Module::to_dtype"
+            );
+            let mut vel_slice = vel.host_mut::<T>();
 
             // Update velocity: v = momentum·v - lr·grad
             for (v, &g) in vel_slice.iter_mut().zip(active_grad.host::<T>().iter()) {
@@ -205,19 +200,13 @@ impl SGD {
             }
 
             // Update parameters: θ = θ + v
-            let p_data = p
-                .data
-                .as_host_mut::<T>()
-                .expect("Parameter should be CPU storage");
+            let mut p_data = p.data.host_mut::<T>();
             for (d, &v) in p_data.iter_mut().zip(vel_slice.iter()) {
                 *d += v;
             }
         } else {
             // Simple SGD: θ = θ - lr·grad
-            let p_data = p
-                .data
-                .as_host_mut::<T>()
-                .expect("Parameter should be CPU storage");
+            let mut p_data = p.data.host_mut::<T>();
             for (d, &g) in p_data.iter_mut().zip(active_grad.host::<T>().iter()) {
                 *d -= lr * g;
             }

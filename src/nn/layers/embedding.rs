@@ -105,9 +105,9 @@ impl IndexedLayer for Embedding {
                 );
                 let start = idx * self.dim;
                 let end = start + self.dim;
-                output_data.extend_from_slice(span(weight_data, start..end));
+                output_data.extend_from_slice(span(&weight_data, start..end));
             }
-            Storage::from_typed(output_data)
+            Storage::from_compute(weight_borrowed.data.dtype(), output_data)
         });
 
         drop(weight_borrowed);
@@ -180,10 +180,10 @@ impl EmbeddingGradFn {
                 for d in 0..self.embedding_dim {
                     let out_grad_idx = i * self.embedding_dim + d;
                     let weight_idx = idx * self.embedding_dim + d;
-                    *slot(&mut grad_weight, weight_idx) += fetch(g_host, out_grad_idx);
+                    *slot(&mut grad_weight, weight_idx) += fetch(&g_host, out_grad_idx);
                 }
             }
-            RawTensor::from_shape_typed(
+            RawTensor::from_shape_compute(out_grad.data.dtype(),
                 grad_weight,
                 Shape::derived(vec![self.vocab_size, self.embedding_dim]),
             )

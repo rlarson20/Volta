@@ -97,12 +97,12 @@ impl UnaryGradFn {
         // CPU path (CPU tensors, or a `cpu_only` op). Chain rule: ∂L/∂x = ∂L/∂y · ∂y/∂x, with the derivative from
         // the `UnaryOp` table, in x's dtype.
         let op = self.op;
-        let grad = dispatch_real!(x.data.dtype(), T => Storage::from_typed(
+        let grad = dispatch_real!(x.data.dtype(), T => Storage::from_compute(x.data.dtype(),
             out_grad
                 .data
                 .host::<T>()
                 .iter()
-                .zip(x.data.host::<T>())
+                .zip(x.data.host::<T>().iter())
                 .map(|(&g, &x)| T::unary_backward(op, g, x))
                 .collect::<Vec<T>>(),
         ));
@@ -144,7 +144,7 @@ impl RawTensor {
         }
 
         // CPU path (CPU tensor, or a `cpu_only` op on the GPU: `edge()` applies the policy).
-        let result = dispatch_real!(dtype, T => Storage::from_typed(
+        let result = dispatch_real!(dtype, T => Storage::from_compute(dtype,
             data.host::<T>().iter().map(|&x| T::unary(op, x)).collect::<Vec<T>>(),
         ));
 

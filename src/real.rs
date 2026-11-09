@@ -2,7 +2,8 @@
 //!
 //! CPU kernels are generic over [`Real`] and instantiated twice. Elementwise ops come from
 //! the `define_ops!` tables, which emit an `f32` and an `f64` function per row, so the
-//! table stays one row per op. Half types will run the `f32` instance (P4).
+//! table stays one row per op. F16 and BF16 run the `f32` instance: `Storage::host` decodes
+//! their inputs and `Storage::from_compute` rounds the output (P4).
 
 use crate::dtype::DType;
 use crate::ops::{BinaryOp, UnaryOp};
@@ -121,12 +122,11 @@ pub(crate) mod fl64 {
     }
 }
 
-/// Panics unless every input has one compute dtype (`F32` or `F64`), naming the op, and
-/// returns it. Mixed dtypes wait for promotion (P6); half types for P4; integers and bool
-/// have no kernels.
+/// Panics unless every input has one float dtype, naming the op, and returns it. Mixed
+/// dtypes wait for promotion (P6); integers and bool have no kernels.
 ///
 /// # Panics
-/// If the inputs' dtypes differ, or the common dtype is not `F32`/`F64`.
+/// If the inputs' dtypes differ, or the common dtype is not a float.
 #[track_caller]
 pub(crate) fn compute_dtype(op: impl FnOnce() -> String, dtypes: &[DType]) -> DType {
     let first = *dtypes.first().expect("an op has at least one input");
@@ -141,11 +141,7 @@ pub(crate) fn compute_dtype(op: impl FnOnce() -> String, dtypes: &[DType]) -> DT
         );
     }
     match first {
-        DType::F32 | DType::F64 => first,
-        DType::F16 | DType::BF16 => panic!(
-            "{}: {first} ops are not implemented until ADDENDUM §11 P4; cast with to_dtype",
-            op()
-        ),
+        DType::F32 | DType::F64 | DType::F16 | DType::BF16 => first,
         DType::I32 | DType::I64 | DType::U8 | DType::Bool => panic!(
             "{}: no {first} kernel; ops compute in f32 or f64 (ADDENDUM §11)",
             op()
@@ -153,12 +149,13 @@ pub(crate) fn compute_dtype(op: impl FnOnce() -> String, dtypes: &[DType]) -> DT
     }
 }
 
-/// Run `$body` with `$T` bound to the Rust type of `$dtype`, which must be `F32` or `F64`
+/// Run `$body` with `$T` bound to the Rust type of `$dtype`, which must be a float
+/// (`f32` for F32, F16 and BF16; `f64` for F64;
 /// (check it with [`compute_dtype`] first).
 macro_rules! dispatch_real {
     ($dtype:expr, $T:ident => $body:expr) => {
         match $dtype {
-            $crate::dtype::DType::F32 => {
+            $crate::dtype::DType::F32 | $crate::dtype::DType::F16 | $crate::dtype::DType::BF16 => {
                 type $T = f32;
                 $body
             }
@@ -166,7 +163,7 @@ macro_rules! dispatch_real {
                 type $T = f64;
                 $body
             }
-            other => unreachable!("dispatch_real on {other}: compute_dtype admits F32/F64 only"),
+            other => unreachable!("dispatch_real on {other}: compute_dtype admits floats only"),
         }
     };
 }

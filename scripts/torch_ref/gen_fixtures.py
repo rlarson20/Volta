@@ -393,6 +393,120 @@ def group_f64():
     print(f"wrote f64: {len(t)} tensors")
 
 
+def group_half():
+    """Forward and backward in float16 and bfloat16 for every op family (Volta P4).
+
+    Each case runs twice, keys prefixed `f16.` and `bf16.`. Inputs are random values
+    rounded to the dtype, and torch computes natively in it (CPU: each op decodes to f32,
+    computes, and rounds its output). Layer weights are half values, which Volta's f32
+    state dicts carry exactly. Stored in the native half dtype.
+    """
+    F = torch.nn.functional
+    t = {}
+    for dname, dt in [("f16", torch.float16), ("bf16", torch.bfloat16)]:
+        torch.manual_seed(SEED)
+
+        def rl(*shape):
+            return torch.randn(*shape).to(dt).requires_grad_(True)
+
+        def case(name, out, inputs):
+            w = torch.randn(out.shape).to(dt)
+            names = list(inputs)
+            grads = torch.autograd.grad((out * w).sum(), [inputs[n] for n in names])
+            t[f"{dname}.{name}.out"] = out
+            t[f"{dname}.{name}.w"] = w
+            for n, g in zip(names, grads):
+                t[f"{dname}.{name}.grad_{n}"] = g
+
+        def leaf(name, x):
+            t[f"{dname}.{name}"] = x
+            return x
+
+        x = leaf("unary.x", rl(3, 4))
+        xp = leaf("unary.xp", (torch.rand(3, 4) * 2 + 0.25).to(dt).requires_grad_(True))
+        for op in ["neg", "exp", "exp2", "sin", "cos", "tanh", "sigmoid", "relu", "erf"]:
+            case(f"unary.{op}", getattr(torch, op)(x), {"x": x})
+        for op, f in [("recip", torch.reciprocal), ("sqrt", torch.sqrt), ("log", torch.log), ("log2", torch.log2)]:
+            case(f"unary.{op}", f(xp), {"x": xp})
+
+        a, b = leaf("binary.a", rl(3, 4)), leaf("binary.b", rl(4))
+        bp = leaf("binary.bp", (torch.rand(4) + 0.5).to(dt).requires_grad_(True))
+        for op, f in [("add", torch.add), ("sub", torch.sub), ("mul", torch.mul), ("max", torch.maximum)]:
+            case(f"binary.{op}", f(a, b), {"a": a, "b": b})
+        case("binary.div", a / bp, {"a": a, "b": bp})
+
+        x = leaf("reduce.x", rl(3, 5))
+        case("reduce.sum", x.sum(), {"x": x})
+        case("reduce.mean", x.mean(), {"x": x})
+        case("reduce.max", x.max(), {"x": x})
+        case("reduce.sum_dim", x.sum(1), {"x": x})
+        case("reduce.mean_dim", x.mean(0, keepdim=True), {"x": x})
+        case("reduce.max_dim", x.amax(1), {"x": x})
+        case("reduce.softmax", torch.softmax(x, 1), {"x": x})
+        case("reduce.log_softmax", torch.log_softmax(x, 0), {"x": x})
+
+        x = leaf("move.x", rl(2, 3, 4))
+        case("move.permute", x.permute(2, 0, 1), {"x": x})
+        case("move.reshape", x.reshape(6, 4), {"x": x})
+        case("move.shrink", x[:, 1:3, 0:2], {"x": x})
+        case("move.expand", x[:, :1, :].expand(2, 5, 4), {"x": x})
+        m = leaf("move.m", rl(3, 5))
+        case("move.transpose", m.t(), {"x": m})
+
+        a, b = leaf("matmul.a", rl(2, 1, 3, 4)), leaf("matmul.b", rl(1, 3, 4, 2))
+        case("matmul", a @ b, {"a": a, "b": b})
+
+        x, y, z = leaf("ternary.x", rl(3, 4)), leaf("ternary.y", rl(3, 4)), leaf("ternary.z", rl(3, 4))
+        case("ternary.mulacc", torch.addcmul(z, x, y), {"x": x, "y": y, "z": z})
+        cond = leaf("ternary.cond", (torch.rand(3, 4) > 0.5).to(dt))
+        case("ternary.where", torch.where(cond != 0, y, z), {"y": y, "z": z})
+
+        p, q = leaf("loss.pred", rl(4, 3)), leaf("loss.target", rl(4, 3))
+        case("loss.mse", F.mse_loss(p, q), {"pred": p})
+        onehot = leaf("loss.onehot", F.one_hot(torch.tensor([0, 2, 1, 2]), 3).to(dt))
+        case("loss.cross_entropy", -(onehot * torch.log_softmax(p, 1)).sum(1).mean(), {"pred": p})
+
+        x, w, bias = leaf("linear.x", rl(4, 2)), leaf("linear.weight", rl(3, 2)), leaf("linear.bias", rl(3))
+        case("linear", F.linear(x, w, bias), {"x": x, "weight": w, "bias": bias})
+
+        x, w, bias = leaf("conv.x", rl(2, 2, 5, 5)), leaf("conv.weight", rl(3, 2, 3, 3)), leaf("conv.bias", rl(3))
+        case("conv", F.conv2d(x, w, bias, stride=2, padding=1), {"x": x, "weight": w, "bias": bias})
+
+        x, w, bias = leaf("convt.x", rl(2, 2, 3, 3)), leaf("convt.weight", rl(2, 3, 3, 3)), leaf("convt.bias", rl(3))
+        case("convt", F.conv_transpose2d(x, w, bias, stride=2, padding=1), {"x": x, "weight": w, "bias": bias})
+
+        x = leaf("maxpool.x", rl(2, 2, 4, 4))
+        case("maxpool", F.max_pool2d(x, 2, 2), {"x": x})
+
+        x, g, bias = leaf("batchnorm.x", rl(3, 2, 2, 2)), leaf("batchnorm.gamma", rl(2)), leaf("batchnorm.beta", rl(2))
+        case("batchnorm", F.batch_norm(x, None, None, g, bias, training=True, eps=1e-5), {"x": x, "gamma": g, "beta": bias})
+
+        x, g, bias = leaf("layernorm.x", rl(3, 4)), leaf("layernorm.gamma", rl(4)), leaf("layernorm.beta", rl(4))
+        case("layernorm", F.layer_norm(x, (4,), g, bias, 1e-5), {"x": x, "gamma": g, "beta": bias})
+
+        w = leaf("embedding.weight", rl(5, 3))
+        case("embedding", F.embedding(torch.tensor([1, 3, 1]), w), {"weight": w})
+
+        for oname, make in [
+            ("sgd", lambda ps: torch.optim.SGD(ps, lr=2**-4, momentum=0.875)),
+            ("adam", lambda ps: torch.optim.Adam(ps, lr=2**-7, betas=(0.875, 1 - 2**-10), eps=2**-14, weight_decay=2**-7)),
+        ]:
+            p = torch.randn(2, 3).to(dt).requires_grad_(True)
+            t[f"{dname}.{oname}.init"] = p.detach().clone()
+            opt = make([p])
+            for k in range(3):
+                g = torch.randn(2, 3).to(dt)
+                p.grad = g.clone()
+                t[f"{dname}.{oname}.g{k}"] = g
+                opt.step()
+                t[f"{dname}.{oname}.after{k}"] = p.detach().clone()
+
+    OUT.mkdir(parents=True, exist_ok=True)
+    meta = {"info": f"torch={torch.__version__};seed={SEED};group=half"}
+    save_file({k: v.detach().clone().contiguous() for k, v in t.items()}, OUT / "half.safetensors", metadata=meta)
+    print(f"wrote half: {len(t)} tensors")
+
+
 # Volta's `DType` discriminants, in order: F16=0, BF16=1, F32=2, F64=3, I32=4, I64=5, U8=6, Bool=7.
 VOLTA_DTYPES = [torch.float16, torch.bfloat16, torch.float32, torch.float64, torch.int32, torch.int64, torch.uint8, torch.bool]
 
@@ -460,7 +574,7 @@ def group_casts():
     print(f"wrote casts: {len(out)} tensors")
 
 
-GROUPS = {"ops": group_ops, "reductions": group_reductions, "optim": group_optim, "layers": group_layers, "dtypes": group_dtypes, "casts": group_casts, "f64": group_f64}
+GROUPS = {"ops": group_ops, "reductions": group_reductions, "optim": group_optim, "layers": group_layers, "dtypes": group_dtypes, "casts": group_casts, "f64": group_f64, "half": group_half}
 
 if __name__ == "__main__":
     wanted = sys.argv[1:] or list(GROUPS)
