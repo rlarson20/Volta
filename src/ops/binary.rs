@@ -2,6 +2,7 @@ use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::index::{fetch, slot};
 use crate::macros::define_ops;
+use crate::real::{Real, compute_dtype, dispatch_real};
 use crate::shape::{Shape, Strides};
 use crate::storage::Storage;
 use crate::{RawTensor, Result, Tensor, VoltaError};
@@ -77,37 +78,45 @@ impl BinaryGradFn {
 
         // CPU path: the table gives the per-element (∂a, ∂b) at the broadcast shape;
         // each is then summed back down to its operand's shape.
-        let x_bc = RawTensor::broadcast_to(
-            x.data.to_host_f32(),
-            x.shape.truncate_rank(),
-            out_grad.shape.truncate_rank(),
-        );
-        let y_bc = RawTensor::broadcast_to(
-            y.data.to_host_f32(),
-            y.shape.truncate_rank(),
-            out_grad.shape.truncate_rank(),
-        );
-        let (grad_x, grad_y): (Vec<f32>, Vec<f32>) = out_grad
-            .data
-            .to_host_f32()
-            .iter()
-            .zip(&x_bc)
-            .zip(&y_bc)
-            .map(|((&g, &a), &b)| self.op.backward(g, a, b))
-            .unzip();
-
-        let reduce_to = |full: &[f32], operand: &RawTensor| {
-            let summed = RawTensor::sum_over_broadcast_dims(
-                full,
+        let op = self.op;
+        dispatch_real!(x.data.dtype(), T => {
+            let x_bc = RawTensor::broadcast_to(
+                x.data.host::<T>(),
+                x.shape.truncate_rank(),
                 out_grad.shape.truncate_rank(),
-                operand.shape.truncate_rank(),
             );
-            RawTensor::from_shape(summed, operand.shape.clone(), false)
-        };
-        vec![
-            x.requires_grad.then(|| reduce_to(&grad_x, &x)),
-            y.requires_grad.then(|| reduce_to(&grad_y, &y)),
-        ]
+            let y_bc = RawTensor::broadcast_to(
+                y.data.host::<T>(),
+                y.shape.truncate_rank(),
+                out_grad.shape.truncate_rank(),
+            );
+            let (grad_x, grad_y): (Vec<T>, Vec<T>) = out_grad
+                .data
+                .host::<T>()
+                .iter()
+                .zip(&x_bc)
+                .zip(&y_bc)
+                .map(|((&g, &a), &b)| T::binary_backward(op, g, a, b))
+                .unzip();
+
+            let reduce_to = |full: &[T], operand: &RawTensor| {
+                let summed = RawTensor::sum_over_broadcast_dims(
+                    full,
+                    out_grad.shape.truncate_rank(),
+                    operand.shape.truncate_rank(),
+                );
+                RawTensor::new_with_storage(
+                    Storage::from_typed(summed),
+                    operand.shape.clone(),
+                    Device::CPU,
+                    false,
+                )
+            };
+            vec![
+                x.requires_grad.then(|| reduce_to(&grad_x, &x)),
+                y.requires_grad.then(|| reduce_to(&grad_y, &y)),
+            ]
+        })
     }
 
     /// Whether the op has no derivative (`Mod`, `Cmplt`), so `edge()` attaches no grad fn.
@@ -178,7 +187,11 @@ impl RawTensor {
     ///
     /// This repeats values along dimensions where `from_shape` is 1
     /// and `to_shape` is larger.
-    pub(crate) fn broadcast_to(data: &[f32], from_shape: &[usize], to_shape: &[usize]) -> Vec<f32> {
+    pub(crate) fn broadcast_to<T: Copy>(
+        data: &[T],
+        from_shape: &[usize],
+        to_shape: &[usize],
+    ) -> Vec<T> {
         if from_shape == to_shape {
             return data.to_vec();
         }
@@ -188,7 +201,8 @@ impl RawTensor {
                 panic!("Broadcast: invalid target shape {to_shape:?} from {from_shape:?}: {e}")
             })
             .numel();
-        let mut result = vec![0.0; to_size];
+        // Every element is written below; the first input value is only a placeholder.
+        let mut result = vec![fetch(data, 0); to_size];
 
         // Pad from_shape with leading 1s to match rank
         let mut padded_from = vec![1; to_shape.len()];
@@ -227,11 +241,11 @@ impl RawTensor {
     /// During backward pass, if a dimension was broadcast from size 1 to size N,
     /// we need to sum the gradients over that dimension to get the gradient
     /// for the original size-1 dimension.
-    pub(crate) fn sum_over_broadcast_dims(
-        grad: &[f32],
+    pub(crate) fn sum_over_broadcast_dims<T: Real>(
+        grad: &[T],
         grad_shape: &[usize],
         target_shape: &[usize],
-    ) -> Vec<f32> {
+    ) -> Vec<T> {
         if grad_shape == target_shape {
             return grad.to_vec();
         }
@@ -262,7 +276,7 @@ impl RawTensor {
         if sum_axes.is_empty() {
             return grad.to_vec();
         }
-        let mut result = vec![0.0; target_shape.iter().product()];
+        let mut result = vec![T::ZERO; target_shape.iter().product()];
         let target_strides = Strides::from_shape(target_shape);
         let target_strides = target_strides.truncate_rank();
         let grad_strides = Strides::from_shape(grad_shape);
@@ -302,7 +316,10 @@ impl RawTensor {
     /// broadcast failure
     #[must_use]
     pub fn binary_op(self_t: &Tensor, other: &Tensor, op: BinaryOp) -> Tensor {
-        crate::tensor::expect_f32(|| format!("Binary({op:?})"), &[self_t, other]);
+        let dtype = compute_dtype(
+            || format!("Binary({op:?})"),
+            &[self_t.dtype(), other.dtype()],
+        );
         // If both operands are on the same GPU with equal shapes, run the kernel there;
         // otherwise (or if it fails) fall through to the CPU path.
         if let Some((shape, storage, device)) = Self::gpu_binary_forward(self_t, other, op) {
@@ -332,20 +349,23 @@ impl RawTensor {
         let out_size: usize = out_shape.iter().product();
         assert!(out_size > 0, "Invalid broadcast result size");
 
-        let bc_data_a =
-            Self::broadcast_to(data_a.to_host_f32(), shape_a.truncate_rank(), &out_shape);
-        let bc_data_b =
-            Self::broadcast_to(data_b.to_host_f32(), shape_b.truncate_rank(), &out_shape);
-
-        let result_data: Vec<f32> = bc_data_a
-            .iter()
-            .zip(&bc_data_b)
-            .map(|(&a, &b)| op.forward(a, b))
-            .collect();
+        let result = dispatch_real!(dtype, T => {
+            let bc_data_a =
+                Self::broadcast_to(data_a.host::<T>(), shape_a.truncate_rank(), &out_shape);
+            let bc_data_b =
+                Self::broadcast_to(data_b.host::<T>(), shape_b.truncate_rank(), &out_shape);
+            Storage::from_typed(
+                bc_data_a
+                    .iter()
+                    .zip(&bc_data_b)
+                    .map(|(&a, &b)| T::binary(op, a, b))
+                    .collect::<Vec<T>>(),
+            )
+        });
 
         edge(
             [self_t.clone(), other.clone()],
-            Storage::cpu(result_data),
+            result,
             Shape::derived(out_shape),
             Device::CPU,
             GradFn::Binary(BinaryGradFn { op }),

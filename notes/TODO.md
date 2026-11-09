@@ -32,6 +32,8 @@ Evidence, measured numbers, and the refuted claims are in `docs/audits/2026-11-s
 - [ ] **Not yet run:** S13 (`Sequential::to_device` skips a child's `to_device`, so `PositionalEncoding`'s table stays on the CPU); `LSTMCell` and `MultiHeadAttention` against torch with loaded weights; the effect of S1 on `time_sequence.rs`.
 - [ ] **Tests: extend the torch reference suite** (`scripts/torch_ref/gen_fixtures.py`) to `LSTMCell`, attention, `Embedding`, `bce_with_logits_loss`, `kl_divergence_gaussian`, unary ops over wide ranges, and `expand`/`pad`/`shrink`/`stride_op`. The CPU/GPU parity tests still only compare Volta with itself.
 
+- [ ] **`RawTensor::contiguous` detaches.** It copies the data into a new leaf that takes `requires_grad` from its input, so a gradient through it never reaches the input (invariant 1: outputs come from `edge()`). No caller in the repo uses it. Make it a differentiable identity (a `Movement` reshape to the same shape) or remove it. Found 2026-11-03 while making it dtype-generic (Phase 5 P3).
+
 ## GPU
 
 - [ ] **Kernel gaps that `Strict` rejects.** Each one panics under `Strict` and runs on the CPU under `PreferGpu`: binary ops with differing (broadcast) shapes, forward and backward (`Linear`'s bias add, `mean_dim`'s divide); batched and vector (1-D) `matmul`, forward and backward; `transpose`; `sum_dim`; `max_dim` (and so `softmax`/`log_softmax`); `mul_acc` backward; movement ops above rank 4. With no GPU path at all: `Embedding`, `MaxPool2d`, `ConvTranspose2d`, `Where`. A kernel for any of these drops its name out of an `expect_gaps` assertion.
