@@ -854,7 +854,9 @@ impl Storage {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
+    /// use volta::Storage;
+    ///
     /// let mut storage = Storage::gpu(vec![1.0, 2.0, 3.0]);
     /// let _ = storage.to_host_f32(); // Reads the host copy
     /// storage.invalidate_cpu_cache(); // Releases it

@@ -27,37 +27,61 @@ fn operands(i: u32) -> vec3<f32> {
 }
 
 @compute @workgroup_size(256)
-fn lt(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn lt(
+    @builtin(global_invocation_id) gid_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let gid = flat_global_id(gid_2d, num_wg);
     let i = gid.x;
     if (i < params.n) { let o = operands(i); result[i] = select(0u, 1u, o.z == 0.0 && o.x < o.y); }
 }
 
 @compute @workgroup_size(256)
-fn le(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn le(
+    @builtin(global_invocation_id) gid_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let gid = flat_global_id(gid_2d, num_wg);
     let i = gid.x;
     if (i < params.n) { let o = operands(i); result[i] = select(0u, 1u, o.z == 0.0 && o.x <= o.y); }
 }
 
 @compute @workgroup_size(256)
-fn gt(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn gt(
+    @builtin(global_invocation_id) gid_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let gid = flat_global_id(gid_2d, num_wg);
     let i = gid.x;
     if (i < params.n) { let o = operands(i); result[i] = select(0u, 1u, o.z == 0.0 && o.x > o.y); }
 }
 
 @compute @workgroup_size(256)
-fn ge(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn ge(
+    @builtin(global_invocation_id) gid_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let gid = flat_global_id(gid_2d, num_wg);
     let i = gid.x;
     if (i < params.n) { let o = operands(i); result[i] = select(0u, 1u, o.z == 0.0 && o.x >= o.y); }
 }
 
 @compute @workgroup_size(256)
-fn eq(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn eq(
+    @builtin(global_invocation_id) gid_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let gid = flat_global_id(gid_2d, num_wg);
     let i = gid.x;
     if (i < params.n) { let o = operands(i); result[i] = select(0u, 1u, o.z == 0.0 && o.x == o.y); }
 }
 
 @compute @workgroup_size(256)
-fn ne(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn ne(
+    @builtin(global_invocation_id) gid_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let gid = flat_global_id(gid_2d, num_wg);
     let i = gid.x;
     if (i < params.n) { let o = operands(i); result[i] = select(0u, 1u, o.z != 0.0 || o.x != o.y); }
 }

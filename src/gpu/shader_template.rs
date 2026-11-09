@@ -242,6 +242,14 @@ fn f32_to_bf16_bits(v: f32) -> u32 {
     return (x + 0x7fffu + ((x >> 16u) & 1u)) >> 16u;
 }
 
+// The flat invocation index of a 256-wide 1-D kernel dispatched as a 2-D grid
+// (`kernels::dispatch_flat`): wgpu caps each dispatch dimension at 65535 workgroups, so
+// a launch over more than 65535 * 256 elements spreads its rows over `y`. Returned as a
+// vec3 so a kernel can keep reading `global_id.x`.
+fn flat_global_id(gid: vec3<u32>, num_wg: vec3<u32>) -> vec3<u32> {
+    return vec3<u32>(gid.x + gid.y * num_wg.x * 256u, 0u, 0u);
+}
+
 // bf16 bits -> f32, exactly.
 fn bf16_bits_to_f32(b: u32) -> f32 {
     return bitcast<f32>(b << 16u);

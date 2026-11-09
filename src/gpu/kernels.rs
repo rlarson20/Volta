@@ -540,7 +540,7 @@ fn dispatch_counted(
         });
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        pass.dispatch_workgroups(workgroups_for(n), 1, 1);
+        dispatch_flat(&mut pass, workgroups_for(n));
     }
     ctx.queue().submit(Some(encoder.finish()));
     ctx.increment_pending();
@@ -631,7 +631,7 @@ impl GpuKernels {
             });
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(workgroups_for(grad.len()), 1, 1);
+            dispatch_flat(&mut pass, workgroups_for(grad.len()));
         }
         ctx.queue().submit(Some(encoder.finish()));
         ctx.increment_pending();
@@ -753,7 +753,7 @@ impl GpuKernels {
             // Dispatch workgroups
             // Each workgroup processes 256 elements (defined in shader)
             let workgroup_count = pack_u32(a.len()).div_ceil(256);
-            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
+            dispatch_flat(&mut compute_pass, workgroup_count);
         }
 
         // Submit to GPU with throttling
@@ -805,7 +805,7 @@ impl GpuKernels {
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
             let workgroup_count = pack_u32(input.len()).div_ceil(256);
-            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
+            dispatch_flat(&mut compute_pass, workgroup_count);
         }
 
         ctx.queue().submit(Some(encoder.finish()));
@@ -878,7 +878,7 @@ impl GpuKernels {
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
             let workgroup_count = pack_u32(out_grad.len()).div_ceil(256);
-            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
+            dispatch_flat(&mut compute_pass, workgroup_count);
         }
 
         ctx.queue().submit(Some(encoder.finish()));
@@ -964,7 +964,7 @@ impl GpuKernels {
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
             let workgroup_count = pack_u32(out_grad.len()).div_ceil(256);
-            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
+            dispatch_flat(&mut compute_pass, workgroup_count);
         }
 
         ctx.queue().submit(Some(encoder.finish()));
@@ -1050,7 +1050,7 @@ impl GpuKernels {
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
             let workgroup_count = pack_u32(out_grad.len()).div_ceil(256);
-            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
+            dispatch_flat(&mut compute_pass, workgroup_count);
         }
 
         ctx.queue().submit(Some(encoder.finish()));
@@ -1202,7 +1202,7 @@ impl GpuKernels {
             compute_pass.set_bind_group(0, &pass1_bind_group, &[]);
 
             let workgroup_count = pack_u32(out_grad.len()).div_ceil(256);
-            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
+            dispatch_flat(&mut compute_pass, workgroup_count);
         }
 
         // ============ PASS 2: Reduce ============
@@ -1248,7 +1248,7 @@ impl GpuKernels {
             compute_pass.set_bind_group(0, &pass2_bind_group, &[]);
 
             let max_size = pack_u32(a.len().max(b.len())).div_ceil(256);
-            compute_pass.dispatch_workgroups(max_size, 1, 1);
+            dispatch_flat(&mut compute_pass, max_size);
         }
 
         ctx.queue().submit(Some(encoder.finish()));
@@ -1659,7 +1659,7 @@ impl GpuKernels {
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
             let workgroup_count = pack_u32(input_size).div_ceil(256);
-            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
+            dispatch_flat(&mut compute_pass, workgroup_count);
         }
 
         ctx.queue().submit(Some(encoder.finish()));
@@ -1746,7 +1746,7 @@ impl GpuKernels {
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
             let workgroup_count = pack_u32(input_size).div_ceil(256);
-            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
+            dispatch_flat(&mut compute_pass, workgroup_count);
         }
 
         ctx.queue().submit(Some(encoder.finish()));
@@ -1841,7 +1841,7 @@ impl GpuKernels {
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
             let workgroup_count = pack_u32(input_size).div_ceil(256);
-            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
+            dispatch_flat(&mut compute_pass, workgroup_count);
         }
 
         ctx.queue().submit(Some(encoder.finish()));
@@ -2236,7 +2236,7 @@ impl GpuKernels {
             compute_pass.set_bind_group(0, &bind_group, &[]);
 
             let workgroup_count = pack_u32(params.len()).div_ceil(256);
-            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
+            dispatch_flat(&mut compute_pass, workgroup_count);
         }
 
         ctx.queue().submit(Some(encoder.finish()));
@@ -2477,7 +2477,7 @@ impl GpuKernels {
 
             // Each workgroup handles one output row (one output position)
             let workgroup_count = pack_u32(rows).div_ceil(256);
-            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
+            dispatch_flat(&mut compute_pass, workgroup_count);
         }
 
         ctx.queue().submit(Some(encoder.finish()));
@@ -3366,7 +3366,7 @@ fn movement_op(
             .filter_map(|i| params.new_shape.get(i))
             .product::<u32>();
         let workgroup_count = output_size.div_ceil(256);
-        compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
+        dispatch_flat(&mut compute_pass, workgroup_count);
     }
 
     ctx.queue().submit(Some(encoder.finish()));
@@ -3389,17 +3389,32 @@ fn pack_u32(v: usize) -> u32 {
         .unwrap_or_else(|_| panic!("kernel parameter {v} does not fit u32 (index-mapping bug)"))
 }
 
-/// Workgroups (256 threads each) that cover `len` elements.
+/// Workgroups (256 threads each) that cover `len` elements; `dispatch_flat` spreads more
+/// than 65535 of them over two dimensions.
+fn workgroups_for(len: usize) -> u32 {
+    pack_u32(len).div_ceil(256)
+}
+
+/// Dispatch `groups` workgroups of a 256-wide 1-D kernel. wgpu caps each dimension at
+/// 65535 workgroups (16,776,960 invocations), so a larger launch spreads over `y`; the
+/// kernel rebuilds its flat index with `flat_global_id` (`shader_template`), and extra
+/// invocations past the end fail their bounds check like any trailing ones (audit A2).
 ///
 /// # Panics
-/// If that is more than the 65535 a single dispatch dimension allows.
-fn workgroups_for(len: usize) -> u32 {
-    let groups = pack_u32(len).div_ceil(256);
+/// If `groups` needs more than 65535 rows (over 2^32 invocations), which `pack_u32` on
+/// the element count already rules out.
+fn dispatch_flat(pass: &mut wgpu::ComputePass<'_>, groups: u32) {
+    const MAX: u32 = 65_535;
+    let (x, y) = if groups <= MAX {
+        (groups, 1)
+    } else {
+        (MAX, groups.div_ceil(MAX))
+    };
     assert!(
-        groups <= 65535,
-        "GPU Muon buffer of {len} elements needs {groups} workgroups, over the 65535 limit"
+        y <= MAX,
+        "GPU dispatch of {groups} workgroups exceeds a 65535 x 65535 grid"
     );
-    groups
+    pass.dispatch_workgroups(x, y, 1);
 }
 
 /// `out = alpha·x + beta·y`, elementwise, into a new buffer.
@@ -3477,7 +3492,7 @@ fn muon_dispatch(
         });
         compute_pass.set_pipeline(pipeline);
         compute_pass.set_bind_group(0, &bind_group, &[]);
-        compute_pass.dispatch_workgroups(workgroups, 1, 1);
+        dispatch_flat(&mut compute_pass, workgroups);
     }
     ctx.queue().submit(Some(encoder.finish()));
     ctx.increment_pending();

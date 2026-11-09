@@ -25,7 +25,11 @@ pub struct Adam {
 
 impl Adam {
     /// Optimizer over `params` with zeroed moment estimates on each parameter's device.
+    ///
+    /// # Panics
+    /// If a hyperparameter is invalid; see [`Self::try_new`].
     #[must_use]
+    #[track_caller]
     pub fn new(
         params: Vec<Tensor>,
         lr: f32,
@@ -33,6 +37,26 @@ impl Adam {
         eps: f32,
         weight_decay: f32,
     ) -> Self {
+        Self::try_new(params, lr, betas, eps, weight_decay).unwrap_or_else(|e| panic!("Adam: {e}"))
+    }
+
+    /// [`Self::new`], checking the hyperparameters first, as PyTorch does.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` if `lr`, `eps` or `weight_decay` is negative or NaN,
+    /// or a beta is outside `[0, 1)` (a beta of 1 makes the bias correction divide by 0).
+    pub fn try_new(
+        params: Vec<Tensor>,
+        lr: f32,
+        betas: (f32, f32),
+        eps: f32,
+        weight_decay: f32,
+    ) -> crate::Result<Self> {
+        super::check_non_negative("learning rate", lr)?;
+        super::check_non_negative("epsilon", eps)?;
+        super::check_beta(0, betas.0)?;
+        super::check_beta(1, betas.1)?;
+        super::check_non_negative("weight_decay", weight_decay)?;
         // Create state matching the device of each parameter
         let m: Vec<Storage> = params
             .iter()
@@ -60,7 +84,7 @@ impl Adam {
             })
             .collect();
 
-        Self {
+        Ok(Self {
             params,
             lr,
             betas,
@@ -69,13 +93,13 @@ impl Adam {
             m,
             v,
             t: 0,
-        }
+        })
     }
 
     /// Clears the gradient of every parameter.
     pub fn zero_grad(&self) {
         for param in &self.params {
-            param.borrow_mut().grad = None;
+            param.zero_grad();
         }
     }
 
@@ -93,7 +117,7 @@ impl Adam {
         for i in 0..self.params.len() {
             // SAFETY: We're iterating over valid indices 0..self.params.len()
             debug_assert!(i < self.params.len(), "Parameter index out of bounds");
-            let param = self.params.get(i).unwrap();
+            let param = self.params.get(i).expect("Adam: a parameter per index");
             let p = param.borrow();
 
             // Skip parameters without gradients
@@ -122,7 +146,7 @@ impl Adam {
     fn step_gpu_param(&mut self, i: usize) {
         use crate::gpu::OptimizerStepParams;
 
-        let param = self.params.get(i).unwrap();
+        let param = self.params.get(i).expect("Adam: a parameter per index");
         let mut p = param.borrow_mut();
 
         let grad = match &p.grad {
@@ -131,8 +155,14 @@ impl Adam {
         };
 
         // State is already on GPU (stored as Storage)
-        let m_state = self.m.get_mut(i).unwrap();
-        let v_state = self.v.get_mut(i).unwrap();
+        let m_state = self
+            .m
+            .get_mut(i)
+            .expect("Adam: first-moment state per parameter");
+        let v_state = self
+            .v
+            .get_mut(i)
+            .expect("Adam: second-moment state per parameter");
 
         // Setup optimizer parameters
         let opt_params = OptimizerStepParams {
@@ -154,7 +184,7 @@ impl Adam {
 
     /// CPU update for a single parameter
     fn step_cpu_param(&mut self, i: usize) {
-        let param = self.params.get(i).unwrap();
+        let param = self.params.get(i).expect("Adam: a parameter per index");
         let mut p = param.borrow_mut();
 
         let grad = match &p.grad {

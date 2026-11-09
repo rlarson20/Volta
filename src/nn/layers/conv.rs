@@ -223,7 +223,11 @@ impl DirectConvGradFn {
             Some(if use_gpu {
                 let storage = RawTensor::gpu_conv_backward_input(
                     &out_grad.data,
-                    &weight.as_ref().unwrap().borrow().data,
+                    &weight
+                        .as_ref()
+                        .expect("DirectConv backward: the weight is a parent")
+                        .borrow()
+                        .data,
                     &self.spec,
                 )
                 .unwrap_or_else(|| kernel_failed("DirectConv"));
@@ -237,7 +241,7 @@ impl DirectConvGradFn {
                 dispatch_real!(out_grad.data.dtype(), T => self.compute_input_gradient_cpu::<T>(
                     out_grad.data.dtype(),
                     &out_grad.data.host::<T>(),
-                    &weight.as_ref().unwrap().borrow().data.host::<T>(),
+                    &weight.as_ref().expect("DirectConv backward: the weight is a parent").borrow().data.host::<T>(),
                 ))
             })
         } else {
@@ -251,7 +255,10 @@ impl DirectConvGradFn {
             Some(if use_gpu {
                 let storage = RawTensor::gpu_conv_backward_weight(
                     &out_grad.data,
-                    &x.as_ref().unwrap().borrow().data,
+                    &x.as_ref()
+                        .expect("DirectConv backward: the input is a parent")
+                        .borrow()
+                        .data,
                     &self.spec,
                 )
                 .unwrap_or_else(|| kernel_failed("DirectConv"));
@@ -265,7 +272,7 @@ impl DirectConvGradFn {
                 dispatch_real!(out_grad.data.dtype(), T => self.compute_weight_gradient_cpu::<T>(
                     out_grad.data.dtype(),
                     &out_grad.data.host::<T>(),
-                    &x.as_ref().unwrap().borrow().data.host::<T>(),
+                    &x.as_ref().expect("DirectConv backward: the input is a parent").borrow().data.host::<T>(),
                 ))
             })
         } else {
@@ -494,7 +501,11 @@ impl IGEMMGradFn {
             if is_gpu {
                 let storage = RawTensor::gpu_igemm_backward_input(
                     &out_grad.data,
-                    &weight.as_ref().unwrap().borrow().data,
+                    &weight
+                        .as_ref()
+                        .expect("IGEMM backward: the weight is a parent")
+                        .borrow()
+                        .data,
                     &self.spec,
                 )
                 .unwrap_or_else(|| kernel_failed("Igemm"));
@@ -539,7 +550,10 @@ impl IGEMMGradFn {
             if is_gpu {
                 let storage = RawTensor::gpu_igemm_backward_weight(
                     &out_grad.data,
-                    &x.as_ref().unwrap().borrow().data,
+                    &x.as_ref()
+                        .expect("IGEMM backward: the input is a parent")
+                        .borrow()
+                        .data,
                     &self.spec,
                 )
                 .unwrap_or_else(|| kernel_failed("Igemm"));
@@ -770,10 +784,10 @@ impl Conv2d {
         use_bias: bool,
     ) -> Self {
         let w = RawTensor::he_initialization(&[out_ch, in_ch, kernel, kernel]);
-        w.borrow_mut().requires_grad = true;
+        w.set_requires_grad(true);
         let b = if use_bias {
             let b = RawTensor::zeros(&[out_ch]);
-            b.borrow_mut().requires_grad = true;
+            b.set_requires_grad(true);
             Some(b)
         } else {
             None
@@ -1514,7 +1528,7 @@ mod conv2d_tests {
         crate::tensor::manual_seed(0xC2D0);
         let conv = Conv2d::new(2, 4, 3, 1, 1, true);
         let x = RawTensor::randn(&[1, 2, 6, 6]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         // Seeded; measured max relative error 4.9e-6, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) = RawTensor::check_gradients(
@@ -1536,7 +1550,7 @@ mod conv2d_tests {
         // strict superset of the presence-only checks this test used to hand-roll.
         let conv = Conv2d::new(2, 4, 3, 1, 0, true);
         let x = RawTensor::randn(&[1, 2, 5, 5]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         crate::assert_trainable!(conv, x);
     }
@@ -1766,7 +1780,7 @@ mod conv2d_tests {
         crate::tensor::manual_seed(0xC2D1);
         let conv = Conv2d::new(2, 4, 1, 1, 0, true);
         let x = RawTensor::randn(&[1, 2, 4, 4]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         // Seeded; measured max relative error 1.6e-6, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
@@ -1787,7 +1801,7 @@ mod conv2d_tests {
         crate::tensor::manual_seed(0xC2D5);
         let conv = Conv2d::new(2, 4, 5, 1, 2, true);
         let x = RawTensor::randn(&[1, 2, 8, 8]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         // Seeded; measured max relative error 7.7e-5, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
@@ -1808,7 +1822,7 @@ mod conv2d_tests {
         crate::tensor::manual_seed(0xC2D2);
         let conv = Conv2d::new(2, 4, 3, 2, 1, true);
         let x = RawTensor::randn(&[1, 2, 8, 8]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         // Seeded; measured max relative error 1.5e-5, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
@@ -1829,7 +1843,7 @@ mod conv2d_tests {
         crate::tensor::manual_seed(0xC2DB);
         let conv = Conv2d::new(2, 4, 3, 1, 1, false);
         let x = RawTensor::randn(&[1, 2, 6, 6]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         // Seeded; measured max relative error 3.1e-5, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
@@ -1850,7 +1864,7 @@ mod conv2d_tests {
         crate::tensor::manual_seed(0xC2DC);
         let conv = Conv2d::new(4, 8, 3, 1, 1, true);
         let x = RawTensor::randn(&[1, 4, 8, 8]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         // Seeded; measured max relative error 2.7e-4, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
@@ -1867,7 +1881,7 @@ mod conv2d_tests {
         // Verify that parameter gradients have correct shapes
         let conv = Conv2d::new(3, 16, 3, 1, 1, true);
         let x = RawTensor::randn(&[2, 3, 32, 32]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         let y = conv.forward(&x);
         let loss = y.sum();
@@ -1998,7 +2012,7 @@ mod conv2d_tests {
         conv.set_algo(ConvAlgo::Direct);
 
         let x = RawTensor::randn(&[1, 2, 8, 8]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         // Seeded; measured max relative error 2.5e-4, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
@@ -2021,7 +2035,7 @@ mod conv2d_tests {
         conv.set_algo(ConvAlgo::Direct);
 
         let x = RawTensor::randn(&[1, 2, 6, 6]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         // Seeded; measured max relative error 2.5e-5, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
@@ -2044,7 +2058,7 @@ mod conv2d_tests {
         conv.set_algo(ConvAlgo::Direct);
 
         let x = RawTensor::randn(&[1, 2, 8, 8]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         // Seeded; measured max relative error 2.3e-5, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
@@ -2067,7 +2081,7 @@ mod conv2d_tests {
         conv.set_algo(ConvAlgo::Direct);
 
         let x = RawTensor::randn(&[1, 2, 4, 4]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         // Seeded; measured max relative error 1.3e-6, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
@@ -2090,7 +2104,7 @@ mod conv2d_tests {
         conv.set_algo(ConvAlgo::Direct);
 
         let x = RawTensor::randn(&[1, 2, 6, 6]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         // Seeded; measured max relative error 1.2e-4, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
@@ -2109,7 +2123,7 @@ mod conv2d_tests {
         conv.set_algo(ConvAlgo::Direct);
 
         let x = RawTensor::randn(&[1, 2, 6, 6]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         let y = conv.forward(&x);
         let loss = y.sum();
@@ -2150,7 +2164,7 @@ mod conv2d_tests {
         }
 
         let x = RawTensor::randn(&[1, 2, 6, 6]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         // Compute gradients with direct conv
         let y_direct = conv_direct.forward(&x);
@@ -2161,10 +2175,10 @@ mod conv2d_tests {
         let w_grad_direct = conv_direct.weight.grad().clone();
 
         // Clear gradients
-        x.borrow_mut().grad = None;
-        conv_direct.weight.borrow_mut().grad = None;
+        x.zero_grad();
+        conv_direct.weight.zero_grad();
         if let Some(ref b) = conv_direct.bias {
-            b.borrow_mut().grad = None;
+            b.zero_grad();
         }
 
         // Compute gradients with im2col
@@ -2237,7 +2251,7 @@ mod conv2d_tests {
             conv.set_algo(ConvAlgo::Direct);
 
             let x = RawTensor::randn(&[1, in_ch, h, w]);
-            x.borrow_mut().requires_grad = true;
+            x.set_requires_grad(true);
 
             let (max_err, mean_err, passed) =
                 RawTensor::check_gradients(&x, |t| conv.forward(t).sum(), 0.5, tolerance);
@@ -2256,7 +2270,7 @@ mod conv2d_tests {
         conv.set_algo(ConvAlgo::Auto);
 
         let x = RawTensor::randn(&[1, 2, 4, 4]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         // Should now use Direct (small input, gradients OK)
         let y = conv.forward(&x);
@@ -2332,7 +2346,7 @@ mod conv2d_tests {
         conv.set_algo(ConvAlgo::IGEMM);
 
         let x = RawTensor::randn(&[1, 2, 8, 8]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         // Seeded; measured max relative error 3.2e-5, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
@@ -2349,12 +2363,12 @@ mod conv2d_tests {
         // Compare iGEMM gradients with Direct gradients
         // Use SAME input values for fair comparison
         let x_direct = RawTensor::randn(&[1, 2, 6, 6]);
-        x_direct.borrow_mut().requires_grad = true;
+        x_direct.set_requires_grad(true);
 
         // Clone input data to use same values
         let x_data = x_direct.borrow().data.to_vec();
         let x_igemm = RawTensor::new(x_data, &[1, 2, 6, 6], true);
-        x_igemm.borrow_mut().requires_grad = true;
+        x_igemm.set_requires_grad(true);
 
         let conv_direct = Conv2d::new(2, 4, 3, 1, 1, true);
         conv_direct.set_algo(ConvAlgo::Direct);
@@ -2650,7 +2664,7 @@ mod conv2d_tests {
         conv.set_algo(ConvAlgo::IGEMM);
 
         let x = RawTensor::randn(&[1, 2, 8, 8]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         // Seeded; measured max relative error 9.7e-5, tolerance the next 1-2-5 value at least 10x above it.
         let (max_err, mean_err, passed) =
@@ -2928,7 +2942,7 @@ mod conv2d_gpu_tests {
 
         let conv = Conv2d::new_on_device(2, 4, 3, 1, 0, true, device.clone());
         let x = RawTensor::randn(&[1, 2, 5, 5]).to_device(device.clone());
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         let y = conv.forward(&x);
         let loss = y.sum();
@@ -3125,7 +3139,7 @@ mod conv2d_gpu_tests {
         // Test that gradients flow correctly on GPU
         let conv = Conv2d::new_on_device(2, 4, 3, 1, 1, true, device.clone());
         let x = RawTensor::randn(&[1, 2, 6, 6]).to_device(device.clone());
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         let y = conv.forward(&x);
         let loss = y.sum();
@@ -3196,7 +3210,7 @@ mod conv2d_gpu_tests {
         conv.set_algo(ConvAlgo::Direct);
 
         let x = RawTensor::randn(&[1, 2, 8, 8]).to_device(device.clone());
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
 
         let y = conv.forward(&x);
         let loss = y.sum();

@@ -54,10 +54,10 @@ impl LayerNorm {
 
         // Initialize gamma to 1, beta to 0
         let gamma = RawTensor::ones(&[num_features]);
-        gamma.borrow_mut().requires_grad = true;
+        gamma.set_requires_grad(true);
 
         let beta = RawTensor::zeros(&[num_features]);
-        beta.borrow_mut().requires_grad = true;
+        beta.set_requires_grad(true);
 
         Self {
             normalized_shape,
@@ -107,6 +107,16 @@ impl Module for LayerNorm {
 
 impl Layer for LayerNorm {
     fn forward(&self, x: &Tensor) -> Tensor {
+        // A half input with f32 parameters normalizes in f32 and returns the input's
+        // dtype, as PyTorch's norm kernels do (audit A5).
+        crate::nn::norm_mixed(x, self.gamma.dtype(), |x| self.forward_in(x))
+    }
+}
+
+impl LayerNorm {
+    /// The forward pass with `x` already in the parameters' dtype (or another dtype pair
+    /// [`crate::nn::norm_mixed`] leaves alone).
+    fn forward_in(&self, x: &Tensor) -> Tensor {
         let input_shape = x.borrow().shape.clone();
         let input_rank = input_shape.rank();
 

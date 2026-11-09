@@ -14,7 +14,7 @@ use std::time::Instant;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```no_run
 /// use volta::gpu::system_monitor::SystemMonitor;
 ///
 /// let monitor = SystemMonitor::new();
@@ -81,7 +81,10 @@ impl SystemMonitor {
         let last_ops = self.last_checkpoint_ops.swap(ops, Ordering::Relaxed);
         let ops_delta = ops - last_ops;
 
-        let mut last_time = self.last_checkpoint_time.lock().unwrap();
+        let mut last_time = self
+            .last_checkpoint_time
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let time_delta = last_time.elapsed().as_secs_f64();
         *last_time = Instant::now();
         drop(last_time);
@@ -145,7 +148,10 @@ impl SystemMonitor {
         self.operation_count.store(0, Ordering::Relaxed);
         self.sync_count.store(0, Ordering::Relaxed);
         self.last_checkpoint_ops.store(0, Ordering::Relaxed);
-        *self.last_checkpoint_time.lock().unwrap() = Instant::now();
+        *self
+            .last_checkpoint_time
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Instant::now();
     }
 }
 

@@ -30,8 +30,30 @@ impl SGD {
     /// * `lr` - Learning rate (typical: 0.01 to 0.1)
     /// * `momentum` - Momentum coefficient (typical: 0.9, or 0.0 for no momentum)
     /// * `weight_decay` - L2 penalty (typical: 1e-4, or 0.0 for none)
+    ///
+    /// # Panics
+    /// If a hyperparameter is invalid; see [`Self::try_new`].
     #[must_use]
+    #[track_caller]
     pub fn new(params: Vec<Tensor>, lr: f32, momentum: f32, weight_decay: f32) -> Self {
+        Self::try_new(params, lr, momentum, weight_decay).unwrap_or_else(|e| panic!("SGD: {e}"))
+    }
+
+    /// [`Self::new`], checking the hyperparameters first, as PyTorch does.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` if `lr`, `momentum` or `weight_decay` is negative
+    /// or NaN. A negative momentum used to be ignored on the CPU and to panic on the GPU
+    /// (audit A3).
+    pub fn try_new(
+        params: Vec<Tensor>,
+        lr: f32,
+        momentum: f32,
+        weight_decay: f32,
+    ) -> crate::Result<Self> {
+        super::check_non_negative("learning rate", lr)?;
+        super::check_non_negative("momentum", momentum)?;
+        super::check_non_negative("weight_decay", weight_decay)?;
         // Create velocity state matching the device and dtype of each parameter
         let velocity = if momentum > 0.0 {
             params
@@ -50,13 +72,13 @@ impl SGD {
             vec![]
         };
 
-        Self {
+        Ok(Self {
             params,
             lr,
             momentum,
             weight_decay,
             velocity,
-        }
+        })
     }
 
     /// Zero all parameter gradients
@@ -65,7 +87,7 @@ impl SGD {
     /// across multiple batches.
     pub fn zero_grad(&self) {
         for param in &self.params {
-            param.borrow_mut().grad = None;
+            param.zero_grad();
         }
     }
 
@@ -82,7 +104,7 @@ impl SGD {
         }
         // Process each parameter based on its device
         for i in 0..self.params.len() {
-            let param = self.params.get(i).unwrap();
+            let param = self.params.get(i).expect("SGD: a parameter per index");
             let p = param.borrow();
 
             // Skip parameters without gradients
@@ -111,7 +133,7 @@ impl SGD {
     fn step_gpu_param(&mut self, i: usize) {
         use crate::gpu::OptimizerStepParams;
 
-        let param = self.params.get(i).unwrap();
+        let param = self.params.get(i).expect("SGD: a parameter per index");
         let mut p = param.borrow_mut();
 
         let grad = match &p.grad {
@@ -130,7 +152,13 @@ impl SGD {
             (0, 0.0, &mut dummy_state1)
         } else {
             // Velocity is already on the GPU, with the parameter.
-            (1, self.momentum, self.velocity.get_mut(i).unwrap())
+            (
+                1,
+                self.momentum,
+                self.velocity
+                    .get_mut(i)
+                    .expect("SGD: velocity per parameter when momentum > 0"),
+            )
         };
 
         let opt_params = OptimizerStepParams {
@@ -158,7 +186,7 @@ impl SGD {
 
     /// CPU update for a single parameter
     fn step_cpu_param(&mut self, i: usize) {
-        let param = self.params.get(i).unwrap();
+        let param = self.params.get(i).expect("SGD: a parameter per index");
         let mut p = param.borrow_mut();
 
         let grad = match &p.grad {

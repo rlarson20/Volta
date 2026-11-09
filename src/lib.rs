@@ -18,6 +18,9 @@
 // print freely. `utils::progress` is the one legitimate exception and opts out
 // with a module-level `#[allow]`.
 #![cfg_attr(not(test), deny(clippy::print_stdout, clippy::print_stderr))]
+// Library code states the broken contract in an `expect` instead of a bare `unwrap()`
+// (post-Phase-5 audit A9). Tests may unwrap.
+#![cfg_attr(not(test), deny(clippy::unwrap_used))]
 #[cfg(feature = "gpu")]
 pub mod gpu;
 

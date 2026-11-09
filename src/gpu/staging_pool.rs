@@ -19,7 +19,7 @@ use wgpu::Buffer;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```text
 /// let pool = StagingBufferPool::default();
 ///
 /// // Try to acquire from pool
@@ -31,6 +31,11 @@ use wgpu::Buffer;
 /// // Return to pool (or drop if full)
 /// pool.release(buffer, size_bytes);
 /// ```
+///
+/// A poisoned lock is recovered rather than propagated: each critical section only
+/// pushes, pops, or adjusts a count, with nothing in between that can panic, so the
+/// pool is consistent after a panic elsewhere; and one panicking thread (a failing
+/// test) must not break every later GPU call.
 pub struct StagingBufferPool {
     /// Pools organized by exact byte size
     pools: Mutex<HashMap<u64, Vec<Buffer>>>,
@@ -64,8 +69,15 @@ impl StagingBufferPool {
     /// # Panics
     /// Unwrapping pool mutex
     pub fn acquire(&self, size_bytes: u64) -> Option<Buffer> {
-        let mut count = self.current_count.lock().unwrap();
-        if let Some(pool) = self.pools.lock().unwrap().get_mut(&size_bytes)
+        let mut count = self
+            .current_count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(pool) = self
+            .pools
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_mut(&size_bytes)
             && let Some(buffer) = pool.pop()
         {
             *count = count.saturating_sub(1);
@@ -92,7 +104,10 @@ impl StagingBufferPool {
     /// # Panics
     /// Unwrapping pool mutex
     pub fn release(&self, buffer: Buffer, size_bytes: u64) -> bool {
-        let mut count = self.current_count.lock().unwrap();
+        let mut count = self
+            .current_count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         if *count >= self.max_total {
             log::trace!(
@@ -106,7 +121,7 @@ impl StagingBufferPool {
 
         self.pools
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .entry(size_bytes)
             .or_default()
             .push(buffer);
@@ -127,8 +142,14 @@ impl StagingBufferPool {
     /// # Panics
     /// Unwrapping pool mutex
     pub fn clear(&self) {
-        self.pools.lock().unwrap().clear();
-        *self.current_count.lock().unwrap() = 0;
+        self.pools
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        *self
+            .current_count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = 0;
 
         log::trace!("[StagingPool] cleared all buffers");
     }
@@ -137,7 +158,10 @@ impl StagingBufferPool {
     /// # Panics
     /// Unwrapping count mutex
     pub fn size(&self) -> usize {
-        *self.current_count.lock().unwrap()
+        *self
+            .current_count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Get maximum pool capacity
@@ -152,7 +176,10 @@ impl StagingBufferPool {
     /// unwrapping mutex for `total_pooled`
     pub fn stats(&self) -> StagingPoolStats {
         StagingPoolStats {
-            total_pooled: *self.current_count.lock().unwrap(),
+            total_pooled: *self
+                .current_count
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
             max_capacity: self.max_total,
         }
     }
@@ -193,7 +220,10 @@ mod tests {
     #[test]
     fn test_clear_resets_count() {
         let pool = StagingBufferPool::new(10);
-        *pool.current_count.lock().unwrap() = 5; // Simulate some buffers
+        *pool
+            .current_count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = 5; // Simulate some buffers
         pool.clear();
         assert_eq!(pool.size(), 0);
     }

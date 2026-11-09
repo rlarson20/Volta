@@ -50,6 +50,29 @@ jobs:
       - name: cargo-hack feature powerset (no gpu)
         run: cargo hack check --feature-powerset --no-dev-deps --exclude-features gpu
 
+  # Default features (gpu) on Linux, with Mesa's lavapipe as the adapter: a software
+  # Vulkan device (shaderFloat16), so the gpu-gated tests run on every PR, including the
+  # f16/bf16 GPU tests and the naga validation of every shader expansion. Not Metal: the
+  # macOS lane stays the Apple-GPU check. VOLTA_REQUIRE_GPU makes a missing adapter fail
+  # the run instead of letting every GPU test skip.
+  linux-lavapipe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install lavapipe
+        run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
+
+      - name: Test (default features, GPU on lavapipe)
+        env:
+          VOLTA_REQUIRE_GPU: "1"
+        run: cargo test
+
   # Full build with gpu + accelerate. GitHub's macos-latest is Apple Silicon
   # with a working Metal GPU; GPU tests self-skip at runtime when no adapter
   # is available (src/gpu/mod.rs).
@@ -75,6 +98,9 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Test (all features)
+        env:
+          # The runner has a Metal GPU; a missing adapter fails instead of skipping.
+          VOLTA_REQUIRE_GPU: "1"
         run: cargo test --all-features
 
       - name: Build docs (all features)

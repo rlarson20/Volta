@@ -5,7 +5,9 @@
 //! scope's dtype (F16 or BF16), and the losses (`mse_loss`, `cross_entropy_loss`,
 //! `nll_loss`, `bce_loss`, `bce_with_logits_loss`, `kl_divergence_gaussian`) cast theirs to
 //! F32. Every other op runs in its inputs' dtype, promoting mixed operands as usual: on the
-//! CPU, PyTorch keeps softmax, norms and reductions in the half dtype too. The casts are
+//! CPU, PyTorch keeps softmax, norms and reductions in the half dtype too. The norm layers
+//! take a half input with f32 parameters as torch's kernels do: normalized in f32, returned
+//! in the half dtype (`nn::norm_mixed`). The casts are
 //! `to_dtype` graph nodes, so parameters stay f32 and receive f32 gradients: there are no
 //! master weights to keep, and the optimizer is unchanged. F64 tensors are never cast,
 //! as in PyTorch.
@@ -242,7 +244,8 @@ impl GradScaler {
     ///
     /// # Panics
     /// If called twice before `update` (torch refuses too: the gradients would be divided
-    /// twice).
+    /// twice), or a gradient is f16 (torch refuses those: loss scaling is for f32
+    /// parameters under autocast; bf16 gradients are accepted, as in torch).
     pub fn unscale(&mut self, opt: &impl Optimizer) {
         assert!(
             self.stage == Stage::Ready,
@@ -250,8 +253,15 @@ impl GradScaler {
         );
         let inv = 1.0 / self.scale;
         let mut found_inf = false;
-        for p in opt.parameters() {
+        for (i, p) in opt.parameters().iter().enumerate() {
             let Some(g) = p.grad_storage() else { continue };
+            // PyTorch's rule: an f16 gradient can under- or overflow in f16 itself, so
+            // unscaling it is refused; loss scaling is for autocast's f32 parameters.
+            assert!(
+                g.dtype() != DType::F16,
+                "GradScaler: Attempting to unscale FP16 gradients (parameter {i}); keep the \
+                 parameters f32 and run the forward under amp::autocast(DType::F16) (audit A4)"
+            );
             let (unscaled, bad) = unscale_storage(&g, inv);
             found_inf |= bad;
             p.set_grad(unscaled);

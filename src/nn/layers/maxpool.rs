@@ -166,7 +166,12 @@ impl Layer for MaxPool2d {
 impl MaxPool2dGradFn {
     /// Scatters `out_grad` to the recorded maxima; all other input elements get zero.
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
-        let input_shape = parents.first().unwrap().borrow().shape.clone();
+        let input_shape = parents
+            .first()
+            .expect("MaxPool2d backward: one parent")
+            .borrow()
+            .shape
+            .clone();
         dispatch_real!(out_grad.data.dtype(), T => {
             let mut grad_input = vec![T::ZERO; input_shape.iter().product()];
             let g_host = out_grad.data.host::<T>();
@@ -218,7 +223,7 @@ mod tests {
     fn test_maxpool2d_backward_flow() {
         let pool = MaxPool2d::new(2, 2, 0);
         let x = RawTensor::randn(&[1, 1, 4, 4]);
-        x.borrow_mut().requires_grad = true;
+        x.set_requires_grad(true);
         let y = pool.forward(&x);
         let loss = y.sum();
         loss.into_loss().expect("scalar loss").backward();

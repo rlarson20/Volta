@@ -23,7 +23,11 @@ struct OptimizerParams {
 @group(0) @binding(4) var<uniform> opt_params: OptimizerParams;
 
 @compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn main(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx >= len_params()) {
         return;

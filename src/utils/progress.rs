@@ -3,7 +3,10 @@
 //! This module deliberately writes to stderr (carriage-return redraws of a
 //! single line), which is not a log record and would be meaningless through the
 //! `log` facade. Callers opt in by constructing a [`ProgressBar`].
-#![allow(clippy::print_stderr)]
+#![allow(
+    clippy::print_stderr,
+    reason = "a progress bar redraws one stderr line by design; it is not a log record"
+)]
 
 use std::io::{self, Write};
 

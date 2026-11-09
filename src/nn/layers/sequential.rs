@@ -27,6 +27,14 @@ impl Module for Sequential {
         }
     }
 
+    /// Forwards to each child, so a child's buffers move too (`PositionalEncoding`'s
+    /// table); the default would move only the parameters (S13).
+    fn to_device(&mut self, device: crate::Device) {
+        for entry in &mut self.layers {
+            entry.layer.to_device(device.clone());
+        }
+    }
+
     fn parameters(&self) -> Vec<Tensor> {
         self.layers
             .iter()

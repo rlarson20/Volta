@@ -16,7 +16,11 @@ struct UnscaleParams {
 @group(0) @binding(3) var<uniform> params: UnscaleParams;
 
 @compute @workgroup_size(256)
-fn amp_unscale(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn amp_unscale(
+    @builtin(global_invocation_id) gid_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let gid = flat_global_id(gid_2d, num_wg);
     let i = gid.x;
     if (i < params.n) {
         st_out(i, ld_grad(i) * params.inv);
