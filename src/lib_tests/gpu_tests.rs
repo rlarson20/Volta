@@ -133,9 +133,10 @@ fn test_matmul_backward_gpu() {
             1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
         ],
         &[3, 4],
-        true,
+        false,
     )
     .to_device(gpu_device.clone());
+    b.set_requires_grad(true);
     let c = a.matmul(&b);
 
     // Forward should be on GPU
@@ -656,7 +657,8 @@ fn test_gpu_binary_backward_broadcast_add() {
         // Test case: (3, 1) + (1, 4) -> (3, 4)
         // a_grad should sum over dim 1: (3, 1)
         // b_grad should sum over dim 0: (1, 4)
-        let a = RawTensor::new(vec![1.0, 2.0, 3.0], &[3, 1], true).to_device(gpu_device.clone());
+        let a = RawTensor::new(vec![1.0, 2.0, 3.0], &[3, 1], false).to_device(gpu_device.clone());
+        a.set_requires_grad(true);
         let b = RawTensor::new(vec![10.0, 20.0, 30.0, 40.0], &[1, 4], false)
             .to_device(gpu_device.clone());
         b.set_requires_grad(true);
@@ -725,7 +727,9 @@ fn test_gpu_binary_backward_broadcast_mul() {
         // Test broadcasting multiplication
         let a = RawTensor::new(vec![1.0, 2.0], &[2, 1], false).to_device(gpu_device.clone());
         a.set_requires_grad(true);
-        let b = RawTensor::new(vec![10.0, 20.0, 30.0], &[1, 3], true).to_device(gpu_device.clone());
+        let b =
+            RawTensor::new(vec![10.0, 20.0, 30.0], &[1, 3], false).to_device(gpu_device.clone());
+        b.set_requires_grad(true);
 
         let c = a.elem_mul(&b);
         c.sum().into_loss().expect("scalar loss").backward();

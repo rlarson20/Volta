@@ -34,7 +34,7 @@ Work that a Linux CPU can verify, and that reviews as a PR. Candidates are open 
 - **Metal-specific evidence:** H5, GPU parity on Apple hardware, GPU speed. Without lavapipe a passing GPU test here was skipped. With lavapipe the GPU tests run on a software Vulkan device: that verifies the kernels' logic and the device-policy paths, not Metal's precision, limits or driver. Say "GPU tests ran on lavapipe" and still hand Metal off as "needs `just test-gpu` on the Mac"; don't close a `needs-mac` issue from the cloud.
 - **Performance and the Accelerate path:** benches, speed claims, and timing thresholds. `bench_matmul_speedup` (`src/lib.rs`) uses the non-Accelerate threshold and may flake on a shared VM. Report it; don't loosen it.
 - **Shader validation** runs anywhere: `just validate-shaders` is `cargo test --lib shader_template` (naga is a dev-dependency).
-- **Git:** never push to `main` or `improvements`, never force-push, never `--no-verify` or `SKIP=`. Branch and target PRs as in "Stacked PRs" below.
+- **Git:** never push to `main` or `improvements`, never force-push, never `--no-verify` or `SKIP=`. Branch and target PRs as in "Pull requests" below.
 
 ## How to work there
 
@@ -44,13 +44,13 @@ Work that a Linux CPU can verify, and that reviews as a PR. Candidates are open 
 - The PR description must say what ran: "CPU-only, Linux, GPU tests skipped", or "GPU tests ran on lavapipe" (with `mesa-vulkan-drivers` installed), and list what was not verified (always Metal).
 - One task per session and per PR. Keep diffs reviewable.
 
-## Stacked PRs
+## Pull requests
 
-Open PRs form one linear stack on `improvements`, used like a sequence of commits: each PR's base is the branch of the PR below it, and only the bottom one targets `improvements`. There are no parallel branches, so no two open PRs can conflict.
+Each PR branches from `improvements` and targets it. Open PRs are independent and can be reviewed and merged in any order; `improvements` merges into `main` at the merge gate (`CLAUDE.md`).
 
-- **Pick the base.** List the open PRs and follow the stack up from `improvements`. Branch from the top PR's branch and open the PR against it. Branch from `improvements` only when no PR is open.
-- **One stack only.** Never open a second PR against `improvements` while one is open, even for an unrelated task. If you find more than one open PR based on `improvements`, stop and ask which is the stack before branching.
-- **Say where it sits.** Start the PR description with "Stacked on #N" and the merge order down to `improvements`, as in #10. A series on one topic also numbers its titles ("(2/3)").
-- **Merge bottom-up** with a merge commit, not squash or rebase: the branches above carry the lower PR's original commits, and a rewritten copy of them is the one way a linear stack can still conflict. After a PR merges, retarget the PR above it to `improvements` (GitHub does it automatically only when the merged branch is deleted).
-- **Fix forward by default.** A follow-up to a lower PR goes in a new PR on top. Change a lower PR only when its own review asks for it; then push to that branch and merge it into each branch above it, bottom-up. Merge, never rebase, since force-push is ruled out above.
-- Each PR still holds one task. Stacking orders reviews; it does not widen a PR.
+- **Branch from `improvements`,** from its current tip, with one branch per task. Don't branch from another open PR's branch.
+- **One task per PR.** Keep the diff reviewable. A follow-up to an open PR is a new PR once that one has merged; before then, push to its branch.
+- **Describe it.** Say what changed and why, write `Fixes #N` for each issue it closes, and list what ran and what was not verified (see above).
+- **Squash-merge** (one commit per PR). Write the squash commit message as a commit message, not a list of the branch's commits.
+- **Conflicts.** If another PR merged first and yours conflicts, bring your branch up to date with `improvements` and resolve it there. In a cloud session, merge `improvements` into your branch; force-pushing is ruled out above. A local session may rebase instead and push with `--force-with-lease`. Never force-push `improvements` or `main`.
+- **Dependent work.** If a task needs another open PR's change, wait for it to merge, or say so in the description and ask before basing a branch on it. A PR whose base isn't `improvements` needs the user's say-so.

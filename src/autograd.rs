@@ -17,7 +17,8 @@ use crate::storage::{Element, Storage};
 use crate::tensor::{MaxDimGradFn, RawTensor, SumDimGradFn, Tensor};
 use half::{bf16, f16};
 use std::cell::Cell;
-use std::collections::HashSet;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 
 // ===== GRADIENT FUNCTIONS =====
@@ -362,10 +363,11 @@ impl RawTensor {
     /// Only reachable through [`ScalarLoss::backward`], which has already checked
     /// that `tensor_ref` has one element and requires grad.
     ///
-    /// 1. Seed this tensor's gradient with 1 (if not already set)
+    /// 1. Seed this tensor's gradient with 1, afresh on every call
     /// 2. Traverse the computation graph backwards (topological sort via DFS)
-    /// 3. For each node, call its `grad_fn` to compute parent gradients
-    /// 4. Accumulate gradients in each parent tensor
+    /// 3. For each op output, call its `grad_fn` on the gradient this pass gave it
+    /// 4. Add each parent's contribution: into `grad` for a leaf, into the pass's own
+    ///    table for an op output (which keeps no `grad`, as in PyTorch)
     pub(crate) fn run_backward(tensor_ref: &Tensor) {
         /// A step of the iterative post-order DFS that builds the topological order.
         enum Action {
@@ -381,16 +383,22 @@ impl RawTensor {
             tensor_ref.borrow().requires_grad,
             "ScalarLoss::backward on a tensor that no longer requires grad"
         );
-        // Initialize gradient if not already set
-        {
-            let mut tensor = tensor_ref.borrow_mut();
-            if tensor.grad.is_none() {
-                // Initialize grad on the same device, and in the same dtype, as this
-                // tensor's data (a gradient has its tensor's dtype).
-                let base = Storage::cpu(vec![1.0]).cast(tensor.data.dtype());
-                let grad_storage = base.to_device(&tensor.device);
-                tensor.grad = Some(grad_storage);
-            }
+        // The gradient of an op output exists only for this pass (PyTorch's rule): it
+        // waits in `pending` until the node's backward step consumes it. Only a leaf keeps
+        // a `grad` across passes, so a second pass sends only its own contribution.
+        let mut pending: HashMap<_, Storage> = HashMap::new();
+
+        // Seed the root with 1, on the root's device and in its dtype (a gradient has its
+        // tensor's dtype). Every pass seeds afresh.
+        let (seed, root_is_leaf) = {
+            let tensor = tensor_ref.borrow();
+            let base = Storage::cpu(vec![1.0]).cast(tensor.data.dtype());
+            (base.to_device(&tensor.device), tensor.grad_fn.is_none())
+        };
+        if root_is_leaf {
+            tensor_ref.accumulate_named(seed, || "backward seed".to_string());
+        } else {
+            pending.insert(tensor_ref.as_ptr(), seed);
         }
 
         // Use a topological sort to ensure we process nodes only after
@@ -430,19 +438,19 @@ impl RawTensor {
         // topo_order has [leaf, ..., root]. We reverse to get [root, ..., leaf].
 
         for tensor in topo_order.into_iter().rev() {
-            let (grad_fn, parents, grad_data, shape, device) = {
+            let (grad_fn, parents, shape, device) = {
                 let t = tensor.borrow();
                 (
                     t.grad_fn.clone(),
                     t.parents.clone(),
-                    t.grad.clone(),
                     t.shape.clone(),
                     t.device.clone(),
                 )
             };
-            // If this node has a gradient function and gradients, backpropagate
+            // A leaf has nothing to propagate: its gradient was added to `grad` as each
+            // contribution arrived. An op output is propagated if anything reached it.
             if let Some(grad_fn) = grad_fn
-                && let Some(grad_out_data) = grad_data
+                && let Some(grad_out_data) = pending.remove(&tensor.as_ptr())
             {
                 let grad_out = Self {
                     data: grad_out_data,
@@ -457,13 +465,27 @@ impl RawTensor {
                 // Compute gradients for parent tensors
                 let parent_grads = grad_fn.backward(&grad_out, &parents);
 
-                // Accumulate gradients in parents. `Tensor::accumulate_grad` is the
-                // only code allowed to write `grad` (device-move + add-or-set), so
-                // backward() just extracts the raw contribution and hands it over.
+                // A leaf parent takes the contribution through `Tensor::accumulate_grad`,
+                // the only code allowed to write `grad` (device-move + add-or-set). An
+                // op-output parent gets the same checks and device move, but the sum waits
+                // in `pending` for its own backward step.
                 for (parent_grad, parent_ref) in parent_grads.into_iter().zip(parents.iter()) {
                     if let Some(g) = parent_grad {
                         let grad_storage = g.borrow().data.clone();
-                        parent_ref.accumulate_grad(grad_storage, &grad_fn);
+                        let parent_is_leaf = parent_ref.borrow().grad_fn.is_none();
+                        if parent_is_leaf {
+                            parent_ref.accumulate_grad(grad_storage, &grad_fn);
+                        } else {
+                            let routed = parent_ref.route_grad(grad_storage, &|| grad_fn.op_name());
+                            match pending.entry(parent_ref.as_ptr()) {
+                                Entry::Vacant(slot) => {
+                                    slot.insert(routed);
+                                }
+                                Entry::Occupied(mut slot) => {
+                                    Self::accumulate_grad(slot.get_mut(), &routed);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -541,9 +563,10 @@ impl Tensor {
 }
 
 impl ScalarLoss {
-    /// Backpropagate from this loss, accumulating into every reachable `grad`.
+    /// Backpropagate from this loss, accumulating into the `grad` of every reachable leaf.
     ///
-    /// Calling it again accumulates into the existing gradients.
+    /// Calling it again adds that pass's gradient to each leaf's existing one. A tensor
+    /// that is the output of an op keeps no `grad`.
     pub fn backward(&self) {
         RawTensor::run_backward(&self.0);
     }
@@ -666,20 +689,55 @@ mod tests {
         let x = RawTensor::new(vec![3.0], &[1], true);
         let loss = x.elem_mul(&x).into_loss().expect("scalar");
         loss.backward();
-        let first = x
-            .grad()
-            .expect("grad")
-            .first()
-            .copied()
-            .expect("one element");
+        assert_eq!(x.grad().expect("grad"), vec![6.0]);
         loss.backward();
-        let second = x
-            .grad()
-            .expect("grad")
-            .first()
-            .copied()
-            .expect("one element");
-        assert!(second > first, "second backward should add to the first");
+        assert_eq!(x.grad().expect("grad"), vec![12.0]);
+    }
+
+    /// Only a leaf keeps a gradient: `b = 2a` and the loss are op outputs, so after a
+    /// backward they hold none (PyTorch's rule without `retain_grad`).
+    #[test]
+    fn op_outputs_keep_no_gradient() {
+        let a = RawTensor::new(vec![1.0], &[1], true);
+        let two = RawTensor::new(vec![2.0], &[1], false);
+        let b = a.elem_mul(&two);
+        let loss = b.sum().into_loss().expect("scalar");
+        loss.backward();
+        assert_eq!(a.grad().expect("leaf grad"), vec![2.0]);
+        assert!(b.grad_storage().is_none(), "intermediate kept a grad");
+        assert!(loss.tensor().grad_storage().is_none(), "root kept a grad");
+    }
+
+    /// A root that is itself a leaf is seeded with 1 on each pass and accumulates, as in
+    /// PyTorch (`x.sum().backward()` on a one-element leaf twice gives 2).
+    #[test]
+    fn leaf_root_accumulates_its_seed() {
+        let x = RawTensor::new(vec![5.0], &[1], true);
+        let loss = x.clone().into_loss().expect("scalar");
+        loss.backward();
+        assert_eq!(x.grad().expect("grad"), vec![1.0]);
+        loss.backward();
+        assert_eq!(x.grad().expect("grad"), vec![2.0]);
+    }
+
+    /// An intermediate reached by two consumers sums both contributions within one pass,
+    /// and a second pass adds the same total again rather than re-sending the first.
+    #[test]
+    fn shared_intermediate_sums_within_a_pass_and_adds_per_pass() {
+        // b = 2a; loss = sum(b) + sum(3b); d loss / da = 2 + 6 = 8 per pass.
+        let a = RawTensor::new(vec![1.0], &[1], true);
+        let two = RawTensor::new(vec![2.0], &[1], false);
+        let three = RawTensor::new(vec![3.0], &[1], false);
+        let b = a.elem_mul(&two);
+        let loss = b
+            .sum()
+            .add(&b.elem_mul(&three).sum())
+            .into_loss()
+            .expect("scalar");
+        loss.backward();
+        assert_eq!(a.grad().expect("grad"), vec![8.0]);
+        loss.backward();
+        assert_eq!(a.grad().expect("grad"), vec![16.0]);
     }
 
     /// A reshape shares its input's buffer (copy-on-write storage), so an in-place

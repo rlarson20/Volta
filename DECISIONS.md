@@ -13,7 +13,21 @@ Updated: 2026-11-02
 
 Recursive DFS risks stack overflow on deep computation graphs. Iterative DFS with an explicit stack avoids this. The `HashSet` ensures each node is processed once — critical for diamond-shaped graphs where multiple paths converge on a shared ancestor.
 
-**Diamond graphs:** When two downstream nodes share an upstream node, that node's `.grad` receives contributions from both paths. The engine handles this by _accumulating_ (summing) gradients at each node rather than overwriting. This is mathematically correct: partial derivatives from all downstream paths sum to give the total gradient.
+**Diamond graphs:** When two downstream nodes share an upstream node, that node receives contributions from both paths. The engine handles this by _accumulating_ (summing) them at each node rather than overwriting (in the pass's own table for an op output, in `grad` for a leaf; see "Only leaves keep a gradient"). This is mathematically correct: partial derivatives from all downstream paths sum to give the total gradient.
+
+---
+
+### Only leaves keep a gradient (S1)
+
+**Decision:** `run_backward` keeps the gradient of an op output in a table that lives for one pass. Only a leaf has its `grad` written, by `Tensor::accumulate_grad`, so a second `backward()` adds only its own contribution. The root is seeded with 1 on every pass. This is PyTorch's rule: `.grad` of a non-leaf is `None` unless `retain_grad()` was called, and there is no `retain_grad` here.
+
+**Before:** every node's incoming gradient was accumulated into its `grad`, and a node's whole `grad` was what it sent to its parents. Nothing cleared an intermediate, so a second pass re-sent the first pass's gradient: `sum(2a)` twice gave `a.grad = 6` (torch 4), and two losses through `b = 2a` gave 10 (torch 8). The root escaped only because it was seeded "if not already set" and never accumulated into. `examples/time_sequence.rs`, which carries LSTM state across timesteps and calls `backward()` each step, counted earlier steps again on every pass.
+
+**Rejected: clear each intermediate's `grad` after its backward step.** It fixes the numbers, but an op output still has a `grad` for a moment, so it is observable mid-pass and stale if a pass panics. It also makes "who clears `grad`" two answers (invariant 3 says `zero_grad` only).
+
+**Consequences:** a test that read an op output's gradient must read the leaf. The main case is a CPU leaf moved with `to_device`: the copy is an op output, so its gradient comes back on the source leaf (see "`to_device` is a differentiable op"). A GPU leaf is made by moving a tensor that doesn't require grad and then marking it.
+
+**Tests:** `tests/sweep_repros.rs` (`second_backward_through_an_intermediate_adds_only_the_new_gradient`, `two_losses_sharing_an_intermediate_sum_their_gradients`) and `autograd::tests` (`backward_twice_accumulates` with exact values, `op_outputs_keep_no_gradient`, `leaf_root_accumulates_its_seed`, `shared_intermediate_sums_within_a_pass_and_adds_per_pass`).
 
 ---
 
