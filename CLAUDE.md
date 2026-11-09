@@ -10,9 +10,9 @@ In a cloud session (Linux, `CLAUDE_CODE_REMOTE` set, no `rtk`, no GPU), read `de
 
 Update this section when a phase lands or the merge gate changes. Keep it short; what landed is in the commit log and `DECISIONS.md`.
 
-- **Roadmap:** `docs/plans/ADDENDUM.md` § Sequencing is the only plan. Phases 0–3 are done. Phase 5 (dtypes and mixed precision, ADDENDUM §11, PRs P0–P8) is implemented as a stack of open PRs (#19–#28), merged bottom-up; it comes before Phase 4 and before the merge. Phase 4 (arena graph, sealed `Backend` trait, proptest DAG checks) is optional and comes last.
-- **Open work:** `notes/TODO.md` lists only what is open, including the 2026-11 sweep (`docs/audits/2026-11-sweep.md`): defects found by checking against PyTorch, each with an `#[ignore = "S<n>: ..."]` test, and the post-Phase-5 audit (`docs/audits/2026-11-post-phase5.md`: `A<n>` repros in `tests/audit_repros.rs`). PyTorch fixtures are regenerated with `just torch-fixtures` (needs `uv`). The defect IDs B1–B5 and H1–H8 (`docs/audits/OPUS_5_EVAL_AUDIT.md`) are all fixed; the audits are frozen records.
-- **Merge gate:** cleared. The library documents every item (`missing_docs` and `missing_docs_in_private_items` are `deny`), and `just ci` passes. `improvements` can merge into `main` once the other TODO items are done, including Phase 5 and the correctness items from the 2026-11 sweep (`notes/TODO.md`, "Correctness: found by the 2026-11 sweep"). Those are open defects, not features, so the gate is not cleared until they are fixed or deliberately deferred.
+- **Roadmap:** `docs/plans/ADDENDUM.md` § Sequencing defines the phases. Phases 0–3 and 5 (dtypes and mixed precision, PRs #19–#28) are done. Phase 4 (arena graph, sealed `Backend` trait, proptest DAG checks) is optional and comes last.
+- **Open work lives in [GitHub issues](https://github.com/rlarson20/Volta/issues), nowhere else.** Each defect ID (`S<n>`, `A<n>`) has one issue naming its `#[ignore = "S<n>: ..."]` repro and its audit section. Pick work with `is:open label:P0 -label:blocked` (then P1, ...). The audits in `docs/audits/` are frozen evidence, not status. PyTorch fixtures are regenerated with `just torch-fixtures` (needs `uv`).
+- **Merge gate:** `improvements` merges into `main` when every [`merge-gate`](https://github.com/rlarson20/Volta/issues?q=is%3Aopen+label%3Amerge-gate) issue is closed (fixed, or closed as not planned with a reason). `just ci` passes and the library documents every item.
 
 ## Invariants
 
@@ -56,9 +56,9 @@ Read these when the need comes up; don't preload them.
 | Need | Read |
 | --- | --- |
 | Why something is designed the way it is | `DECISIONS.md` |
-| What's in scope now; what's next | ADDENDUM § Sequencing + `notes/TODO.md` |
+| What's open; what's next | [GitHub issues](https://github.com/rlarson20/Volta/issues) (labels `P0`–`P3`, `merge-gate`, `blocked`, `needs-mac`) |
 | Evidence and repro for a defect ID | `docs/audits/` |
-| Feature ideas after Phase 2 | `docs/backlog.md` (don't start these unprompted) |
+| Feature ideas | Issues labeled `kind:feature` (don't start these unprompted) |
 | Step-by-step: adding an op or layer | `dev-docs/DEVELOPMENT.md` |
 | Conv algorithms and selection | `dev-docs/CONV2D_IMPLEMENTATION.md` |
 | What's valid in a cloud session; Linux/no-GPU differences | `dev-docs/CLOUD.md` |
@@ -67,6 +67,7 @@ Read these when the need comes up; don't preload them.
 
 When you're corrected or discover something non-obvious, file it in exactly one place:
 
+- **A defect, task, or idea** goes in a GitHub issue (one per defect ID, with labels `kind:`, `area:`, `P0`–`P3`, `size:`), never in a file. Search open issues first.
 - **A rule for one area** goes in the matching `.claude/rules/*.md`.
 - **A repo-wide rule** goes under Invariants above. Keep that list at 10 or fewer and merge items rather than append.
 - **Why a decision was made, or what was tried and rejected** goes in a `DECISIONS.md` entry.
@@ -74,4 +75,12 @@ When you're corrected or discover something non-obvious, file it in exactly one 
 
 ## Scope
 
-Stay inside the current phase. Backlog features, refactors from later phases, and "while I'm here" cleanups get proposed as a line in `notes/TODO.md`, not implemented.
+Stay inside the current phase. Backlog features, refactors from later phases, and "while I'm here" cleanups get proposed as a new issue, not implemented.
+
+## Working an issue
+
+- A PR that fixes an issue says `Fixes #N` in its body; merging closes the issue. One PR may close several, each with its own `Fixes`.
+- Finished without a PR (an investigation, a refuted defect): comment the result on the issue and close it (`completed` or `not planned`, with the reason).
+- Found something new mid-task: open an issue for it and keep it out of the current PR.
+- Skip `needs-mac` issues in a cloud session; they need the M2's Metal backend to verify.
+- When a fix removes an `#[ignore = "S<n>: ..."]`, the PR closes the issue that names `S<n>`.

@@ -2,7 +2,7 @@
 
 This document provides detailed architecture documentation for the Volta deep learning framework.
 
-TODO: UPDATE THIS WITH PHASE 1 CHANGES
+> **Possibly stale:** written before Phases 1–5; see [#86](https://github.com/rlarson20/Volta/issues/86). Check claims against the code and `DECISIONS.md`.
 
 ## Core Design Philosophy
 
@@ -177,7 +177,7 @@ pub struct GpuBuffer {
   - Backward passes (input and weight gradients) for all three algorithms
   - Auto-selection prefers iGEMM on GPU for inputs >1M elements
 
-**❌ Gaps** (a panic under `DevicePolicy::Strict`, CPU under `PreferGpu`; the full list is in `notes/TODO.md`, "Kernel gaps that `Strict` rejects"):
+**❌ Gaps** (a panic under `DevicePolicy::Strict`, CPU under `PreferGpu`; the full list is in [#67](https://github.com/rlarson20/Volta/issues/67)):
 
 - Broadcasting binary ops, forward and backward (`Linear`'s bias add, the norm layers, GELU's constants)
 - `sum_dim`/`max_dim` (so softmax and the norms), batched and 1-D `matmul`, movement above rank 4

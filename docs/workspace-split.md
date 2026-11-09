@@ -59,7 +59,7 @@ Invariant 3 ("only `accumulate_grad` and `set_grad` write `grad`") is broken tod
 1. **Now:** do step 0 (in-crate layering) as ordinary TODO items. Do not create a workspace.
 2. **Revisit when any one of these is true:**
    - The Phase 4 `Backend` trait lands. This is the expected trigger.
-   - A second in-repo consumer appears, for example the WASM binding moving into this repo as its own crate (`notes/TODO.md` wasm32 item).
+   - A second in-repo consumer appears, for example the WASM binding moving into this repo as its own crate (issue #64, wasm32).
    - An incremental `cargo build --tests` after a one-line edit in `nn` regularly takes over about 30 s on the Mac. Measure it; don't go by feel.
 3. **When triggered,** follow the plan below. The plan is written so that step 0 is useful even if no trigger ever fires.
 
@@ -96,7 +96,7 @@ The dependency direction is `volta` → {`nn`, `data`, `wgpu`} → `core`. `volt
 - **0c. Give `nn` the methods it reaches around.** Route the three `zero_grad`s through the existing `RawTensor::zero_grad` and name it in invariant 3 (or make it go through `set_grad`). Add `Tensor` methods for the optimizer's in-place parameter update, `requires_grad` on construction, and BatchNorm's running stats. Then remove `borrow_mut()` from `nn` (fixes invariant 2). Target: no `.borrow`, `edge(`, or `crate::index` in non-test `nn` code. Several PRs, one per layer family.
 - **0d. Lock it in.** Add a script check in `just ci` that fails on `crate::autograd`, `edge(`, or `borrow_mut()` in non-test `src/nn/**`, the same mechanism as `check-fallbacks`. Once this passes, `nn` uses only the public API and the eventual move is a file move.
 
-Each item needs a line in `notes/TODO.md`. 0c's invariant-3 fix is worth doing whatever happens to the split.
+Each item needs an issue. 0c's invariant-3 fix is worth doing whatever happens to the split.
 
 ### Step 1: convert to a workspace (after the trigger)
 

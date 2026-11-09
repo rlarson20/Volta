@@ -995,7 +995,8 @@ fn bench_matmul_speedup() {
     let _ = RawTensor::matmul_raw(&a, &b, 256, 256, 256);
     let duration = start.elapsed();
 
-    println!("256x256 matmul: {duration:?}");
+    // `just bench-matmul` parses this line; keep the unit fixed at ms.
+    println!("256x256 matmul: {:.3}ms", duration.as_secs_f64() * 1e3);
     let max_duration_ms: u128 = if cfg!(all(feature = "accelerate", target_os = "macos")) {
         if cfg!(debug_assertions) { 50 } else { 10 }
     } else if cfg!(debug_assertions) {

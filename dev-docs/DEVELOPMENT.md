@@ -33,7 +33,7 @@ Every op ends in `edge()`, the only function that attaches `parents` and `grad_f
 3. Build the output from graph ops or `edge()`. A layer that holds a fixed non-parameter tensor overrides `Module::to_device` to move it, and builds constants with `x.constant_like(..)` so they land on the input's device.
 4. `load_state_dict` goes through `Tensor::load_weight`, which checks the shape and keeps the destination's device.
 5. Add an `assert_trainable!` test with its input from `crate::macros::trainable_input(&shape)`, plus value tests against a hand-computed or reference result.
-6. Add an example in `examples/` if the layer is complex. Examples must not route around a broken component; file the defect in `notes/TODO.md` instead.
+6. Add an example in `examples/` if the layer is complex. Examples must not route around a broken component; file the defect as a GitHub issue instead.
 
 ## Errors: panic or `Result`
 

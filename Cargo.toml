@@ -174,7 +174,7 @@ missing_fields_in_debug = "deny"       # Include all fields in Debug implementat
 
 # Leftover debugging and unsafe hygiene
 dbg_macro = "deny"                  # No dbg! left in committed code
-todo = "deny"                       # Track work in notes/TODO.md, not todo!()
+todo = "deny"                       # Track work in GitHub issues, not todo!()
 unimplemented = "deny"              # Same: no unimplemented!() stubs
 undocumented_unsafe_blocks = "deny" # Every unsafe block states its SAFETY invariant
 

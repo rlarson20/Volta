@@ -610,10 +610,11 @@ Ordered by prevention-per-risk; each phase compiles and ships independently.
 
 | Phase                 | Contents                                                                                        | Prevents                           | Size                |
 | --------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------- | ------------------- |
-| 5 — dtypes, before 4 and `main` | Dtypes and mixed precision (§11), P0–P8 | decorative dtype, silent casts | multi-week |
 | 4 — endgame, optional | Arena graph (§6); `Backend` trait (§3.5); proptest DAG checks (§10.2) if not already in phase 2 | cycles, `Send`, memory determinism | multi-week, do last |
 
-Phases 0–3 (done) retire every prevention target that maps to a Part I blocker.
+Status of each phase lives in the GitHub issues (Phase 4: the `phase-4` label); this table only defines the phases.
+
+Phases 0–3 and 5 (done) retire every prevention target that maps to a Part I blocker.
 The arena (§6) is the only genuinely architectural bet,
 and it gets cheaper every phase that lands before it.
 
@@ -623,6 +624,7 @@ and it gets cheaper every phase that lands before it.
 | 1 — the invariant wall | Opaque `Tensor` + §1.4 `edge()` constructor + `NoGrad` (§1.1, 1.4, 1.5); `assert_trainable!` across all layers (§5.3) | B1/B2/B3 class, graph surgery | ~1 week, mechanical churn |
 | 2 — types for dims and ops | `Shape`/`Axis`/`Strides` (§1.2); specs replace positional args (§1.3); `GradFn` enum (§2.5); `define_ops!` (§5.1); `PadValue` (§2.4); `into_loss` (§2.2) | B4 class, forward/backward/kernel drift, H1 | ~1–2 weeks |
 | 3 — traits and storage | Sealed + split traits w/ trybuild (§3); `DevicePolicy` (§2.1); storage `Arc`/`OnceCell`/no-Deref (§7), the matmul layout contract (§7), and the `RawTensor.shape` → `Shape` flip; indexing policy + `fetch` (§8) | H3/H6/H8, silent fallback, clone economy, silent zeros | \~2 weeks |
+| 5 — dtypes (PRs #19–#28) | Dtypes and mixed precision (§11), P0–P8 | decorative dtype, silent casts | multi-week |
 
 **Deviations from the sketches above.** Each phase departed from the sketches in this document in places (the `edge()` signature, `NO_GRAD` as a depth counter, `Window2dSpec`, `PadValue`'s constructors, a `Result` from `into_loss` rather than `backward`, `DevicePolicy` as a scoped guard with no `CpuOnly`, and so on). They were made while implementing, and the reasons are recorded in `DECISIONS.md`, one entry per decision: "`edge()`", "`NO_GRAD` as a reentrant depth counter", "`assert_trainable!`", "Conv-family specs", "MatmulSpec", "PadValue", "`define_ops!` for unary and binary ops", "`into_loss` / `ScalarLoss`", "Closed `GradFn` enum", "Split layer traits", "`RawTensor.shape` is a `Shape`", "Indexing policy", and "`DevicePolicy`". Where this document and `DECISIONS.md` disagree, `DECISIONS.md` is right, and the section numbers above stay as stable names for the ideas.
 
