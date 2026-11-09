@@ -109,15 +109,17 @@ impl Tensor {
     ///
     /// `VoltaError::StateShapeMismatch` if `src.shape` differs from this tensor's shape,
     /// `VoltaError::StateDataLength` if `src.data.len()` does not match it, and
-    /// `VoltaError::DTypeMismatch` if this tensor is not f32 (`TensorData` holds f32).
+    /// `VoltaError::DTypeMismatch` if this tensor is not a float dtype. The f32 values are
+    /// cast to this tensor's dtype (exact for f64), as PyTorch's `load_state_dict` does.
     /// `name` is the state-dict key, reported in the error. Nothing is written on error.
     pub(crate) fn load_weight(&self, name: &str, src: &crate::io::TensorData) -> Result<()> {
         let mut t = self.inner.borrow_mut();
-        // `TensorData` is f32; loading it into another dtype would convert silently.
-        if t.data.dtype() != DType::F32 {
+        // `TensorData` is f32 and is cast to the destination's dtype below, as PyTorch's
+        // `load_state_dict` (`copy_`) does. Only a float destination can be a parameter.
+        if !t.data.dtype().is_float() {
             return Err(VoltaError::DTypeMismatch {
-                expected: t.data.dtype(),
-                actual: DType::F32,
+                expected: DType::F32,
+                actual: t.data.dtype(),
             });
         }
         // `TensorData.shape` is the serialized `Vec`; compare it at the io boundary.
@@ -136,7 +138,7 @@ impl Tensor {
                 len: src.data.len(),
             });
         }
-        let cpu = Storage::cpu(src.data.clone());
+        let cpu = Storage::cpu(src.data.clone()).cast(t.data.dtype());
         t.data = cpu.to_device(&t.device);
         Ok(())
     }
@@ -145,6 +147,43 @@ impl Tensor {
     #[must_use]
     pub fn data(&self) -> Vec<f32> {
         self.inner.borrow().data.to_f32_vec()
+    }
+
+    /// Converts this tensor's data, and its gradient if any, to `dtype` in place, keeping
+    /// it in the graph: the parameter cast behind [`crate::nn::Module::to_dtype`]. Values
+    /// follow [`Storage::cast`].
+    ///
+    /// # Panics
+    /// If the tensor is on the GPU and `dtype` is not F32 (GPU storage is f32-only until
+    /// ADDENDUM §11 P8), or `dtype` is not a float dtype while the tensor requires grad.
+    #[track_caller]
+    pub(crate) fn cast_in_place(&self, dtype: DType) {
+        let mut t = self.inner.borrow_mut();
+        assert!(
+            !t.requires_grad || dtype.is_float(),
+            "to_dtype: {}",
+            VoltaError::NotDifferentiable { dtype }
+        );
+        t.data = t.data.cast(dtype);
+        t.grad = t.grad.as_ref().map(|g| g.cast(dtype));
+    }
+
+    /// This tensor's data in its own dtype, without conversion: the lossless counterpart of
+    /// [`Self::data`] (which decodes to `f32`). `T` names the dtype, e.g.
+    /// `t.to_vec_as::<f64>()`. A GPU tensor is copied to the host.
+    ///
+    /// # Errors
+    ///
+    /// `VoltaError::DTypeMismatch` if `T` is not this tensor's dtype. Use
+    /// [`Self::to_dtype`] first to convert on purpose.
+    pub fn to_vec_as<T: Element>(&self) -> Result<Vec<T>> {
+        let t = self.inner.borrow();
+        let host = if t.data.is_gpu() {
+            t.data.to_device(&Device::CPU)
+        } else {
+            t.data.clone()
+        };
+        host.as_host::<T>().map(<[T]>::to_vec)
     }
 
     /// The value of a single-element tensor, decoded to `f32` regardless of dtype/device.
@@ -349,32 +388,6 @@ pub struct RawTensor {
     pub device: Device,
 }
 
-/// Panics unless every input is f32, naming the op: the f32-only check of the layers and
-/// optimizers whose kernels are not dtype-generic yet (ADDENDUM §11 P3b). Called at the
-/// entry, before any work, so the message names the op rather than a kernel read. Core ops
-/// use `real::compute_dtype` instead.
-///
-/// # Panics
-/// If an input's dtype is not F32.
-#[track_caller]
-pub(crate) fn expect_f32(op: impl FnOnce() -> String, inputs: &[&Tensor]) {
-    if let Some((i, dtype)) = inputs
-        .iter()
-        .map(|t| t.dtype())
-        .enumerate()
-        .find(|&(_, d)| d != DType::F32)
-    {
-        panic!(
-            "{}: {} (input {i}); this op computes in f32 only until ADDENDUM §11 P3b",
-            op(),
-            VoltaError::DTypeMismatch {
-                expected: DType::F32,
-                actual: dtype,
-            }
-        );
-    }
-}
-
 // ===== RNG HELPERS =====
 
 thread_local! {
@@ -564,6 +577,7 @@ impl RawTensor {
     /// # Panics
     ///
     /// If `data.len()` != `shape.numel()`.
+    #[cfg(test)]
     pub(crate) fn from_shape(data: Vec<f32>, shape: Shape, requires_grad: bool) -> Tensor {
         Self::new_with_storage(Storage::cpu(data), shape, Device::CPU, requires_grad)
     }
@@ -1419,12 +1433,37 @@ impl RawTensor {
             .backward();
         saved.restore();
 
-        let analytical_grad = tensor.grad().expect("Tensor must have gradient");
-        let mut numerical_grad = vec![0.0; analytical_grad.len()];
+        // Everything below is in f64: the gradient and the losses are widened exactly, and
+        // the input is perturbed in its own dtype (f32 or f64), so an f64 tensor gets an
+        // f64-accurate check.
+        let analytical_grad: Vec<f64> = tensor
+            .grad_storage()
+            .expect("Tensor must have gradient")
+            .cast(DType::F64)
+            .as_host::<f64>()
+            .expect("cast to f64")
+            .to_vec();
+        let mut numerical_grad = vec![0.0f64; analytical_grad.len()];
 
         let original_data = tensor.borrow().data.clone();
         let original_shape = tensor.borrow().shape.clone();
         let requires_grad = tensor.borrow().requires_grad;
+        let dtype = compute_dtype(|| "check_gradients".to_string(), &[original_data.dtype()]);
+        let loss_value = |loss: &Tensor| {
+            let l = loss.borrow();
+            assert!(
+                !l.data.is_empty(),
+                "check_gradients: loss must be scalar, got shape {:?}",
+                l.shape
+            );
+            fetch(
+                l.data
+                    .cast(DType::F64)
+                    .as_host::<f64>()
+                    .expect("cast to f64"),
+                0,
+            )
+        };
 
         // Compute numerical gradient for each element. These perturbed forward passes
         // are for finite-difference comparison only — scoped in `no_grad()` so they
@@ -1432,49 +1471,35 @@ impl RawTensor {
         // (ADDENDUM.md §1.5).
         {
             let _no_grad = crate::autograd::no_grad();
-            for i in 0..original_data.len() {
-                //f(x + epsilon)
-                let mut data_plus = original_data.clone();
-                *slot(
-                    data_plus
-                        .as_host_f32_mut()
-                        .expect("check_gradients: CPU F32 input"),
-                    i,
-                ) += epsilon;
-                let tensor_plus =
-                    Self::from_shape(data_plus.to_vec(), original_shape.clone(), requires_grad);
-                let loss_plus = loss_fn(&tensor_plus);
-                assert!(
-                    !loss_plus.borrow().data.is_empty(),
-                    "check_gradients: loss must be scalar, got shape {:?}",
-                    loss_plus.borrow().shape
-                );
-                let val_plus = fetch(loss_plus.borrow().data.to_host_f32(), 0);
-
-                let mut data_minus = original_data.clone();
-                *slot(
-                    data_minus
-                        .as_host_f32_mut()
-                        .expect("check_gradients: CPU F32 input"),
-                    i,
-                ) -= epsilon;
-                let tensor_minus =
-                    Self::from_shape(data_minus.to_vec(), original_shape.clone(), requires_grad);
-                let loss_minus = loss_fn(&tensor_minus);
-                assert!(
-                    !loss_minus.borrow().data.is_empty(),
-                    "check_gradients: loss must be scalar, got shape {:?}",
-                    loss_minus.borrow().shape
-                );
-                let val_minus = fetch(loss_minus.borrow().data.to_host_f32(), 0);
-                //central diff
-                *slot(&mut numerical_grad, i) = (val_plus - val_minus) / (2.0 * epsilon);
-            }
+            dispatch_real!(dtype, T => {
+                let step = T::from_f64(f64::from(epsilon));
+                let perturbed = |i: usize, up: bool| {
+                    let mut data = original_data.clone();
+                    let x = slot(
+                        data.as_host_mut::<T>()
+                            .expect("check_gradients: CPU float input"),
+                        i,
+                    );
+                    if up {
+                        *x += step;
+                    } else {
+                        *x -= step;
+                    }
+                    Self::new_with_storage(data, original_shape.clone(), Device::CPU, requires_grad)
+                };
+                for i in 0..original_data.len() {
+                    let val_plus = loss_value(&loss_fn(&perturbed(i, true)));
+                    let val_minus = loss_value(&loss_fn(&perturbed(i, false)));
+                    //central diff
+                    *slot(&mut numerical_grad, i) =
+                        (val_plus - val_minus) / (2.0 * f64::from(epsilon));
+                }
+            });
         }
 
-        // Compute errors
-        let mut max_error: f32 = 0.0;
-        let mut total_error: f32 = 0.0;
+        // Compute errors (in f64; reported as f32, the signature's type)
+        let mut max_error: f64 = 0.0;
+        let mut total_error: f64 = 0.0;
 
         for (i, (&analytical, &numerical)) in
             analytical_grad.iter().zip(&numerical_grad).enumerate()
@@ -1489,17 +1514,21 @@ impl RawTensor {
             max_error = max_error.max(relative_error);
             total_error += relative_error;
 
-            if relative_error > tolerance {
+            if relative_error > f64::from(tolerance) {
                 log::debug!(
                     "Gradient mismatch at index {i}: analytical={analytical:.6e}, numerical={numerical:.6e}, error={relative_error:.6e}",
                 );
             }
         }
 
-        let mean_error = total_error / analytical_grad.len() as f32;
-        let passed = max_error < tolerance;
+        let mean_error = total_error / analytical_grad.len() as f64;
+        let passed = max_error < f64::from(tolerance);
 
-        (max_error, mean_error, passed)
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "the errors are reported in the signature's f32"
+        )]
+        (max_error as f32, mean_error as f32, passed)
     }
 
     /// Simplified gradient checker with default parameters
@@ -2423,29 +2452,33 @@ mod load_weight_dtype_tests {
     use super::*;
     use crate::io::TensorData;
 
-    /// `TensorData` is f32: loading it into an f64 tensor is refused, not converted, and
-    /// the tensor keeps its values.
+    /// `TensorData` is f32: loading it into an f64 tensor casts the values (exactly), as
+    /// PyTorch's `load_state_dict` does, and keeps the tensor f64.
     #[test]
-    fn load_weight_refuses_a_non_f32_tensor() {
+    fn load_weight_casts_to_the_destination_dtype() {
         let t = RawTensor::from_typed(vec![1.0f64, 2.0], &[2]);
+        let src = TensorData {
+            data: vec![0.1, 6.0],
+            shape: vec![2],
+        };
+        t.load_weight("w", &src).expect("f64 destination");
+        assert_eq!(t.dtype(), DType::F64);
+        assert_eq!(
+            t.to_vec_as::<f64>().expect("f64"),
+            vec![f64::from(0.1f32), 6.0]
+        );
+    }
+
+    /// An integer tensor is not a parameter: loading into one is an error.
+    #[test]
+    fn load_weight_refuses_an_integer_tensor() {
+        let t = RawTensor::from_typed(vec![1i64, 2], &[2]);
         let src = TensorData {
             data: vec![5.0, 6.0],
             shape: vec![2],
         };
-        let err = t.load_weight("w", &src).expect_err("f64 destination");
-        assert!(
-            matches!(
-                err,
-                VoltaError::DTypeMismatch {
-                    expected: DType::F64,
-                    actual: DType::F32
-                }
-            ),
-            "{err}"
-        );
-        assert_eq!(
-            t.borrow().data.as_host::<f64>().expect("still f64"),
-            &[1.0, 2.0]
-        );
+        let err = t.load_weight("w", &src).expect_err("i64 destination");
+        assert!(matches!(err, VoltaError::DTypeMismatch { .. }), "{err}");
+        assert_eq!(t.to_vec_as::<i64>().expect("i64"), vec![1, 2]);
     }
 }

@@ -27,7 +27,7 @@ This project is an educational endeavor to demystify the inner workings of moder
 - **Optimizers:** `SGD` (momentum + weight decay), `Adam` (bias-corrected + weight decay), and experimental `Muon`.
 - **External Model Loading:** Load weights from PyTorch, HuggingFace, and other frameworks via `StateDictMapper` with automatic weight transposition and key remapping. Supports SafeTensors format.
 - **Named Layers:** Human-readable state dict keys with `Sequential::builder()` pattern for robust serialization.
-- **SafeTensors dtypes:** f16, bf16, f64, i32, i64, u8, and bool files load (converted to f32); the core ops compute in f32 or f64; layers, optimizers, and the GPU are f32-only. Mixed precision is in progress (`docs/plans/ADDENDUM.md` §11).
+- **SafeTensors dtypes:** f16, bf16, f64, i32, i64, u8, and bool files load (converted to f32); every op, layer, and optimizer computes in f32 or f64 on the CPU (`Module::to_dtype(DType::F64)` converts a model); the GPU is f32-only. Mixed precision is in progress (`docs/plans/ADDENDUM.md` §11).
 - **IO System:** Save and load model weights (state dicts) via `bincode` or SafeTensors format.
 - **BLAS Acceleration (macOS):** Optional acceleration for matrix multiplication via Apple's Accelerate framework.
 - **GPU Acceleration:** Experimental WGPU-based GPU support for core tensor operations (elementwise, matmul, reductions, movement ops) with automatic backward pass on GPU.
@@ -410,7 +410,7 @@ The next major steps for Volta are focused on expanding its capabilities to hand
 
 - **Conv2d Memory Inefficiency**: `im2col` implementation in `src/nn/layers/conv.rs` materializes the entire matrix in memory. Large batch sizes or high-resolution images will easily OOM even on high-end machines. Somewhat mitigated through algorithm selection in convolutional layer.
 - **GPU Kernel Efficiency**: Current GPU matmul uses naive implementation without shared memory tiling. Significant performance gains possible with optimized GEMM kernels.
-- **f32 and f64 only, partly**: tensors of every dtype can be built, read back, and cast (`RawTensor::from_typed`, `to_dtype`). The core ops (elementwise, reductions, movement, matmul) compute in f32 or f64; layers, optimizers, and GPU kernels are f32-only, and an op panics on a dtype it has no kernel for. Half precision and mixed precision are planned (`docs/plans/ADDENDUM.md` §11).
+- **f32 and f64 only**: tensors of every dtype can be built, read back (`to_vec_as`), and cast (`RawTensor::from_typed`, `to_dtype`). Every op, layer, and optimizer computes in f32 or f64 on the CPU, and `Module::to_dtype` converts a model; GPU kernels are f32-only, and an op panics on a dtype it has no kernel for. A non-f32 model cannot be saved yet (`state_dict` is f32). Half precision and mixed precision are planned (`docs/plans/ADDENDUM.md` §11).
 - **Single-threaded**: Uses `Rc<RefCell>` instead of `Arc<Mutex>`, limiting to single-threaded execution on CPU.
 
 ## Contributing

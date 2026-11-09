@@ -34,6 +34,9 @@ Evidence, measured numbers, and the refuted claims are in `docs/audits/2026-11-s
 
 - [ ] **`RawTensor::contiguous` detaches.** It copies the data into a new leaf that takes `requires_grad` from its input, so a gradient through it never reaches the input (invariant 1: outputs come from `edge()`). No caller in the repo uses it. Make it a differentiable identity (a `Movement` reshape to the same shape) or remove it. Found 2026-11-03 while making it dtype-generic (Phase 5 P3).
 
+- [ ] **A non-f32 model cannot be saved.** `state_dict()` panics in `TensorData::from_tensor` for an f64 (later f16/bf16) parameter, because `TensorData` holds f32. Give `TensorData` a dtype (a bincode format change; safetensors already carries one), or save through `save_safetensors_typed`. Loading already casts. Found in Phase 5 P3b.
+- [ ] **Optimizer state is allocated at construction** in each parameter's dtype and device, so converting a model (`to_dtype`, `to_device`) after building its optimizer panics on the first step. S17 is the device half; allocate state lazily on the first step for both.
+
 ## GPU
 
 - [ ] **Kernel gaps that `Strict` rejects.** Each one panics under `Strict` and runs on the CPU under `PreferGpu`: binary ops with differing (broadcast) shapes, forward and backward (`Linear`'s bias add, `mean_dim`'s divide); batched and vector (1-D) `matmul`, forward and backward; `transpose`; `sum_dim`; `max_dim` (and so `softmax`/`log_softmax`); `mul_acc` backward; movement ops above rank 4. With no GPU path at all: `Embedding`, `MaxPool2d`, `ConvTranspose2d`, `Where`. A kernel for any of these drops its name out of an `expect_gaps` assertion.

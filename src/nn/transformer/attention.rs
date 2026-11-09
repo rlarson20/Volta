@@ -1,5 +1,5 @@
 use crate::shape::Axis;
-use crate::tensor::{RawTensor, Tensor};
+use crate::tensor::Tensor;
 
 /// Scaled Dot-Product Attention
 ///
@@ -118,7 +118,7 @@ impl ScaledDotProductAttention {
 
         // Apply causal mask if requested
         let scores = if causal {
-            let causal = self.create_causal_mask(seq_len, query.borrow().device.clone());
+            let causal = self.create_causal_mask(seq_len, query);
             scores.add(&causal)
         } else {
             scores
@@ -138,8 +138,9 @@ impl ScaledDotProductAttention {
         attention_weights.matmul(value)
     }
 
-    /// Additive mask `[seq_len, seq_len]`: `-inf` above the diagonal, 0 elsewhere, on `device`.
-    fn create_causal_mask(&self, seq_len: usize, device: crate::Device) -> Tensor {
+    /// Additive mask `[seq_len, seq_len]`: `-inf` above the diagonal, 0 elsewhere, on
+    /// `like`'s device and in its dtype.
+    fn create_causal_mask(&self, seq_len: usize, like: &Tensor) -> Tensor {
         let mut mask_data = Vec::with_capacity(seq_len * seq_len);
         for i in 0..seq_len {
             for j in 0..seq_len {
@@ -151,13 +152,14 @@ impl ScaledDotProductAttention {
                 }
             }
         }
-        RawTensor::new(mask_data, &[seq_len, seq_len], false).to_device(device)
+        like.constant_like(mask_data, &[seq_len, seq_len])
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RawTensor;
 
     #[test]
     fn test_attention_creation() {

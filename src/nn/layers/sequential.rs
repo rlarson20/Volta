@@ -19,6 +19,14 @@ pub struct Sequential {
 }
 
 impl Module for Sequential {
+    /// Forwards to each child, so a child's buffers are converted too (the default would
+    /// convert only the parameters).
+    fn to_dtype(&mut self, dtype: crate::DType) {
+        for entry in &mut self.layers {
+            entry.layer.to_dtype(dtype);
+        }
+    }
+
     fn parameters(&self) -> Vec<Tensor> {
         self.layers
             .iter()

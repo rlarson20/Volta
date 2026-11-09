@@ -5,6 +5,7 @@ use crate::device_policy::kernel_failed;
 use crate::index::{fetch, signed, slot, unsigned};
 use crate::io::{StateDict, TensorData};
 use crate::nn::{Layer, Module};
+use crate::real::{Real, compute_dtype, dispatch_real};
 use crate::shape::Axis;
 use crate::shape::Shape;
 use crate::spec::{Conv2dSpec, PadValue, Window2dSpec};
@@ -171,8 +172,10 @@ impl Im2colGradFn {
                 .unwrap_or_else(|| kernel_failed("Im2col"));
             (storage, out_grad.device.clone())
         } else {
-            let col = Conv2d::col2im(out_grad.data.to_host_f32(), &self.spec);
-            (crate::storage::Storage::cpu(col), crate::Device::CPU)
+            let col = dispatch_real!(out_grad.data.dtype(), T => {
+                Storage::from_typed(Conv2d::col2im(out_grad.data.host::<T>(), &self.spec))
+            });
+            (col, crate::Device::CPU)
         };
 
         let grad_tensor = RawTensor::try_new_with_storage(
@@ -230,10 +233,10 @@ impl DirectConvGradFn {
                     false,
                 )
             } else {
-                self.compute_input_gradient_cpu(
-                    &out_grad.data.to_vec(),
-                    &weight.as_ref().unwrap().borrow().data.to_vec(),
-                )
+                dispatch_real!(out_grad.data.dtype(), T => self.compute_input_gradient_cpu::<T>(
+                    out_grad.data.host::<T>(),
+                    weight.as_ref().unwrap().borrow().data.host::<T>(),
+                ))
             })
         } else {
             None
@@ -257,10 +260,10 @@ impl DirectConvGradFn {
                     false,
                 )
             } else {
-                self.compute_weight_gradient_cpu(
-                    &out_grad.data.to_vec(),
-                    &x.as_ref().unwrap().borrow().data.to_vec(),
-                )
+                dispatch_real!(out_grad.data.dtype(), T => self.compute_weight_gradient_cpu::<T>(
+                    out_grad.data.host::<T>(),
+                    x.as_ref().unwrap().borrow().data.host::<T>(),
+                ))
             })
         } else {
             None
@@ -296,7 +299,11 @@ fn covering_windows(
 
 impl DirectConvGradFn {
     /// CPU implementation of input gradient computation
-    fn compute_input_gradient_cpu(&self, out_grad_data: &[f32], weight_data: &[f32]) -> Tensor {
+    fn compute_input_gradient_cpu<T: Real>(
+        &self,
+        out_grad_data: &[T],
+        weight_data: &[T],
+    ) -> Tensor {
         let Conv2dSpec {
             batch,
             in_ch,
@@ -312,7 +319,7 @@ impl DirectConvGradFn {
             out_h: h_out,
             out_w: w_out,
         } = self.spec;
-        let mut grad_x_data = vec![0.0f32; batch * in_ch * height * width];
+        let mut grad_x_data = vec![T::ZERO; batch * in_ch * height * width];
 
         // Input gradient: full convolution of output gradient with flipped weights
         // For each input position, accumulate contributions from all output positions
@@ -321,7 +328,7 @@ impl DirectConvGradFn {
             for ic in 0..in_ch {
                 for ih in 0..height {
                     for iw in 0..width {
-                        let mut sum = 0.0f32;
+                        let mut sum = T::ZERO;
 
                         // Only the windows that cover (ih, iw) contribute.
                         for oc in 0..out_ch {
@@ -355,11 +362,11 @@ impl DirectConvGradFn {
             }
         }
 
-        RawTensor::new(grad_x_data, &self.spec.input_dims(), false)
+        RawTensor::from_shape_typed(grad_x_data, Shape::derived(self.spec.input_dims()))
     }
 
     /// CPU implementation of weight gradient computation
-    fn compute_weight_gradient_cpu(&self, out_grad_data: &[f32], x_data: &[f32]) -> Tensor {
+    fn compute_weight_gradient_cpu<T: Real>(&self, out_grad_data: &[T], x_data: &[T]) -> Tensor {
         let Conv2dSpec {
             batch,
             in_ch,
@@ -375,7 +382,7 @@ impl DirectConvGradFn {
             out_h: h_out,
             out_w: w_out,
         } = self.spec;
-        let mut grad_w_data = vec![0.0f32; out_ch * in_ch * kernel_h * kernel_w];
+        let mut grad_w_data = vec![T::ZERO; out_ch * in_ch * kernel_h * kernel_w];
 
         // Weight gradient: sum of outer products of input patches and output gradients
         // ∂L/∂W[o,ic,kh,kw] = sum_{b,oh,ow} X[b,ic,oh*sh+kh-ph,ow*sw+kw-pw] * ∂L/∂Y[b,o,oh,ow]
@@ -433,7 +440,7 @@ impl DirectConvGradFn {
             }
         }
 
-        RawTensor::new(grad_w_data, &self.spec.weight_dims(), false)
+        RawTensor::from_shape_typed(grad_w_data, Shape::derived(self.spec.weight_dims()))
     }
 }
 
@@ -490,24 +497,26 @@ impl IGEMMGradFn {
                 ))
             } else {
                 // CPU path
-                let mut grad_x_data = vec![0.0f32; batch * in_ch * height * width];
-                let out_grad_data = out_grad.data.to_vec();
-                let weight_data = weight.as_ref().map(|w| w.borrow().data.to_vec());
+                dispatch_real!(out_grad.data.dtype(), T => {
+                let mut grad_x_data = vec![T::ZERO; batch * in_ch * height * width];
+                                let out_grad_data = out_grad.data.host::<T>().to_vec();
+                                let weight_data = weight.as_ref().map(|w| w.borrow().data.host::<T>().to_vec());
 
-                if let Some(ref wd) = weight_data {
-                    // Input gradient: full convolution of output grad with flipped weights
-                    // Use same tiling as forward pass
-                    let config = TileConfig::default();
-                    Self::igemm_backward_input(
-                        &out_grad_data,
-                        wd,
-                        &mut grad_x_data,
-                        &self.spec,
-                        &config,
-                    );
-                }
+                                if let Some(ref wd) = weight_data {
+                                    // Input gradient: full convolution of output grad with flipped weights
+                                    // Use same tiling as forward pass
+                                    let config = TileConfig::default();
+                                    Self::igemm_backward_input(
+                                        &out_grad_data,
+                                        wd,
+                                        &mut grad_x_data,
+                                        &self.spec,
+                                        &config,
+                                    );
+                                }
 
-                Some(RawTensor::new(grad_x_data, &self.spec.input_dims(), false))
+                                Some(RawTensor::from_shape_typed(grad_x_data, Shape::derived(self.spec.input_dims())))
+                })
             }
         } else {
             None
@@ -533,23 +542,25 @@ impl IGEMMGradFn {
                 ))
             } else {
                 // CPU path
-                let mut grad_w_data = vec![0.0f32; out_ch * in_ch * kernel_h * kernel_w];
-                let out_grad_data = out_grad.data.to_vec();
-                let x_data = x.as_ref().map(|x| x.borrow().data.to_vec());
+                dispatch_real!(out_grad.data.dtype(), T => {
+                let mut grad_w_data = vec![T::ZERO; out_ch * in_ch * kernel_h * kernel_w];
+                                let out_grad_data = out_grad.data.host::<T>().to_vec();
+                                let x_data = x.as_ref().map(|x| x.borrow().data.host::<T>().to_vec());
 
-                if let Some(ref xd) = x_data {
-                    // Weight gradient: sum over outer products
-                    let config = TileConfig::default();
-                    Self::igemm_backward_weight(
-                        xd,
-                        &out_grad_data,
-                        &mut grad_w_data,
-                        &self.spec,
-                        &config,
-                    );
-                }
+                                if let Some(ref xd) = x_data {
+                                    // Weight gradient: sum over outer products
+                                    let config = TileConfig::default();
+                                    Self::igemm_backward_weight(
+                                        xd,
+                                        &out_grad_data,
+                                        &mut grad_w_data,
+                                        &self.spec,
+                                        &config,
+                                    );
+                                }
 
-                Some(RawTensor::new(grad_w_data, &self.spec.weight_dims(), false))
+                                Some(RawTensor::from_shape_typed(grad_w_data, Shape::derived(self.spec.weight_dims())))
+                })
             }
         } else {
             None
@@ -561,10 +572,10 @@ impl IGEMMGradFn {
 
 impl IGEMMGradFn {
     /// Compute input gradient for iGEMM using tiled approach
-    fn igemm_backward_input(
-        out_grad: &[f32],
-        weight: &[f32],
-        grad_x: &mut [f32],
+    fn igemm_backward_input<T: Real>(
+        out_grad: &[T],
+        weight: &[T],
+        grad_x: &mut [T],
         spec: &Conv2dSpec,
         config: &TileConfig,
     ) {
@@ -602,7 +613,7 @@ impl IGEMMGradFn {
 
                     // For each input channel in tile:
                     for ic in ic_start..ic_end {
-                        let mut sum = 0.0;
+                        let mut sum = T::ZERO;
 
                         // Accumulate from the windows that cover this input position
                         for oc in 0..out_ch {
@@ -640,10 +651,10 @@ impl IGEMMGradFn {
     }
 
     /// Compute weight gradient for iGEMM using tiled approach
-    fn igemm_backward_weight(
-        x: &[f32],
-        out_grad: &[f32],
-        grad_w: &mut [f32],
+    fn igemm_backward_weight<T: Real>(
+        x: &[T],
+        out_grad: &[T],
+        grad_w: &mut [T],
         spec: &Conv2dSpec,
         config: &TileConfig,
     ) {
@@ -891,8 +902,9 @@ impl Conv2d {
             "im2col would create tensor with {total_elements} elements (max: {MAX_ALLOC}). Window: {spec:?}"
         );
 
-        let mut result = vec![0.0; total_elements];
-        let cpu_data = data.to_vec();
+        let result = dispatch_real!(data.dtype(), T => {
+        let mut result = vec![T::ZERO; total_elements];
+        let cpu_data = data.host::<T>().to_vec();
 
         // For each output position, extract and flatten the receptive field
         for b in 0..batch {
@@ -927,9 +939,12 @@ impl Conv2d {
             }
         }
 
+        Storage::from_typed(result)
+        });
+
         edge(
             [x.clone()],
-            Storage::cpu(result),
+            result,
             Shape::derived(vec![rows, cols]),
             Device::CPU,
             GradFn::Im2col(Im2colGradFn { spec: *spec }),
@@ -937,7 +952,7 @@ impl Conv2d {
     }
 
     /// Col2im: Inverse of im2col, used for computing input gradients
-    fn col2im(col: &[f32], spec: &Window2dSpec) -> Vec<f32> {
+    fn col2im<T: Real>(col: &[T], spec: &Window2dSpec) -> Vec<T> {
         let Window2dSpec {
             batch,
             channels,
@@ -952,7 +967,7 @@ impl Conv2d {
             ..
         } = *spec;
 
-        let mut result = vec![0.0; batch * channels * height * width];
+        let mut result = vec![T::ZERO; batch * channels * height * width];
 
         // Accumulate gradients from each receptive field
         for b in 0..batch {
@@ -1014,20 +1029,21 @@ impl Conv2d {
             out_w: w_out,
         } = *spec;
 
+        let output = dispatch_real!(x_data.dtype(), T => {
         // Create padded input (virtually via index computation)
-        let x_data_cpu = x_data.to_vec();
-        let w_data_cpu = w_data.to_vec();
+        let x_data_cpu = x_data.host::<T>().to_vec();
+        let w_data_cpu = w_data.host::<T>().to_vec();
 
         // Output tensor
         let output_size = batch * out_ch * h_out * w_out;
-        let mut output = vec![0.0f32; output_size];
+        let mut output = vec![T::ZERO; output_size];
 
         // Direct convolution: for each output pixel, compute dot product
         for b in 0..batch {
             for oc in 0..out_ch {
                 for oh in 0..h_out {
                     for ow in 0..w_out {
-                        let mut sum = 0.0f32;
+                        let mut sum = T::ZERO;
 
                         // Starting position in input (accounting for padding)
                         let h_start = oh * stride_h;
@@ -1081,12 +1097,15 @@ impl Conv2d {
             }
         }
 
+        Storage::from_typed(output)
+        });
+
         // Create output tensor. `edge()` requires grad if *either* x or weight does —
         // fixes a latent bug where this used to check only `x_requires_grad`, ignoring
         // the weight tensor (the same B1-class bug §1.4 targets).
         edge(
             [x.clone(), weight.clone()],
-            Storage::cpu(output),
+            output,
             Shape::derived(spec.output_dims()),
             Device::CPU,
             GradFn::DirectConv(DirectConvGradFn { spec: *spec }),
@@ -1170,13 +1189,14 @@ impl Conv2d {
                 }),
             )
         } else {
+            let output = dispatch_real!(x_data.dtype(), T => {
             // CPU path
-            let x_data_cpu = x_data.to_vec();
-            let w_data_cpu = w_data.to_vec();
+            let x_data_cpu = x_data.host::<T>().to_vec();
+            let w_data_cpu = w_data.host::<T>().to_vec();
 
             // Output tensor
             let output_size = batch * out_ch * h_out * w_out;
-            let mut output = vec![0.0f32; output_size];
+            let mut output = vec![T::ZERO; output_size];
 
             // Select variant implementation
             match variant {
@@ -1186,10 +1206,13 @@ impl Conv2d {
                 }
             }
 
+            Storage::from_typed(output)
+            });
+
             // Create output tensor
             edge(
                 [x.clone(), weight.clone()],
-                Storage::cpu(output),
+                output,
                 Shape::derived(spec.output_dims()),
                 Device::CPU,
                 GradFn::Igemm(IGEMMGradFn {
@@ -1204,10 +1227,10 @@ impl Conv2d {
     ///
     /// Computes convolution by tiling across output channels and spatial dimensions,
     /// iterating over input channels to accumulate partial results.
-    fn igemm_tiled(
-        x_data: &[f32],
-        w_data: &[f32],
-        output: &mut [f32],
+    fn igemm_tiled<T: Real>(
+        x_data: &[T],
+        w_data: &[T],
+        output: &mut [T],
         spec: &Conv2dSpec,
         config: &TileConfig,
     ) {
@@ -1256,7 +1279,7 @@ impl Conv2d {
 
                         // For each output channel in tile:
                         for oc in oc_start..oc_end {
-                            let mut sum = 0.0;
+                            let mut sum = T::ZERO;
 
                             // Accumulate over input channel tile
                             for ic in ic_start..ic_end {
@@ -1311,7 +1334,7 @@ impl Conv2d {
     /// # Panics
     /// Input needs to be 4D
     pub fn forward(&self, x: &Tensor) -> Tensor {
-        crate::tensor::expect_f32(|| "Conv2d".to_string(), &[x, &self.weight]);
+        compute_dtype(|| "Conv2d".to_string(), &[x.dtype(), self.weight.dtype()]);
         let spec = Conv2dSpec::new(&x.shape(), &self.weight.shape(), self.stride, self.padding)
             .unwrap_or_else(|e| panic!("{e}"));
 
