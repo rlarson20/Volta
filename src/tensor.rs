@@ -309,25 +309,43 @@ impl Tensor {
     /// On a backward gap under `Strict`, or if `op` produced a GPU gradient for a CPU
     /// tensor (an op bug).
     pub(crate) fn accumulate_grad(&self, g: Storage, op: &GradFn) {
+        self.accumulate_named(g, || op.op_name());
+    }
+
+    /// [`Tensor::accumulate_grad`] for a contribution that no `GradFn` produced (the
+    /// seed of a root that is itself a leaf); `source` names it in errors.
+    pub(crate) fn accumulate_named(&self, g: Storage, source: impl Fn() -> String) {
+        let g = self.route_grad(g, &source);
         let mut t = self.inner.borrow_mut();
-        assert!(
-            g.dtype() == t.data.dtype(),
-            "{}: produced a {} gradient for a {} tensor (a gradient has its tensor's dtype)",
-            op.op_name(),
-            g.dtype(),
-            t.data.dtype()
-        );
-        let g = match (t.device.is_gpu(), g.is_gpu()) {
-            (true, false) => {
-                on_gap(&op.op_name(), Pass::Backward);
-                g.to_device(&t.device)
-            }
-            (false, true) => panic!("{}: produced a GPU gradient for a CPU tensor", op.op_name()),
-            (true, true) | (false, false) => g,
-        };
         match t.grad {
             None => t.grad = Some(g),
             Some(ref mut existing) => RawTensor::accumulate_grad(existing, &g),
+        }
+    }
+
+    /// Checks a gradient contribution for this tensor and puts it on the tensor's device,
+    /// without storing it. Backward uses this for the per-pass gradient of an op output,
+    /// which is never written to `grad` (only a leaf keeps one).
+    ///
+    /// # Panics
+    /// As [`Tensor::accumulate_grad`]: a dtype mismatch, a backward gap under `Strict`, or a
+    /// GPU gradient for a CPU tensor.
+    pub(crate) fn route_grad(&self, g: Storage, source: &impl Fn() -> String) -> Storage {
+        let t = self.inner.borrow();
+        assert!(
+            g.dtype() == t.data.dtype(),
+            "{}: produced a {} gradient for a {} tensor (a gradient has its tensor's dtype)",
+            source(),
+            g.dtype(),
+            t.data.dtype()
+        );
+        match (t.device.is_gpu(), g.is_gpu()) {
+            (true, false) => {
+                on_gap(&source(), Pass::Backward);
+                g.to_device(&t.device)
+            }
+            (false, true) => panic!("{}: produced a GPU gradient for a CPU tensor", source()),
+            (true, true) | (false, false) => g,
         }
     }
 

@@ -36,8 +36,11 @@ mod gpu_tests {
             return;
         }
 
-        let x = RawTensor::new(vec![2.0], &[1], true);
-        let x_gpu = x.to_device(Device::gpu().expect("GPU availability checked above"));
+        // A GPU leaf: move first, then mark. A `to_device` copy of a tracked tensor is an
+        // op output and keeps no gradient.
+        let x_gpu = RawTensor::new(vec![2.0], &[1], false)
+            .to_device(Device::gpu().expect("GPU availability checked above"));
+        x_gpu.set_requires_grad(true);
 
         x_gpu.clone().into_loss().expect("scalar loss").backward();
 

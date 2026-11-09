@@ -844,8 +844,10 @@ mod tests {
             &c,
             &format!("{what} forward"),
         );
-        assert_close(&a_run.grad().expect("a grad"), &da, &format!("{what} dA"));
-        assert_close(&b_run.grad().expect("b grad"), &db, &format!("{what} dB"));
+        // `a` and `b` are the leaves: with a GPU, `a_run` is a `to_device` copy that keeps no
+        // gradient, and its backward sends the gradient back to `a`.
+        assert_close(&a.grad().expect("a grad"), &da, &format!("{what} dA"));
+        assert_close(&b.grad().expect("b grad"), &db, &format!("{what} dB"));
     }
 
     /// Past one 16x16 tile and not a multiple of 16 on any side (GEMM report §4).

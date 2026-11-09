@@ -3261,9 +3261,10 @@ mod conv2d_gpu_tests {
                 16.0,
             ],
             &[1, 1, 4, 4],
-            true,
+            false,
         )
         .to_device(device.clone());
+        x_gpu.set_requires_grad(true);
 
         // Create conv with im2col algorithm
         let conv = Conv2d::new_on_device(1, 2, 3, 1, 0, true, device.clone());

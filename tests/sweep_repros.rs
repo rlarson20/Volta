@@ -34,7 +34,6 @@ fn second_backward_on_a_graph_with_no_intermediate_node_is_exact() {
 }
 
 #[test]
-#[ignore = "S1: the intermediate b = 2a keeps its gradient from the first pass and re-sends it; torch gives a.grad = 4"]
 fn second_backward_through_an_intermediate_adds_only_the_new_gradient() {
     // l = sum(2a). d/da = 2 per backward, so retain_graph=True twice gives 4.
     let a = RawTensor::new(vec![1.0], &[1], true);
@@ -46,7 +45,6 @@ fn second_backward_through_an_intermediate_adds_only_the_new_gradient() {
 }
 
 #[test]
-#[ignore = "S1: b keeps the first loss's gradient and re-sends it; torch gives a.grad = 8"]
 fn two_losses_sharing_an_intermediate_sum_their_gradients() {
     // b = 2a, l1 = sum(b), l2 = sum(3b). a.grad = 2*1 + 2*3 = 8 in torch.
     let a = RawTensor::new(vec![1.0], &[1], true);
