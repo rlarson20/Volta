@@ -9,8 +9,8 @@
 //! from a small text corpus.
 use std::collections::HashMap;
 use volta::{
-    Adam, Dropout, Embedding, IndexedLayer, LSTMCell, Layer, Linear, Module, RawTensor,
-    RecurrentLayer, manual_seed,
+    Adam, Dropout, Embedding, LSTMCell, Layer, Linear, Module, RawTensor, RecurrentLayer,
+    manual_seed,
 };
 
 /// Vocabulary for character-level language modeling
@@ -116,7 +116,7 @@ fn forward_and_compute_loss(
 
     for (&input_idx, &target_idx) in inputs.iter().zip(targets) {
         // Embedding lookup
-        let emb = model.embedding.forward_indices(&[input_idx]);
+        let emb = model.embedding.forward(&index_tensor(&[input_idx]));
         let emb_drop = model.dropout.forward(&emb);
 
         // LSTM step
@@ -172,7 +172,7 @@ fn generate(
     // Prime with seed text
     for c in seed.chars() {
         if let Some(&idx) = vocab.char_to_idx.get(&c) {
-            let emb = model.embedding.forward_indices(&[idx]);
+            let emb = model.embedding.forward(&index_tensor(&[idx]));
             let _ = model.lstm.step(&emb, &mut state);
         }
     }
@@ -185,7 +185,7 @@ fn generate(
     );
 
     for _ in 0..length {
-        let emb = model.embedding.forward_indices(&[current_idx]);
+        let emb = model.embedding.forward(&index_tensor(&[current_idx]));
         let h_new = model.lstm.step(&emb, &mut state);
         let logits = model.decoder.forward(&h_new);
 
@@ -209,6 +209,15 @@ fn generate(
 
     model.train_mode(true); // Re-enable dropout
     result
+}
+
+/// Token indices as the I64 tensor `Embedding` takes.
+fn index_tensor(indices: &[usize]) -> volta::Tensor {
+    let wide: Vec<i64> = indices
+        .iter()
+        .map(|&i| i64::try_from(i).expect("a token index fits i64"))
+        .collect();
+    volta::RawTensor::from_typed(wide, &[indices.len()])
 }
 
 fn main() {

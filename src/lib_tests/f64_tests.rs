@@ -145,7 +145,7 @@ fn binary_ops_gradcheck_in_f64() {
             let b = leaf_from(sb, 22, |v| match op {
                 BinaryOp::Div => 0.5 + v.abs(),
                 BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Max => v + 0.25,
-                BinaryOp::Mod | BinaryOp::Cmplt => unreachable!("filtered: not differentiable"),
+                BinaryOp::Mod => unreachable!("filtered: not differentiable"),
             });
             let name = format!("{op:?} {sa:?} {sb:?}");
             let b2 = b.clone();
@@ -210,7 +210,7 @@ fn ternary_ops_gradcheck_in_f64() {
     let (x3, y3) = (x.clone(), y.clone());
     assert_grad("MulAcc z", &z, |t| weighted(&x3.mulacc(&y3, t), 54));
 
-    let cond = RawTensor::from_typed(vec![1.0f64, 0.0, 1.0], &[3]);
+    let cond = RawTensor::from_typed(vec![true, false, true], &[3]);
     let a = leaf(&[2, 3], 55);
     let b = leaf(&[2, 1], 56);
     let (c2, b2) = (cond.clone(), b.clone());
@@ -321,7 +321,7 @@ fn f64_unary_values_are_f64() {
 use crate::nn::layers::lstm::LSTMCell;
 use crate::nn::{
     BatchNorm1d, BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, Embedding, FeedForward, GELU,
-    IndexedLayer, Layer, LayerNorm, Linear, MaxPool2d, Module, MultiHeadAttention, PixelShuffle,
+    Layer, LayerNorm, Linear, MaxPool2d, Module, MultiHeadAttention, PixelShuffle,
     PositionalEncoding, PositionalEncodingType, RecurrentLayer, TransformerBlock,
 };
 
@@ -428,14 +428,19 @@ fn layers_gradcheck_in_f64() {
     );
 }
 
-/// `Embedding` (an `IndexedLayer`): the weight's gradient in f64, with a repeated index.
+/// `Embedding` (I64 indices): the weight's gradient in f64, with a repeated index.
 #[test]
 fn embedding_gradcheck_in_f64() {
     manual_seed(2);
     let mut emb = Embedding::new(5, 3);
     emb.to_dtype(DType::F64);
     let w = emb.parameters()[0].clone();
-    let err = param_gradcheck(&w, || weighted(&emb.forward_indices(&[1, 3, 1]), 103));
+    let err = param_gradcheck(&w, || {
+        weighted(
+            &emb.forward(&RawTensor::from_typed(vec![1i64, 3, 1], &[3])),
+            103,
+        )
+    });
     assert!(
         err < TOL,
         "Embedding weight: f64 gradcheck max relative error {err:.3e}"

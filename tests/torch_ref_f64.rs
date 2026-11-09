@@ -7,7 +7,6 @@
 
 use std::collections::BTreeMap;
 use volta::io::{StateDict, TensorData, TypedTensorData, load_safetensors_raw};
-use volta::nn::IndexedLayer;
 use volta::{
     Adam, Axis, BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, DType, Embedding, Layer, LayerNorm,
     Linear, MaxPool2d, Module, RawTensor, Storage, Tensor,
@@ -337,7 +336,7 @@ fn embedding_matches_torch_in_f64() {
         vec![5, 3],
     )]))
     .expect("load");
-    let out = e.forward_indices(&[1, 3, 1]);
+    let out = e.forward(&RawTensor::from_typed(vec![1i64, 3, 1], &[3]));
     let p = e.parameters();
     check(&f, "embedding", &out, &[("weight", &p[0], None)]);
 }

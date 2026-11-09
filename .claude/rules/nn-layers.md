@@ -5,10 +5,10 @@ paths:
 
 # Neural network layers
 
-- A tensor-to-tensor layer implements `Module` (`parameters`, `state_dict`, `load_state_dict`) and `Layer` (`forward`). `parameters()` must return every learnable tensor. Index input is an `IndexedLayer`, carried state is a `RecurrentLayer`; both are sealed, so a new layer of those kinds goes in the crate.
+- A tensor-to-tensor layer implements `Module` (`parameters`, `state_dict`, `load_state_dict`) and `Layer` (`forward`). `parameters()` must return every learnable tensor. Index input is an I64/I32 tensor through `Layer` (`Embedding`, as in PyTorch); carried state is a `RecurrentLayer`, which is sealed, so a new layer of that kind goes in the crate.
 - Build outputs from graph ops (`shrink`, broadcast add, `matmul`, …) or from `edge()`. Never copy values into a fresh tensor, which severs the graph; that is how LSTMCell's gate slice (B2) and PositionalEncoding (B3) shipped, and both are a `shrink` now. A layer that holds a non-parameter tensor (a fixed buffer such as PositionalEncoding's sinusoid table) overrides `Module::to_device` to move it too.
 - **Every parameterized layer gets an `assert_trainable!` test**, with its input from `crate::macros::trainable_input(&shape)`. All-ones input makes gradients mathematically zero for normalization and attention layers.
-- Exception: `Embedding` is an `IndexedLayer` (`forward_indices(&[usize])`), so it can't go through `Layer` or `assert_trainable!`. Test its per-index gradients directly. `LSTMCell` is a `RecurrentLayer` (`initial_state`, `step`); its `assert_trainable!` test goes through a test-only two-step `Layer` wrapper (one step from zero state gives `weight_hh` an exactly zero gradient).
+- Exception: `Embedding` takes integer indices, which `trainable_input` (floats) can't give, so it has no `assert_trainable!` test: test its per-index gradients directly, and its training in a `Sequential` (`tests/dtype_tensors.rs`). `LSTMCell` is a `RecurrentLayer` (`initial_state`, `step`); its `assert_trainable!` test goes through a test-only two-step `Layer` wrapper (one step from zero state gives `weight_hh` an exactly zero gradient).
 - `MultiHeadAttention` and `TransformerBlock` have an inherent `forward(x, mask, …)` alongside `Layer::forward`. In generic code, call the trait version through UFCS: `<_ as Layer>::forward(&layer, &x)`.
 - `load_state_dict` must validate numel and preserve the destination's device (H7). Never replace `data` with `Storage::cpu(..)`.
 - Layout is NCHW, following PyTorch conventions.

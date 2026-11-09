@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use volta::{
     Adam, Embedding, LayerNorm, RawTensor,
     nn::{
-        IndexedLayer, Layer, Module,
+        Layer, Module,
         transformer::{
             FeedForward, MultiHeadAttention, PositionalEncoding, PositionalEncodingType,
         },
@@ -163,7 +163,7 @@ impl TinyTransformerLM {
         let seq_len = indices.len();
 
         // Embed: [seq_len, embed_dim]
-        let emb = self.embedding.forward_indices(indices);
+        let emb = self.embedding.forward(&index_tensor(indices));
 
         // Reshape to [1, seq_len, embed_dim], then add the positional encoding
         let x = self
@@ -182,6 +182,15 @@ impl TinyTransformerLM {
 }
 
 // ===== Training =====
+
+/// Token indices as the I64 tensor `Embedding` takes.
+fn index_tensor(indices: &[usize]) -> volta::Tensor {
+    let wide: Vec<i64> = indices
+        .iter()
+        .map(|&i| i64::try_from(i).expect("a token index fits i64"))
+        .collect();
+    volta::RawTensor::from_typed(wide, &[indices.len()])
+}
 
 fn main() {
     volta::manual_seed(42);

@@ -13,7 +13,6 @@
 use half::{bf16, f16};
 use std::collections::BTreeMap;
 use volta::io::{StateDict, TensorData, TypedTensorData, load_safetensors_raw};
-use volta::nn::IndexedLayer;
 use volta::storage::Element;
 use volta::{
     Adam, Axis, BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, DType, Embedding, Layer, LayerNorm,
@@ -365,7 +364,7 @@ fn ternary<H: Half>() {
         &[("x", &x, None), ("y", &y, None), ("z", &z, None)],
     );
     let (y, z) = (f.tensor("ternary.y", true), f.tensor("ternary.z", true));
-    let cond = f.tensor("ternary.cond", false);
+    let cond = f.tensor("ternary.cond", false).to_dtype(DType::Bool);
     check(
         &f,
         "ternary.where",
@@ -524,7 +523,7 @@ fn other_layers<H: Half>() {
         vec![5, 3],
     )]))
     .expect("load");
-    let out = e.forward_indices(&[1, 3, 1]);
+    let out = e.forward(&RawTensor::from_typed(vec![1i64, 3, 1], &[3]));
     let params = e.parameters();
     let [w] = params.as_slice() else {
         panic!("Embedding has one parameter")

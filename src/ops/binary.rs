@@ -15,7 +15,8 @@ define_ops! {
     /// Binary operations: two inputs, one output
     ///
     /// Broadcasting is automatically handled for compatible shapes.
-    /// Non-differentiable operations (Mod, Cmplt) return tensors with `requires_grad=false`.
+    /// The non-differentiable `Mod` returns a tensor with `requires_grad=false`.
+    /// Comparisons are [`CmpOp`](crate::ops::CmpOp), which return Bool.
     binary BinaryOp {
         differentiable {
             /// x + y
@@ -42,8 +43,6 @@ define_ops! {
         non_differentiable {
             /// x % y
             Mod => |a, b| a % b, gpu(mod_op);
-            /// x < y ? 1 : 0
-            Cmplt => |a, b| if a < b { 1.0 } else { 0.0 }, gpu(cmplt);
         }
     }
 }
@@ -395,12 +394,9 @@ mod tests {
             let av: Vec<f32> = a.data().clone();
             let bv: Vec<f32> = match op {
                 BinaryOp::Div => b.data().iter().map(|v| 0.5 + v.abs()).collect(),
-                BinaryOp::Add
-                | BinaryOp::Sub
-                | BinaryOp::Mul
-                | BinaryOp::Max
-                | BinaryOp::Mod
-                | BinaryOp::Cmplt => b.data().clone(),
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Max | BinaryOp::Mod => {
+                    b.data().clone()
+                }
             };
             let (a, b) = (
                 RawTensor::new(av, shape_a, true),
@@ -461,13 +457,9 @@ mod tests {
     }
 
     #[test]
-    fn is_trivial_exactly_for_mod_and_cmplt() {
+    fn is_trivial_exactly_for_mod() {
         for &op in BinaryOp::ALL {
-            assert_eq!(
-                op.is_trivial(),
-                matches!(op, BinaryOp::Mod | BinaryOp::Cmplt),
-                "{op:?}"
-            );
+            assert_eq!(op.is_trivial(), matches!(op, BinaryOp::Mod), "{op:?}");
         }
     }
 
@@ -475,9 +467,7 @@ mod tests {
     fn non_differentiable_ops_attach_no_grad_fn() {
         let a = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], true);
         let b = RawTensor::new(vec![2.0, 2.0, 2.0], &[3], true);
-        for op in [BinaryOp::Mod, BinaryOp::Cmplt] {
-            assert!(!RawTensor::binary_op(&a, &b, op).requires_grad(), "{op:?}");
-        }
+        assert!(!RawTensor::binary_op(&a, &b, BinaryOp::Mod).requires_grad());
     }
 
     #[test]
@@ -488,7 +478,7 @@ mod tests {
 
     #[test]
     fn all_lists_each_variant_once() {
-        assert_eq!(BinaryOp::ALL.len(), 7);
+        assert_eq!(BinaryOp::ALL.len(), 6);
         for (i, a) in BinaryOp::ALL.iter().enumerate() {
             for b in BinaryOp::ALL.iter().skip(i + 1) {
                 assert_ne!(a, b);
