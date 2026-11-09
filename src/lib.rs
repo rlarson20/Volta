@@ -33,7 +33,7 @@ pub mod storage;
 
 // Add to re-exports:
 pub use autograd::ScalarLoss;
-pub use dtype::DType;
+pub use dtype::{DType, DTypePolicy, DTypePolicyGuard, dtype_policy, with_dtype_policy};
 pub use error::{Result, VoltaError};
 pub use shape::{Axis, Shape, Strides};
 pub use spec::PadValue;
@@ -45,6 +45,8 @@ pub use gpu::{
     gpu_pool_stats, gpu_sync, gpu_sync_threshold, is_gpu_available,
 };
 
+/// Automatic mixed precision: `autocast` and `GradScaler`.
+pub mod amp;
 /// Reverse-mode automatic differentiation: the graph edges and `backward`.
 pub mod autograd;
 /// Dataset loading and preprocessing.
@@ -66,6 +68,7 @@ pub mod tensor;
 pub mod utils;
 
 // Re-export main types for easy access
+pub use amp::{GradScaler, autocast};
 pub use device::Device;
 pub use device_policy::{
     DevicePolicy, DevicePolicyGuard, FallbackEvent, Pass, device_policy, take_fallback_events,
@@ -73,6 +76,7 @@ pub use device_policy::{
 };
 pub use nn::layers::Dropout;
 pub use nn::layers::flatten::Flatten;
+pub use nn::optim::Optimizer;
 pub use nn::{
     Adam, BatchNorm1d, BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, Embedding, GELU, LSTMCell,
     Layer, LayerNorm, Linear, MaxPool2d, Module, Muon, PixelShuffle, ReLU, RecurrentLayer, SGD,
@@ -150,6 +154,10 @@ mod axis_reduce_tests;
 #[cfg(test)]
 #[path = "lib_tests/gpu_tests.rs"]
 mod gpu_tests;
+
+#[cfg(test)]
+#[path = "lib_tests/gpu_half_tests.rs"]
+mod gpu_half_tests;
 
 // ===== EXPANDED COVERAGE (P1) =====
 //

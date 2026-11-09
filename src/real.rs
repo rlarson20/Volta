@@ -123,25 +123,50 @@ pub(crate) mod fl64 {
     }
 }
 
-/// Panics unless every input has one dtype (any dtype), naming the op, and returns it:
-/// the check for data ops (comparisons, `where`'s branches), which work on every dtype.
+/// The operands of an elementwise op, cast to one dtype (ADDENDUM §11 P6): under
+/// `DTypePolicy::Promote`, [`DType::promote`] of all of them (PyTorch's `result_type` for
+/// dimensioned tensors), reached with a differentiable `to_dtype` on each operand that
+/// differs, so its gradient comes back in its own dtype. `float_result` is true division:
+/// an integer or bool result dtype becomes F32, as PyTorch's `div` does. Under
+/// `DTypePolicy::Strict` mixed operands panic instead. Returns the dtype and the operands.
 ///
 /// # Panics
-/// If the inputs' dtypes differ.
+/// Under `DTypePolicy::Strict`, if the operands' dtypes differ.
 #[track_caller]
-pub(crate) fn same_dtype(op: impl FnOnce() -> String, dtypes: &[DType]) -> DType {
+pub(crate) fn promote_operands(
+    op: impl FnOnce() -> String,
+    operands: &[&crate::Tensor],
+    float_result: bool,
+) -> (DType, Vec<crate::Tensor>) {
+    let dtypes: Vec<DType> = operands.iter().map(|t| t.dtype()).collect();
     let first = *dtypes.first().expect("an op has at least one input");
-    if let Some((i, &d)) = dtypes.iter().enumerate().find(|&(_, &d)| d != first) {
-        mixed_dtypes(&op(), first, d, i);
+    let mixed = dtypes.iter().enumerate().find(|&(_, &d)| d != first);
+    if let (Some((i, &d)), crate::DTypePolicy::Strict) = (mixed, crate::dtype_policy()) {
+        panic!(
+            "{}: {} (input {i}) under DTypePolicy::Strict; cast with to_dtype",
+            op(),
+            crate::VoltaError::DTypeMismatch {
+                expected: first,
+                actual: d,
+            }
+        );
     }
-    first
+    let common = dtypes.iter().copied().fold(first, DType::promote);
+    let target = if float_result && !common.is_float() {
+        DType::F32
+    } else {
+        common
+    };
+    let cast = operands.iter().map(|t| t.to_dtype(target)).collect();
+    (target, cast)
 }
 
-/// The mixed-dtype panic of [`compute_dtype`] and [`same_dtype`].
+/// The mixed-dtype panic of [`compute_dtype`] (ops that need one dtype).
 #[track_caller]
 fn mixed_dtypes(op: &str, expected: DType, actual: DType, input: usize) -> ! {
     panic!(
-        "{op}: {} (input {input}); mixed dtypes need an explicit to_dtype until ADDENDUM §11 P6",
+        "{op}: {} (input {input}); this op needs one dtype, as in PyTorch: cast with \
+         to_dtype (a layer with Module::to_dtype)",
         crate::VoltaError::DTypeMismatch { expected, actual }
     )
 }
@@ -160,7 +185,8 @@ pub(crate) fn compute_dtype(op: impl FnOnce() -> String, dtypes: &[DType]) -> DT
     match first {
         DType::F32 | DType::F64 | DType::F16 | DType::BF16 => first,
         DType::I32 | DType::I64 | DType::U8 | DType::Bool => panic!(
-            "{}: no {first} kernel; ops compute in f32 or f64 (ADDENDUM §11)",
+            "{}: no {first} kernel; arithmetic computes in f32, f64, f16 or bf16 (integer and \
+             bool tensors are data: move, compare, select, index; ADDENDUM §11)",
             op()
         ),
     }

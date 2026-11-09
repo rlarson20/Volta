@@ -34,7 +34,7 @@ const NS_EPS: f32 = 1e-7;
 /// and update all run on the device, with no host round-trip.
 pub struct Muon {
     /// Parameters being optimized.
-    params: Vec<Tensor>,
+    pub(super) params: Vec<Tensor>,
     /// Learning rate.
     lr: f32,
     /// Momentum coefficient.
@@ -70,12 +70,8 @@ impl Muon {
             .iter()
             .map(|p| {
                 let p = p.borrow();
-                // In the parameter's dtype (GPU storage is f32-only).
-                if p.device.is_gpu() {
-                    Storage::new_zeros(p.data.len(), &p.device)
-                } else {
-                    Storage::new_zeros(p.data.len(), &p.device).cast(p.data.dtype())
-                }
+                // In the parameter's dtype on its device (a no-op cast for f32).
+                Storage::new_zeros(p.data.len(), &p.device).cast(p.data.dtype())
             })
             .collect();
         Self {

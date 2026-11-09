@@ -44,6 +44,9 @@ env_logger = "0.11"
 trybuild = "1"
 serde_json = "1"
 rustversion = "1"
+# Validates every shader expansion without a device (src/gpu/shader_template.rs). Same
+# version as wgpu's own naga, so the lockfile keeps one copy.
+naga = { version = "27", features = ["wgsl-in"] }
 
 [features]
 default = ["gpu", "accelerate"]

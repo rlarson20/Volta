@@ -7,9 +7,15 @@
 //! shrink, pad, transpose), compare, select (`where`), index (`Embedding`), and act as
 //! class targets (`cross_entropy_loss`); comparisons return Bool. Arithmetic on them
 //! panics, naming the op.
+//!
+//! Elementwise ops with operands of different dtypes promote them to
+//! [`DType::promote`] of all of them, as PyTorch does, unless [`DTypePolicy::Strict`] is
+//! set; matmul, convolutions and layers need one dtype, as in PyTorch.
 //! `load_safetensors` converts to f32. Mixed precision is planned in ADDENDUM §11.
 
+use std::cell::Cell;
 use std::fmt;
+use std::marker::PhantomData;
 
 /// Element types a tensor can hold.
 ///
@@ -175,5 +181,63 @@ mod tests {
         assert!(DType::U8.is_int());
         assert!(!DType::F32.is_int());
         assert!(!DType::Bool.is_int());
+    }
+}
+
+/// How elementwise ops treat operands of different dtypes (ADDENDUM §11 P6).
+///
+/// Under [`DTypePolicy::Promote`] (the default) they follow PyTorch: binary, comparison
+/// and `where`/`mulacc` ops cast every operand to [`DType::promote`] of all of them with a
+/// differentiable `to_dtype`, so each gradient comes back in its own operand's dtype.
+/// [`DTypePolicy::Strict`] makes mixed dtypes panic instead, so no implicit cast
+/// happens. Matmul, convolutions and layers need one dtype under both, as in PyTorch.
+/// The policy is thread-local and set for a scope with [`with_dtype_policy`], like
+/// [`crate::with_device_policy`].
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DTypePolicy {
+    /// Mixed operands are promoted, as in PyTorch. The default.
+    #[default]
+    Promote,
+    /// Mixed operands panic, naming the op: every cast is an explicit `to_dtype`.
+    Strict,
+}
+
+thread_local! {
+    static DTYPE_POLICY: Cell<DTypePolicy> = const { Cell::new(DTypePolicy::Promote) };
+}
+
+/// This thread's current dtype policy.
+#[must_use]
+pub fn dtype_policy() -> DTypePolicy {
+    DTYPE_POLICY.with(Cell::get)
+}
+
+/// Set this thread's dtype policy until the returned guard drops.
+///
+/// The guard restores the policy that was active before it, so scopes nest, and it
+/// restores it on unwind too.
+#[must_use]
+pub fn with_dtype_policy(policy: DTypePolicy) -> DTypePolicyGuard {
+    let prev = DTYPE_POLICY.with(|p| p.replace(policy));
+    DTypePolicyGuard {
+        prev,
+        _not_send: PhantomData,
+    }
+}
+
+/// Restores the previous dtype policy on drop. Made by [`with_dtype_policy`].
+///
+/// `!Send`, like `DevicePolicyGuard`: the policy is thread-local.
+pub struct DTypePolicyGuard {
+    /// The policy to restore.
+    prev: DTypePolicy,
+    /// Makes the guard `!Send` (and `!Sync`).
+    _not_send: PhantomData<*const ()>,
+}
+
+impl Drop for DTypePolicyGuard {
+    fn drop(&mut self) {
+        DTYPE_POLICY.with(|p| p.set(self.prev));
     }
 }

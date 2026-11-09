@@ -576,6 +576,94 @@ def group_intbool():
     print(f"wrote intbool: {len(t)} tensors")
 
 
+def group_promotion():
+    """Implicit promotion (Volta P6): for every ordered pair of Volta's eight dtypes,
+    torch's result for add, mul, div, lt and where(cond, a, b), stored in torch's result
+    dtype (so the file records the dtype too), and for float pairs the gradients of
+    sum(a * b * w) in each operand's own dtype. The operands are small integers cast from
+    f32 (`a`, `b`), exact in every dtype; Volta casts them the same way.
+    """
+    torch.manual_seed(SEED)
+    names = ["f16", "bf16", "f32", "f64", "i32", "i64", "u8", "bool"]
+    a = torch.tensor([0.0, 1.0, 2.0, 3.0])
+    b = torch.tensor([3.0, 2.0, 1.0, 1.0])
+    cond = torch.tensor([True, False, True, False])
+    w = torch.tensor([0.5, -1.0, 2.0, 0.25])
+    t = {"a": a, "b": b, "cond": cond, "w": w}
+    for na, da in zip(names, VOLTA_DTYPES):
+        for nb, db in zip(names, VOLTA_DTYPES):
+            x, y = a.to(da), b.to(db)
+            key = f"{na}.{nb}"
+            t[f"add.{key}"] = x + y
+            t[f"mul.{key}"] = x * y
+            t[f"div.{key}"] = x / y
+            t[f"lt.{key}"] = torch.lt(x, y)
+            t[f"where.{key}"] = torch.where(cond, x, y)
+            if da.is_floating_point and db.is_floating_point:
+                x, y = x.clone().requires_grad_(True), y.clone().requires_grad_(True)
+                gx, gy = torch.autograd.grad((x * y * w.to(torch.promote_types(da, db))).sum(), [x, y])
+                t[f"grad_a.{key}"], t[f"grad_b.{key}"] = gx, gy
+
+    OUT.mkdir(parents=True, exist_ok=True)
+    meta = {"info": f"torch={torch.__version__};seed={SEED};group=promotion"}
+    save_file({k: v.detach().clone().contiguous() for k, v in t.items()}, OUT / "promotion.safetensors", metadata=meta)
+    print(f"wrote promotion: {len(t)} tensors")
+
+
+def group_autocast():
+    """CPU autocast in bf16 and f16 (Volta P7): f32 parameters and inputs, forward under
+    `torch.autocast("cpu", dtype=..)`, backward outside it. Cases: an MLP (Linear, ReLU,
+    Linear) with class-index cross-entropy (loss and every parameter's f32 gradient),
+    Conv2d and ConvTranspose2d (output in the low dtype and the f32 gradients of input,
+    weight and bias under a weighted sum), and broadcast batched matmul. Keys prefixed
+    `bf16.` / `f16.`; stored in native dtypes.
+    """
+    F = torch.nn.functional
+    t = {}
+    for dname, dt in [("bf16", torch.bfloat16), ("f16", torch.float16)]:
+        torch.manual_seed(SEED)
+
+        def rl(*shape):
+            return torch.randn(*shape).requires_grad_(True)
+
+        def case(name, fwd, inputs):
+            with torch.autocast("cpu", dtype=dt):
+                out = fwd()
+            w = torch.randn(out.shape)
+            names = list(inputs)
+            grads = torch.autograd.grad((out * w).sum(), [inputs[n] for n in names])
+            t[f"{dname}.{name}.out"] = out
+            t[f"{dname}.{name}.w"] = w
+            for n, g in zip(names, grads):
+                t[f"{dname}.{name}.grad_{n}"] = g
+
+        x, w1, b1, w2, b2 = rl(5, 8), rl(16, 8), rl(16), rl(3, 16), rl(3)
+        y = torch.tensor([0, 2, 1, 1, 0], dtype=torch.int64)
+        t.update({f"{dname}.mlp.{k}": v for k, v in dict(x=x, w1=w1, b1=b1, w2=w2, b2=b2, y=y).items()})
+        with torch.autocast("cpu", dtype=dt):
+            loss = F.cross_entropy(F.linear(torch.relu(F.linear(x, w1, b1)), w2, b2), y)
+        t[f"{dname}.mlp.loss"] = loss
+        for k, g in zip(["x", "w1", "b1", "w2", "b2"], torch.autograd.grad(loss, [x, w1, b1, w2, b2])):
+            t[f"{dname}.mlp.grad_{k}"] = g
+
+        x, w, b = rl(2, 2, 5, 5), rl(3, 2, 3, 3), rl(3)
+        t.update({f"{dname}.conv.x": x, f"{dname}.conv.weight": w, f"{dname}.conv.bias": b})
+        case("conv", lambda: F.conv2d(x, w, b, stride=2, padding=1), {"x": x, "weight": w, "bias": b})
+
+        x, w, b = rl(2, 2, 3, 3), rl(2, 3, 3, 3), rl(3)
+        t.update({f"{dname}.convt.x": x, f"{dname}.convt.weight": w, f"{dname}.convt.bias": b})
+        case("convt", lambda: F.conv_transpose2d(x, w, b, stride=2, padding=1), {"x": x, "weight": w, "bias": b})
+
+        a, bm = rl(2, 1, 3, 4), rl(1, 3, 4, 2)
+        t.update({f"{dname}.matmul.a": a, f"{dname}.matmul.b": bm})
+        case("matmul", lambda: a @ bm, {"a": a, "b": bm})
+
+    OUT.mkdir(parents=True, exist_ok=True)
+    meta = {"info": f"torch={torch.__version__};seed={SEED};group=autocast"}
+    save_file({k: v.detach().clone().contiguous() for k, v in t.items()}, OUT / "autocast.safetensors", metadata=meta)
+    print(f"wrote autocast: {len(t)} tensors")
+
+
 # Volta's `DType` discriminants, in order: F16=0, BF16=1, F32=2, F64=3, I32=4, I64=5, U8=6, Bool=7.
 VOLTA_DTYPES = [torch.float16, torch.bfloat16, torch.float32, torch.float64, torch.int32, torch.int64, torch.uint8, torch.bool]
 
@@ -643,7 +731,7 @@ def group_casts():
     print(f"wrote casts: {len(out)} tensors")
 
 
-GROUPS = {"ops": group_ops, "reductions": group_reductions, "optim": group_optim, "layers": group_layers, "dtypes": group_dtypes, "casts": group_casts, "f64": group_f64, "half": group_half, "intbool": group_intbool}
+GROUPS = {"ops": group_ops, "reductions": group_reductions, "optim": group_optim, "layers": group_layers, "dtypes": group_dtypes, "casts": group_casts, "f64": group_f64, "half": group_half, "intbool": group_intbool, "promotion": group_promotion, "autocast": group_autocast}
 
 if __name__ == "__main__":
     wanted = sys.argv[1:] or list(GROUPS)

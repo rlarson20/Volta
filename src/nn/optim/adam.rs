@@ -6,7 +6,7 @@ use crate::tensor::Tensor;
 /// Adam optimizer (Kingma & Ba): per-parameter step sizes from running first and second moments of the gradient.
 pub struct Adam {
     /// Parameters being optimized.
-    params: Vec<Tensor>,
+    pub(super) params: Vec<Tensor>,
     /// Learning rate.
     lr: f32,
     /// Decay rates `(beta1, beta2)` of the first and second moment estimates.
@@ -42,13 +42,8 @@ impl Adam {
                 let device = param.device.clone();
                 let dtype = param.data.dtype();
                 drop(param);
-                // Zero state on the parameter's device and in its dtype (GPU storage is
-                // f32-only).
-                if device.is_gpu() {
-                    Storage::new_zeros(len, &device)
-                } else {
-                    Storage::new_zeros(len, &device).cast(dtype)
-                }
+                // Zero state in the parameter's dtype on its device (a no-op cast for f32).
+                Storage::new_zeros(len, &device).cast(dtype)
             })
             .collect();
 
@@ -60,13 +55,8 @@ impl Adam {
                 let device = param.device.clone();
                 let dtype = param.data.dtype();
                 drop(param);
-                // Zero state on the parameter's device and in its dtype (GPU storage is
-                // f32-only).
-                if device.is_gpu() {
-                    Storage::new_zeros(len, &device)
-                } else {
-                    Storage::new_zeros(len, &device).cast(dtype)
-                }
+                // Zero state in the parameter's dtype on its device (a no-op cast for f32).
+                Storage::new_zeros(len, &device).cast(dtype)
             })
             .collect();
 

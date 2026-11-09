@@ -111,11 +111,10 @@ impl Linear {
     /// Forward pass through the layer
     #[must_use]
     pub fn forward(&self, x: &Tensor) -> Tensor {
-        let out = x.matmul(&self.weight);
-        if let Some(b) = &self.bias {
-            out.add(b)
-        } else {
-            out
-        }
+        // One low-precision op under `amp::autocast`: input, weight and bias are cast
+        // together, so the bias add stays in the low dtype (PyTorch's `linear`).
+        let (x, weight, bias) = crate::amp::lower_layer(x, &self.weight, self.bias.as_ref());
+        let out = x.matmul(&weight);
+        if let Some(b) = &bias { out.add(b) } else { out }
     }
 }

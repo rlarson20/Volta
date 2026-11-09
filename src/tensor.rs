@@ -155,8 +155,8 @@ impl Tensor {
     /// follow [`Storage::cast`].
     ///
     /// # Panics
-    /// If the tensor is on the GPU and `dtype` is not F32 (GPU storage is f32-only until
-    /// ADDENDUM §11 P8), or `dtype` is not a float dtype while the tensor requires grad.
+    /// If the tensor is on the GPU and `dtype` cannot live there (F64 or an integer type),
+    /// or `dtype` is not a float dtype while the tensor requires grad.
     #[track_caller]
     pub(crate) fn cast_in_place(&self, dtype: DType) {
         let mut t = self.inner.borrow_mut();
@@ -855,6 +855,8 @@ impl RawTensor {
     /// Mean squared error: `mean((pred - target)^2)`.
     #[must_use]
     pub fn mse_loss(pred: &Tensor, target: &Tensor) -> Tensor {
+        // An f32 op under `amp::autocast` (PyTorch's losses): half inputs are cast up.
+        let (pred, target) = (&crate::amp::to_f32(pred), &crate::amp::to_f32(target));
         let diff = pred.sub(target);
         let squared = diff.elem_mul(&diff);
         squared.mean()
@@ -871,6 +873,8 @@ impl RawTensor {
     #[must_use]
     #[track_caller]
     pub fn cross_entropy_loss(logits: &Tensor, targets: &Tensor) -> Tensor {
+        // An f32 op under `amp::autocast` (PyTorch's losses): half inputs are cast up.
+        let (logits, targets) = (&crate::amp::to_f32(logits), &crate::amp::to_f32(targets));
         // Use log_softmax for numerical stability
         let log_probs = Self::log_softmax(logits, Axis(1));
         Self::nll_loss_named(&log_probs, targets, "cross_entropy_loss")
@@ -885,6 +889,8 @@ impl RawTensor {
     #[must_use]
     #[track_caller]
     pub fn nll_loss(log_probs: &Tensor, targets: &Tensor) -> Tensor {
+        // An f32 op under `amp::autocast` (PyTorch's losses): half inputs are cast up.
+        let (log_probs, targets) = (&crate::amp::to_f32(log_probs), &crate::amp::to_f32(targets));
         Self::nll_loss_named(log_probs, targets, "nll_loss")
     }
 
@@ -951,6 +957,8 @@ impl RawTensor {
     /// * `logvar` - Log variance of learned distribution
     #[must_use]
     pub fn kl_divergence_gaussian(mu: &Tensor, logvar: &Tensor) -> Tensor {
+        // An f32 op under `amp::autocast` (PyTorch's losses): half inputs are cast up.
+        let (mu, logvar) = (&crate::amp::to_f32(mu), &crate::amp::to_f32(logvar));
         // 1 + logvar
         let mu_shape = mu.borrow().shape.clone();
         let one = mu.constant_like(vec![1.0; mu_shape.numel()], mu_shape.truncate_rank());
@@ -983,6 +991,8 @@ impl RawTensor {
     /// For numerical stability with logits, use `bce_with_logits_loss` instead.
     #[must_use]
     pub fn bce_loss(pred: &Tensor, target: &Tensor) -> Tensor {
+        // An f32 op under `amp::autocast` (PyTorch's losses): half inputs are cast up.
+        let (pred, target) = (&crate::amp::to_f32(pred), &crate::amp::to_f32(target));
         // y * log(y_hat)
         let log_pred = pred.log();
         let term1 = target.elem_mul(&log_pred);
@@ -1013,6 +1023,8 @@ impl RawTensor {
     /// * `target` - Target labels (0 or 1)
     #[must_use]
     pub fn bce_with_logits_loss(logits: &Tensor, target: &Tensor) -> Tensor {
+        // An f32 op under `amp::autocast` (PyTorch's losses): half inputs are cast up.
+        let (logits, target) = (&crate::amp::to_f32(logits), &crate::amp::to_f32(target));
         let shape = logits.borrow().shape.clone();
         let zeros = logits.constant_like(vec![0.0; shape.numel()], shape.truncate_rank());
         let one = logits.constant_like(vec![1.0; shape.numel()], shape.truncate_rank());
@@ -1313,9 +1325,9 @@ impl RawTensor {
     /// Returns `self_t` itself when it already has `dtype`, as PyTorch does.
     ///
     /// # Panics
-    /// If `self_t` is on the GPU and `dtype` is not F32 (GPU storage is f32-only until
-    /// ADDENDUM §11 P8), and on a float-to-integer value that is NaN, infinite, or out of
-    /// range (see [`Storage::cast`]).
+    /// If `self_t` is on the GPU and `dtype` cannot live there (F64 or an integer type;
+    /// casts between F32, F16, BF16 and Bool run on the device), and on a float-to-integer
+    /// value that is NaN, infinite, or out of range (see [`Storage::cast`]).
     #[must_use]
     #[track_caller]
     pub fn to_dtype(self_t: &Tensor, dtype: DType) -> Tensor {
@@ -1806,12 +1818,13 @@ impl Tensor {
     }
 
     /// Selects `x` where `self` (a Bool condition) is true, else `y`, with broadcasting
-    /// (PyTorch's `where`). `x` and `y` share a dtype, any dtype; gradients flow to the
-    /// selected float branch.
+    /// (PyTorch's `where`). `x` and `y` may have any dtype; branches of different dtypes
+    /// promote (`DTypePolicy`). Gradients flow to the selected float branch. On the GPU,
+    /// equal shapes run a kernel and broadcasting is a device-policy gap.
     ///
     /// # Panics
-    /// If the condition is not Bool, the branches' dtypes differ, or a tensor is on the GPU
-    /// (Bool tensors cannot live there until ADDENDUM §11 P8).
+    /// If the condition is not Bool, the inputs are on different devices, or the
+    /// branches' dtypes differ under `DTypePolicy::Strict`.
     #[must_use]
     pub fn where_op(&self, x: &Self, y: &Self) -> Self {
         RawTensor::ternary_op(self, x, y, TernaryOp::Where)

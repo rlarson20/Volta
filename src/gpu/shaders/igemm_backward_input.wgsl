@@ -19,9 +19,9 @@ struct IGEMMBackwardInputParams {
     _padding: u32,
 }
 
-@group(0) @binding(0) var<storage, read> out_grad: array<f32>;
-@group(0) @binding(1) var<storage, read> weight: array<f32>;
-@group(0) @binding(2) var<storage, read_write> grad_input: array<f32>;
+@group(0) @binding(0) var<storage, read> out_grad: array<ELEM>;
+@group(0) @binding(1) var<storage, read> weight: array<ELEM>;
+@group(0) @binding(2) var<storage, read_write> grad_input: array<ELEM>;
 @group(0) @binding(3) var<uniform> params: IGEMMBackwardInputParams;
 
 @compute @workgroup_size(16, 16, 1)
@@ -71,11 +71,11 @@ fn igemm_backward_input_main(
                     if (oh < params.h_out && ow < params.w_out) {
                         // Get output gradient at this position
                         let out_grad_idx = ((batch * params.out_channels + oc) * params.h_out + oh) * params.w_out + ow;
-                        let grad_val = out_grad[out_grad_idx];
+                        let grad_val = ld_out_grad(out_grad_idx);
 
                         // Get weight at this kernel position
                         let weight_idx = ((oc * params.in_channels + in_ch) * params.kernel_h + kh) * params.kernel_w + kw;
-                        let weight_val = weight[weight_idx];
+                        let weight_val = ld_weight(weight_idx);
 
                         sum += grad_val * weight_val;
                     }
@@ -86,5 +86,5 @@ fn igemm_backward_input_main(
 
     // Write result
     let input_idx = ((batch * params.in_channels + in_ch) * params.height + ih) * params.width + iw;
-    grad_input[input_idx] = sum;
+    st_grad_input(input_idx, sum);
 }

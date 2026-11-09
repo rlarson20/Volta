@@ -6,9 +6,9 @@
 // 2. Compute partial results within the tile
 // 3. Accumulate across tiles
 
-@group(0) @binding(0) var<storage, read> a: array<f32>;
-@group(0) @binding(1) var<storage, read> b: array<f32>;
-@group(0) @binding(2) var<storage, read_write> c: array<f32>;
+@group(0) @binding(0) var<storage, read> a: array<ELEM>;
+@group(0) @binding(1) var<storage, read> b: array<ELEM>;
+@group(0) @binding(2) var<storage, read_write> c: array<ELEM>;
 
 struct Params {
     m: u32,  // Rows of A
@@ -47,7 +47,7 @@ fn matmul(
         let a_row = row;
         let a_col = t * TILE_SIZE + local_col;
         if (a_row < params.m && a_col < params.k) {
-            tile_a[local_row * TILE_SIZE + local_col] = a[a_row * params.k + a_col];
+            tile_a[local_row * TILE_SIZE + local_col] = ld_a(a_row * params.k + a_col);
         } else {
             tile_a[local_row * TILE_SIZE + local_col] = 0.0;
         }
@@ -56,7 +56,7 @@ fn matmul(
         let b_row = t * TILE_SIZE + local_row;
         let b_col = col;
         if (b_row < params.k && b_col < params.n) {
-            tile_b[local_row * TILE_SIZE + local_col] = b[b_row * params.n + b_col];
+            tile_b[local_row * TILE_SIZE + local_col] = ld_b(b_row * params.n + b_col);
         } else {
             tile_b[local_row * TILE_SIZE + local_col] = 0.0;
         }
@@ -75,6 +75,6 @@ fn matmul(
 
     // Write result
     if (row < params.m && col < params.n) {
-        c[row * params.n + col] = sum;
+        st_c(row * params.n + col, sum);
     }
 }

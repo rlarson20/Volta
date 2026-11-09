@@ -3,7 +3,8 @@
 //! CPU data is a [`HostBuf`]: one `Arc<[T]>` per dtype, so alignment and element type are
 //! guaranteed by the type rather than by a tag next to a byte buffer. Kernels read their
 //! inputs through `host::<T>()` for `T` = f32 or f64 (`crate::real`), which panics on any
-//! other dtype rather than converting it. GPU storage is f32-only until ADDENDUM §11 P8.
+//! other dtype rather than converting it. GPU storage holds F32, F16, BF16 or Bool (P8); its
+//! host copy is a [`HostBuf`] too, so host reads treat both variants alike.
 
 use crate::VoltaError;
 use crate::device::Device;
@@ -154,12 +155,12 @@ element!(bool, Bool);
 /// Storage backend for tensor data
 ///
 /// This enum allows tensors to store their data either on CPU (a typed [`HostBuf`]) or on
-/// GPU (an f32 `GpuBuffer`).
+/// GPU (a `GpuBuffer` of F32, F16, BF16 or Bool).
 pub enum Storage {
     /// CPU storage: a typed, shared, copy-on-write buffer.
     Cpu(HostBuf),
 
-    /// GPU storage - data lives in GPU memory, always f32.
+    /// GPU storage - data lives in GPU memory: F32, F16, BF16 or Bool (ADDENDUM §11 P8).
     ///
     /// Shared like the CPU variant: `clone` bumps a refcount, and the only write path is
     /// `Storage::gpu_buffer_mut`, which copies the buffer first if it is shared. So a
@@ -176,8 +177,8 @@ pub enum Storage {
 pub struct GpuStorage {
     /// The device buffer.
     buffer: GpuBuffer,
-    /// Host copy, filled by the first host read.
-    host: OnceLock<Vec<f32>>,
+    /// Host copy in the buffer's dtype, filled by the first host read.
+    host: OnceLock<HostBuf>,
 }
 
 #[cfg(feature = "gpu")]
@@ -391,11 +392,21 @@ impl Storage {
 
     /// Get the data type of this storage
     #[must_use]
-    pub const fn dtype(&self) -> DType {
+    pub fn dtype(&self) -> DType {
         match self {
             Self::Cpu(buf) => buf.dtype(),
             #[cfg(feature = "gpu")]
-            Self::Gpu(_) => DType::F32,
+            Self::Gpu(shared) => shared.buffer.dtype(),
+        }
+    }
+
+    /// The elements on the host: the CPU buffer, or GPU storage's host copy (read from
+    /// the device once, then cached; the buffer never changes while shared).
+    fn host_buf(&self) -> &HostBuf {
+        match self {
+            Self::Cpu(buf) => buf,
+            #[cfg(feature = "gpu")]
+            Self::Gpu(shared) => shared.host.get_or_init(|| shared.buffer.to_host()),
         }
     }
 
@@ -511,19 +522,16 @@ impl Storage {
     #[must_use]
     #[track_caller]
     pub fn to_host_f32(&self) -> &[f32] {
-        match self {
-            Self::Cpu(buf) => f32::view(buf).unwrap_or_else(|| {
-                panic!(
-                    "{}",
-                    VoltaError::DTypeMismatch {
-                        expected: DType::F32,
-                        actual: buf.dtype(),
-                    }
-                )
-            }),
-            #[cfg(feature = "gpu")]
-            Self::Gpu(shared) => shared.host.get_or_init(|| shared.buffer.to_vec()),
-        }
+        let buf = self.host_buf();
+        f32::view(buf).unwrap_or_else(|| {
+            panic!(
+                "{}",
+                VoltaError::DTypeMismatch {
+                    expected: DType::F32,
+                    actual: buf.dtype(),
+                }
+            )
+        })
     }
 
     /// Host view of a kernel's input as `T` (`f32` or `f64`): [`Self::to_host_f32`] for
@@ -537,16 +545,23 @@ impl Storage {
     #[must_use]
     #[track_caller]
     pub(crate) fn host<T: crate::real::Real>(&self) -> Cow<'_, [T]> {
-        match (T::DTYPE, self) {
+        match (T::DTYPE, self.host_buf()) {
             // Half to f64 to `T = f32` is exact both ways.
-            (DType::F32, Self::Cpu(HostBuf::F16(d))) => {
+            (DType::F32, HostBuf::F16(d)) => {
                 Cow::Owned(d.iter().map(|x| T::from_f64(x.to_f64())).collect())
             }
-            (DType::F32, Self::Cpu(HostBuf::BF16(d))) => {
+            (DType::F32, HostBuf::BF16(d)) => {
                 Cow::Owned(d.iter().map(|x| T::from_f64(x.to_f64())).collect())
             }
-            (DType::F32, _) => Cow::Borrowed(cast_slice(self.to_host_f32())),
-            _ => Cow::Borrowed(self.as_host::<T>().unwrap_or_else(|e| panic!("{e}"))),
+            (_, buf) => Cow::Borrowed(T::view(buf).unwrap_or_else(|| {
+                panic!(
+                    "{}",
+                    VoltaError::DTypeMismatch {
+                        expected: T::DTYPE,
+                        actual: buf.dtype(),
+                    }
+                )
+            })),
         }
     }
 
@@ -631,11 +646,7 @@ impl Storage {
     /// The elements' native-endian bytes. GPU storage syncs through the host copy.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
-        match self {
-            Self::Cpu(buf) => buf.as_bytes(),
-            #[cfg(feature = "gpu")]
-            Self::Gpu(_) => cast_slice(self.to_host_f32()),
-        }
+        self.host_buf().as_bytes()
     }
 
     // ========== Conversion ==========
@@ -650,12 +661,7 @@ impl Storage {
         reason = "decoding to f32 for display narrows by definition"
     )]
     pub fn to_f32_vec(&self) -> Vec<f32> {
-        let buf = match self {
-            Self::Cpu(buf) => buf,
-            #[cfg(feature = "gpu")]
-            Self::Gpu(_) => return self.to_host_f32().to_vec(),
-        };
-        match buf {
+        match self.host_buf() {
             HostBuf::F16(d) => d.iter().map(|x| x.to_f32()).collect(),
             HostBuf::BF16(d) => d.iter().map(|x| x.to_f32()).collect(),
             HostBuf::F32(d) => d.to_vec(),
@@ -686,20 +692,20 @@ impl Storage {
     ///
     /// # Panics
     ///
-    /// On GPU storage (f32-only until ADDENDUM §11 P8), and on a float-to-integer value
-    /// out of range, as above.
+    /// On GPU storage cast to a dtype the GPU cannot hold (F64 or an integer type; GPU
+    /// casts between F32, F16, BF16 and Bool run on the device), and on a float-to-integer
+    /// value out of range, as above.
     #[must_use]
     #[track_caller]
     pub fn cast(&self, target: DType) -> Self {
         if self.dtype() == target {
             return self.clone();
         }
-        let buf = match self {
-            Self::Cpu(buf) => buf,
-            #[cfg(feature = "gpu")]
-            Self::Gpu(_) => panic!("cast to {target}: GPU storage is f32-only (ADDENDUM §11 P8)"),
-        };
-        Self::Cpu(match buf {
+        #[cfg(feature = "gpu")]
+        if let Self::Gpu(shared) = self {
+            return Self::cast_on_gpu(&shared.buffer, target);
+        }
+        Self::Cpu(match self.host_buf() {
             HostBuf::F16(d) => cast_float(d.iter().map(|x| f64::from(x.to_f32())), target),
             HostBuf::BF16(d) => cast_float(d.iter().map(|x| f64::from(x.to_f32())), target),
             HostBuf::F32(d) => cast_float(d.iter().map(|&x| f64::from(x)), target),
@@ -739,12 +745,31 @@ impl Storage {
         }
     }
 
+    /// `buffer` cast to `target` on the device (`Storage::cast` of GPU storage): between
+    /// F32, F16, BF16 and Bool, with a kernel, so the result stays on the GPU.
+    ///
+    /// # Panics
+    /// If `target` cannot live on the GPU (F64 and the integer types), or the kernel fails.
+    #[cfg(feature = "gpu")]
+    #[track_caller]
+    fn cast_on_gpu(buffer: &GpuBuffer, target: DType) -> Self {
+        assert!(
+            matches!(target, DType::F32 | DType::F16 | DType::BF16 | DType::Bool),
+            "cast to {target}: GPU tensors hold f32, f16, bf16 or bool; move the tensor to the \
+             CPU before casting it to {target}"
+        );
+        let out = crate::gpu::GpuKernels::cast(buffer, target)
+            .unwrap_or_else(|| crate::device_policy::kernel_failed("Cast"));
+        Self::from_gpu_buffer(out)
+    }
+
     /// Move to a specific device
     ///
     /// # Panics
     /// If `device` is a GPU and no GPU is available (it never returns CPU storage for a
-    /// GPU request), or the storage is not F32: GPU storage is f32-only, and converting
-    /// on the way would change the dtype silently.
+    /// GPU request), or the storage is F64 or an integer type: GPU tensors hold F32, F16,
+    /// BF16 and Bool (PyTorch's MPS refuses f64 too), and converting on the way would
+    /// change the dtype silently.
     #[must_use]
     pub fn to_device(&self, device: &Device) -> Self {
         match device {
@@ -752,7 +777,7 @@ impl Storage {
                 // Already host memory: share the buffer.
                 Self::Cpu(_) => self.clone(),
                 #[cfg(feature = "gpu")]
-                Self::Gpu(_) => Self::cpu(self.to_host_f32().to_vec()),
+                Self::Gpu(_) => Self::Cpu(self.host_buf().clone()),
             },
             Device::GPU(_) => {
                 #[cfg(feature = "gpu")]
@@ -766,11 +791,18 @@ impl Storage {
                         Self::Gpu(_) => self.clone(),
                         Self::Cpu(buf) => {
                             assert!(
-                                buf.dtype() == DType::F32,
-                                "to_device({device}): GPU storage is f32-only, got {}",
+                                matches!(
+                                    buf.dtype(),
+                                    DType::F32 | DType::F16 | DType::BF16 | DType::Bool
+                                ),
+                                "to_device({device}): GPU tensors hold f32, f16, bf16 or bool, \
+                                 not {} (PyTorch's MPS refuses f64 too); cast with to_dtype first",
                                 buf.dtype()
                             );
-                            Self::gpu(self.to_host_f32().to_vec())
+                            let buffer = GpuBuffer::from_host(buf).unwrap_or_else(|| {
+                                panic!("to_device({device}): GPU buffer allocation failed")
+                            });
+                            Self::from_gpu_buffer(buffer)
                         }
                     }
                 }

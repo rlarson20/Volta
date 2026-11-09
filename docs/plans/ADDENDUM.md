@@ -579,15 +579,15 @@ Today `DType` only tags bytes: every `Tensor` is f32, `Storage`'s typed construc
 - f16/bf16 ops decode to f32, compute in f32, and round the output to the storage dtype (PyTorch CPU). Reductions over half inputs accumulate in f32. f64 computes in f64. Torch fixtures check each dtype with its own tolerance.
 - A gradient has its tensor's dtype. Only float tensors may `requires_grad`; asking for it on an int or bool tensor is a `VoltaError`.
 - `to_dtype` is a differentiable op (`GradFn::Cast`, built by `edge()`); its backward casts the gradient back. Mixed-dtype operands never reach a kernel: promotion inserts `Cast` nodes, so every kernel sees one dtype.
-- Promotion follows `torch.result_type` for two dimensioned tensors. The rule for zero-dim tensors and Rust scalars is settled in P6.
+- Promotion follows `torch.result_type` for two dimensioned tensors. Settled in P6: Volta has no zero-dim tensors or scalar ops, so a `[1]` tensor is dimensioned and promotes fully (`f16[n] * f32[1]` is f32, as in torch). Scalar ops with torch's wrapped-number rule are a TODO. `DTypePolicy::Strict` turns promotion off.
 - I64 and Bool tensors are data, not parameters: `Embedding` takes I64 indices, cross-entropy takes I64 targets, comparisons return Bool, and `where` takes a Bool condition.
-- On the GPU, f32 and f16 are supported (wgpu `SHADER_F16`). An unsupported dtype or adapter panics at `to_device` (like a missing adapter today; `to_device` takes tensors the program built), never a silent upcast.
+- On the GPU, f32, f16 and bf16 are supported, and Bool (decided in P8, following PyTorch: native where the hardware has it, emulated where it can store the type). f16 is native with wgpu `SHADER_F16` and packed two per `u32` word otherwise; bf16 is always packed (WGSL has no bf16), with f32 compute and round-to-nearest-even stores, as PyTorch's `c10::BFloat16` emulates it on GPUs without bf16. F64 and integer tensors panic at `to_device`, as PyTorch's MPS refuses f64, never a silent upcast.
 
 **Storage.** A typed host buffer replaces `Arc<[u8]>` plus a tag: `HostBuf::{F32(Arc<[f32]>), F64(Arc<[f64]>), F16(..), BF16(..), I32(..), I64(..), U8(..), Bool(..)}`. Alignment becomes a type guarantee rather than an allocator accident (`DECISIONS.md`, "CPU storage"), which starts to matter once f64 is computed on. GPU buffers carry their dtype.
 
 **Kernels.** CPU kernels become generic over a sealed accumulator trait implemented for `f32` and `f64`. Half dtypes run the `f32` instance and load and round at the edges. That doubles the instances, not the source.
 
-**Autocast and scaling (P7).** A scoped guard (like `NoGrad`) casts the inputs of matmul, conv, and `Linear` to the low-precision dtype, and keeps reductions, softmax, norms, and losses in f32. `GradScaler` scales the loss, unscales the gradients, skips a step on inf/NaN, and adapts the scale. Optimizers keep f32 master weights and state for half parameters.
+**Autocast and scaling (P7).** A scoped guard (like `NoGrad`) casts the inputs of matmul, conv, and `Linear` to the low-precision dtype and the inputs of losses to f32; everything else runs in its inputs' dtype (PyTorch's CPU lists, decided in P7: on the CPU torch keeps softmax, norms and reductions in the half dtype). Parameters stay f32, so autocast needs no master weights. `GradScaler` scales the loss, unscales the gradients, skips a step on inf/NaN, and adapts the scale. Master weights for a model converted to half are a TODO.
 
 **PRs (stacked, one task each):**
 
@@ -601,8 +601,8 @@ Today `DType` only tags bytes: every `Tensor` is f32, `Storage`'s typed construc
 | P4 | f16/bf16 tensors | Torch fixtures in f16 and bf16 for every op family |
 | P5 | I64/Bool tensors; `Embedding` becomes a `Layer` (§3.2) | `Embedding` in `Sequential` trains; comparisons, `where`, cross-entropy against torch |
 | P6 | Implicit promotion | Mixed-dtype ops match torch's result dtype and values |
-| P7 | Autocast, `GradScaler`, master weights | MNIST under bf16 autocast reaches f32 accuracy within a stated margin; a scaler skip-step test |
-| P8 | GPU f16 | `just test-gpu` on the Mac: GPU f16 matches CPU f16 |
+| P7 | Autocast, `GradScaler`, `Optimizer` trait | MNIST under bf16 autocast reaches f32 accuracy within a stated margin (0.2 points, 5 seeds, `just mnist-autocast`); a scaler skip-step test |
+| P8 | GPU f16, bf16 and Bool | GPU f16 (native and emulated) and bf16 match the CPU in the same dtype for every op family; run on lavapipe and on the Mac (`just test-gpu`) |
 
 ## Sequencing
 
