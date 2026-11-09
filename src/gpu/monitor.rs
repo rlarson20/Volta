@@ -1,8 +1,8 @@
 //! Emergency resource monitoring for GPU operations
 //!
 //! Provides system-level resource monitoring to detect critical memory
-//! pressure before system freezes occur. macOS-specific implementation
-//! using the `ps` command for memory tracking.
+//! pressure before system freezes occur. Process memory is read from `ps` and
+//! `sysctl` on macOS and from `/proc` on Linux.
 
 #[cfg(target_os = "macos")]
 use std::process::Command;
@@ -21,7 +21,7 @@ pub enum ResourceStatus {
 /// Check system resource health
 ///
 /// Monitors two key indicators:
-/// 1. **Process memory usage** - Via macOS `ps` command (fails safe on other platforms)
+/// 1. **Process memory usage** - macOS and Linux (fails safe elsewhere)
 /// 2. **GPU pending operation count** - Proxy for GPU memory pressure
 ///
 /// # Thresholds
@@ -36,7 +36,7 @@ pub enum ResourceStatus {
 ///
 /// # Platform Support
 ///
-/// - **macOS**: Full memory monitoring via `ps` command
+/// - **macOS** and **Linux**: Full memory monitoring
 /// - **Other platforms**: Only monitors GPU pending count (memory always returns healthy)
 ///
 /// # Example
@@ -86,55 +86,100 @@ pub fn check_system_resources() -> ResourceStatus {
     ResourceStatus::Healthy
 }
 
-/// Get process memory usage as ratio of system memory (macOS only)
+/// Process resident set size in KiB, or `None` if it cannot be read.
+#[cfg(target_os = "macos")]
+fn process_rss_kb() -> Option<u64> {
+    // Execute: ps -o rss= -p <pid>
+    let output = Command::new("ps")
+        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+        .output()
+        .ok()?;
+    String::from_utf8(output.stdout).ok()?.trim().parse().ok()
+}
+
+/// Total physical memory in KiB, or `None` if it cannot be read.
+#[cfg(target_os = "macos")]
+fn total_memory_kb() -> Option<u64> {
+    let output = Command::new("sysctl")
+        .args(["-n", "hw.memsize"])
+        .output()
+        .ok()?;
+    let bytes: u64 = String::from_utf8(output.stdout).ok()?.trim().parse().ok()?;
+    Some(bytes / 1024)
+}
+
+/// Value in KiB of a `Key:   <n> kB` line in a `/proc` file.
+#[cfg(target_os = "linux")]
+fn proc_kb(path: &str, key: &str) -> Option<u64> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let rest = text.lines().find_map(|line| line.strip_prefix(key))?;
+    rest.strip_prefix(':')?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// Process resident set size in KiB, or `None` if it cannot be read.
+#[cfg(target_os = "linux")]
+fn process_rss_kb() -> Option<u64> {
+    proc_kb("/proc/self/status", "VmRSS")
+}
+
+/// Total physical memory in KiB, or `None` if it cannot be read.
+#[cfg(target_os = "linux")]
+fn total_memory_kb() -> Option<u64> {
+    proc_kb("/proc/meminfo", "MemTotal")
+}
+
+/// Not measured on this platform.
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn process_rss_kb() -> Option<u64> {
+    None
+}
+
+/// Not measured on this platform.
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn total_memory_kb() -> Option<u64> {
+    None
+}
+
+/// Log once that memory pressure cannot be measured, so a blind monitor is not silent.
+fn warn_unmeasured() {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| {
+        log::warn!("process memory is not measurable here; memory pressure checks are disabled");
+    });
+}
+
+/// Get process memory usage as a ratio of total system memory
 ///
-/// Uses the `ps` command to query process resident set size (RSS).
-/// Returns 0.0 (healthy) on any errors to avoid false positives.
+/// Reads the process resident set size (RSS) and the machine's physical
+/// memory, so the thresholds in [`check_system_resources`] scale to the host.
+/// Returns 0.0 (healthy) when either cannot be read, to avoid false positives.
 ///
 /// # Implementation Details
 ///
-/// - Uses `ps -o rss= -p <pid>` to get RSS in kilobytes
-/// - Assumes 24GB system memory (M2 Mac target platform)
-/// - ~1ms execution time, negligible overhead
+/// - **macOS**: `ps -o rss= -p <pid>` for RSS, `sysctl -n hw.memsize` for total RAM
+/// - **Linux**: `VmRSS` from `/proc/self/status`, `MemTotal` from `/proc/meminfo`
+/// - **Other platforms**: not measured
+///
+/// Total RAM is read once and cached.
 ///
 /// # Fail-Safe Behavior
 ///
-/// Returns 0.0 (healthy) if:
-/// - `ps` command fails to execute
-/// - Output parsing fails
-/// - Any other errors occur
-#[cfg(target_os = "macos")]
+/// Returns 0.0 (healthy), and logs a warning once, if a command or file
+/// cannot be read or parsed, or if total memory is reported as zero.
 fn get_process_memory_ratio() -> f64 {
-    const SYSTEM_MEMORY_KB: usize = 24 * 1024 * 1024;
-
-    let pid = std::process::id();
-
-    // Execute: ps -o rss= -p <pid>
-    let Ok(output) = Command::new("ps")
-        .args(["-o", "rss=", "-p", &pid.to_string()])
-        .output()
-    else {
-        return 0.0;
-    };
-
-    // Parse RSS value (in KB)
-    let Ok(rss_str) = String::from_utf8(output.stdout) else {
-        return 0.0;
-    };
-
-    let rss_kb: usize = match rss_str.trim().parse() {
-        Ok(kb) => kb,
-        Err(_) => return 0.0,
-    };
-
-    // Convert to ratio of 24GB (M2 Mac system memory)
-    rss_kb as f64 / SYSTEM_MEMORY_KB as f64
-}
-
-/// Not measured off macOS: always `0.0`, which callers read as no memory pressure.
-#[cfg(not(target_os = "macos"))]
-fn get_process_memory_ratio() -> f64 {
-    0.0 // Not implemented for non-macOS, return healthy
+    static TOTAL_KB: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    let total = *TOTAL_KB.get_or_init(total_memory_kb);
+    match (process_rss_kb(), total) {
+        (Some(rss), Some(total)) if total > 0 => rss as f64 / total as f64,
+        _ => {
+            warn_unmeasured();
+            0.0
+        }
+    }
 }
 
 /// Get current process memory in MB (diagnostic)
@@ -150,15 +195,14 @@ fn get_process_memory_ratio() -> f64 {
 /// println!("Current memory usage: {}MB", get_process_memory_mb());
 /// ```
 #[must_use]
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "the ratio is a fraction of 24 GiB, so the product is a whole, non-negative MB count"
-)]
 pub fn get_process_memory_mb() -> usize {
-    const SYSTEM_MEMORY_MB: usize = 24 * 1024;
-    let ratio = get_process_memory_ratio();
-    (ratio * SYSTEM_MEMORY_MB as f64) as usize
+    process_rss_kb().map_or_else(
+        || {
+            warn_unmeasured();
+            0
+        },
+        |kb| usize::try_from(kb / 1024).unwrap_or(usize::MAX),
+    )
 }
 
 #[cfg(test)]
@@ -172,12 +216,22 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn test_memory_ratio_is_reasonable() {
         let ratio = get_process_memory_ratio();
-        // Memory ratio should be between 0 and 1
-        assert!(ratio >= 0.0);
+        // A running test process has a nonzero RSS, so zero means the read failed.
+        assert!(ratio > 0.0, "RSS or total memory was not read");
         assert!(ratio <= 1.0);
+    }
+
+    #[test]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn test_memory_mb_matches_ratio() {
+        let total_mb = total_memory_kb().expect("total memory") / 1024;
+        let from_ratio = get_process_memory_ratio() * total_mb as f64;
+        let mb = get_process_memory_mb() as f64;
+        // Two reads a moment apart; allow for allocation between them.
+        assert!((mb - from_ratio).abs() < 64.0, "{mb} vs {from_ratio}");
     }
 
     #[test]

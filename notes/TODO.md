@@ -57,7 +57,6 @@ Evidence in `docs/audits/2026-11-post-phase5.md`; repros (`#[ignore = "A<n>: ...
 - [ ] GPU reductions are single-threaded (`workgroup_size(1)`); `gpu_max_reduce` reads back to CPU.
 - [ ] **GPU Muon's Frobenius norm is a single-workgroup reduction** (`sum_squares` in `muon.wgsl`, one 256-thread workgroup with a strided loop). Correct (about 1e-6 against the CPU on 64x96), but it will be the slow step in `muon_newton_schulz` for a very large parameter. The fix is a two-pass reduction (per-workgroup partial sums, then one workgroup over the partials). Time `muon_newton_schulz` on a 4096x4096 matrix before changing it.
 - [ ] GPU layer returns `Option` for everything; move to `Result<_, GpuError>` with a single dispatch choke point.
-- [ ] `get_process_memory_ratio` (`src/gpu/monitor.rs`) divides by a hard-coded 24 GB (an M2 Mac) and returns 0.0 off macOS. Detect real system memory (the `sysinfo` crate, or drop the ratio).
 - [~] Stop exporting diagnostic tooling as public API. `GpuKernels`, `OptimizerStepParams`, `BufferPool`, `BufferPoolConfig`, and `StagingBufferPool` are crate-private. Still public: the `monitor`, `system_monitor`, and `early_warning` modules (`tests/gpu_stress.rs` demonstrates them) and `GpuContext`.
 
 ## Performance
