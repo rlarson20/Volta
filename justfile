@@ -178,5 +178,20 @@ bench-compare:
 	cargo bench --bench neural_networks -- --baseline main
 	cargo bench --bench conv_algorithms -- --baseline main
 
+# Time the 256x256 `matmul_raw` smoke test N times in release and average (was bench.sh).
+# A quick regression check, not a benchmark: use `just bench` for criterion numbers.
+bench-matmul runs="10" *flags="":
+	#!/usr/bin/env bash
+	set -euo pipefail
+	total=0
+	for ((i = 1; i <= {{runs}}; i++)); do
+		line=$(cargo test --release --lib {{flags}} bench_matmul_speedup -- --nocapture 2>&1 | grep '256x256 matmul:' || true)
+		ms=$(printf '%s' "$line" | sed -nE 's/.*matmul: ([0-9.]+)ms.*/\1/p')
+		if [[ -z "$ms" ]]; then echo "run $i: no timing line (did the test build or fail?)" >&2; exit 1; fi
+		echo "run $i: ${ms}ms"
+		total=$(awk -v t="$total" -v m="$ms" 'BEGIN {print t + m}')
+	done
+	awk -v t="$total" -v n="{{runs}}" 'BEGIN {printf "average: %.3fms over %d runs\n", t / n, n}'
+
 bench-report:
 	open './target/criterion/report/index.html'

@@ -167,7 +167,7 @@ fn strict_dtype_policy_refuses_mixed_operands() {
 }
 
 /// Integer division is true division, in f32 (PyTorch's `div`); integer `add` still has no
-/// kernel (data-only integers, `notes/TODO.md`).
+/// kernel (data-only integers, issue #75).
 #[test]
 fn int_division_is_true_division_in_f32() {
     let a = RawTensor::from_typed(vec![1i64, 7, -3], &[3]);

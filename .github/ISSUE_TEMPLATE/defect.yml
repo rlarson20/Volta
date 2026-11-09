@@ -1,0 +1,35 @@
+name: Defect
+description: A wrong result, panic, or NaN, or a claim in the docs that the code doesn't back.
+labels: ["kind:bug"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What Volta does, what PyTorch (or the docs) says it should do, and the smallest input that shows it.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence and repro
+      description: The audit section, if there is one, and the `#[ignore = "<ID>: ..."]` test plus the command that runs it (invariant 6, never a test that asserts the bug).
+      render: markdown
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: The check that closes this, e.g. "the ignored test passes un-ignored and matches torch".
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority (copy to a P0–P3 label)
+      options:
+        - "P0: silent wrong answer"
+        - "P1: loud failure or unverified claim"
+        - "P2: debt, API, feature"
+        - "P3: perf or later phase"

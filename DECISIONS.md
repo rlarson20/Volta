@@ -1,6 +1,6 @@
 # DECISIONS.md — Design decisions
 
-Why the code is the way it is, and what was tried and rejected. What was done is in the commit log; what is open is in `notes/TODO.md`.
+Why the code is the way it is, and what was tried and rejected. What was done is in the commit log; what is open is in the GitHub issues.
 Updated: 2026-11-02
 
 ---
@@ -245,7 +245,7 @@ A size silently defaulting to 1 is the same class as `.get(i).unwrap_or(0.0)` (i
 
 **Not covered:**
 - Movement ops keep their per-op structs and hand-written dispatch. They carry real state and different kernels and would need a second grammar. They share the one thing that could drift instead: each of `expand`, `pad`, `shrink`, and `stride_op` computes GPU-or-CPU storage and ends in a single `RawTensor::movement_edge` call, where it used to build an identical `GradFn::Movement` literal once per path. That needed not-gpu stubs for the five forward `gpu_*` wrappers (`gpu_ops.rs`), so `movement.rs` carries no forward `cfg`.
-- The non-safe `GpuKernels::binary_backward_broadcast` (atomic-add scatter, dead code behind `#[allow(dead_code)]`) was deleted rather than given a row slot. It returned wrong gradients silently when checked on the commit before this change, so nothing working was lost. The race-free two-pass path remains but also fails (wgpu bind-group validation error); both are unreachable, since GPU forward never broadcasts (`notes/TODO.md`). The non-safe `*_broadcast` pipelines and shader entry points were deleted afterwards, along with the helpers and `params` binding only they used; `binary_backward.wgsl` now holds only the same-shape `*_backward_a/b` entries.
+- The non-safe `GpuKernels::binary_backward_broadcast` (atomic-add scatter, dead code behind `#[allow(dead_code)]`) was deleted rather than given a row slot. It returned wrong gradients silently when checked on the commit before this change, so nothing working was lost. The race-free two-pass path remains but also fails (wgpu bind-group validation error); both are unreachable, since GPU forward never broadcasts (#60). The non-safe `*_broadcast` pipelines and shader entry points were deleted afterwards, along with the helpers and `params` binding only they used; `binary_backward.wgsl` now holds only the same-shape `*_backward_a/b` entries.
 
 ### `into_loss` / `ScalarLoss` (ADDENDUM §2.2)
 
@@ -281,7 +281,7 @@ Choke points for whoever lands views: the operand reads in `RawTensor::matmul` (
 
 **Zero that means something:** conv and im2col padding reads as zero because the coordinate is outside the image. That check is spelled out (`ih < height && iw < width`) and commented at the site, and the in-range read then goes through `fetch`. A slice bound never implements padding.
 
-**Two panics that wait on the error-handling policy:** the §8 pass added two panics that go past "kernel mapping bug" and touch the undecided panic-vs-`Result` question (`notes/TODO.md`, H4 and Rust/errors). `to_one_hot` asserts `label < num_classes`, and that label can come from real data, so it may belong on the `Result` side. `GpuKernels::binary_backward_broadcast_safe` panics on rank > 4 instead of truncating the shape into a 4-wide array (H5); the path is unreachable today. Both were kept loud because the alternative was silent corruption. Revisit them when the error regime lands.
+**Two panics that wait on the error-handling policy:** the §8 pass added two panics that go past "kernel mapping bug" and touch the undecided panic-vs-`Result` question (then in `notes/TODO.md`, H4 and Rust/errors; since settled, see "Errors" below). `to_one_hot` asserts `label < num_classes`, and that label can come from real data, so it may belong on the `Result` side. `GpuKernels::binary_backward_broadcast_safe` panics on rank > 4 instead of truncating the shape into a 4-wide array (H5); the path is unreachable today. Both were kept loud because the alternative was silent corruption. Revisit them when the error regime lands.
 
 **Out of scope:** `HashMap` lookups (`state.get("weight")`, where a missing key is legitimate).
 
@@ -407,7 +407,7 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 - **A gap** (a GPU input reaching an op, or a case of an op, with no GPU kernel) goes through the policy. `DevicePolicy::Strict`, the default, panics with the op's name and the opt-in. `DevicePolicy::PreferGpu` runs the op on the CPU, moves the result to the GPU, and records a `FallbackEvent`. `edge()` is the forward check (a CPU output for GPU inputs is a gap) and `Tensor::accumulate_grad` the backward one (a CPU gradient for a GPU tensor is a gap), so an op that is never edited is still covered.
 - **A failure** (a kernel that covers the case returns `None`) panics under every policy via `kernel_failed`, at the op site. Only the op knows whether a kernel covers the case: `UnaryOp::has_gpu_kernel()` (from `define_ops!`), differing binary shapes, batched and vector matmul, movement ops above rank 4.
 
-**Why `Strict` by default:** it is PyTorch's behavior (mixed devices raise; a missing kernel raises `NotImplementedError`; the only fallback, `PYTORCH_ENABLE_MPS_FALLBACK`, is opt-in), and invariant 5: a silent fallback is how a "GPU test" passed with nothing on the GPU. No one depends on the old behavior, so GPU models that hit gaps (`Linear`'s bias add, attention's batched matmuls) now opt in, and the panics are the list of missing kernels (`notes/TODO.md`).
+**Why `Strict` by default:** it is PyTorch's behavior (mixed devices raise; a missing kernel raises `NotImplementedError`; the only fallback, `PYTORCH_ENABLE_MPS_FALLBACK`, is opt-in), and invariant 5: a silent fallback is how a "GPU test" passed with nothing on the GPU. No one depends on the old behavior, so GPU models that hit gaps (`Linear`'s bias add, attention's batched matmuls) now opt in, and the panics are the list of missing kernels (#67).
 
 **Why `PreferGpu` never covers failures:** a kernel that exists and returns nothing is a bug or a broken device. Retrying it on the CPU is the silent fallback this replaces. PyTorch does not retry a CUDA OOM on the CPU either.
 
@@ -422,7 +422,7 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 - No CPU-scalar exception. PyTorch lets a 0-dim CPU tensor meet a CUDA tensor; Volta's scalars are shape `[1]`, and the exception would reopen the mixed-device hole. Library code builds constants on its input's device (`Tensor::constant_like`).
 - Errors are panics, not `Result`. Ops return `Tensor`; the H4 error-policy decision revisits this.
 
-**Also fixed on the way:** the GPU movement kernels pack shapes into `[u32; 4]`, so a rank-5 permute returned zeros (H5's truncation). Movement ops above rank 4, or with a pad width over 16 bits on dims 2–3, are now gaps. GPU binary backward with differing shapes is a gap too: its kernels are broken (`notes/TODO.md`), and the forward check made them reachable.
+**Also fixed on the way:** the GPU movement kernels pack shapes into `[u32; 4]`, so a rank-5 permute returned zeros (H5's truncation). Movement ops above rank 4, or with a pad width over 16 bits on dims 2–3, are now gaps. GPU binary backward with differing shapes is a gap too: its kernels are broken (#60), and the forward check made them reachable.
 
 **Tests:** `tests/device_policy.rs` (forward and backward gaps under both policies, mixed devices, unknown GPU names, layers and losses keeping constants on the GPU, `no_grad`, event order, rank-5 movement), `device_policy::tests`, and `expect_gaps` in the parity and smoke tests, which asserts the exact set of ops each GPU test runs on the CPU. All ran on a real adapter (2026-10-30).
 
@@ -656,7 +656,7 @@ Seeds spread about 0.25 points, so a 5-seed mean has a standard error near 0.05;
 
 **Missing keys still load nothing:** `load_state_dict` skips keys the module lacks and leaves parameters with no entry untouched. That is the old behavior, kept; `load_state_dict_checked` reports them. Strictness about missing keys is a separate decision.
 
-**Open: a failed load is not atomic.** `load_state_dict` checks each entry as it reaches it, so an `Err` can leave earlier layers overwritten. The trait doc says to discard the module. A browser tool must not rely on that. The fix has to avoid keeping a second copy of the weights, which rules out snapshot-and-rollback and a fresh model plus a swap (peak memory about twice the weights, gigabytes for a large model, in a browser tab). That leaves plan-then-apply: layers return the `(tensor, entry)` pairs they would load, one provided method validates all of them, and only then writes. Deferred until the browser tool exists, because it changes the `Module` trait again; the design and its costs are in `notes/TODO.md`.
+**Open: a failed load is not atomic.** `load_state_dict` checks each entry as it reaches it, so an `Err` can leave earlier layers overwritten. The trait doc says to discard the module. A browser tool must not rely on that. The fix has to avoid keeping a second copy of the weights, which rules out snapshot-and-rollback and a fresh model plus a swap (peak memory about twice the weights, gigabytes for a large model, in a browser tab). That leaves plan-then-apply: layers return the `(tensor, entry)` pairs they would load, one provided method validates all of them, and only then writes. Deferred until the browser tool exists, because it changes the `Module` trait again; the design and its costs are in #65.
 
 **Not changed:** ops that take an `Axis` (`max_dim`, `mean_dim`, `softmax`, `permute`, ...) and the GPU layer's `Option` returns stay as they were. A binding range-checks an axis against `shape().rank()` itself until those get a `try_` form.
 

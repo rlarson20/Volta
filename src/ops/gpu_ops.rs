@@ -346,7 +346,7 @@ impl RawTensor {
         if !(out_grad.device.is_gpu() && x.device.is_gpu() && y.device.is_gpu()) {
             return None;
         }
-        // Gap until the broadcast backward bind groups are fixed (TODO.md, "GPU broadcast
+        // Gap until the broadcast backward bind groups are fixed (issue #60, "GPU broadcast
         // backward is broken"): `None` sends differing shapes to the CPU path, and the
         // device policy applies when the gradient reaches its GPU parameter.
         if !(out_grad.shape == x.shape && out_grad.shape == y.shape) {
@@ -406,7 +406,7 @@ impl RawTensor {
     #[cfg(feature = "gpu")]
     #[expect(
         dead_code,
-        reason = "unreachable until the broadcast backward bind groups are fixed (TODO.md)"
+        reason = "unreachable until the broadcast backward bind groups are fixed (issue #60)"
     )]
     fn gpu_binary_backward_broadcast_shapes(
         op: BinaryOp,
@@ -1245,7 +1245,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "GPU broadcast backward (notes/TODO.md): the two-pass pass-1 bind group has 6 \
+    #[ignore = "GPU broadcast backward (#60): the two-pass pass-1 bind group has 6 \
                 bindings but wgpu's auto layout keeps only those the entry point uses (3 for Add)"]
     fn gpu_binary_backward_broadcast_matches_cpu() {
         assert_gpu_backward_matches_cpu(&[

@@ -34,7 +34,7 @@ What the numbers say:
 - Reductions cost 3x to 7x an elementwise op and grow with size. Not investigated.
 - Criterion's "regressed" and "improved" flags compare against whatever baseline was on disk, so they are not a verdict on a code change. The largest flags in this run were `gpu_sum` and `gpu_mean` at 4096 (+43% and +52%) and `many_small_ops` (+16%).
 
-Open follow-ups are in `notes/TODO.md`.
+Open follow-ups: [#79](https://github.com/rlarson20/Volta/issues/79) (per-op floor, matmul/sum profiling, transfer sizing) and [#80](https://github.com/rlarson20/Volta/issues/80) (reductions).
 
 ## Benchmark Commands
 
@@ -44,6 +44,9 @@ just bench
 
 # Run convolution algorithm comparison (SAFE)
 just bench-conv
+
+# Quick matmul timing smoke check: N release runs of one test, averaged
+just bench-matmul 10                          # extra cargo flags: just bench-matmul 10 --no-default-features
 
 # Run specific benchmark
 just bench-name tensor_ops

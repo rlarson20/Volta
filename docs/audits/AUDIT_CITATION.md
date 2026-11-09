@@ -1,6 +1,6 @@
 # Audit citation ledger
 
-> **Frozen record (2026-11-02).** B1–B5 and H1–H8 are fixed; live status is in `notes/TODO.md`, and the evidence for each fix is in the git history. Findings below describe the code as it was when audited.
+> **Frozen record (2026-11-02).** B1–B5 and H1–H8 are fixed; live status is in the GitHub issues, and the evidence for each fix is in the git history. Findings below describe the code as it was when audited.
 
 This is a durable research ledger for the findings in `OPUS_5_EVAL_AUDIT.md` and `notes/TODO.md`.
 It distinguishes (1) a locally verified defect from (2) the external contract or reference implementation that establishes the intended behavior.

@@ -21,17 +21,17 @@ A cloud run is the GitHub `cpu-only` lane in `.github/workflows/ci.yml`, not the
 
 ## Valid cloud work
 
-Work that a Linux CPU can verify, and that reviews as a PR. Current candidates from `notes/TODO.md` (check it for live status):
+Work that a Linux CPU can verify, and that reviews as a PR. Candidates are open issues without the `needs-mac` label; check the issue for live status. Typical shapes:
 
-- Test fixes from `notes/TODO.md`: the blind BatchNorm gradcheck in `tests/coverage_fill.rs`, and the io tests' fixed temp paths.
+- Test and CPU-side correctness fixes (labels `kind:test`, `kind:bug` without `area:gpu`).
 - Docs toward the merge gate (the undocumented items behind the `lib.rs` allow). Read the code for every claim you write. Don't remove the allow until nothing is left.
 - Comment-only fixes (for example the `BackwardParams` comments in `matmul_backward.wgsl`).
-- Investigations that end in a `notes/TODO.md` or `DECISIONS.md` entry.
+- Investigations that end in an issue comment or a `DECISIONS.md` entry.
 - Phase 3 work (storage, the `Shape` flip) and later architecture, on the same terms as locally: ask before choosing a design. Any GPU-touching part can't be verified here (below).
 
 ## Not valid in cloud
 
-- **Metal-specific evidence:** H5, GPU parity on Apple hardware, GPU speed. Without lavapipe a passing GPU test here was skipped. With lavapipe the GPU tests run on a software Vulkan device: that verifies the kernels' logic and the device-policy paths, not Metal's precision, limits or driver. Say "GPU tests ran on lavapipe" and still hand Metal off as "needs `just test-gpu` on the Mac"; don't mark Metal behavior `[x]` in `notes/TODO.md`.
+- **Metal-specific evidence:** H5, GPU parity on Apple hardware, GPU speed. Without lavapipe a passing GPU test here was skipped. With lavapipe the GPU tests run on a software Vulkan device: that verifies the kernels' logic and the device-policy paths, not Metal's precision, limits or driver. Say "GPU tests ran on lavapipe" and still hand Metal off as "needs `just test-gpu` on the Mac"; don't close a `needs-mac` issue from the cloud.
 - **Performance and the Accelerate path:** benches, speed claims, and timing thresholds. `bench_matmul_speedup` (`src/lib.rs`) uses the non-Accelerate threshold and may flake on a shared VM. Report it; don't loosen it.
 - **Shader validation** runs anywhere: `just validate-shaders` is `cargo test --lib shader_template` (naga is a dev-dependency).
 - **Git:** never push to `main` or `improvements`, never force-push, never `--no-verify` or `SKIP=`. Branch and target PRs as in "Stacked PRs" below.

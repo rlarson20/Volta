@@ -6,7 +6,7 @@
 //! representable in every dtype.
 //!
 //! Where torch's result is an integer or bool dtype for `add`/`mul` (`i64 + i64`,
-//! `bool + bool`), Volta has no integer arithmetic kernels (`notes/TODO.md`): the test
+//! `bool + bool`), Volta has no integer arithmetic kernels (issue #75): the test
 //! checks that the op panics naming the missing kernel, rather than skipping the pair.
 
 use std::collections::BTreeMap;
