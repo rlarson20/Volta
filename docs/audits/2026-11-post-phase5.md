@@ -1,6 +1,6 @@
 # Post-Phase-5 audit (2026-11-04)
 
-A whole-codebase audit after the Phase 5 stack (dtypes and mixed precision, PRs #19–#28), on `audit/2026-11-post-phase5` stacked on `dtype/p8-gpu-half` (`de41abb`). It asks four questions: what is dealt with, what is newly exposed, what is fragile, and what claims don't match the code. New defects get an `A<n>` ID and an `#[ignore = "A<n>: ..."]` repro in `tests/audit_repros.rs`; confirmed sweep items keep their `S<n>`. Like the other files in this directory, this is a frozen record: live status is in `notes/TODO.md`. Original text is never edited or removed; corrections are appended under `## Corrections` at the end (`.claude/rules/audits.md`).
+A whole-codebase audit after the Phase 5 stack (dtypes and mixed precision, PRs #19–#28), on `audit/2026-11-post-phase5` stacked on `dtype/p8-gpu-half` (`de41abb`). It asks four questions: what is dealt with, what is newly exposed, what is fragile, and what claims don't match the code. New defects get an `A<n>` ID and an `#[ignore = "A<n>: ..."]` repro in `tests/audit_repros.rs`; confirmed sweep items keep their `S<n>`. Like the other files in this directory, this is a frozen record: live status is in `notes/TODO.md` [corrected 2026-11-10: see C2]. Original text is never edited or removed; corrections are appended under `## Corrections` at the end (`.claude/rules/audits.md`).
 
 ## Method
 
@@ -8,7 +8,7 @@ A whole-codebase audit after the Phase 5 stack (dtypes and mixed precision, PRs 
 - **Mechanical checks** of invariants 1–8 and the area rules, with a script that greps library code only (it stops at each file's `#[cfg(test)] mod`).
 - **About 270 cross-feature probes** in a scratch harness (not committed): every layer and loss in f64, f16 and bf16 on the CPU; every layer in f32, f16 and bf16 on the GPU under `Strict` and `PreferGpu`; autocast with `DTypePolicy::Strict`; state dicts; optimizers after `to_dtype`/`to_device`; the sweep items marked "not yet run"; and tensors at the GPU workgroup limit.
 - **Torch checks** (2.15.0) for each behaviour classed as a divergence below.
-- **Docs against code:** `notes/TODO.md` item by item, README, `CLAUDE.md`, `.claude/rules/`, `dev-docs/`, `DECISIONS.md`.
+- **Docs against code:** `notes/TODO.md` [corrected 2026-11-10: see C2] item by item, README, `CLAUDE.md`, `.claude/rules/`, `dev-docs/`, `DECISIONS.md`.
 
 Not covered: Metal (`just test-gpu` on the Mac), performance, and the WASM target.
 
@@ -61,7 +61,7 @@ Not covered: Metal (`just test-gpu` on the Mac), performance, and the WASM targe
   - It called binary ops "fully GPU-accelerated"; only equal shapes are.
   - It called "Linear backward" CPU-only; the gap is the forward bias broadcast.
 - README: "GradFn trait dispatch" is now "`GradFn` dispatch".
-- `notes/TODO.md`:
+- `notes/TODO.md` [corrected 2026-11-10: see C2]:
   - The decorative-dtype item is gone.
   - The GPU gap list now says `Where` has a kernel for equal shapes, and that `ConvTranspose2d` with a bias panics (A1).
   - The "non-f32 model cannot be saved" item covers half models and the missing constructor (A8).
@@ -117,3 +117,8 @@ Appended after the original text, which is unchanged (`.claude/rules/audits.md`)
 - **Said** (§ 1, "Every 2026-11 sweep defect still reproduces"): "**S24** (GPU `tanh` NaN for x >= 45) passes on lavapipe, because its overflow is Metal's `tanh`; it stays ignored, with the note."
 - **True:** the lavapipe result stands. The range is wrong: on Metal, GPU `tanh` is 0 for about 43.7 to 44.35 and NaN from 44.37, not NaN from 45. See C1 in `2026-11-sweep.md` for the cause and the evidence.
 - **Fix:** PR #146 (`Fixes #49`) removes the `#[ignore]` once merged, so "it stays ignored" will no longer hold.
+
+### C2 (2026-11-10): `notes/TODO.md` no longer exists
+
+- **Said** (header; § Method "Docs against code"; § 4 list of files): "live status is in `notes/TODO.md`", and `notes/TODO.md` as a file audited item by item.
+- **True:** PR #87 (`b20a43f`) retired `notes/TODO.md`. Live status is in the GitHub issues, one per defect ID: search the `S<n>` or `A<n>`. The file's last version is `git show 9d8aff5:notes/TODO.md`. The mentions in § Method and § 4 describe what was audited and are accurate as history; only the pointer to live status in the header is wrong, and the file cannot be opened from the working tree.
