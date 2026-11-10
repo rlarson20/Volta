@@ -1,15 +1,22 @@
 name: Dependency Audit
 on:
+  # Dependency changes are checked in the PR; the schedule catches new advisories on old locks.
+  pull_request:
+    paths: [Cargo.toml, Cargo.lock, deny.toml, .github/workflows/audit.yml]
   schedule:
     - cron: "0 0 * * 0" # Weekly on Sunday
   workflow_dispatch: # Manual trigger
 
+permissions:
+  contents: read
+
 jobs:
   audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
         with:
           tool: cargo-deny
       - run: cargo deny check

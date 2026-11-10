@@ -1,0 +1,9 @@
+# Keeps the SHA-pinned actions in .github/workflows current. It cannot bump
+# `dtolnay/rust-toolchain@<sha> # master` (no version tag to follow): update that pin by hand.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: improvements
+    schedule:
+      interval: weekly
