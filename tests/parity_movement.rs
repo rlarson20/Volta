@@ -92,6 +92,53 @@ fn reshape_backward_parity() {
 }
 
 // ---------------------------------------------------------------------------
+// contiguous
+// ---------------------------------------------------------------------------
+
+#[test]
+fn contiguous_backward_parity() {
+    if skip_if_no_gpu() {
+        return;
+    }
+    let x_cpu = make_input(&[2, 3, 4], true, (-2.0, 2.0));
+    let x_gpu = gpu_leaf(&x_cpu);
+    // Distinct weights, so a gradient routed to the wrong element cannot pass.
+    let w_cpu = make_input(&[2, 3, 4], false, (0.5, 3.0));
+    let w_gpu = gpu_leaf(&w_cpu);
+
+    let y_cpu = volta::RawTensor::contiguous(&x_cpu);
+    let y_gpu = volta::RawTensor::contiguous(&x_gpu);
+    assert!(
+        y_gpu.device().is_gpu(),
+        "contiguous moved a GPU tensor to {}",
+        y_gpu.device()
+    );
+
+    y_cpu
+        .elem_mul(&w_cpu)
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
+    y_gpu
+        .elem_mul(&w_gpu)
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
+
+    assert_close(
+        "contiguous fwd",
+        &y_cpu.data(),
+        &y_gpu.to_device(Device::CPU).data(),
+        TOL_FWD_GPU,
+    );
+    let g_cpu = x_cpu.grad().expect("CPU gradient missing");
+    let g_gpu = x_gpu.grad_storage().expect("GPU gradient missing").to_vec();
+    assert_close("contiguous bwd", &g_cpu, &g_gpu, TOL_BWD_GPU);
+}
+
+// ---------------------------------------------------------------------------
 // permute
 // ---------------------------------------------------------------------------
 
