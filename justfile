@@ -125,6 +125,23 @@ ci:
 	cargo build --examples
 	@echo "CI check passed!"
 
+# Apply .github/rulesets/*.json to GitHub (create or update by name; needs admin `gh` auth)
+rulesets:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+	for f in .github/rulesets/*.json; do
+		name=$(jq -r .name "$f")
+		id=$(gh api "repos/$repo/rulesets" --jq ".[] | select(.name == \"$name\") | .id")
+		if [[ -n "$id" ]]; then
+			gh api -X PUT "repos/$repo/rulesets/$id" --input "$f" --silent
+			echo "updated: $name ($id)"
+		else
+			gh api -X POST "repos/$repo/rulesets" --input "$f" --silent
+			echo "created: $name"
+		fi
+	done
+
 # Licenses, RustSec advisories, duplicate versions, and sources (needs network for the advisory db)
 deny:
 	cargo deny check

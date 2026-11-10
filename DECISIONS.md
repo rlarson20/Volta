@@ -697,3 +697,18 @@ Seeds spread about 0.25 points, so a 5-seed mean has a standard error near 0.05;
 **Decision:** no async in the core or the GPU API. Revisit only for isolated data loading or serving.
 
 Autograd is a sequential graph walk over `Rc<RefCell<_>>`, and nothing in it is `Send`. The GPU path blocks on submission, which is coherent for a single-threaded engine. The prerequisites are explicit transfers (ADDENDUM §7) and the arena graph (§6), which is the actual route to threading. Premature `Arc<Mutex>` is how `BufferPool` ended up guarding state only one thread can reach. The full analysis lives in git history (`docs/plans/2026-02-23-async-*.md`, removed 2026-10-25).
+
+## Process
+
+### Rulesets enforce the merge gate (#149)
+
+**Decision:** `improvements` and `main` each have a ruleset, kept in `.github/rulesets/*.json` and applied with `just rulesets`. Both require a pull request and the five `ci.yml` checks (`cpu-only` on 1.89 and stable, `linux-lavapipe`, `macos` on 1.89 and stable), and block deletion and force pushes. `improvements` allows only squash merges; `main` allows only merge commits, so a phase landing keeps its history.
+
+**Why:** until then the merge gate was convention. The only rule was "no force push", so a red CI run did not block a merge, and #148 reached `improvements` as a merge commit instead of a squash.
+
+**Choices:**
+- *0 required approvals.* There is one maintainer; the PR requirement exists to make CI run first, not to add a reviewer.
+- *Repo admin bypasses through a PR only* (`bypass_mode: pull_request`): an emergency merge of a red PR is possible, a direct push is not.
+- *Status checks are not strict* (a branch need not be up to date with the base), to avoid a rebase and a full CI re-run whenever another PR merges first.
+- The checks are listed by name, so a renamed job or a change to the toolchain matrix in `ci.yml` (see #121) blocks every merge until the JSON is updated. Change both in the same PR.
+- The JSON is the source of truth, but nothing applies it automatically: after editing a file, run `just rulesets`. The recipe creates or updates by `name`, so it is safe to repeat.
