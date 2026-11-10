@@ -72,7 +72,7 @@ fn tanh_op(
     let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_input()) {
-        st_result(idx, tanh(ld_input(idx)));
+        st_result(idx, tanh_sat(ld_input(idx)));
     }
 }
 

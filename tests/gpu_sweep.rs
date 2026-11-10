@@ -1,5 +1,6 @@
 //! GPU probes for defects in `docs/audits/2026-11-sweep.md`: full-tensor `max`, `modulo`,
-//! accuracy of `erf`, the `sum` of a large tensor, and optimizer state after `to_device`.
+//! accuracy of `erf`, saturation of `tanh` and `sigmoid`, the `sum` of a large tensor, and
+//! optimizer state after `to_device`.
 //!
 //! Each test prints `GPU-RAN <name>` before its assertions, because a GPU test with no
 //! adapter returns early and still reports `ok`; check the log for the marker. Defects are
@@ -80,16 +81,69 @@ fn gpu_erf_is_relatively_accurate_near_zero() {
 }
 
 #[test]
-#[ignore = "S24: GPU tanh(x) is NaN for x >= 45 (44 is fine; measured on Apple M2), consistent with exp(2x) overflowing f32; torch gives 1"]
 fn gpu_tanh_saturates_without_nan() {
     if skip_or_mark("gpu_tanh_saturates_without_nan") {
         return;
     }
-    let xs = vec![-100.0, -50.0, 50.0, 100.0];
-    assert_eq!(
-        on_gpu(xs, &[4], false).tanh().data(),
-        vec![-1.0, -1.0, 1.0, 1.0]
-    );
+    // 43.8 to 44.3 is the band where Metal's tanh returned 0, 44.4 and up where it was NaN.
+    let xs = vec![
+        -100.0, -50.0, -44.0, 43.8, 44.0, 44.3, 44.4, 45.0, 50.0, 100.0,
+    ];
+    let want: Vec<f32> = xs.iter().map(|x: &f32| x.signum()).collect();
+    let n = xs.len();
+    assert_eq!(on_gpu(xs, &[n], false).tanh().data(), want);
+}
+
+#[test]
+fn gpu_tanh_agrees_with_cpu_in_the_range_that_does_not_saturate() {
+    if skip_or_mark("gpu_tanh_agrees_with_cpu_in_the_range_that_does_not_saturate") {
+        return;
+    }
+    let xs = vec![-9.5, -3.0, -0.01, 1.0e-4, 0.7, 9.5];
+    let n = xs.len();
+    let cpu = RawTensor::new(xs.clone(), &[n], false).tanh().data();
+    let gpu = on_gpu(xs, &[n], false).tanh().data();
+    assert_eq!(cpu.len(), gpu.len());
+    for (i, (c, g)) in cpu.iter().zip(&gpu).enumerate() {
+        assert!((c - g).abs() <= 1e-6, "tanh[{i}]: cpu {c} gpu {g}");
+    }
+}
+
+#[test]
+fn gpu_tanh_backward_saturates_without_nan() {
+    if skip_or_mark("gpu_tanh_backward_saturates_without_nan") {
+        return;
+    }
+    let xs = vec![-100.0, -50.0, -1.5, 0.3, 43.8, 44.0, 50.0, 100.0];
+    let n = xs.len();
+    let cpu = RawTensor::new(xs.clone(), &[n], true);
+    cpu.tanh().sum().into_loss().expect("scalar").backward();
+    let want = cpu.grad().expect("cpu grad");
+    let gpu = on_gpu(xs, &[n], true);
+    gpu.tanh().sum().into_loss().expect("scalar").backward();
+    let got = gpu.grad().expect("gpu grad");
+    assert_eq!(want.len(), got.len());
+    for (i, (w, g)) in want.iter().zip(&got).enumerate() {
+        assert!(
+            g.is_finite() && (w - g).abs() <= 1e-6,
+            "tanh grad[{i}]: cpu {w} gpu {g}"
+        );
+    }
+}
+
+#[test]
+fn gpu_tanh_propagates_nan() {
+    if skip_or_mark("gpu_tanh_propagates_nan") {
+        return;
+    }
+    // Clamping the input must not turn a NaN into a number.
+    let x = on_gpu(vec![f32::NAN, 1.0], &[2], true);
+    let y = x.tanh();
+    let out = y.data();
+    assert!(out[0].is_nan(), "tanh(NaN) on the GPU is {}", out[0]);
+    y.sum().into_loss().expect("scalar").backward();
+    let grad = x.grad().expect("grad");
+    assert!(grad[0].is_nan(), "tanh'(NaN) on the GPU is {}", grad[0]);
 }
 
 #[test]

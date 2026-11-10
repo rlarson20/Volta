@@ -254,6 +254,18 @@ fn flat_global_id(gid: vec3<u32>, num_wg: vec3<u32>) -> vec3<u32> {
 fn bf16_bits_to_f32(b: u32) -> f32 {
     return bitcast<f32>(b << 16u);
 }
+
+// tanh that stays finite for large |x| (S24). Metal evaluates tanh as
+// (e^2x - 1) / (e^2x + 1) under fast math, which returns 0 for 43.67 < x < 44.36 (the
+// denominator passes 2^126, where fast division flushes to 0) and NaN above that
+// (e^2x = inf). tanh rounds to exactly 1.0 in f32 for |x| > 9.01, so clamping to +/-15
+// changes no result and keeps e^2x near 1e13. Metal's clamp(NaN) returns -15, which
+// would turn a NaN into -1, so a NaN is detected from its bits (fast math may fold
+// x != x away) and passed through.
+fn tanh_sat(x: f32) -> f32 {
+    let is_nan = (bitcast<u32>(x) & 0x7fffffffu) > 0x7f800000u;
+    return select(tanh(clamp(x, -15.0, 15.0)), x, is_nan);
+}
 ";
 
 #[cfg(test)]
