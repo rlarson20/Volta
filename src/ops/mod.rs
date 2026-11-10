@@ -123,18 +123,22 @@ impl RawTensor {
         Self::try_from_typed(data, shape).unwrap_or_else(|e| panic!("from_typed: {e}"))
     }
 
-    /// Ensure tensor is contiguous in memory
+    /// Ensure tensor is contiguous in memory.
     ///
-    /// Currently all tensors are contiguous. This would be needed
-    /// if we implement views/strides that share memory.
+    /// Every tensor is contiguous today, so this is a differentiable identity: a
+    /// [`reshape`](Self::reshape) to the tensor's own shape. The result is a new graph node
+    /// that shares the input's buffer (copy-on-write), keeps its device and dtype, and
+    /// passes the gradient back unchanged.
+    ///
+    /// **When storage gains strided views, this must become its own op.** A same-shape
+    /// `reshape` would then stay a view, and `contiguous` would silently stop materializing.
+    /// Give it a `MovementOp` that copies the data densely, with an identity backward, and
+    /// send the choke points named in DECISIONS.md ("Matmul layout: contiguous-only")
+    /// through it. Don't reuse `reshape` there.
     #[must_use]
     pub fn contiguous(self_t: &Tensor) -> Tensor {
-        let dtype = self_t.dtype();
-        let s = self_t.borrow();
-        let data = crate::real::dispatch_bits!(dtype, B => {
-            crate::Storage::from_bits(dtype, s.data.bits::<B>())
-        });
-        Self::new_with_storage(data, s.shape.clone(), crate::Device::CPU, s.requires_grad)
+        let shape = self_t.borrow().shape.clone();
+        Self::reshape(self_t, shape.truncate_rank())
     }
 }
 
