@@ -51,6 +51,6 @@ Each PR branches from `improvements` and targets it. Open PRs are independent an
 - **Branch from `improvements`,** from its current tip, with one branch per task. Don't branch from another open PR's branch.
 - **One task per PR.** Keep the diff reviewable. A follow-up to an open PR is a new PR once that one has merged; before then, push to its branch.
 - **Describe it.** Say what changed and why, write `Fixes #N` for each issue it closes, and list what ran and what was not verified (see above).
-- **Squash-merge** (one commit per PR). Write the squash commit message as a commit message, not a list of the branch's commits.
+- **Squash-merge** (one commit per PR). The ruleset on `improvements` allows no other merge method. Write the squash commit message as a commit message, not a list of the branch's commits.
 - **Conflicts.** If another PR merged first and yours conflicts, bring your branch up to date with `improvements` and resolve it there. In a cloud session, merge `improvements` into your branch; force-pushing is ruled out above. A local session may rebase instead and push with `--force-with-lease`. Never force-push `improvements` or `main`.
 - **Dependent work.** If a task needs another open PR's change, wait for it to merge, or say so in the description and ask before basing a branch on it. A PR whose base isn't `improvements` needs the user's say-so.
