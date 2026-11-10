@@ -81,6 +81,7 @@ Stay inside the current phase. Backlog features, refactors from later phases, an
 ## Working an issue
 
 - A PR that fixes an issue says `Fixes #N` in its body; merging closes the issue. One PR may close several, each with its own `Fixes`.
+- PR bodies follow `.github/PULL_REQUEST_TEMPLATE.md` (`gh pr create --body` skips it): a short opener the user approved, `Fixes`, the checklist, then the agent's full write-up inside `<details><summary>Model (effort)</summary>`.
 - Finished without a PR (an investigation, a refuted defect): comment the result on the issue and close it (`completed` or `not planned`, with the reason).
 - Found something new mid-task: open an issue for it and keep it out of the current PR.
 - Skip `needs-mac` issues in a cloud session; they need the M2's Metal backend to verify.
