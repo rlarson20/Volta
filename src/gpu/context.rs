@@ -228,6 +228,10 @@ pub struct ComputePipelines {
     pub max_backward_a: wgpu::ComputePipeline,
     /// Same-shape backward of `max` for the second operand.
     pub max_backward_b: wgpu::ComputePipeline,
+    /// Same-shape backward of `mod` for the first operand.
+    pub mod_backward_a: wgpu::ComputePipeline,
+    /// Same-shape backward of `mod` for the second operand.
+    pub mod_backward_b: wgpu::ComputePipeline,
 
     // Binary backward operations with RACE-FREE broadcasting (two-pass)
     /// Broadcast backward of `add`, scatter pass: records each output element's contribution in a temporary buffer.
@@ -250,6 +254,10 @@ pub struct ComputePipelines {
     pub max_broadcast_pass1: wgpu::ComputePipeline,
     /// Broadcast backward of `max`, reduce pass: accumulates the temporary buffer into the operand gradients without write races.
     pub max_broadcast_pass2: wgpu::ComputePipeline,
+    /// Broadcast backward of `mod`, scatter pass: records each output element's contribution in a temporary buffer.
+    pub mod_broadcast_pass1: wgpu::ComputePipeline,
+    /// Broadcast backward of `mod`, reduce pass: accumulates the temporary buffer into the operand gradients without write races.
+    pub mod_broadcast_pass2: wgpu::ComputePipeline,
 
     // Reductions
     /// Reduces all elements to their sum.
@@ -1118,6 +1126,16 @@ impl GpuContext {
                 "max_backward_b",
                 "Max Backward B Pipeline",
             ),
+            mod_backward_a: create_pipeline(
+                &binary_backward_shader,
+                "mod_backward_a",
+                "Mod Backward A Pipeline",
+            ),
+            mod_backward_b: create_pipeline(
+                &binary_backward_shader,
+                "mod_backward_b",
+                "Mod Backward B Pipeline",
+            ),
 
             // Binary backward with RACE-FREE broadcasting (two-pass)
             add_broadcast_pass1: create_pipeline(
@@ -1169,6 +1187,16 @@ impl GpuContext {
                 &binary_backward_safe_shader,
                 "max_broadcast_pass2",
                 "Max Broadcast Pass2 Pipeline",
+            ),
+            mod_broadcast_pass1: create_pipeline(
+                &binary_backward_safe_shader,
+                "mod_broadcast_pass1",
+                "Mod Broadcast Pass1 Pipeline",
+            ),
+            mod_broadcast_pass2: create_pipeline(
+                &binary_backward_safe_shader,
+                "mod_broadcast_pass2",
+                "Mod Broadcast Pass2 Pipeline",
             ),
 
             // Reductions

@@ -54,16 +54,29 @@ fn gpu_max_gradient_goes_to_the_true_maximum_on_a_near_tie() {
 }
 
 #[test]
-#[ignore = "S5: GPU modulo is floored (-1 mod 3 = 2), CPU modulo is truncated (-1)"]
 fn modulo_agrees_between_cpu_and_gpu() {
     if skip_or_mark("modulo_agrees_between_cpu_and_gpu") {
         return;
     }
+    // Mixed signs: the floored result takes the divisor's sign, as torch.remainder.
     let (a, b) = (vec![-1.0, 5.5, -7.0, 7.0], vec![3.0, 2.0, 2.0, -3.0]);
-    let cpu =
-        RawTensor::new(a.clone(), &[4], false).modulo(&RawTensor::new(b.clone(), &[4], false));
-    let gpu = on_gpu(a, &[4], false).modulo(&on_gpu(b, &[4], false));
+    let (cpu_a, cpu_b) = (
+        RawTensor::new(a.clone(), &[4], true),
+        RawTensor::new(b.clone(), &[4], true),
+    );
+    let (gpu_a, gpu_b) = (on_gpu(a, &[4], true), on_gpu(b, &[4], true));
+    let cpu = cpu_a.modulo(&cpu_b);
+    let gpu = gpu_a.modulo(&gpu_b);
+    assert_eq!(cpu.data(), vec![2.0, 1.5, 1.0, -2.0]);
     assert_eq!(cpu.data(), gpu.data());
+
+    cpu.sum().into_loss().expect("scalar").backward();
+    gpu.sum().into_loss().expect("scalar").backward();
+    // d/da = 1 and d/db = -floor(a/b).
+    assert_eq!(cpu_a.grad().expect("grad"), vec![1.0; 4]);
+    assert_eq!(cpu_b.grad().expect("grad"), vec![1.0, -2.0, 4.0, 3.0]);
+    assert_eq!(cpu_a.grad(), gpu_a.grad());
+    assert_eq!(cpu_b.grad(), gpu_b.grad());
 }
 
 #[test]

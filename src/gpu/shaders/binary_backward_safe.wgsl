@@ -619,3 +619,101 @@ fn max_broadcast_pass2(
         st_result_grad(a_size + thread_idx, sum_b);
     }
 }
+
+// Floored modulo: a mod b
+// grad_a = out_grad, grad_b = -out_grad * floor(a / b)
+@compute @workgroup_size(256)
+fn mod_broadcast_pass1(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
+    let out_idx = global_id.x;
+    let out_size = params.out_shape[0u] * params.out_shape[1u] * params.out_shape[2u] * params.out_shape[3u];
+
+    if (out_idx >= out_size) {
+        return;
+    }
+
+    let out_coords = idx_to_coords(out_idx, params.out_shape, params.out_rank);
+    let out_grad_val = ld_out_grad(out_idx);
+
+    // Compute target indices and values
+    let a_padded = pad_shape(params.a_shape, params.a_rank, params.out_rank);
+    var a_coords_padded = vec4<u32>(0u, 0u, 0u, 0u);
+    for (var i: u32 = 0u; i < params.out_rank; i = i + 1u) {
+        a_coords_padded[i] = select(out_coords[i], 0u, a_padded[i] == 1u);
+    }
+    let a_strides = compute_strides(params.a_shape, params.a_rank);
+    var a_coords = vec4<u32>(0u, 0u, 0u, 0u);
+    let a_offset = params.out_rank - params.a_rank;
+    for (var i: u32 = 0u; i < params.a_rank; i = i + 1u) {
+        a_coords[i] = a_coords_padded[i + a_offset];
+    }
+    let target_idx_a = coords_to_idx(a_coords, a_strides, params.a_rank);
+    let a_val = ld_a(target_idx_a);
+
+    let b_padded = pad_shape(params.b_shape, params.b_rank, params.out_rank);
+    var b_coords_padded = vec4<u32>(0u, 0u, 0u, 0u);
+    for (var i: u32 = 0u; i < params.out_rank; i = i + 1u) {
+        b_coords_padded[i] = select(out_coords[i], 0u, b_padded[i] == 1u);
+    }
+    let b_strides = compute_strides(params.b_shape, params.b_rank);
+    var b_coords = vec4<u32>(0u, 0u, 0u, 0u);
+    let b_offset = params.out_rank - params.b_rank;
+    for (var i: u32 = 0u; i < params.b_rank; i = i + 1u) {
+        b_coords[i] = b_coords_padded[i + b_offset];
+    }
+    let target_idx_b = coords_to_idx(b_coords, b_strides, params.b_rank);
+    let b_val = ld_b(target_idx_b);
+
+    let temp_idx = out_idx * 3u;
+    st_temp_buffer(temp_idx, f32(target_idx_a));
+    st_temp_buffer(temp_idx + 1u, f32(target_idx_b));
+    st_temp_buffer(temp_idx + 2u, out_grad_val);
+}
+
+@compute @workgroup_size(256)
+fn mod_broadcast_pass2(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
+    let thread_idx = global_id.x;
+    let a_size = params.a_shape[0u] * params.a_shape[1u] * params.a_shape[2u] * params.a_shape[3u];
+    let b_size = params.b_shape[0u] * params.b_shape[1u] * params.b_shape[2u] * params.b_shape[3u];
+    let max_size = max(a_size, b_size);
+    let out_size = params.out_shape[0u] * params.out_shape[1u] * params.out_shape[2u] * params.out_shape[3u];
+
+    if (thread_idx >= max_size) {
+        return;
+    }
+
+    // grad_a = out_grad
+    if (thread_idx < a_size) {
+        var sum_a: f32 = 0.0;
+        for (var i: u32 = 0u; i < out_size; i = i + 1u) {
+            let temp_idx = i * 3u;
+            let target_a = u32(ld_temp_buffer(temp_idx));
+            if (target_a == thread_idx) {
+                sum_a = sum_a + ld_temp_buffer(temp_idx + 2u);
+            }
+        }
+        st_result_grad(thread_idx, sum_a);
+    }
+
+    // grad_b = -out_grad * floor(a / b)
+    if (thread_idx < b_size) {
+        var sum_b: f32 = 0.0;
+        for (var i: u32 = 0u; i < out_size; i = i + 1u) {
+            let temp_idx = i * 3u;
+            let target_b = u32(ld_temp_buffer(temp_idx + 1u));
+            if (target_b == thread_idx) {
+                let a_val = ld_a(u32(ld_temp_buffer(temp_idx)));
+                let b_val = ld_b(target_b);
+                sum_b = sum_b - ld_temp_buffer(temp_idx + 2u) * floor(a_val / b_val);
+            }
+        }
+        st_result_grad(a_size + thread_idx, sum_b);
+    }
+}

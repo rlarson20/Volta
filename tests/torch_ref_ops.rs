@@ -97,7 +97,6 @@ fn relu_propagates_nan_like_torch() {
 }
 
 #[test]
-#[ignore = "S5: CPU modulo is truncated (-1 mod 3 = -1; GPU and torch give 2) and non-differentiable"]
 fn remainder_matches_torch_forward_and_gradient() {
     // S5
     let f = Fixture::load("ops");

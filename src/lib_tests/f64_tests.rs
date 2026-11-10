@@ -141,11 +141,12 @@ fn binary_ops_gradcheck_in_f64() {
     for &op in BinaryOp::ALL.iter().filter(|op| !op.is_trivial()) {
         for (sa, sb) in shapes {
             let a = leaf(sa, 21);
-            // Div's divisor away from 0; Max's operands away from ties.
+            // Div's divisor away from 0; Max's operands away from ties; Mod's divisor away
+            // from 0 with both signs (its jumps are at integer a/b, far from the 1e-6 step).
             let b = leaf_from(sb, 22, |v| match op {
                 BinaryOp::Div => 0.5 + v.abs(),
                 BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Max => v + 0.25,
-                BinaryOp::Mod => unreachable!("filtered: not differentiable"),
+                BinaryOp::Mod => (1.0 + v.abs()).copysign(v),
             });
             let name = format!("{op:?} {sa:?} {sb:?}");
             let b2 = b.clone();

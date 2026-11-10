@@ -107,6 +107,14 @@ fn modulo_forward_value() {
 }
 
 #[test]
+fn modulo_is_floored_for_negative_operands() {
+    let a = RawTensor::new(vec![-1.0, 7.0], &[2], false);
+    let b = RawTensor::new(vec![3.0, -3.0], &[2], false);
+    let out = a.modulo(&b).data();
+    assert_eq!(out, vec![2.0, -2.0]);
+}
+
+#[test]
 fn lt_forward_value_is_bool() {
     let a = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], true);
     let b = RawTensor::new(vec![3.0, 1.0, 3.0, 5.0], &[4], false);

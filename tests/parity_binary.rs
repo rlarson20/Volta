@@ -1,7 +1,7 @@
 //! CPU/GPU parity for binary tensor ops.
 //!
-//! Differentiable ops are checked forward + backward; non-differentiable ops
-//! (modulo) are checked forward only. All shapes are matched — Volta
+//! Differentiable ops are checked forward + backward (modulo included); ops whose
+//! backward routes ties are checked forward only. All shapes are matched — Volta
 //! does not support broadcasting on the GPU path.
 
 #![cfg(feature = "gpu")]
@@ -77,12 +77,13 @@ fn max_elem_parity_forward_only() {
 }
 
 #[test]
-fn modulo_parity_forward() {
-    assert_binary_parity(
+fn modulo_parity() {
+    assert_binary_parity_backward(
         "modulo",
         volta::Tensor::modulo,
         SHAPE,
         (1.0, 5.0),
         TOL_FWD_GPU,
+        TOL_BWD_GPU,
     );
 }
