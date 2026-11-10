@@ -6,6 +6,12 @@ use crate::shape::Axis;
 use crate::tensor::{RawTensor, Tensor};
 
 /// Batch normalization over `[B, C, H, W]` input, with per-channel statistics.
+///
+/// # Panics
+///
+/// `forward` panics if the input is not 4D, its channel count is not `num_features`, or, in
+/// training mode, it has one value per channel (`B * H * W == 1`), as PyTorch raises. The
+/// running statistics are untouched by a rejected batch.
 pub struct BatchNorm2d {
     /// Number of channels `C`.
     num_features: usize,
@@ -132,6 +138,13 @@ impl BatchNorm2d {
             self.num_features,
             "Channel mismatch"
         );
+        let [b, _, h, w] = x_borrow.shape.fixed::<4>();
+        let num_pixels = b * h * w;
+        assert!(
+            !self.training || num_pixels > 1,
+            "BatchNorm2d expected more than 1 value per channel when training, got input shape {:?}",
+            x_borrow.shape
+        );
         drop(x_borrow);
 
         // 1. Reshape to normalize over (B, H, W) for each channel
@@ -142,10 +155,6 @@ impl BatchNorm2d {
 
         // We need reshaping to utilize current Tensor ops for mean/var
         // (C, B, H, W) -> (C, B*H*W)
-        let x_shape = &x.borrow().shape;
-        let [b, _, h, w] = x_shape.fixed::<4>();
-        let num_pixels = b * h * w;
-
         let x_flat = x_perm.reshape(&[self.num_features, b * h * w]);
 
         let (mean, var) = if self.training {
@@ -172,8 +181,7 @@ impl BatchNorm2d {
                 let bv_data = bv_ref.data.host::<T>();
 
                 // Note: PyTorch uses unbiased (N-1) for running_var update,
-                // but biased for batch norm calculation.
-                // We stick to standard implementation:
+                // but biased for batch norm calculation. The guard above ensures N > 1.
                 let m = T::from_f64(f64::from(self.momentum));
                 let num_pixels = T::from_usize(num_pixels);
 
@@ -237,6 +245,12 @@ impl BatchNorm2d {
 ///
 /// Normalizes over the batch dimension (dim=0), computing per-feature statistics.
 /// Commonly used after fully-connected layers or LSTM outputs.
+///
+/// # Panics
+///
+/// `forward` panics if the input is not 2D, its feature count is not `num_features`, or, in
+/// training mode, the batch has one sample (as PyTorch raises). The running statistics are
+/// untouched by a rejected batch.
 pub struct BatchNorm1d {
     /// Number of features `C`.
     num_features: usize,
@@ -362,6 +376,11 @@ impl BatchNorm1d {
             "Feature mismatch"
         );
         let batch_size = x_borrow.shape.dim_at(0);
+        assert!(
+            !self.training || batch_size > 1,
+            "BatchNorm1d expected more than 1 value per channel when training, got input shape {:?}",
+            x_borrow.shape
+        );
         drop(x_borrow);
 
         let (mean, var) = if self.training {
@@ -395,7 +414,7 @@ impl BatchNorm1d {
                     let rm_val = fetch(rm_host, i);
                     let bm_val = fetch(&bm_data, i);
                     *slot(rm_host, i) = (1.0 - m).mul_add(rm_val, m * bm_val);
-                    // Bessel correction for running_var update
+                    // Bessel correction for running_var update (the guard above ensures N > 1)
                     let bv_val = fetch(&bv_data, i);
                     let unbiased_var = bv_val * batch_size / (batch_size - 1.0);
                     let rv_val = fetch(rv_host, i);
