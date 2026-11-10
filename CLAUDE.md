@@ -31,7 +31,7 @@ Never violate these. If a task seems to require it, stop and ask.
 
 - Default features are `gpu` + `accelerate`, so a plain `cargo build` compiles the GPU backend. For CPU-only, add `--no-default-features`.
 - Fast loop: `cargo test --no-default-features --lib <name-filter>`.
-- Before committing, run `just ci` (fmt, `clippy --all-targets -D warnings` with default features and with `--no-default-features`, test, doc, examples) or `pre-commit run`. Both should pass on a clean `HEAD`; if a hook fails, fix the cause rather than skipping it.
+- Before committing, run `just ci` (fmt, `clippy --all-targets -D warnings`, test and `RUSTDOCFLAGS=-D warnings cargo doc`, each with default features and with `--no-default-features`, then examples and the cargo-hack feature powerset when installed). `ci.yml` calls the same justfile recipes. `pre-commit run` is the faster subset (fmt, fallbacks, both clippy runs, `cargo test`). Both should pass on a clean `HEAD`; if a hook fails, fix the cause rather than skipping it.
 - Committing past the hooks: `SKIP=clippy,cargo-test git commit ...` (ask the user first; never `--no-verify`). The `fmt` hook runs `cargo fmt --all` and fails whenever it rewrites a file, so make the tree `cargo fmt --check`-clean first. Stage everything you want and leave nothing unstaged: pre-commit stashes unstaged changes, and that conflicts with its own fixes (also with `git commit -- <paths>`).
 - `cargo test <filter>` matches test *names*. There are no category modules called `core`, `neural`, or similar.
 

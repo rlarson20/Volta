@@ -713,3 +713,16 @@ Autograd is a sequential graph walk over `Rc<RefCell<_>>`, and nothing in it is 
 - The checks are listed by name, so a renamed job or a change to the toolchain matrix in `ci.yml` (see #121) blocks every merge until the JSON is updated. Change both in the same PR.
 - The JSON is the source of truth, but nothing applies it automatically: after editing a file, run `just rulesets`. The recipe creates or updates by `name`, so it is safe to repeat.
 - *The `macos` job runs stable only.* GitHub's macOS runners are intermittently unavailable (a run failed because `macos (stable)` got no runner), and each extra macOS job is another chance to hit that. The MSRV is checked by `cpu-only (1.89)`. What this gives up: `accelerate` (and the macOS-only code paths) are no longer compiled with 1.89, so an MSRV break in that code is not caught by CI. Revisit if one slips through.
+
+### One definition of CI (#120, #121)
+
+**Decision:** the justfile defines each check (`lint`, `lint-cpu`, `test-cpu`, `doc`, `doc-cpu`, `hack`), and `just ci`, the pre-commit clippy hook and `ci.yml` call those recipes. `just ci` now also runs `cargo test --no-default-features`, rustdoc with `-D warnings` for both feature sets, and the cargo-hack powerset (skipped with a notice when `cargo-hack` is not installed). Workflows run with `permissions: contents: read`, a per-job `timeout-minutes`, and actions pinned to commit SHAs that Dependabot updates. Job names are unchanged, so the rulesets are too.
+
+**Why:** a change could pass `just ci` and fail GitHub (an unresolved intra-doc link, a CPU-only test), and a hung job could sit on a scarce macOS runner for six hours.
+
+**Choices:**
+- *`concurrency` cancels only pull-request runs.* A superseded PR push stops holding runners; a push to `main` or `improvements` always finishes, so the merged state is tested (`improvements` is now in the `push` branches).
+- *`dtolnay/rust-toolchain` is pinned to a `master` SHA,* which Dependabot cannot follow. Bump it by hand.
+- *`cargo deny` runs on PRs that touch `Cargo.toml`, `Cargo.lock` or `deny.toml`,* and weekly. It is not a required check: a path-filtered check that never reports would block every other PR.
+- *`stable` keeps floating.* `tests/compile_fail.rs` pins rustc's wording, so a new stable can turn an untouched branch red. Pinning would rename the `(stable)` checks, edit the rulesets, and need a bump every six weeks. When it happens, re-bless on stable in its own PR.
+- *Pre-commit does not run the CPU-only test, the strict docs or cargo-hack,* to keep commits fast. `just ci` does.

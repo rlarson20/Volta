@@ -1,8 +1,19 @@
 name: CI
 on:
   push:
-    branches: [main]
+    branches: [main, improvements]
   pull_request:
+
+permissions:
+  contents: read
+
+# A superseded push to a PR branch is cancelled (it would otherwise hold a scarce macOS
+# runner); runs on main and improvements always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Each step calls the justfile recipe that `just ci` uses, so local and CI checks cannot drift.
 
 jobs:
   # Honest "no default features" lane. Everything here is CPU-only; the `gpu`
@@ -11,44 +22,43 @@ jobs:
   # (ADDENDUM §9), so call sites carry no `cfg` and this lane's clippy is clean.
   cpu-only:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         rust: [1.89, stable]
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: ${{ matrix.rust }}
           components: rustfmt, clippy, rust-src
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
         with:
-          tool: cargo-hack
+          tool: cargo-hack,just
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       - name: Check formatting
         run: cargo fmt --check
 
       - name: Check silent fallbacks
-        run: ./scripts/check-fallbacks.sh
+        run: just check-fallbacks
 
       - name: Clippy (no default features)
-        run: cargo clippy --no-default-features --all-targets -- -D warnings
+        run: just lint-cpu
 
       - name: Test (no default features)
-        run: cargo test --no-default-features
+        run: just test-cpu
 
       - name: Build docs (no default features)
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: cargo doc --no-deps --no-default-features
+        run: just doc-cpu
 
       # Feature-combination rot check. `--feature-powerset` includes the
       # empty-feature-set compile that would have caught B5. `gpu` is
       # deliberately excluded on Linux.
       - name: cargo-hack feature powerset (no gpu)
-        run: cargo hack check --feature-powerset --no-dev-deps --exclude-features gpu
+        run: just hack --exclude-features gpu
 
   # Default features (gpu) on Linux, with Mesa's lavapipe as the adapter: a software
   # Vulkan device (shaderFloat16), so the gpu-gated tests run on every PR, including the
@@ -57,13 +67,14 @@ jobs:
   # the run instead of letting every GPU test skip.
   linux-lavapipe:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
           components: rust-src
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       - name: Install lavapipe
         run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
@@ -80,24 +91,27 @@ jobs:
   # check name `macos (stable)` that the rulesets require.
   macos:
     runs-on: macos-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         rust: [stable]
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: ${{ matrix.rust }}
           components: rustfmt, clippy, rust-src
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
         with:
-          tool: cargo-hack
+          tool: cargo-hack,just
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
-      - name: Clippy (all features)
-        run: cargo clippy --all-targets --all-features -- -D warnings
+      # `just lint` runs default features (gpu + accelerate, i.e. all features) and then
+      # no default features.
+      - name: Clippy
+        run: just lint
 
       - name: Test (all features)
         env:
@@ -106,9 +120,7 @@ jobs:
         run: cargo test --all-features
 
       - name: Build docs (all features)
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: cargo doc --no-deps --all-features
+        run: just doc
 
       - name: cargo-hack feature powerset
-        run: cargo hack check --feature-powerset --no-dev-deps
+        run: just hack

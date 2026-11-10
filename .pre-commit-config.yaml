@@ -6,7 +6,8 @@ repos:
 
   # Local hooks re-run on .rs and on the .toml files that carry lint config
   # (Cargo.toml, clippy.toml, rustfmt.toml). Lint flags live in the justfile and
-  # Cargo.toml so this hook cannot drift from `just ci`.
+  # Cargo.toml so this hook cannot drift from `just ci`. The CPU-only test, the
+  # `-D warnings` docs and the cargo-hack check are slower and run only in `just ci`.
   - repo: local
     hooks:
       - id: clippy

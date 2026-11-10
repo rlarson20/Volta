@@ -72,7 +72,7 @@ mnist-autocast: mnist-data
 
 # Run all tests without GPU/Accelerate features
 test-cpu:
-	cargo test --no-default-features -- --nocapture
+	cargo test --no-default-features
 
 # ===== EXAMPLE & INTEGRATION QUALITY =====
 
@@ -106,23 +106,53 @@ clean:
 
 # ===== AGGREGATE WORKFLOWS =====
 
-# Clippy over every target; the single definition of the lint gate (pre-commit calls this too)
-lint:
+# Clippy over every target with default features, then without; the single definition of the
+# lint gate (ci.yml and pre-commit call this too)
+lint: lint-cpu
 	cargo clippy --all-targets -- -D warnings
+
+# Clippy over every target with no default features (the CPU-only lane)
+lint-cpu:
+	cargo clippy --no-default-features --all-targets -- -D warnings
+
+# Rustdoc with warnings denied (a broken intra-doc link fails), default features
+doc:
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+
+# Rustdoc with warnings denied, no default features
+doc-cpu:
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --no-default-features
+
+# Feature-combination rot check (e.g. `just hack --exclude-features gpu`); needs cargo-hack
+hack *flags:
+	cargo hack check --feature-powerset --no-dev-deps {{flags}}
+
+# `hack`, skipped with a notice when cargo-hack is not installed (`cargo install cargo-hack`)
+hack-if-installed:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	if command -v cargo-hack >/dev/null; then
+		just hack
+	else
+		echo "skipped: cargo-hack not installed (cargo install cargo-hack)"
+	fi
 
 # Fail on silent numeric fallbacks (`unwrap_or(0.0)`, `if let Some(slot) = v.get_mut(i)`)
 check-fallbacks:
 	./scripts/check-fallbacks.sh
 
-# CI-like pipeline (fmt -> fallbacks -> lint, both feature sets -> test -> docs -> examples)
+# CI-like pipeline (fmt -> fallbacks -> lint, both feature sets -> tests, both feature sets -> docs
+# with -D warnings, both feature sets -> examples -> feature powerset when cargo-hack is installed)
 ci:
 	cargo fmt --check
 	just check-fallbacks
 	just lint
-	cargo clippy --no-default-features --all-targets -- -D warnings
 	cargo test
-	cargo doc --no-deps
+	just test-cpu
+	just doc
+	just doc-cpu
 	cargo build --examples
+	just hack-if-installed
 	@echo "CI check passed!"
 
 # Apply .github/rulesets/*.json to GitHub (create or update by name; needs admin `gh` auth)
