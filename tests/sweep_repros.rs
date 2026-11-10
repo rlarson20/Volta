@@ -177,7 +177,6 @@ fn i8_safetensors_is_rejected() {
 }
 
 #[test]
-#[ignore = "S12: with one sample per channel the Bessel correction is 0/0, so running_var becomes NaN and every eval output is NaN; torch raises ValueError"]
 fn batchnorm_with_one_sample_per_channel_never_poisons_running_stats() {
     let mut bn = BatchNorm1d::new(2);
     let x = RawTensor::new(vec![1.0, 2.0], &[1, 2], false);

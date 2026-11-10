@@ -200,3 +200,60 @@ fn bn2d_assert_trainable_all_params_get_gradient() {
     let x = crate::macros::trainable_input(&[2, 2, 2, 2]);
     crate::assert_trainable!(layer, x);
 }
+
+// ---- one value per channel (S12) ----
+
+#[test]
+#[should_panic(expected = "more than 1 value per channel")]
+fn bn1d_one_sample_in_training_panics() {
+    let layer = BatchNorm1d::new(2);
+    let x = RawTensor::new(vec![1.0, 2.0], &[1, 2], false);
+    let _ = <BatchNorm1d as Layer>::forward(&layer, &x);
+}
+
+#[test]
+#[should_panic(expected = "more than 1 value per channel")]
+fn bn2d_one_value_per_channel_in_training_panics() {
+    let layer = BatchNorm2d::new(3);
+    let x = RawTensor::new(vec![1.0, 2.0, 3.0], &[1, 3, 1, 1], false);
+    let _ = <BatchNorm2d as Layer>::forward(&layer, &x);
+}
+
+#[test]
+fn rejected_batch_leaves_running_stats_untouched() {
+    let layer = BatchNorm1d::new(2);
+    let x = RawTensor::new(vec![1.0, 2.0], &[1, 2], false);
+    let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        <BatchNorm1d as Layer>::forward(&layer, &x)
+    }));
+    assert!(rejected.is_err());
+    let (rm, rv) = running_stats(&<BatchNorm1d as Module>::state_dict(&layer));
+    assert_eq!(rm, vec![0.0, 0.0]);
+    assert_eq!(rv, vec![1.0, 1.0]);
+}
+
+#[test]
+fn bn2d_one_sample_with_spatial_extent_trains() {
+    // 4 values per channel: torch accepts this.
+    let layer = BatchNorm2d::new(2);
+    let x = RawTensor::new(
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 7.0, 6.0, 9.0],
+        &[1, 2, 2, 2],
+        false,
+    );
+    let _ = <BatchNorm2d as Layer>::forward(&layer, &x);
+    let (_, rv) = running_stats(&<BatchNorm2d as Module>::state_dict(&layer));
+    assert!(rv.iter().all(|v| v.is_finite()), "running_var: {rv:?}");
+}
+
+#[test]
+fn bn1d_one_sample_in_eval_is_finite() {
+    let mut layer = BatchNorm1d::new(2);
+    layer.train(false);
+    let x = RawTensor::new(vec![0.5, 1.0], &[1, 2], false);
+    let y = <BatchNorm1d as Layer>::forward(&layer, &x).data();
+    // Default running stats (mean 0, var 1), gamma 1, beta 0: y = x / sqrt(1 + eps).
+    let scale = 1.0 / (1.0f32 + 1e-5).sqrt();
+    assert_relative_eq!(fetch(&y, 0), 0.5 * scale, epsilon = 1e-6);
+    assert_relative_eq!(fetch(&y, 1), 1.0 * scale, epsilon = 1e-6);
+}
