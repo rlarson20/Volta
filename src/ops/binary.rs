@@ -15,7 +15,7 @@ define_ops! {
     /// Binary operations: two inputs, one output
     ///
     /// Broadcasting is automatically handled for compatible shapes.
-    /// The non-differentiable `Mod` returns a tensor with `requires_grad=false`.
+    /// `Mod` is floored, as `torch.remainder`.
     /// Comparisons are [`CmpOp`](crate::ops::CmpOp), which return Bool.
     binary BinaryOp {
         differentiable {
@@ -39,11 +39,16 @@ define_ops! {
             Max => |a, b| a.max(b),
                 |g, a, b| (if a >= b { g } else { 0.0 }, if b > a { g } else { 0.0 }),
                 gpu(max, max_backward_a, max_backward_b, max_broadcast_pass1, max_broadcast_pass2);
+            /// x mod y, floored like `torch.remainder` (the result takes y's sign):
+            /// ∂/∂x = 1, ∂/∂y = -floor(x/y)
+            Mod => |a, b| {
+                    let r = a % b;
+                    if r != 0.0 && ((r < 0.0) != (b < 0.0)) { r + b } else { r }
+                },
+                |g, a, b| (g, -g * (a / b).floor()),
+                gpu(mod_op, mod_backward_a, mod_backward_b, mod_broadcast_pass1, mod_broadcast_pass2);
         }
-        non_differentiable {
-            /// x % y
-            Mod => |a, b| a % b, gpu(mod_op);
-        }
+        non_differentiable {}
     }
 }
 
@@ -118,7 +123,7 @@ impl BinaryGradFn {
         })
     }
 
-    /// Whether the op has no derivative (`Mod`, `Cmplt`), so `edge()` attaches no grad fn.
+    /// Whether the op has no derivative, so `edge()` attaches no grad fn (none today).
     pub(crate) fn is_trivial(&self) -> bool {
         self.op.is_trivial()
     }
@@ -391,8 +396,8 @@ mod tests {
         BinaryOp::ALL.iter().copied().filter(|op| !op.is_trivial())
     }
 
-    /// Random operands in each op's domain, away from Div's pole and from Max ties
-    /// (the finite-difference step must not straddle `a == b`).
+    /// Random operands in each op's domain, away from Div's pole, from Max ties, and from
+    /// Mod's jumps (the finite-difference step must not straddle `a == b` or `a/b` integral).
     fn operands(op: BinaryOp, shape_a: &[usize], shape_b: &[usize]) -> (Tensor, Tensor) {
         for seed in 0..64_u64 {
             manual_seed(0xB1A5 + seed);
@@ -401,25 +406,37 @@ mod tests {
             let av: Vec<f32> = a.data().clone();
             let bv: Vec<f32> = match op {
                 BinaryOp::Div => b.data().iter().map(|v| 0.5 + v.abs()).collect(),
-                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Max | BinaryOp::Mod => {
-                    b.data().clone()
-                }
+                // |b| in [2, 3] with a random sign: negative divisors, and b away from 0.
+                BinaryOp::Mod => b
+                    .data()
+                    .iter()
+                    .map(|v| if *v < 0.0 { v - 2.0 } else { v + 2.0 }.clamp(-3.0, 3.0))
+                    .collect(),
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Max => b.data().clone(),
             };
             let (a, b) = (
                 RawTensor::new(av, shape_a, true),
                 RawTensor::new(bv, shape_b, true),
             );
-            if op != BinaryOp::Max {
+            if op != BinaryOp::Max && op != BinaryOp::Mod {
                 return (a, b);
             }
             let out_shape = RawTensor::broadcast_shape(shape_a, shape_b);
             let a_bc = RawTensor::broadcast_to(&a.data(), shape_a, &out_shape);
             let b_bc = RawTensor::broadcast_to(&b.data(), shape_b, &out_shape);
-            if a_bc.iter().zip(&b_bc).all(|(x, y)| (x - y).abs() > 0.05) {
+            let clear = |x: &f32, y: &f32| match op {
+                // Mod jumps where a/b is an integer; the finite-difference step moves a/b
+                // by at most ~0.0075, so stay 0.02 clear of one.
+                BinaryOp::Mod => ((x / y) - (x / y).round()).abs() > 0.02,
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Max => {
+                    (x - y).abs() > 0.05
+                }
+            };
+            if a_bc.iter().zip(&b_bc).all(|(x, y)| clear(x, y)) {
                 return (a, b);
             }
         }
-        panic!("no tie-free Max operands for {shape_a:?} x {shape_b:?}");
+        panic!("no tie-free {op:?} operands for {shape_a:?} x {shape_b:?}");
     }
 
     #[test]
@@ -464,23 +481,22 @@ mod tests {
     }
 
     #[test]
-    fn is_trivial_exactly_for_mod() {
+    fn no_binary_op_is_trivial() {
         for &op in BinaryOp::ALL {
-            assert_eq!(op.is_trivial(), matches!(op, BinaryOp::Mod), "{op:?}");
+            assert!(!op.is_trivial(), "{op:?}");
         }
     }
 
     #[test]
-    fn non_differentiable_ops_attach_no_grad_fn() {
-        let a = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], true);
-        let b = RawTensor::new(vec![2.0, 2.0, 2.0], &[3], true);
-        assert!(!RawTensor::binary_op(&a, &b, BinaryOp::Mod).requires_grad());
-    }
-
-    #[test]
-    #[should_panic(expected = "non-differentiable")]
-    fn backward_of_non_differentiable_op_panics() {
-        let _ = BinaryOp::Mod.backward(1.0, 1.0, 2.0);
+    fn mod_is_floored_with_torch_gradients() {
+        // torch.remainder: the result takes the divisor's sign.
+        let (a, b) = ([-1.0, 5.5, -7.0, 7.0], [3.0, 2.0, 2.0, -3.0]);
+        let expected = [2.0, 1.5, 1.0, -2.0];
+        let floors = [-1.0, 2.0, -4.0, -3.0];
+        for ((&x, &y), (&want, &fl)) in a.iter().zip(&b).zip(expected.iter().zip(&floors)) {
+            assert_eq!(BinaryOp::Mod.forward(x, y), want, "{x} mod {y}");
+            assert_eq!(BinaryOp::Mod.backward(1.0, x, y), (1.0, -fl), "{x} mod {y}");
+        }
     }
 
     #[test]

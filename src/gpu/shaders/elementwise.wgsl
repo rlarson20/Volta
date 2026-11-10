@@ -75,6 +75,9 @@ fn mod_op(
     let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_a()) {
-        st_result(idx, ld_a(idx) - ld_b(idx) * floor(ld_a(idx) / ld_b(idx)));
+        let b = ld_b(idx);
+        let r = ld_a(idx) % b;
+        // Floored, as torch.remainder: the truncated remainder takes b's sign.
+        st_result(idx, select(r, r + b, r != 0.0 && ((r < 0.0) != (b < 0.0))));
     }
 }

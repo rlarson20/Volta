@@ -42,8 +42,8 @@
 ///                     add_broadcast_pass1, add_broadcast_pass2);
 ///         }
 ///         non_differentiable {
-///             /// x % y
-///             Mod => |a, b| a % b, gpu(mod_op);
+///             /// Comparison-like op with no derivative.
+///             Foo => |a, b| ..., gpu(foo);
 ///         }
 ///     }
 /// }
@@ -54,6 +54,8 @@
 /// - `gpu(fwd, bwd_a, bwd_b, pass1, pass2)` names the forward, same-shape backward, and
 ///   two-pass broadcast-backward `ComputePipelines` fields. `gpu(fwd)` is the forward
 ///   only.
+/// - The `non_differentiable` section may be empty (`non_differentiable {}`), as it is
+///   while every binary op has a derivative.
 /// - `is_trivial` is true exactly for the `non_differentiable` rows, and their
 ///   `backward` panics (`edge()` never attaches a trivial grad fn, so it can't run).
 macro_rules! define_ops {
@@ -224,9 +226,9 @@ macro_rules! define_ops {
                         let $dgb = rhs;
                         $dbwd
                     })*
-                    $(Self::$nvariant)|* => {
+                    $(Self::$nvariant => {
                         unreachable!("{self:?} is non-differentiable and has no backward")
-                    }
+                    })*
                 }
             }
 
@@ -260,9 +262,9 @@ macro_rules! define_ops {
                         let $dgb = rhs;
                         $dbwd
                     })*
-                    $(Self::$nvariant)|* => {
+                    $(Self::$nvariant => {
                         unreachable!("{self:?} is non-differentiable and has no backward")
-                    }
+                    })*
                 }
             }
 
@@ -270,8 +272,8 @@ macro_rules! define_ops {
             #[must_use]
             pub const fn is_trivial(self) -> bool {
                 match self {
-                    $(Self::$dvariant)|* => false,
-                    $(Self::$nvariant)|* => true,
+                    $(Self::$dvariant => false,)*
+                    $(Self::$nvariant => true,)*
                 }
             }
 
@@ -302,7 +304,7 @@ macro_rules! define_ops {
                         pass1: &p.$dp1,
                         pass2: &p.$dp2,
                     }),)*
-                    $(Self::$nvariant)|* => None,
+                    $(Self::$nvariant => None,)*
                 }
             }
         }

@@ -156,3 +156,30 @@ fn max_backward_b(
         st_result_grad(idx, grad);
     }
 }
+
+// For mod (floored): d(a mod b)/da = 1
+@compute @workgroup_size(256)
+fn mod_backward_a(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
+    let idx = global_id.x;
+    if (idx < len_out_grad()) {
+        force_use_bindings(ld_a(idx), ld_b(idx));
+        st_result_grad(idx, ld_out_grad(idx));
+    }
+}
+
+// For mod (floored): d(a mod b)/db = -floor(a/b)
+@compute @workgroup_size(256)
+fn mod_backward_b(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
+    let idx = global_id.x;
+    if (idx < len_out_grad()) {
+        st_result_grad(idx, -ld_out_grad(idx) * floor(ld_a(idx) / ld_b(idx)));
+    }
+}
