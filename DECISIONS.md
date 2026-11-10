@@ -702,7 +702,7 @@ Autograd is a sequential graph walk over `Rc<RefCell<_>>`, and nothing in it is 
 
 ### Rulesets enforce the merge gate (#149)
 
-**Decision:** `improvements` and `main` each have a ruleset, kept in `.github/rulesets/*.json` and applied with `just rulesets`. Both require a pull request and the five `ci.yml` checks (`cpu-only` on 1.89 and stable, `linux-lavapipe`, `macos` on 1.89 and stable), and block deletion and force pushes. `improvements` allows only squash merges; `main` allows only merge commits, so a phase landing keeps its history.
+**Decision:** `improvements` and `main` each have a ruleset, kept in `.github/rulesets/*.json` and applied with `just rulesets`. Both require a pull request and the four `ci.yml` checks (`cpu-only` on 1.89 and stable, `linux-lavapipe`, `macos` on stable), and block deletion and force pushes. `improvements` allows only squash merges; `main` allows only merge commits, so a phase landing keeps its history.
 
 **Why:** until then the merge gate was convention. The only rule was "no force push", so a red CI run did not block a merge, and #148 reached `improvements` as a merge commit instead of a squash.
 
@@ -712,3 +712,4 @@ Autograd is a sequential graph walk over `Rc<RefCell<_>>`, and nothing in it is 
 - *Status checks are not strict* (a branch need not be up to date with the base), to avoid a rebase and a full CI re-run whenever another PR merges first.
 - The checks are listed by name, so a renamed job or a change to the toolchain matrix in `ci.yml` (see #121) blocks every merge until the JSON is updated. Change both in the same PR.
 - The JSON is the source of truth, but nothing applies it automatically: after editing a file, run `just rulesets`. The recipe creates or updates by `name`, so it is safe to repeat.
+- *The `macos` job runs stable only.* GitHub's macOS runners are intermittently unavailable (a run failed because `macos (stable)` got no runner), and each extra macOS job is another chance to hit that. The MSRV is checked by `cpu-only (1.89)`. What this gives up: `accelerate` (and the macOS-only code paths) are no longer compiled with 1.89, so an MSRV break in that code is not caught by CI. Revisit if one slips through.

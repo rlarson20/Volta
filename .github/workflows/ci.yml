@@ -75,13 +75,15 @@ jobs:
 
   # Full build with gpu + accelerate. GitHub's macos-latest is Apple Silicon
   # with a working Metal GPU; GPU tests self-skip at runtime when no adapter
-  # is available (src/gpu/mod.rs).
+  # is available (src/gpu/mod.rs). Stable only: GitHub's macOS runners are scarce, and
+  # the MSRV (1.89) is checked by the `cpu-only` lane. The one-entry matrix keeps the
+  # check name `macos (stable)` that the rulesets require.
   macos:
     runs-on: macos-latest
     strategy:
       fail-fast: false
       matrix:
-        rust: [1.89, stable]
+        rust: [stable]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
