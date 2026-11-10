@@ -11,7 +11,7 @@ In a cloud session (Linux, `CLAUDE_CODE_REMOTE` set, no `rtk`, no GPU), read `de
 Update this section when a phase lands or the merge gate changes. Keep it short; what landed is in the commit log and `DECISIONS.md`.
 
 - **Roadmap:** `docs/plans/ADDENDUM.md` § Sequencing defines the phases. Phases 0–3 and 5 (dtypes and mixed precision, PRs #19–#28) are done. Phase 4 (arena graph, sealed `Backend` trait, proptest DAG checks) is optional and comes last.
-- **Open work lives in [GitHub issues](https://github.com/rlarson20/Volta/issues), nowhere else.** Each defect ID (`S<n>`, `A<n>`) has one issue naming its `#[ignore = "S<n>: ..."]` repro and its audit section. Pick work with `is:open label:P0 -label:blocked` (then P1, ...). The audits in `docs/audits/` are frozen evidence, not status. PyTorch fixtures are regenerated with `just torch-fixtures` (needs `uv`).
+- **Open work lives in [GitHub issues](https://github.com/rlarson20/Volta/issues), nowhere else.** Each defect ID (`S<n>`, `A<n>`) has one issue naming its `#[ignore = "S<n>: ..."]` repro and its audit section. Pick work with `is:open label:P0 -label:blocked` (then P1, ...). The audits in `docs/audits/` are dated, append-only evidence, not status: correct them by appending, and tell the user (`.claude/rules/audits.md`). PyTorch fixtures are regenerated with `just torch-fixtures` (needs `uv`).
 - **Merge gate:** `improvements` merges into `main` when every [`merge-gate`](https://github.com/rlarson20/Volta/issues?q=is%3Aopen+label%3Amerge-gate) issue is closed (fixed, or closed as not planned with a reason). `just ci` passes and the library documents every item.
 
 ## Invariants
@@ -68,6 +68,7 @@ Read these when the need comes up; don't preload them.
 When you're corrected or discover something non-obvious, file it in exactly one place:
 
 - **A defect, task, or idea** goes in a GitHub issue (one per defect ID, with labels `kind:`, `area:`, `P0`–`P3`, `size:`), never in a file. Search open issues first.
+- **A correction to an audit** is appended under that file's `## Corrections` with an inline pointer, never made by editing the original text, and you tell the user (`.claude/rules/audits.md`).
 - **A rule for one area** goes in the matching `.claude/rules/*.md`.
 - **A repo-wide rule** goes under Invariants above. Keep that list at 10 or fewer and merge items rather than append.
 - **Why a decision was made, or what was tried and rejected** goes in a `DECISIONS.md` entry.

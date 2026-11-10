@@ -1,10 +1,10 @@
 # OPUS_5_EVAL_AUDIT
 
-> **Frozen record (2026-11-02).** B1–B5 and H1–H8 are fixed; live status is in the GitHub issues, and the evidence for each fix is in the git history. Findings below describe the code as it was when audited.
+> **Frozen record (2026-11-02).** B1–B5 and H1–H8 are fixed; live status is in the GitHub issues, and the evidence for each fix is in the git history. Findings below describe the code as it was when audited. Original text is never edited or removed; corrections are appended under `## Corrections` at the end (`.claude/rules/audits.md`).
 
 ## Intro
 
-Evaluation of every claim in the **"new notes"** section of `notes/TODO.md`, checked against the
+Evaluation of every claim in the **"new notes"** section of `notes/TODO.md` [corrected 2026-11-10: see C1], checked against the
 code at commit `75188fa` (branch `improvements`).
 
 **Method.** Claims were checked three ways: (1) reading the cited code, (2) counting with
@@ -1189,3 +1189,12 @@ document makes for itself.
 [Muon: An optimizer for hidden layers in neural networks — Keller Jordan](https://kellerjordan.github.io/posts/muon/),
 [How Much Orthogonalization Does Muon Need?](https://arxiv.org/pdf/2606.00371),
 [Accelerating Newton-Schulz Iteration for Orthogonalization via Chebyshev-type Polynomials](https://arxiv.org/pdf/2506.10935).
+
+## Corrections
+
+Appended after the original text, which is unchanged (`.claude/rules/audits.md`).
+
+### C1 (2026-11-10): `notes/TODO.md` no longer exists
+
+- **Said** (line 7): "Evaluation of every claim in the **"new notes"** section of `notes/TODO.md`."
+- **True:** PR #87 (`b20a43f`) retired `notes/TODO.md`; the file is not in the working tree. The section this audit evaluated is in its last version, `git show 9d8aff5:notes/TODO.md`. Live status is in the GitHub issues, one per defect ID. The evaluation itself is unaffected.

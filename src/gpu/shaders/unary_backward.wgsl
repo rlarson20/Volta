@@ -68,7 +68,7 @@ fn tanh_backward(
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         // d(tanh(x))/dx = 1 - tanh²(x)
-        let t = tanh(ld_x(idx));
+        let t = tanh_sat(ld_x(idx));
         st_result(idx, ld_out_grad(idx) * (1.0 - t * t));
     }
 }
