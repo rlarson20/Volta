@@ -56,10 +56,6 @@
             "integration_id": 15368
           },
           {
-            "context": "macos (1.89)",
-            "integration_id": 15368
-          },
-          {
             "context": "macos (stable)",
             "integration_id": 15368
           }
