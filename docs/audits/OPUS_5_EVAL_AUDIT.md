@@ -1,6 +1,6 @@
 # OPUS_5_EVAL_AUDIT
 
-> **Frozen record (2026-11-02).** B1–B5 and H1–H8 are fixed; live status is in the GitHub issues, and the evidence for each fix is in the git history. Findings below describe the code as it was when audited.
+> **Frozen record (2026-11-02).** B1–B5 and H1–H8 are fixed; live status is in the GitHub issues, and the evidence for each fix is in the git history. Findings below describe the code as it was when audited. Original text is never edited or removed; corrections are appended under `## Corrections` at the end (`.claude/rules/audits.md`).
 
 ## Intro
 

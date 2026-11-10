@@ -1,6 +1,6 @@
 # Post-Phase-5 audit (2026-11-04)
 
-A whole-codebase audit after the Phase 5 stack (dtypes and mixed precision, PRs #19–#28), on `audit/2026-11-post-phase5` stacked on `dtype/p8-gpu-half` (`de41abb`). It asks four questions: what is dealt with, what is newly exposed, what is fragile, and what claims don't match the code. New defects get an `A<n>` ID and an `#[ignore = "A<n>: ..."]` repro in `tests/audit_repros.rs`; confirmed sweep items keep their `S<n>`. Like the other files in this directory, this is a frozen record: live status is in `notes/TODO.md`.
+A whole-codebase audit after the Phase 5 stack (dtypes and mixed precision, PRs #19–#28), on `audit/2026-11-post-phase5` stacked on `dtype/p8-gpu-half` (`de41abb`). It asks four questions: what is dealt with, what is newly exposed, what is fragile, and what claims don't match the code. New defects get an `A<n>` ID and an `#[ignore = "A<n>: ..."]` repro in `tests/audit_repros.rs`; confirmed sweep items keep their `S<n>`. Like the other files in this directory, this is a frozen record: live status is in `notes/TODO.md`. Original text is never edited or removed; corrections are appended under `## Corrections` at the end (`.claude/rules/audits.md`).
 
 ## Method
 
@@ -16,7 +16,7 @@ Not covered: Metal (`just test-gpu` on the Mac), performance, and the WASM targe
 
 - **Phase 5 delivers what ADDENDUM §11 promised**, P0–P8, each against PyTorch fixtures (DECISIONS.md, one entry per PR). The TODO item "The dtype system is decorative" is resolved by the stack and removed here.
 - **B1–B5 and H1–H8** stay fixed: their regression tests pass in both feature sets.
-- **Every 2026-11 sweep defect still reproduces.** 29 ignored repros fail on the CPU and 7 GPU-only ones fail on lavapipe, as they should until fixed. One exception: **S24** (GPU `tanh` NaN for x >= 45) passes on lavapipe, because its overflow is Metal's `tanh`; it stays ignored, with the note.
+- **Every 2026-11 sweep defect still reproduces.** 29 ignored repros fail on the CPU and 7 GPU-only ones fail on lavapipe, as they should until fixed. One exception: **S24** (GPU `tanh` NaN for x >= 45) [corrected 2026-11-10: see C1] passes on lavapipe, because its overflow is Metal's `tanh`; it stays ignored, with the note.
 - **Every runnable example completes:** regression, showcase, layernorm_demo, char_language_model, char_transformer_model (loss 3.24 to 0.035), vae, super_resolution, load_external_mnist, readme1 and readme2. time_sequence and mnist_rnn run past 150 s; mnist_cnn, dcgan and the GPU examples were not run.
 - **Phase 5's own claims hold up under the probes.** Every layer and loss runs forward and backward in f64, f16 and bf16 on the CPU, with outputs and gradients in the input's dtype. Every layer runs in f32, f16 and bf16 on the GPU under `PreferGpu` (except A1), with GPU outputs and gradients. The optimizers step half and f64 parameters, GPU promotion and casts stay on the device, and GPU Bool comparisons and `where` broadcast through the gap path.
 
@@ -107,3 +107,13 @@ cargo test -- --ignored                        # every repro, with the GPU ones 
 cargo test --no-default-features -- --ignored  # CPU repros only
 cargo test --test audit_repros -- --ignored --nocapture   # this audit's repros (GPU-RAN markers)
 ```
+
+## Corrections
+
+Appended after the original text, which is unchanged (`.claude/rules/audits.md`).
+
+### C1 (2026-11-10): the S24 range in § 1
+
+- **Said** (§ 1, "Every 2026-11 sweep defect still reproduces"): "**S24** (GPU `tanh` NaN for x >= 45) passes on lavapipe, because its overflow is Metal's `tanh`; it stays ignored, with the note."
+- **True:** the lavapipe result stands. The range is wrong: on Metal, GPU `tanh` is 0 for about 43.7 to 44.35 and NaN from 44.37, not NaN from 45. See C1 in `2026-11-sweep.md` for the cause and the evidence.
+- **Fix:** PR #146 (`Fixes #49`) removes the `#[ignore]` once merged, so "it stays ignored" will no longer hold.
