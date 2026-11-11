@@ -1,6 +1,15 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["torch==2.15.0", "safetensors", "numpy"]
+#
+# # The CPU-only torch build: PyPI's Linux wheel pulls in several GB of CUDA libraries.
+# [[tool.uv.index]]
+# name = "pytorch-cpu"
+# url = "https://download.pytorch.org/whl/cpu"
+# explicit = true
+#
+# [tool.uv.sources]
+# torch = { index = "pytorch-cpu" }
 # ///
 """Generate PyTorch reference fixtures for the Volta `torch_ref_*` tests.
 
