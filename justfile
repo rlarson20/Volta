@@ -134,7 +134,7 @@ hack-if-installed:
 	if command -v cargo-hack >/dev/null; then
 		just hack
 	else
-		echo "skipped: cargo-hack not installed (cargo install cargo-hack)"
+		echo "skipped: cargo-hack not installed (cargo +stable install cargo-hack --locked)"
 	fi
 
 # Fail on silent numeric fallbacks (`unwrap_or(0.0)`, `if let Some(slot) = v.get_mut(i)`)
