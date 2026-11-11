@@ -56,7 +56,7 @@ impl ForwardIndexMapper for PadMapper {
 
     fn map_forward_indices(&self, dim: usize, iter_idx: usize) -> (usize, usize) {
         // Forward: output_idx = input_idx + pad_left
-        let pad_left = self.padding.get(dim).map_or(0, |p| p.0);
+        let pad_left = fetch(&self.padding, dim).0;
         (iter_idx, iter_idx + pad_left)
     }
 }
@@ -78,7 +78,7 @@ impl ForwardIndexMapper for ShrinkMapper {
 
     fn map_forward_indices(&self, dim: usize, iter_idx: usize) -> (usize, usize) {
         // Forward: input_idx (original) = output_idx (shrunk) + range_start
-        let range_start = self.ranges.get(dim).map_or(0, |r| r.0);
+        let range_start = fetch(&self.ranges, dim).0;
         (iter_idx + range_start, iter_idx)
     }
 }
@@ -122,19 +122,11 @@ trait BackwardIndexMapper {
     /// # Arguments
     /// * `dim` - Current dimension being processed
     /// * `iter_idx` - Index in the iteration shape for this dimension
-    /// * `input_dim_size` - Size of the input tensor in this dimension
-    /// * `output_dim_size` - Size of the output tensor in this dimension
     ///
     /// # Returns
-    /// * `Some((input_idx, output_idx))` - Valid indices for both tensors
-    /// * `None` - If the mapping is invalid and should be skipped
-    fn map_backward_indices(
-        &self,
-        dim: usize,
-        iter_idx: usize,
-        input_dim_size: usize,
-        output_dim_size: usize,
-    ) -> Option<(usize, usize)>;
+    /// * (`input_idx`, `output_idx`) - The corresponding indices in the input and output tensors.
+    ///   Every iteration index maps inside both tensors; `apply_movement_backward` asserts it.
+    fn map_backward_indices(&self, dim: usize, iter_idx: usize) -> (usize, usize);
 }
 
 /// Backward mapper for pad operations
@@ -152,17 +144,11 @@ impl BackwardIndexMapper for PadBackwardMapper {
         input_shape // Iterate over input (unpadded) shape
     }
 
-    fn map_backward_indices(
-        &self,
-        dim: usize,
-        iter_idx: usize,
-        _input_dim_size: usize,
-        _output_dim_size: usize,
-    ) -> Option<(usize, usize)> {
+    fn map_backward_indices(&self, dim: usize, iter_idx: usize) -> (usize, usize) {
         // Backward: we iterate over input shape and map to padded output shape
         // input_idx = iter_idx, output_idx = iter_idx + pad_left
-        let pad_left = self.padding.get(dim).map_or(0, |p| p.0);
-        Some((iter_idx, iter_idx + pad_left))
+        let pad_left = fetch(&self.padding, dim).0;
+        (iter_idx, iter_idx + pad_left)
     }
 }
 
@@ -181,17 +167,11 @@ impl BackwardIndexMapper for ShrinkBackwardMapper {
         output_shape // Iterate over output (shrunk) shape
     }
 
-    fn map_backward_indices(
-        &self,
-        dim: usize,
-        iter_idx: usize,
-        _input_dim_size: usize,
-        _output_dim_size: usize,
-    ) -> Option<(usize, usize)> {
+    fn map_backward_indices(&self, dim: usize, iter_idx: usize) -> (usize, usize) {
         // Backward: we iterate over output shape and map to larger input shape
         // output_idx = iter_idx, input_idx = iter_idx + range_start
-        let range_start = self.ranges.get(dim).map_or(0, |r| r.0);
-        Some((iter_idx + range_start, iter_idx))
+        let range_start = fetch(&self.ranges, dim).0;
+        (iter_idx + range_start, iter_idx)
     }
 }
 
@@ -210,22 +190,12 @@ impl BackwardIndexMapper for StrideBackwardMapper {
         output_shape // Iterate over output (strided) shape
     }
 
-    fn map_backward_indices(
-        &self,
-        dim: usize,
-        iter_idx: usize,
-        input_dim_size: usize,
-        _output_dim_size: usize,
-    ) -> Option<(usize, usize)> {
+    fn map_backward_indices(&self, dim: usize, iter_idx: usize) -> (usize, usize) {
         // Backward: we iterate over output shape and map to larger input shape
-        // output_idx = iter_idx, input_idx = iter_idx * stride
+        // output_idx = iter_idx, input_idx = iter_idx * stride. With
+        // `out = ceil(in / stride)`, every `iter_idx * stride` is below `in`.
         let stride = fetch(&self.strides, dim);
-        let input_idx = iter_idx * stride;
-        if input_idx < input_dim_size {
-            Some((input_idx, iter_idx))
-        } else {
-            None // Out of bounds
-        }
+        (iter_idx * stride, iter_idx)
     }
 }
 
@@ -297,6 +267,28 @@ fn fill_bits<B: Bits>(dtype: crate::DType, value: f32) -> B {
         .expect("one element")
 }
 
+/// Checks that a mapper's per-axis indices lie inside both tensors.
+///
+/// The `slot`/`fetch` at the base case only check the flat offset, and an index past one
+/// axis can still land inside the buffer (in the next row), so the per-axis check is
+/// needed to fail loudly instead of writing the wrong element.
+///
+/// # Panics
+/// If `input_idx >= input_dim_size` or `output_idx >= output_dim_size`: a mapper bug.
+fn assert_in_dim(
+    dim: usize,
+    input_idx: usize,
+    input_dim_size: usize,
+    output_idx: usize,
+    output_dim_size: usize,
+) {
+    assert!(
+        input_idx < input_dim_size && output_idx < output_dim_size,
+        "movement: axis {dim} maps to input index {input_idx} (size {input_dim_size}) \
+         and output index {output_idx} (size {output_dim_size})"
+    );
+}
+
 /// Unified recursive index transformation for backward movement operations
 ///
 /// This function consolidates `unpad_recursive`, `unshrink_recursive`, and `unstride_recursive`.
@@ -337,22 +329,20 @@ fn apply_movement_backward<T: Copy, M: BackwardIndexMapper>(
     // Iterate according to the mapper's iteration shape
     for iter_idx in 0..dim_size {
         // Map iteration index to input and output indices
-        if let Some((input_idx, output_idx)) =
-            mapper.map_backward_indices(dim, iter_idx, input_dim_size, output_dim_size)
-        {
-            let input_stride = fetch(ctx.input_strides, dim);
-            let output_stride = fetch(ctx.output_strides, dim);
+        let (input_idx, output_idx) = mapper.map_backward_indices(dim, iter_idx);
+        assert_in_dim(dim, input_idx, input_dim_size, output_idx, output_dim_size);
+        let input_stride = fetch(ctx.input_strides, dim);
+        let output_stride = fetch(ctx.output_strides, dim);
 
-            apply_movement_backward(
-                ctx,
-                result,
-                grad,
-                dim + 1,
-                mapper,
-                input_offset + input_idx * input_stride,
-                output_offset + output_idx * output_stride,
-            );
-        }
+        apply_movement_backward(
+            ctx,
+            result,
+            grad,
+            dim + 1,
+            mapper,
+            input_offset + input_idx * input_stride,
+            output_offset + output_idx * output_stride,
+        );
     }
 }
 
@@ -398,21 +388,19 @@ fn apply_movement_forward<T: Copy, M: ForwardIndexMapper>(
         // Map iteration index to input and output indices
         let (input_idx, output_idx) = mapper.map_forward_indices(dim, iter_idx);
 
-        // Check bounds
-        if input_idx < input_dim_size && output_idx < output_dim_size {
-            let input_stride = fetch(ctx.input_strides, dim);
-            let output_stride = fetch(ctx.output_strides, dim);
+        assert_in_dim(dim, input_idx, input_dim_size, output_idx, output_dim_size);
+        let input_stride = fetch(ctx.input_strides, dim);
+        let output_stride = fetch(ctx.output_strides, dim);
 
-            apply_movement_forward(
-                ctx,
-                result,
-                data,
-                dim + 1,
-                mapper,
-                input_offset + input_idx * input_stride,
-                output_offset + output_idx * output_stride,
-            );
-        }
+        apply_movement_forward(
+            ctx,
+            result,
+            data,
+            dim + 1,
+            mapper,
+            input_offset + input_idx * input_stride,
+            output_offset + output_idx * output_stride,
+        );
     }
 }
 

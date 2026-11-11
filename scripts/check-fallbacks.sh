@@ -9,10 +9,15 @@
 # Use `crate::index::{fetch, slot, span}` in library code and `src/` unit tests, or
 # `Tensor::item()` / `v[i]` / zip in `tests/`, and `.expect("..")` in examples and benches. A line may opt out with `// index-ok: <reason>`.
 #   4. a default for a missing element or slice: `unwrap_or(&[])`, `(&mut 0.0)`, `(&' ')`, `(&0)`, and
-#      any `.get(i)` / `.get_mut(i)` / `.first()` / `.last()` followed by `.unwrap_or(..)`. A keyed
-#      `.get(&k)` / `.get("k")` map lookup is exempt: absent is a real answer there.
-# Not caught: the multi-line `if let Some(&v) = x.get(i) { v } else { 0.0 }` form, and an
-# `.unwrap_or(..)` on the line after the `.get(..)`.
+#      any `.get(i)` / `.get_mut(i)` / `.first()` / `.last()` followed by a default:
+#      `.unwrap_or(..)`, `.unwrap_or_else(..)`, `.unwrap_or_default()`, `.map_or(..)` or
+#      `.map_or_else(..)` (`padding.get(dim).map_or(0, |p| p.0)` is a rank bug read as "no padding").
+#      A keyed `.get(&k)` / `.get("k")` map lookup is exempt: absent is a real answer there.
+#   5. `.filter_map(..)` over a positional `.get(..)`, which drops an out-of-range index instead of
+#      failing (`(0..rank).filter_map(|i| shape.get(i))`). Use `span(s, 0..rank)`.
+# Not caught: the multi-line `if let Some(&v) = x.get(i) { v } else { 0.0 }` form, a default on
+# the line after the `.get(..)`, and a plain `if idx < size { .. }` bounds guard that skips the
+# read or write (no spelling distinguishes it from a loop bound). Those need review.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -31,7 +36,10 @@ hits=$(
             grep -vE "get(_mut)?\\((&|\")" | grep -vE "$keyed" || true
         # `.get(i)`/`.first()`/`.last()` followed by any default, with a positional argument
         # (a keyed `.get(&k)` or `.get("k")` is a map lookup, filtered out below).
-        git grep -nE --untracked '\.(get|get_mut|first|last)\(([^()]|\([^()]*\))*\)(\.copied\(\)|\.cloned\(\))?\.unwrap_or\(' -- "${dirs[@]}" |
+        git grep -nE --untracked '\.(get|get_mut|first|last)\(([^()]|\([^()]*\))*\)(\.copied\(\)|\.cloned\(\))?\.(unwrap_or|unwrap_or_else|unwrap_or_default|map_or|map_or_else)\(' -- "${dirs[@]}" |
+            grep -vE "get(_mut)?\((&|\")" | grep -vE "$keyed" || true
+        # `.filter_map(..)` over a positional `.get(..)` drops the out-of-range indices.
+        git grep -nE --untracked 'filter_map\(.*\.get(_mut)?\(' -- "${dirs[@]}" |
             grep -vE "get(_mut)?\((&|\")" | grep -vE "$keyed" || true
         git grep -nE --untracked 'let Some\(&?[A-Za-z_]+\) = .*\.get(_mut)?\(' -- "${dirs[@]}" |
             grep -vE "get(_mut)?\((&|\")" | grep -vE "$keyed" || true

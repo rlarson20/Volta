@@ -519,23 +519,27 @@ impl IGEMMGradFn {
                 // CPU path
                 dispatch_real!(out_grad.data.dtype(), T => {
                 let mut grad_x_data = vec![T::ZERO; batch * in_ch * height * width];
-                                let out_grad_data = out_grad.data.host::<T>().to_vec();
-                                let weight_data = weight.as_ref().map(|w| w.borrow().data.host::<T>().to_vec());
+                let out_grad_data = out_grad.data.host::<T>().to_vec();
+                let weight_data = weight
+                    .as_ref()
+                    .expect("IGEMM backward: the weight is a parent")
+                    .borrow()
+                    .data
+                    .host::<T>()
+                    .to_vec();
 
-                                if let Some(ref wd) = weight_data {
-                                    // Input gradient: full convolution of output grad with flipped weights
-                                    // Use same tiling as forward pass
-                                    let config = TileConfig::default();
-                                    Self::igemm_backward_input(
-                                        &out_grad_data,
-                                        wd,
-                                        &mut grad_x_data,
-                                        &self.spec,
-                                        &config,
-                                    );
-                                }
+                // Input gradient: full convolution of output grad with flipped weights
+                // Use same tiling as forward pass
+                let config = TileConfig::default();
+                Self::igemm_backward_input(
+                    &out_grad_data,
+                    &weight_data,
+                    &mut grad_x_data,
+                    &self.spec,
+                    &config,
+                );
 
-                                Some(RawTensor::from_shape_compute(out_grad.data.dtype(), grad_x_data, Shape::derived(self.spec.input_dims())))
+                Some(RawTensor::from_shape_compute(out_grad.data.dtype(), grad_x_data, Shape::derived(self.spec.input_dims())))
                 })
             }
         } else {
@@ -567,22 +571,26 @@ impl IGEMMGradFn {
                 // CPU path
                 dispatch_real!(out_grad.data.dtype(), T => {
                 let mut grad_w_data = vec![T::ZERO; out_ch * in_ch * kernel_h * kernel_w];
-                                let out_grad_data = out_grad.data.host::<T>().to_vec();
-                                let x_data = x.as_ref().map(|x| x.borrow().data.host::<T>().to_vec());
+                let out_grad_data = out_grad.data.host::<T>().to_vec();
+                let x_data = x
+                    .as_ref()
+                    .expect("IGEMM backward: the input is a parent")
+                    .borrow()
+                    .data
+                    .host::<T>()
+                    .to_vec();
 
-                                if let Some(ref xd) = x_data {
-                                    // Weight gradient: sum over outer products
-                                    let config = TileConfig::default();
-                                    Self::igemm_backward_weight(
-                                        xd,
-                                        &out_grad_data,
-                                        &mut grad_w_data,
-                                        &self.spec,
-                                        &config,
-                                    );
-                                }
+                // Weight gradient: sum over outer products
+                let config = TileConfig::default();
+                Self::igemm_backward_weight(
+                    &x_data,
+                    &out_grad_data,
+                    &mut grad_w_data,
+                    &self.spec,
+                    &config,
+                );
 
-                                Some(RawTensor::from_shape_compute(out_grad.data.dtype(), grad_w_data, Shape::derived(self.spec.weight_dims())))
+                Some(RawTensor::from_shape_compute(out_grad.data.dtype(), grad_w_data, Shape::derived(self.spec.weight_dims())))
                 })
             }
         } else {
