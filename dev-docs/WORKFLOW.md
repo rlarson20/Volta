@@ -21,7 +21,7 @@ git switch -c type/short-desc origin/improvements   # branch first, from the rem
 just pr          # push the branch and open the PR (prefilled, opens your editor)
 just prs         # your open PRs; checks on this branch's PR
 # CI green -> squash-merge on GitHub
-just sync        # fast-forward improvements, delete branches whose PR merged
+just sync        # fast-forward improvements, delete branches it already holds
 ```
 
 Treat local `improvements` as a read-only mirror of the remote: only ever `git pull --ff-only` it, and never commit on it.
@@ -42,7 +42,13 @@ The reset is safe only because the branch already holds the commits, and `--keep
 
 ## Why `just sync` asks GitHub
 
-Squash merging replaces your branch's commits with one new commit, so nothing links your branch to `improvements` and `git branch --merged` reports none of them as merged. `just sync` asks GitHub which PRs merged and deletes a local branch only if the PR's final commit is exactly the branch tip, so commits you added after the merge are never lost. Run `just sync dry-run` first to see what it would delete. After a squash merge, start the next change from a new branch; don't keep working on the merged one.
+Squash merging replaces your branch's commits with one new commit, so nothing links your branch to `improvements` and `git branch --merged` reports none of them as merged. `just sync` (`scripts/sync.sh`) deletes a local branch when one of these holds:
+
+- **ancestor:** its tip is already in `origin/improvements` (merge commit, fast-forward, or a stacked PR whose lower branch merged), with or without a PR.
+- **squash:** a PR from it merged into `improvements` and that PR's final commit is exactly the local tip.
+- **content:** a PR from it merged and reached `improvements`, the branch's files are identical to that PR's final commit, and every non-merge commit the branch has beyond it matches a commit in `improvements` by patch. This covers a local `Merge branch 'lower' into upper` that moved the tip without changing the content.
+
+Everything else is kept, with the reason printed: no PR and unmerged commits, a merged PR but commits or changes beyond it, an open PR, or a PR closed without merging. Commits you added after the merge are never lost. Run `just sync dry-run` first to see what it would delete, and `just test-sync` after changing the script. After a squash merge, start the next change from a new branch; don't keep working on the merged one.
 
 ## Updating a PR branch
 
