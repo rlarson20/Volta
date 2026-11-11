@@ -3362,8 +3362,8 @@ fn movement_op(
         compute_pass.set_bind_group(0, &bind_group, &[]);
 
         // Only multiply actual dimensions (based on rank), not the padded zeros
-        let output_size = (0..params.rank as usize)
-            .filter_map(|i| params.new_shape.get(i))
+        let output_size = crate::index::span(&params.new_shape, 0..params.rank as usize)
+            .iter()
             .product::<u32>();
         let workgroup_count = output_size.div_ceil(256);
         dispatch_flat(&mut compute_pass, workgroup_count);
