@@ -8,7 +8,8 @@
 //! - Kernel: (K, K)
 //! - im2col output: (B * `H_out` * `W_out`, C * K * K)
 //! - Memory = B * `H_out` * `W_out` * C * K * K * 4 bytes (f32)
-use criterion::{BenchmarkId, Criterion, black_box, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_main};
+use std::hint::black_box;
 use volta::{Conv2d, ConvAlgo, RawTensor, Tensor};
 
 /// Generate a random 4D tensor (batch, channels, height, width)

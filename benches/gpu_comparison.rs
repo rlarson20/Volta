@@ -2,7 +2,8 @@
 //!
 //! These benchmarks are only available when the `gpu` feature is enabled.
 //! They compare CPU and GPU performance for key operations.
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_main};
+use std::hint::black_box;
 use volta::{Device, RawTensor, Tensor};
 
 #[cfg(feature = "gpu")]

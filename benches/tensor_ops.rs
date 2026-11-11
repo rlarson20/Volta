@@ -6,7 +6,8 @@
 //! - Matrix multiplication
 //! - Reduction operations (sum, mean, max)
 //! - Movement operations (reshape, transpose, etc.)
-use criterion::{BenchmarkId, Criterion, black_box, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_main};
+use std::hint::black_box;
 use volta::{Axis, PadValue};
 use volta::{RawTensor, Tensor};
 
