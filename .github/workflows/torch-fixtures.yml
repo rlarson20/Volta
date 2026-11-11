@@ -1,0 +1,27 @@
+name: Torch Fixtures
+on:
+  # Regenerates the PyTorch reference fixtures and compares them with the committed files
+  # (scripts/torch_ref/check_fixtures.py). It downloads torch, so it is not a required
+  # check: it runs on PRs that touch the generator or the fixtures, weekly, and by hand.
+  pull_request:
+    paths:
+      - scripts/torch_ref/**
+      - tests/fixtures/torch/**
+      - .github/workflows/torch-fixtures.yml
+  schedule:
+    - cron: "0 0 * * 0" # Weekly on Sunday
+  workflow_dispatch: # Manual trigger
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
+        with:
+          tool: uv
+      - run: uv run scripts/torch_ref/check_fixtures.py
