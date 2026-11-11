@@ -15,6 +15,10 @@ coverage:
 coverage-summary:
 	cargo llvm-cov
 
+# Per-file coverage table, no default features (the CPU lane; coverage.yml runs this)
+coverage-cpu:
+	cargo llvm-cov --no-default-features --summary-only
+
 # Fast targeted mutation testing (e.g. just mutants src/tensor.rs)
 mutants target="":
 	cargo mutants -- {{target}}
@@ -22,6 +26,12 @@ mutants target="":
 # Full mutation testing (WARNING: slow)
 mutants-all:
 	cargo mutants
+
+# Mutation testing of the autograd core on the CPU lane (mutants.yml runs this in shards, e.g.
+# `just mutants-core --shard 0/8`). gpu_ops.rs is excluded: it is compiled out without `gpu`,
+# so every mutant there would survive. About 400 mutants, ~20 s each on 4 cores.
+mutants-core *flags:
+	cargo mutants --no-default-features --file src/autograd.rs --file 'src/ops/**' --exclude src/ops/gpu_ops.rs {{flags}}
 
 # Find unused dependencies
 dead-deps:

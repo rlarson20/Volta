@@ -1,4 +1,8 @@
-# Keeps the SHA-pinned actions in .github/workflows current. It cannot bump
+# Weekly, grouped dependency updates against `improvements`, so a week's bumps arrive as at
+# most a few PRs instead of one per crate. Every PR that touches Cargo.toml or Cargo.lock also
+# runs `cargo deny` (audit.yml).
+#
+# github-actions keeps the SHA-pinned actions in .github/workflows current. It cannot bump
 # `dtolnay/rust-toolchain@<sha> # master` (no version tag to follow): update that pin by hand.
 version: 2
 updates:
@@ -7,3 +11,17 @@ updates:
     target-branch: improvements
     schedule:
       interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Minor and patch bumps of every crate land as one PR. A major bump (a semver break, e.g. a
+  # wgpu release) gets its own PR, since it usually needs code changes.
+  - package-ecosystem: cargo
+    directory: /
+    target-branch: improvements
+    schedule:
+      interval: weekly
+    groups:
+      cargo-minor-patch:
+        update-types: [minor, patch]
