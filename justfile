@@ -141,11 +141,23 @@ hack-if-installed:
 check-fallbacks:
 	./scripts/check-fallbacks.sh
 
-# CI-like pipeline (fmt -> fallbacks -> lint, both feature sets -> tests, both feature sets -> docs
-# with -D warnings, both feature sets -> examples -> feature powerset when cargo-hack is installed)
+# Fail on an `#[ignore]` without a defect ID, or whose ID names no open issue (the issue half
+# needs `gh` and skips with a notice without it; `just check-ignores --offline` skips it)
+check-ignores *flags:
+	./scripts/check-ignores.sh {{flags}}
+
+# Check scripts/check-ignores.sh against a scratch repo and a stub gh
+test-check-ignores:
+	./scripts/test-check-ignores.sh
+
+# CI-like pipeline (fmt -> fallbacks -> ignores -> lint, both feature sets -> tests, both feature
+# sets -> docs with -D warnings, both feature sets -> examples -> feature powerset when cargo-hack
+# is installed)
 ci:
 	cargo fmt --check
 	just check-fallbacks
+	just test-check-ignores
+	just check-ignores
 	just lint
 	cargo test
 	just test-cpu

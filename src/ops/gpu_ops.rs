@@ -1245,7 +1245,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "GPU broadcast backward (#60): the two-pass pass-1 bind group has 6 \
+    #[ignore = "#60: GPU broadcast backward: the two-pass pass-1 bind group has 6 \
                 bindings but wgpu's auto layout keeps only those the entry point uses (3 for Add)"]
     fn gpu_binary_backward_broadcast_matches_cpu() {
         assert_gpu_backward_matches_cpu(&[

@@ -24,6 +24,14 @@ repos:
         types: [rust]
         pass_filenames: false
 
+      # The format half only: the issue half needs network, and runs in `just ci` and CI.
+      - id: check-ignores
+        name: check ignored tests carry a defect ID
+        entry: ./scripts/check-ignores.sh --offline
+        language: system
+        types: [rust]
+        pass_filenames: false
+
       - id: cargo-test
         name: cargo test
         entry: cargo test

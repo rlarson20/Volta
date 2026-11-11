@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  issues: read # scripts/check-ignores.sh reads the issue list
 
 # A superseded push to a PR branch is cancelled (it would otherwise hold a scarce macOS
 # runner); runs on main and improvements always finish.
@@ -44,6 +45,16 @@ jobs:
 
       - name: Check silent fallbacks
         run: just check-fallbacks
+
+      # Every `#[ignore]` names a defect ID with an open issue (scripts/check-ignores.sh).
+      # VOLTA_REQUIRE_GH makes an unreachable issue list fail instead of skipping.
+      - name: Check ignored tests name open issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VOLTA_REQUIRE_GH: "1"
+        run: |
+          just test-check-ignores
+          just check-ignores
 
       - name: Clippy (no default features)
         run: just lint-cpu
