@@ -276,6 +276,8 @@ fn main() {
     println!("Training...\n");
 
     // Training loop
+    let mut first_loss = f32::NAN;
+    let mut final_loss = f32::NAN;
     for epoch in 1..=epochs {
         let mut epoch_loss = 0.0;
         let num_batches = (data.len() - 1) / seq_len;
@@ -309,6 +311,10 @@ fn main() {
         }
 
         let avg_loss = epoch_loss / num_batches as f32;
+        final_loss = avg_loss;
+        if epoch == 1 {
+            first_loss = avg_loss;
+        }
 
         if epoch % 10 == 0 || epoch == 1 {
             println!("Epoch {epoch:3}/{epochs}: Loss = {avg_loss:.4}");
@@ -316,6 +322,12 @@ fn main() {
     }
 
     println!("\n=== Training Complete ===\n");
+    // The CI smoke run (`just examples-smoke`) relies on this: a NaN or a loss that never
+    // drops exits non-zero.
+    assert!(
+        final_loss.is_finite() && final_loss < first_loss,
+        "training did not reduce the loss: first {first_loss}, final {final_loss}"
+    );
 
     // Generate text samples
     println!("Generated text samples:\n");

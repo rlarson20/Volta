@@ -74,6 +74,8 @@ fn main() {
     println!("Training...\n");
 
     // Training loop
+    let mut first_loss = f32::NAN;
+    let mut final_loss = f32::NAN;
     for epoch in 1..=num_epochs {
         // Generate synthetic training data
         // Low-res: smooth gradients, High-res: sharper version with more detail
@@ -85,6 +87,10 @@ fn main() {
         // Compute MSE loss
         let loss_tensor = mse_loss(&output, &high_res);
         let loss_value = loss_tensor.item();
+        final_loss = loss_value;
+        if epoch == 1 {
+            first_loss = loss_value;
+        }
 
         // Backward pass
         optimizer.zero_grad();
@@ -98,6 +104,12 @@ fn main() {
     }
 
     println!("\n=== Training Complete ===\n");
+    // The CI smoke run (`just examples-smoke`) relies on this: a NaN or a loss that never
+    // drops exits non-zero.
+    assert!(
+        final_loss.is_finite() && final_loss < first_loss,
+        "training did not reduce the loss: first {first_loss}, final {final_loss}"
+    );
 
     // Demonstrate upscaling on a test pattern
     println!("Testing on a simple checkerboard pattern...");

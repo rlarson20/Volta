@@ -90,6 +90,11 @@ test-cpu:
 examples-check:
 	cargo build --examples
 
+# Run the quick, data-free examples (release, CPU) under a time limit; fail on a panic, a
+# timeout, or a printed NaN/inf. The set is in scripts/examples-smoke.sh and dev-docs/DEVELOPMENT.md
+examples-smoke:
+	./scripts/examples-smoke.sh
+
 # Run a single example by name
 example name:
 	cargo run --example {{name}}
@@ -161,8 +166,8 @@ test-check-ignores:
 	./scripts/test-check-ignores.sh
 
 # CI-like pipeline (fmt -> fallbacks -> ignores -> lint, both feature sets -> tests, both feature
-# sets -> docs with -D warnings, both feature sets -> examples -> feature powerset when cargo-hack
-# is installed)
+# sets -> docs with -D warnings, both feature sets -> examples, built then the smoke set run ->
+# feature powerset when cargo-hack is installed)
 ci:
 	cargo fmt --check
 	just check-fallbacks
@@ -174,6 +179,7 @@ ci:
 	just doc
 	just doc-cpu
 	cargo build --examples
+	just examples-smoke
 	just hack-if-installed
 	@echo "CI check passed!"
 

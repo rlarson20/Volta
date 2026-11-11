@@ -26,5 +26,9 @@ fn main() {
     loss.clone().into_loss().expect("scalar loss").backward();
     optim.step();
 
-    println!("Loss: {:?}", loss.item());
+    let loss = loss.item();
+    println!("Loss: {loss:?}");
+    // One step on random targets has no "before" to beat; the CI smoke run
+    // (`just examples-smoke`) checks only that the loss is finite.
+    assert!(loss.is_finite(), "loss is not finite: {loss}");
 }

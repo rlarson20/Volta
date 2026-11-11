@@ -40,12 +40,16 @@ fn main() {
     // Training loop
     let num_epochs = 1000;
     let mut progress = ProgressBar::new(num_epochs, "Training");
+    let mut first_loss = f32::NAN;
 
     for epoch in 0..num_epochs {
         optimizer.zero_grad();
 
         let pred = model.forward(&x);
         let loss = RawTensor::mse_loss(&pred, &y_true);
+        if epoch == 0 {
+            first_loss = loss.item();
+        }
 
         loss.clone().into_loss().expect("scalar loss").backward();
         optimizer.step();
@@ -62,7 +66,14 @@ fn main() {
     let final_pred = model.forward(&x);
     let final_loss = RawTensor::mse_loss(&final_pred, &y_true);
     println!("\n=== Training Complete ===");
-    println!("Final Loss: {:.6}", final_loss.item());
+    let final_loss = final_loss.item();
+    println!("Final Loss: {final_loss:.6}");
+    // The CI smoke run (`just examples-smoke`) relies on this: a NaN or a loss that never
+    // drops exits non-zero.
+    assert!(
+        final_loss.is_finite() && final_loss < first_loss,
+        "training did not reduce the loss: first {first_loss}, final {final_loss}"
+    );
 
     // Show a few predictions
     println!("\nSample predictions:");

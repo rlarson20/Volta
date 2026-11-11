@@ -183,16 +183,17 @@ fn compare_cpu_vs_gpu(x_data: &[f32], y_data: &[f32]) {
 
 /// Train a model for specified number of epochs
 fn train_model(model: &Sequential, opt: &mut Adam, x: &Tensor, y: &Tensor, epochs: usize) {
-    let mut initial_loss = 0.0;
-    let mut final_loss = 0.0;
+    let mut first_loss = f32::NAN;
+    let mut final_loss = f32::NAN;
 
     for epoch in 0..epochs {
         opt.zero_grad();
         let predictions = model.forward(x);
         let loss = mse_loss(&predictions, y);
 
+        // Read only the first and last loss: each `item()` is a device readback.
         if epoch == 0 {
-            initial_loss = loss.item();
+            first_loss = loss.item();
         }
         if epoch == epochs - 1 {
             final_loss = loss.item();
@@ -206,7 +207,13 @@ fn train_model(model: &Sequential, opt: &mut Adam, x: &Tensor, y: &Tensor, epoch
         }
     }
 
-    println!("  Final loss: {final_loss:.6} (started at {initial_loss:.6})");
+    println!("  Final loss: {final_loss:.6} (started at {first_loss:.6})");
+    // The CI smoke run (`just examples-smoke`) relies on this: a NaN or a loss that never
+    // drops exits non-zero.
+    assert!(
+        final_loss.is_finite() && final_loss < first_loss,
+        "training did not reduce the loss: first {first_loss}, final {final_loss}"
+    );
 
     // Test predictions
     println!("  Predictions:");

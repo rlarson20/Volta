@@ -51,3 +51,21 @@ Decide by where an argument comes from (DECISIONS.md, "Panic inside the program,
 - `check_gradients_simple` is the quick check; `check_gradients` is the full one. Avoid ops with non-deterministic gradients on ties (argmax, argmin), and make sure the gradient shape matches the input's.
 - Never write a test that asserts a known bug. Use `#[ignore = "<defect ID>: <why>"]`.
 - Where the tests live: unit tests beside the code or in `src/lib_tests/`; integration, parity, and GPU tests in `tests/` (`tests/gpu_*.rs`, `tests/parity_*.rs`); compile-fail tests in `tests/compile_fail/`.
+
+## Examples smoke run
+
+`just examples-smoke` (`scripts/examples-smoke.sh`, in `just ci` and the `examples-smoke` CI job) builds the examples below in release with no default features and runs each in an empty directory under a 120 s limit. It fails on a non-zero exit, a timeout, or a printed `NaN`/`inf`. Every example in the set that trains asserts at the end that its final loss is finite and below its first (`readme2` takes one step on random targets, so it asserts only that the loss is finite). Timings are from a 4-core Linux VM.
+
+| In the smoke set | Time |
+| --- | --- |
+| `readme1`, `readme2`, `showcase`, `regression`, `layernorm_demo`, `gpu_training` (its CPU path), `load_external_mnist` (its demo path, #143) | < 1 s each |
+| `char_transformer_model`, `char_language_model` | 1 s, 3 s |
+| `super_resolution` | 9 s |
+
+| Left out | Why |
+| --- | --- |
+| `time_sequence` | Trains to NaN and runs past 4 minutes (#88). Add it back with the fix. |
+| `mnist_cnn`, `mnist_rnn`, `mnist_autocast`, `vae`, `dcgan` | Need MNIST in `data/mnist`, and run for minutes (#59 is the MNIST lane; #54 for DCGAN). |
+| `gpu` | Does nothing without the `gpu` feature. |
+
+A new example joins the set when it needs no downloaded data and runs in seconds; add it to the `smoke` list in the script and to this table, with its loss assertion.

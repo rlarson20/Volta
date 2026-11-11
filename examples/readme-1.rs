@@ -26,19 +26,31 @@ fn main() {
 
     // 4. Training loop
     println!("Training a simple MLP to learn XOR...");
+    let mut first_loss = f32::NAN;
+    let mut final_loss = f32::NAN;
     for epoch in 0..=300 {
         optimizer.zero_grad();
 
         let pred = model.forward(&x).reshape(&[4]); //alignment
         let loss = mse_loss(&pred, &y);
+        final_loss = loss.item();
+        if epoch == 0 {
+            first_loss = final_loss;
+        }
 
         if epoch % 20 == 0 {
-            println!("Epoch {}: loss = {:.6}", epoch, loss.item());
+            println!("Epoch {epoch}: loss = {final_loss:.6}");
         }
 
         loss.into_loss().expect("scalar loss").backward();
         optimizer.step();
     }
+    // The CI smoke run (`just examples-smoke`) relies on this: a NaN or a loss that never
+    // drops exits non-zero.
+    assert!(
+        final_loss.is_finite() && final_loss < first_loss,
+        "training did not reduce the loss: first {first_loss}, final {final_loss}"
+    );
 
     // 5. Save and Load State Dict (human-readable keys: "fc1.weight", "fc1.bias", etc.)
     let state = model.state_dict();

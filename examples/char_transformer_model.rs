@@ -221,6 +221,8 @@ fn main() {
 
     println!("Training...\n");
 
+    let mut first_loss = f32::NAN;
+    let mut final_loss = f32::NAN;
     for epoch in 1..=epochs {
         let num_batches = (data.len() - 1) / seq_len;
         let mut epoch_loss = 0.0;
@@ -254,6 +256,10 @@ fn main() {
         }
 
         let avg_loss = epoch_loss / num_batches as f32;
+        final_loss = avg_loss;
+        if epoch == 1 {
+            first_loss = avg_loss;
+        }
         if epoch == 1 || epoch % 25 == 0 {
             println!("Epoch {epoch:3}/{epochs}: loss = {avg_loss:.4}");
         }
@@ -262,4 +268,10 @@ fn main() {
     println!("\n=== Done ===");
     println!("Loss should have decreased from ~3.8 toward ~2.0 or lower.");
     println!("If not, check that autograd flows through MHA and FFN.");
+    // The CI smoke run (`just examples-smoke`) relies on this: a NaN or a loss that never
+    // drops exits non-zero.
+    assert!(
+        final_loss.is_finite() && final_loss < first_loss,
+        "training did not reduce the loss: first {first_loss}, final {final_loss}"
+    );
 }
