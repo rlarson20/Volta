@@ -272,68 +272,41 @@ fn tanh_sat(x: f32) -> f32 {
 mod tests {
     use super::*;
 
-    /// Every shader file, with the element types its `ELEM2` buffers take (`None`: it has
-    /// none).
-    pub(crate) const SHADERS: &[(&str, &str)] = &[
-        ("amp_unscale", include_str!("shaders/amp_unscale.wgsl")),
-        (
-            "binary_backward",
-            include_str!("shaders/binary_backward.wgsl"),
-        ),
-        (
-            "binary_backward_safe",
-            include_str!("shaders/binary_backward_safe.wgsl"),
-        ),
-        ("cast", include_str!("shaders/cast.wgsl")),
-        ("col2im", include_str!("shaders/col2im.wgsl")),
-        ("compare", include_str!("shaders/compare.wgsl")),
-        (
-            "conv_backward_input",
-            include_str!("shaders/conv_backward_input.wgsl"),
-        ),
-        (
-            "conv_backward_weight",
-            include_str!("shaders/conv_backward_weight.wgsl"),
-        ),
-        ("direct_conv", include_str!("shaders/direct_conv.wgsl")),
-        ("elementwise", include_str!("shaders/elementwise.wgsl")),
-        ("igemm", include_str!("shaders/igemm.wgsl")),
-        (
-            "igemm_backward_input",
-            include_str!("shaders/igemm_backward_input.wgsl"),
-        ),
-        (
-            "igemm_backward_weight",
-            include_str!("shaders/igemm_backward_weight.wgsl"),
-        ),
-        ("im2col", include_str!("shaders/im2col.wgsl")),
-        ("matmul", include_str!("shaders/matmul.wgsl")),
-        (
-            "matmul_backward",
-            include_str!("shaders/matmul_backward.wgsl"),
-        ),
-        ("movement", include_str!("shaders/movement.wgsl")),
-        (
-            "movement_backward",
-            include_str!("shaders/movement_backward.wgsl"),
-        ),
-        ("muon", include_str!("shaders/muon.wgsl")),
-        (
-            "optimizer_step",
-            include_str!("shaders/optimizer_step.wgsl"),
-        ),
-        ("reduce", include_str!("shaders/reduce.wgsl")),
-        (
-            "reduce_backward",
-            include_str!("shaders/reduce_backward.wgsl"),
-        ),
-        ("unary", include_str!("shaders/unary.wgsl")),
-        (
-            "unary_backward",
-            include_str!("shaders/unary_backward.wgsl"),
-        ),
-        ("where_select", include_str!("shaders/where_select.wgsl")),
-    ];
+    /// Every `.wgsl` file in `src/gpu/shaders/`, as `(name, source)` sorted by name.
+    ///
+    /// Read from the directory rather than a hand-kept list, so a new shader can't skip
+    /// validation or the direct-access check (#58).
+    ///
+    /// # Panics
+    ///
+    /// If the directory can't be read, holds anything but `.wgsl` files, or is empty.
+    fn shaders() -> Vec<(String, String)> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gpu/shaders");
+        let mut out = Vec::new();
+        for entry in
+            std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
+        {
+            let path = entry
+                .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
+                .path();
+            assert!(
+                path.is_file() && path.extension().is_some_and(|x| x == "wgsl"),
+                "{}: not a .wgsl file; every entry in the shaders directory is validated",
+                path.display()
+            );
+            let name = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_else(|| panic!("{}: non-UTF-8 file name", path.display()))
+                .to_owned();
+            let src = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            out.push((name, src));
+        }
+        assert!(!out.is_empty(), "{}: no shaders found", dir.display());
+        out.sort();
+        out
+    }
 
     /// Parse and validate `src` with naga, allowing f16.
     fn validate(label: &str, src: &str) {
@@ -350,7 +323,7 @@ mod tests {
     /// Every shader expands to valid WGSL under every pair of element types.
     #[test]
     fn every_shader_validates_under_every_element_type() {
-        for (name, src) in SHADERS {
+        for (name, src) in &shaders() {
             for elem in Elem::ALL {
                 for elem2 in Elem::ALL {
                     validate(
@@ -366,7 +339,7 @@ mod tests {
     /// access goes through the helpers, so a packed expansion can't read the wrong half.
     #[test]
     fn shaders_access_data_buffers_only_through_helpers() {
-        for (name, src) in SHADERS {
+        for (name, src) in &shaders() {
             let mut decls = Vec::new();
             for line in src.lines() {
                 if let Some(d) = parse_decl(line, Elem::F32, Elem::F32) {
