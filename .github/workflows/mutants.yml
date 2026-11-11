@@ -1,0 +1,64 @@
+name: Mutants
+on:
+  # Mutation testing of the autograd core (`just mutants-core`: src/autograd.rs and src/ops/,
+  # CPU lane). Too slow for every PR (about 400 mutants at ~20 s each), so it runs weekly and by
+  # hand, in shards. A signal, not a gate: surviving ("missed") mutants are listed in each
+  # shard's job summary and do not fail the run.
+  schedule:
+    - cron: "0 3 * * 0" # Weekly on Sunday
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutants:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          components: rust-src
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
+        with:
+          tool: cargo-mutants,just
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      # cargo-mutants exits 2 when a mutant survives and 3 when one times out: both are the
+      # signal this job reports. 1 (bad usage) and 4 (the unmutated tests fail) are real
+      # failures.
+      - name: Mutants (shard ${{ matrix.shard }}/8)
+        run: |
+          set +e
+          just mutants-core --shard ${{ matrix.shard }}/8 --no-shuffle
+          code=$?
+          set -e
+          echo "cargo-mutants exit: $code"
+          case $code in 0 | 2 | 3) ;; *) exit "$code" ;; esac
+
+      - name: Post to the job summary
+        if: always()
+        run: |
+          out=mutants.out
+          count() { if [ -f "$out/$1.txt" ]; then wc -l < "$out/$1.txt" | tr -d ' '; else echo 0; fi; }
+          {
+            echo "## Mutants, shard ${{ matrix.shard }}/8"
+            echo
+            echo "caught $(count caught), missed $(count missed), timeout $(count timeout), unviable $(count unviable)"
+            for kind in missed timeout; do
+              if [ -s "$out/$kind.txt" ]; then
+                echo
+                echo "### $kind"
+                echo
+                echo '```'
+                cat "$out/$kind.txt"
+                echo '```'
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"

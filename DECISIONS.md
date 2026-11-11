@@ -753,3 +753,19 @@ Autograd is a sequential graph walk over `Rc<RefCell<_>>`, and nothing in it is 
 - *`cargo deny` runs on PRs that touch `Cargo.toml`, `Cargo.lock` or `deny.toml`,* and weekly. It is not a required check: a path-filtered check that never reports would block every other PR.
 - *`stable` keeps floating.* `tests/compile_fail.rs` pins rustc's wording, so a new stable can turn an untouched branch red. Pinning would rename the `(stable)` checks, edit the rulesets, and need a bump every six weeks. When it happens, re-bless on stable in its own PR.
 - *Pre-commit does not run the CPU-only test, the strict docs or cargo-hack,* to keep commits fast. `just ci` does.
+
+---
+
+### Coverage and mutation testing are signals, not gates; dependency updates are grouped (#154)
+
+**Decision:** `coverage.yml` runs `just coverage-cpu` (`cargo llvm-cov --no-default-features --summary-only`) on every PR and push to `improvements` and posts the autograd-core rows and the total to the job summary. `mutants.yml` runs `just mutants-core` (src/autograd.rs and src/ops/, CPU lane) weekly and by hand in 8 shards and lists surviving mutants in each shard's summary. Neither is a required check and neither fails on a number. Dependabot opens one weekly PR for all minor and patch crate bumps, one per major bump, and one for all action bumps.
+
+**Why:** invariant 7 is a claim about test quality, and nothing measured it on a PR. A threshold needs a baseline first; at filing the CPU lane covered 91.8% of regions overall and 86.5% of `autograd.rs`.
+
+**Choices:**
+- *`src/ops/gpu_ops.rs` is excluded from mutation testing.* It is compiled out without `gpu`, so every mutant there would survive and drown the real ones. GPU-only paths elsewhere (`ToDeviceGradFn::backward`) still show as missed, which is accurate for the CPU lane.
+- *Mutants run weekly, not per PR,* because ~400 mutants at ~20 s each (measured on 4 cores: 59 s baseline build, 38 s baseline test, 5 s build + 7 s test per mutant) is over two hours of runner time. `--in-diff` per PR is the next step if the weekly signal proves useful.
+- *Missed mutants go to the job summary, not an uploaded `mutants.out`,* so the list is readable on the run page and the workflow needs no new action pin. The full `mutants.out` is a `just mutants-core` away locally.
+- *A major crate bump gets its own PR* because it usually needs code changes (wgpu); the `cpu-only (1.89)` lane catches a bump that raises the MSRV.
+
+**Revisit:** gate coverage (e.g. no drop on `autograd.rs` and `ops/`) once a few weeks of summaries give a baseline.
