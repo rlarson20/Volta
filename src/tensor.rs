@@ -922,13 +922,15 @@ impl RawTensor {
         Self::nll_loss_named(log_probs, targets, "nll_loss")
     }
 
-    /// `-sum(weights * log_probs, dim=1).mean()`, with class-index targets turned into
-    /// one-hot weights first (`op` names the caller in panics). Multiplying by an exact 1
-    /// and summing exact zeros picks `-log_probs[i, t_i]` exactly, so this is PyTorch's
-    /// gather in every dtype, and the gradient flows to the picked entries only.
+    /// `-sum(targets * log_probs, dim=1).mean()` for probability targets, as PyTorch
+    /// computes it (so `0 * -inf` is NaN there too). Class-index targets select
+    /// `log_probs[i, t_i]` through a one-hot `where` mask instead of multiplying by it, as
+    /// PyTorch's gather does: a `-inf` log-probability on another class (a `-inf` logit)
+    /// is never touched, so it can't turn the loss into NaN (S8), and the gradient flows
+    /// to the picked entries only. `op` names the caller in panics.
     #[track_caller]
     fn nll_loss_named(log_probs: &Tensor, targets: &Tensor, op: &str) -> Tensor {
-        let weights = if targets.dtype().is_int() {
+        let picked = if targets.dtype().is_int() {
             let lp = log_probs.shape();
             let [n, c] = lp.fixed::<2>();
             let ts = targets.shape();
@@ -962,12 +964,17 @@ impl RawTensor {
                     .unwrap_or_else(|| panic!("{op}: target {t} out of range for {c} classes"));
                 *slot(&mut one_hot, i * c + class) = 1.0;
             }
-            log_probs.constant_like(one_hot, &[n, c])
+            // A no-grad Bool constant on the log-probs' device; the zeros come from the
+            // unselected branch, never from a product with a log-probability.
+            let mask = Self::new(one_hot, &[n, c], false)
+                .to_dtype(DType::Bool)
+                .to_device(log_probs.device());
+            let zeros = log_probs.constant_like(vec![0.0; n * c], &[n, c]);
+            mask.where_op(log_probs, &zeros)
         } else {
-            targets.clone()
+            targets.elem_mul(log_probs)
         };
-        let prod = weights.elem_mul(log_probs);
-        let sum = Self::sum_dim(&prod, Axis(1), false);
+        let sum = Self::sum_dim(&picked, Axis(1), false);
         sum.neg().mean()
     }
 
@@ -1006,37 +1013,25 @@ impl RawTensor {
         sum_terms.sum().elem_mul(&half).neg()
     }
 
-    /// Binary Cross Entropy loss
+    /// Binary cross entropy on probabilities, averaged over every element: PyTorch's
+    /// `binary_cross_entropy`, `-mean(y * log(p) + (1 - y) * log(1 - p))` with each `log`
+    /// floored at -100, so `p = 0` or `p = 1` gives a finite loss. The gradient is
+    /// PyTorch's `(p - y) / max(p * (1 - p), 1e-12)` over the element count.
     ///
-    /// `BCE(y, y_hat) = -mean(y * log(y_hat) + (1-y) * log(1-y_hat))`
+    /// `pred` holds probabilities (typically a sigmoid's output) and `target` labels or
+    /// soft targets in `[0, 1]`. From logits, [`Self::bce_with_logits_loss`] is more
+    /// accurate.
     ///
-    /// # Arguments
-    /// * `pred` - Predicted probabilities (should be in [0, 1], typically from sigmoid)
-    /// * `target` - Target labels (0 or 1)
-    ///
-    /// # Note
-    /// Predictions should be passed through sigmoid before calling this.
-    /// For numerical stability with logits, use `bce_with_logits_loss` instead.
+    /// # Panics
+    /// If the shapes differ, `target` requires grad while grad is enabled, or a
+    /// prediction is outside `[0, 1]` or NaN (all as in PyTorch). The range check reads
+    /// `pred` back to the host.
     #[must_use]
+    #[track_caller]
     pub fn bce_loss(pred: &Tensor, target: &Tensor) -> Tensor {
         // An f32 op under `amp::autocast` (PyTorch's losses): half inputs are cast up.
         let (pred, target) = (&crate::amp::to_f32(pred), &crate::amp::to_f32(target));
-        // y * log(y_hat)
-        let log_pred = pred.log();
-        let term1 = target.elem_mul(&log_pred);
-
-        // (1-y) * log(1-y_hat)
-        let ones_like = |t: &Tensor| {
-            let shape = t.borrow().shape.clone();
-            t.constant_like(vec![1.0; shape.numel()], shape.truncate_rank())
-        };
-        let one_minus_target = ones_like(target).sub(target);
-        let one_minus_pred = ones_like(pred).sub(pred);
-        let log_one_minus_pred = one_minus_pred.log();
-        let term2 = one_minus_target.elem_mul(&log_one_minus_pred);
-
-        // -mean(term1 + term2)
-        term1.add(&term2).mean().neg()
+        Self::bce_elementwise(pred, target).mean()
     }
 
     /// Binary Cross Entropy with logits (numerically stable)
@@ -2216,6 +2211,7 @@ pub fn kl_divergence_gaussian(mu: &Tensor, logvar: &Tensor) -> Tensor {
 
 /// Free-function form of [`RawTensor::bce_loss`].
 #[must_use]
+#[track_caller]
 pub fn bce_loss(pred: &Tensor, target: &Tensor) -> Tensor {
     RawTensor::bce_loss(pred, target)
 }

@@ -9,7 +9,7 @@
 mod torch_ref;
 
 use torch_ref::{Fixture, TOL_BWD, TOL_FWD, assert_close, backward_weighted, grad_of};
-use volta::{Axis, RawTensor};
+use volta::{Axis, DType, RawTensor};
 
 #[test]
 #[ignore = "S4: max_elem gives the whole gradient to a on a tie; torch.maximum splits it 0.5/0.5"]
@@ -151,7 +151,6 @@ fn max_dim_propagates_nan_like_torch() {
 }
 
 #[test]
-#[ignore = "S7: bce_loss has no log clamp; pred 0 or 1 gives NaN where torch gives a finite value"]
 fn bce_matches_torch_including_the_log_clamp() {
     // S7
     let f = Fixture::load("ops");
@@ -162,31 +161,37 @@ fn bce_matches_torch_including_the_log_clamp() {
     assert_close("grad", &grad_of("pred", &p), &f.values("bce.grad"), TOL_BWD);
 }
 
-/// A class index stored as an integer-valued f32 in the fixture.
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "the fixture stores small non-negative class indices as f32"
-)]
-fn class_index(c: f32) -> usize {
-    c.round() as usize
+#[test]
+fn cross_entropy_with_neg_inf_off_target_logit_is_finite_like_torch() {
+    // S8: class-index targets are a gather, so a -inf logit on another class never meets
+    // a 0 weight (0 * -inf = NaN). Probability targets multiply, in torch too, so this
+    // passes indices as torch's fixture did.
+    let f = Fixture::load("ops");
+    let z = f.tensor("ce_neginf.logits", true);
+    let classes = f.tensor("ce_neginf.classes", false).to_dtype(DType::I64);
+    let out = RawTensor::cross_entropy_loss(&z, &classes);
+    assert_close("out", &out.data(), &f.values("ce_neginf.out"), TOL_FWD);
+    backward_weighted(&out, None);
+    assert_close(
+        "grad",
+        &grad_of("logits", &z),
+        &f.values("ce_neginf.grad"),
+        TOL_BWD,
+    );
 }
 
 #[test]
-#[ignore = "S8: one-hot * log_softmax gives 0 * -inf = NaN for the whole loss"]
-fn cross_entropy_with_neg_inf_off_target_logit_is_finite_like_torch() {
-    // S8: Volta multiplies one-hot targets by log-probs, so 0 * -inf is NaN.
+fn cross_entropy_probability_targets_with_neg_inf_logit_are_nan_like_torch() {
+    // Torch multiplies probability targets by the log-probs, so a 0 target on a -inf
+    // logit gives NaN. Volta agrees; only class indices are a gather.
     let f = Fixture::load("ops");
-    let (logits, dims) = f.get("ce_neginf.logits");
-    let z = RawTensor::new(logits.clone(), &dims, false);
-    let classes = f.values("ce_neginf.classes");
-    let mut onehot = vec![0.0f32; logits.len()];
-    let width = dims[1];
-    for (row, c) in classes.iter().enumerate() {
-        // class indices are small non-negative integers stored as f32
-        onehot[row * width + class_index(*c)] = 1.0;
-    }
-    let y = RawTensor::new(onehot, &dims, false);
+    let z = f.tensor("ce_neginf.logits", false);
+    let y = f.tensor("ce_neginf.probs", false);
     let out = RawTensor::cross_entropy_loss(&z, &y);
-    assert_close("out", &out.data(), &f.values("ce_neginf.out"), TOL_FWD);
+    assert_close(
+        "out",
+        &out.data(),
+        &f.values("ce_neginf.probs_out"),
+        TOL_FWD,
+    );
 }

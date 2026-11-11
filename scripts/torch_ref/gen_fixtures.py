@@ -107,7 +107,18 @@ def group_ops():
     z = leaf([[1.0, -INF, 2.0], [0.5, 0.2, -INF]])
     cls = torch.tensor([0, 1])
     out = torch.nn.functional.cross_entropy(z, cls)
-    t.update({"ce_neginf.logits": z, "ce_neginf.classes": cls.float(), "ce_neginf.out": out.reshape(1)})
+    (gz,) = grad_of(out, z)
+    # Probability targets multiply (0 * -inf), so torch's answer there is NaN.
+    probs = torch.nn.functional.one_hot(cls, 3).float()
+    pout = torch.nn.functional.cross_entropy(z.detach(), probs)
+    t.update({
+        "ce_neginf.logits": z,
+        "ce_neginf.classes": cls.float(),
+        "ce_neginf.out": out.reshape(1),
+        "ce_neginf.grad": gz,
+        "ce_neginf.probs": probs,
+        "ce_neginf.probs_out": pout.reshape(1),
+    })
 
     save("ops", t)
 
