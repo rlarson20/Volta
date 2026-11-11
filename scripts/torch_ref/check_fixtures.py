@@ -22,13 +22,18 @@ same torch==2.15.0 on different platforms and builds (macOS, Linux `+cpu`, Linux
 gives f32 results a few ulps apart in BatchNorm, convolution, softmax and Muon, and the
 torch version string in the metadata carries the build suffix. Measured on 2026-11-11
 against the committed files: worst f32 difference 3.3e-6 on a scale of max(|want|, 1),
-no difference at all in f64, f16, bf16, integer or bool tensors.
+no difference at all in f64, f16, bf16, integer or bool tensors. On the GitHub
+ubuntu-latest runner the `autocast` group's f32 gradients also moved by up to 2.0 f16 eps
+(`f16.*`) and 1.06 bf16 eps (`bf16.*`): they are f32 tensors, but they carry the precision
+of the low dtype the forward ran in, so they get that dtype's tolerance (`LOW_PRECISION`).
 
 What must match exactly: the set of files, each file's tensor names, every tensor's
 dtype and shape, integer and bool values, NaN positions, infinities and their signs, and
 the metadata once the torch build suffix ("+cpu") is removed. Finite floats must agree
-to `TOL[dtype] * max(|want|, 1)`, the same relative-with-floor-1 metric the Rust
-`torch_ref_*` tests use, and tighter than any of their tolerances.
+to `TOL[dtype] * max(|want|, 1)`, the relative-with-floor-1 metric most Rust
+`torch_ref_*` tests use. The f32 and f64 tolerances are tighter than those tests'. The
+low-dtype ones are not: `torch_ref_autocast` bounds some cases at 1 to 2 eps, so torch's
+own drift between machines is about as large as the error that test allows Volta.
 """
 
 import re
@@ -46,14 +51,30 @@ import gen_fixtures as gen  # noqa: E402
 COMMITTED = gen.OUT
 
 # Relative tolerance with a floor of 1 on the scale. f32 allows ~80 eps for the
-# cross-platform reduction-order differences above; the others differed by 0 when measured
-# and get a few eps of slack.
+# cross-platform reduction-order differences above. f16 and bf16 allow 4 eps, twice the
+# worst autocast drift measured; f64 differed by 0 when measured and gets a little slack.
 TOL = {
     torch.float64: 1e-12,
     torch.float32: 1e-5,
     torch.float16: 4 * torch.finfo(torch.float16).eps,
     torch.bfloat16: 4 * torch.finfo(torch.bfloat16).eps,
 }
+
+
+# f32 tensors whose values passed through a low dtype: (file, key prefix) -> the dtype
+# whose tolerance applies.
+LOW_PRECISION = {
+    ("autocast.safetensors", "bf16."): torch.bfloat16,
+    ("autocast.safetensors", "f16."): torch.float16,
+}
+
+
+def tolerance(file, key, dtype):
+    """The tolerance for `key` in `file`: its low-precision dtype's, else its own dtype's."""
+    for (f, prefix), low in LOW_PRECISION.items():
+        if f == file and key.startswith(prefix):
+            return max(TOL[low], TOL.get(dtype, 0.0))
+    return TOL.get(dtype)
 
 
 def strip_build(meta):
@@ -66,7 +87,7 @@ def load(path):
         return f.metadata(), {k: f.get_tensor(k) for k in f.keys()}
 
 
-def compare_tensor(name, want, got):
+def compare_tensor(name, want, got, tol):
     """Return a list of problems with `got` against the committed `want`."""
     if want.dtype != got.dtype:
         return [f"{name}: dtype {got.dtype}, committed {want.dtype}"]
@@ -77,7 +98,6 @@ def compare_tensor(name, want, got):
             n = int((want != got).sum())
             return [f"{name}: {n} of {want.numel()} values differ ({want.dtype}, must be exact)"]
         return []
-    tol = TOL.get(want.dtype)
     if tol is None:
         return [f"{name}: no tolerance defined for {want.dtype}"]
     w, g = want.double(), got.double()
@@ -122,7 +142,7 @@ def main():
             for key in sorted(got.keys() - want.keys()):
                 problems.append(f"{name}: {key} generated but not committed")
             for key in sorted(want.keys() & got.keys()):
-                problems.extend(f"{name}: {p}" for p in compare_tensor(key, want[key], got[key]))
+                problems.extend(f"{name}: {p}" for p in compare_tensor(key, want[key], got[key], tolerance(name, key, want[key].dtype)))
 
     if problems:
         print(f"\n{len(problems)} mismatches between tests/fixtures/torch and gen_fixtures.py:")
