@@ -1,4 +1,9 @@
 //! Gap-filling tests: `BatchNorm2d` / `Flatten` gradient checks, `Dropout` edge cases, `SGD` momentum arithmetic, and mutable `Storage` access.
+//!
+//! It exists to cover paths a coverage report found untested (the `BatchNorm2d` gradient
+//! path among them, per the comment in its test). It is a catch-all, not a category: put a new
+//! test in the file for its layer, optimizer or storage type (for example
+//! `tests/test_optimizers.rs`), not here.
 use volta::{Dropout, Flatten, Layer};
 use volta::{
     RawTensor, Storage, Tensor, check_gradients_simple, manual_seed,
