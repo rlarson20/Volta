@@ -14,7 +14,7 @@ use crate::shape::{Axis, Shape};
 use crate::spec::PadValue;
 use crate::storage::Element;
 use crate::{Result, VoltaError};
-use rand::Rng;
+use rand::RngExt;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand_distr::{Distribution, Normal};
@@ -438,7 +438,7 @@ pub fn manual_seed(seed: u64) {
 /// falling back to the thread RNG would make a seeded run silently irreproducible.
 pub(crate) fn with_rng<F, T>(f: F) -> T
 where
-    F: FnOnce(&mut dyn rand::RngCore) -> T,
+    F: FnOnce(&mut dyn rand::Rng) -> T,
 {
     GLOBAL_RNG.with(|rng_cell| {
         let mut borrow = rng_cell

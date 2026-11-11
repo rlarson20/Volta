@@ -8,7 +8,7 @@ use crate::real::{Real, dispatch_real};
 use crate::shape::Shape;
 use crate::storage::Storage;
 use crate::tensor::{RawTensor, Tensor, with_rng};
-use rand::Rng;
+use rand::RngExt;
 
 /// Embedding: Maps integer indices to dense vectors
 ///

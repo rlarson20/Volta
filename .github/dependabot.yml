@@ -23,5 +23,10 @@ updates:
     schedule:
       interval: weekly
     groups:
+      # wgpu and naga move together, majors included: naga is a dev-dependency for the shader
+      # tests (src/gpu/shader_template.rs) and must match the naga wgpu pulls in, or the
+      # lockfile carries two copies and the tests validate WGSL with a compiler wgpu never runs.
+      gpu:
+        patterns: ["wgpu", "wgpu-*", "naga"]
       cargo-minor-patch:
         update-types: [minor, patch]

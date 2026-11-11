@@ -1,7 +1,7 @@
 use crate::io::StateDict;
 use crate::nn::{Layer, Module};
 use crate::tensor::Tensor;
-use rand::Rng;
+use rand::RngExt;
 
 /// Zeroes each element with probability `p` in training mode, scaling the rest by `1 / (1 - p)`; the identity in evaluation mode.
 pub struct Dropout {
