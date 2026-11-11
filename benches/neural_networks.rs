@@ -6,7 +6,8 @@
 //! - `MaxPool2d` layer
 //! - Sequential models (end-to-end forward, and forward plus backward)
 use criterion::measurement::WallTime;
-use criterion::{BenchmarkGroup, Criterion, black_box, criterion_main};
+use criterion::{BenchmarkGroup, Criterion, criterion_main};
+use std::hint::black_box;
 use volta::{Conv2d, Layer, Linear, MaxPool2d, RawTensor, ReLU, Sequential, Tensor};
 
 /// Generate a random tensor of the given size
