@@ -85,6 +85,25 @@ jobs:
           VOLTA_REQUIRE_GH: "1"
         run: just check-ignores
 
+  # Runs the quick, data-free examples (scripts/examples-smoke.sh): each must exit 0 within its
+  # time limit, print no NaN/inf, and pass its own final-loss assertion. clippy only builds
+  # them. Its own job, so a broken example reports apart from the build lanes.
+  examples-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
+        with:
+          tool: just
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      - name: Examples smoke run
+        run: just examples-smoke
+
   # Default features (gpu) on Linux, with Mesa's lavapipe as the adapter: a software
   # Vulkan device (shaderFloat16), so the gpu-gated tests run on every PR, including the
   # f16/bf16 GPU tests and the naga validation of every shader expansion. Not Metal: the

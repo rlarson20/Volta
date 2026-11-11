@@ -38,6 +38,8 @@ fn main() {
 
     // 4. The Training Loop
     println!("\n--- Starting Training ---");
+    let mut first_loss = f32::NAN;
+    let mut final_loss = f32::NAN;
     for epoch in 0..epochs {
         // Zero out gradients from the previous iteration
         opt.zero_grad();
@@ -47,6 +49,10 @@ fn main() {
 
         // Calculate loss (Mean Squared Error)
         let loss = mse_loss(&predictions, &y_data);
+        final_loss = loss.item();
+        if epoch == 0 {
+            first_loss = final_loss;
+        }
 
         // Backward pass: compute gradients for all parameters
         loss.clone().into_loss().expect("scalar loss").backward();
@@ -55,11 +61,16 @@ fn main() {
         opt.step();
 
         if epoch % 20 == 0 {
-            let loss_val = loss.item();
-            println!("Epoch {epoch:>3}: Loss = {loss_val:.6}");
+            println!("Epoch {epoch:>3}: Loss = {final_loss:.6}");
         }
     }
     println!("--- Training Complete ---");
+    // The CI smoke run (`just examples-smoke`) relies on this: a NaN or a loss that never
+    // drops exits non-zero.
+    assert!(
+        final_loss.is_finite() && final_loss < first_loss,
+        "training did not reduce the loss: first {first_loss}, final {final_loss}"
+    );
 
     // 5. Inference after Training
     // Let's see how well the model learned the XOR function.
