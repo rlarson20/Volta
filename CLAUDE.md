@@ -62,6 +62,7 @@ Read these when the need comes up; don't preload them.
 | Step-by-step: adding an op or layer | `dev-docs/DEVELOPMENT.md` |
 | Conv algorithms and selection | `dev-docs/CONV2D_IMPLEMENTATION.md` |
 | What's valid in a cloud session; Linux/no-GPU differences | `dev-docs/CLOUD.md` |
+| Local PR workflow: `just pr`, `just sync`, `just prs`, and why | `dev-docs/WORKFLOW.md` |
 
 ## Filing what you learn
 
