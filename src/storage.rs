@@ -364,6 +364,10 @@ impl Storage {
     /// storage in place of GPU storage.
     #[cfg(feature = "gpu")]
     #[must_use]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "takes ownership by design, like `Storage::cpu`: the caller hands over the buffer it just built"
+    )]
     pub fn gpu(data: Vec<f32>) -> Self {
         assert!(is_gpu_available(), "Storage::gpu: no GPU is available");
         let buffer = GpuBuffer::from_slice(&data)
@@ -970,22 +974,22 @@ mod tests {
     /// Every element type round-trips through `from_typed`, `as_host`, and the bytes.
     #[test]
     fn every_dtype_round_trips() {
-        fn check<T: Element + PartialEq + std::fmt::Debug>(data: Vec<T>) {
-            let s = Storage::from_typed(data.clone());
+        fn check<T: Element + PartialEq + std::fmt::Debug>(data: &[T]) {
+            let s = Storage::from_typed(data.to_vec());
             assert_eq!(s.dtype(), T::DTYPE);
             assert_eq!(s.len(), data.len());
-            assert_eq!(s.as_host::<T>().expect("own dtype"), &data[..]);
+            assert_eq!(s.as_host::<T>().expect("own dtype"), data);
             let back = Storage::try_from_bytes(s.as_bytes(), T::DTYPE).expect("own bytes");
-            assert_eq!(back.as_host::<T>().expect("own dtype"), &data[..]);
+            assert_eq!(back.as_host::<T>().expect("own dtype"), data);
         }
-        check(vec![f16::from_f32(1.5), f16::from_f32(-2.0)]);
-        check(vec![bf16::from_f32(1.5), bf16::from_f32(-2.0)]);
-        check(vec![1.5f32, -2.0]);
-        check(vec![1.5f64, -2.0, 1e300]);
-        check(vec![i32::MIN, 0, i32::MAX]);
-        check(vec![i64::MIN, 0, i64::MAX]);
-        check(vec![0u8, 255]);
-        check(vec![true, false, true]);
+        check(&[f16::from_f32(1.5), f16::from_f32(-2.0)]);
+        check(&[bf16::from_f32(1.5), bf16::from_f32(-2.0)]);
+        check(&[1.5f32, -2.0]);
+        check(&[1.5f64, -2.0, 1e300]);
+        check(&[i32::MIN, 0, i32::MAX]);
+        check(&[i64::MIN, 0, i64::MAX]);
+        check(&[0u8, 255]);
+        check(&[true, false, true]);
     }
 
     /// Bytes at an odd offset decode correctly: the copy does not need alignment.

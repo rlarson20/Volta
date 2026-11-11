@@ -24,6 +24,10 @@ pub(crate) struct BceGradFn;
 impl BceGradFn {
     /// The gradient for `pred`, computed with tensor ops on the inputs' device; `None`
     /// for `target`.
+    #[expect(
+        clippy::unused_self,
+        reason = "uniform `GradFn` dispatch: every variant's `backward` takes `&self` (DECISIONS.md, #171)"
+    )]
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let [pred, target] = parents else {
             panic!(

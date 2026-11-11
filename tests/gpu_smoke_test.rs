@@ -42,7 +42,7 @@ fn test_tensor_gpu_unary_add_binary_smoke() {
     let dev = Device::gpu().expect("GPU availability checked above");
     let x = RawTensor::new(vec![1.0, -2.0], &[2], false).to_device(dev.clone());
     x.set_requires_grad(true);
-    let y = RawTensor::new(vec![3.0, 4.0], &[2], false).to_device(dev.clone());
+    let y = RawTensor::new(vec![3.0, 4.0], &[2], false).to_device(dev);
     y.set_requires_grad(true);
 
     let z = x.add(&y); // may take GPU path
@@ -67,7 +67,7 @@ fn test_tensor_gpu_sum_output_device_and_grad_on_gpu() {
     }
 
     let dev = Device::gpu().expect("GPU availability checked above");
-    let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], false).to_device(dev.clone());
+    let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], false).to_device(dev);
     x.set_requires_grad(true);
 
     let loss = x.sum();
@@ -105,7 +105,7 @@ fn test_tensor_gpu_matmul_matches_cpu() {
     let c_cpu = a_cpu.matmul(&b_cpu);
 
     let a_gpu = a_cpu.to_device(dev.clone());
-    let b_gpu = b_cpu.to_device(dev.clone());
+    let b_gpu = b_cpu.to_device(dev);
     let c_gpu = a_gpu.matmul(&b_gpu);
 
     // Move GPU result back to CPU for comparison.
@@ -142,7 +142,7 @@ fn test_tensor_gpu_matmul_backward_consistent_with_cpu() {
     // GPU copies
     let x_gpu = x_cpu.detach().to_device(dev.clone());
     x_gpu.set_requires_grad(x_cpu.requires_grad());
-    let w_gpu = w_cpu.detach().to_device(dev.clone());
+    let w_gpu = w_cpu.detach().to_device(dev);
     w_gpu.set_requires_grad(w_cpu.requires_grad());
 
     // GPU forward/backward
@@ -200,7 +200,7 @@ fn test_tensor_gpu_mulacc_matches_cpu_and_grad() {
         x_gpu.set_requires_grad(x_cpu.requires_grad());
         let y_gpu = y_cpu.detach().to_device(dev.clone());
         y_gpu.set_requires_grad(y_cpu.requires_grad());
-        let z_gpu = z_cpu.detach().to_device(dev.clone());
+        let z_gpu = z_cpu.detach().to_device(dev);
         z_gpu.set_requires_grad(z_cpu.requires_grad());
 
         // Forward: out = x * y + z
@@ -248,7 +248,7 @@ fn test_tensor_gpu_unary_relu_matches_cpu() {
     let dev = Device::gpu().expect("GPU availability checked above");
 
     let x_cpu = RawTensor::randn(&[16]);
-    let x_gpu = x_cpu.to_device(dev.clone());
+    let x_gpu = x_cpu.to_device(dev);
 
     let y_cpu = x_cpu.relu();
     let y_gpu = x_gpu.relu().to_device(Device::CPU);
@@ -301,7 +301,7 @@ fn test_tensor_gpu_binary_basic_matches_cpu() {
     let b_cpu = RawTensor::new(vec![0.5, 2.0, -1.0, 8.0], &[4], false);
 
     let a_gpu = a_cpu.to_device(dev.clone());
-    let b_gpu = b_cpu.to_device(dev.clone());
+    let b_gpu = b_cpu.to_device(dev);
 
     // add
     let add_cpu = a_cpu.add(&b_cpu);
@@ -364,7 +364,7 @@ fn test_tensor_gpu_sum_dim_device_and_grad_on_gpu() {
         }
 
         let dev = Device::gpu().expect("GPU availability checked above");
-        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false).to_device(dev.clone());
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false).to_device(dev);
         x.set_requires_grad(true);
 
         // Sum over last dim: [[1,2],[3,4]] -> [3,7]
@@ -401,8 +401,7 @@ fn test_tensor_gpu_max_dim_device_and_grad_on_gpu() {
 
         let dev = Device::gpu().expect("GPU availability checked above");
         // Shape [2,3]
-        let x = RawTensor::new(vec![1.0, 5.0, 3.0, 2.0, 8.0, 4.0], &[2, 3], false)
-            .to_device(dev.clone());
+        let x = RawTensor::new(vec![1.0, 5.0, 3.0, 2.0, 8.0, 4.0], &[2, 3], false).to_device(dev);
         x.set_requires_grad(true);
 
         let y = x.max_dim(Axis(1), false);
@@ -438,7 +437,7 @@ fn test_binary_add_backward_simple() {
     let dev = Device::gpu().expect("GPU availability checked above");
     let x = RawTensor::new(vec![1.0, 2.0], &[2], false).to_device(dev.clone());
     x.set_requires_grad(true);
-    let y = RawTensor::new(vec![3.0, 4.0], &[2], false).to_device(dev.clone());
+    let y = RawTensor::new(vec![3.0, 4.0], &[2], false).to_device(dev);
     y.set_requires_grad(true);
 
     let z = x.add(&y);

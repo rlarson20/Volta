@@ -19,6 +19,10 @@ pub(crate) struct TransposeGradFn;
 
 impl TransposeGradFn {
     /// Transposes the gradient back; returns it for the single parent.
+    #[expect(
+        clippy::unused_self,
+        reason = "uniform `GradFn` dispatch: every variant's `backward` takes `&self` (DECISIONS.md, #171)"
+    )]
     pub(crate) fn backward(
         &self,
         out_grad: &RawTensor,

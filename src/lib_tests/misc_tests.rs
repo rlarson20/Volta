@@ -816,8 +816,8 @@ fn test_adam_converges_faster() {
     let x_data: Vec<f32> = (0..10).map(|i| i as f32 * 0.1).collect(); // 10 samples
     let y_data: Vec<f32> = x_data.iter().map(|v| v * 2.0).collect();
 
-    let x = RawTensor::new(x_data.clone(), &[10, 1], false);
-    let y = RawTensor::new(y_data.clone(), &[10, 1], false);
+    let x = RawTensor::new(x_data, &[10, 1], false);
+    let y = RawTensor::new(y_data, &[10, 1], false);
 
     // Simple Linear model 1->1
     // Initialize deliberately far from solution (w=0)
@@ -1104,7 +1104,7 @@ fn test_layernorm_normalization_stats() {
 
     // Create input with non-zero mean and non-unit variance
     let data: Vec<f32> = (0..128).map(|i| (i as f32) * 0.1 + 5.0).collect();
-    let x = RawTensor::new(data.clone(), &[8, 16], false);
+    let x = RawTensor::new(data, &[8, 16], false);
 
     let y = ln.forward(&x);
 

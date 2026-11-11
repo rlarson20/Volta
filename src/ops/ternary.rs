@@ -26,6 +26,10 @@ pub enum TernaryOp {
 pub(crate) struct MulAccGradFn;
 impl MulAccGradFn {
     /// Gradients for `x`, `y`, and the optional addend, reduced to each one's shape.
+    #[expect(
+        clippy::unused_self,
+        reason = "uniform `GradFn` dispatch: every variant's `backward` takes `&self` (DECISIONS.md, #171)"
+    )]
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         // SAFETY: MulAcc operation always creates 2 or 3 parents (x, y, optional w)
         debug_assert!(

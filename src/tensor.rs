@@ -363,6 +363,10 @@ impl Tensor {
     /// # Panics
     /// If `grad`'s dtype differs from the tensor's: a gradient has its tensor's dtype.
     #[track_caller]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "takes ownership by design: the caller hands over the buffer it just built, and borrowing would make every caller clone"
+    )]
     pub fn set_grad(&self, grad: Storage) {
         let mut t = self.inner.borrow_mut();
         assert!(

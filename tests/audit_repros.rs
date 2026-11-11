@@ -86,7 +86,7 @@ fn gpu_elementwise_and_cast_cover_a_4096_square() {
     let n = 4096 * 4096;
     // Distinct values near the end, so a wrong flat index shows up as a wrong value.
     let data: Vec<f32> = (0..n).map(|i| (i % 1000) as f32 * 0.25).collect();
-    let a = RawTensor::new(data.clone(), &[4096, 4096], false).to_device(gpu);
+    let a = RawTensor::new(data, &[4096, 4096], false).to_device(gpu);
     let last = n - 1;
     let want = |i: usize| (i % 1000) as f32 * 0.25;
 

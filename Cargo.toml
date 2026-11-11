@@ -181,6 +181,8 @@ undocumented_unsafe_blocks = "deny" # Every unsafe block states its SAFETY invar
 # Misc improvements
 unreadable_literal = "deny" # Use underscores in large numeric literals (1_000_000)
 use_self = "deny"           # Use Self instead of repeating type name
+unused_self = "deny"        # A method that never reads `self` is an associated fn
+needless_pass_by_value = "deny" # Take `&T` unless the function consumes the argument
 
 # -----------------------------------------------------------------------------
 # 3. ALLOWED LINTS (with rationale)
@@ -195,8 +197,3 @@ similar_names = "allow" # Common in math/ML code (x, y, z, w, h, etc.)
 # Wrapping 100+ sites would add noise, not safety. Revisit if an `as f32` ever feeds an
 # integer-exact comparison.
 cast_precision_loss = "allow"
-
-# `Storage::cpu`, `cpu_f64`, `cpu_f16`, `cpu_bf16`, `gpu` and `Tensor::set_grad` take ownership
-# by design: a caller hands over the buffer it just built. Taking `&[f32]` would make every
-# caller clone, across the crate, the examples, the tests, and the benches.
-needless_pass_by_value = "allow"
