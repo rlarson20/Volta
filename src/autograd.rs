@@ -7,6 +7,7 @@ use crate::nn::layers::conv_transpose::ConvTranspose2dGradFn;
 use crate::nn::layers::embedding::EmbeddingGradFn;
 use crate::nn::layers::maxpool::MaxPool2dGradFn;
 use crate::ops::binary::BinaryGradFn;
+use crate::ops::loss::BceGradFn;
 use crate::ops::matmul::{MatMulGradFn, TransposeGradFn};
 use crate::ops::movement::MovementGradFn;
 use crate::ops::reduce::{MaxReduceGradFn, MeanGradFn, SumGradFn};
@@ -58,6 +59,8 @@ pub(crate) enum GradFn {
     MulAcc(MulAccGradFn),
     /// Masked selection `condition ? x : y`.
     Where(WhereGradFn),
+    /// Per-element binary cross entropy, with PyTorch's gradient.
+    Bce(BceGradFn),
     /// Reshape, permute, expand, pad, shrink, stride.
     Movement(MovementGradFn),
     /// Convolution via `im2col` and a matmul.
@@ -146,6 +149,7 @@ impl GradFn {
             Self::MaxDim(_) => "MaxDim".to_string(),
             Self::MulAcc(_) => "MulAcc".to_string(),
             Self::Where(_) => "Where".to_string(),
+            Self::Bce(_) => "Bce".to_string(),
             Self::Im2col(_) => "Im2col".to_string(),
             Self::DirectConv(_) => "DirectConv".to_string(),
             Self::Igemm(_) => "Igemm".to_string(),
@@ -172,6 +176,7 @@ impl GradFn {
             Self::MaxDim(g) => g.backward(out_grad, parents),
             Self::MulAcc(g) => g.backward(out_grad, parents),
             Self::Where(g) => g.backward(out_grad, parents),
+            Self::Bce(g) => g.backward(out_grad, parents),
             Self::Movement(g) => g.backward(out_grad, parents),
             Self::Im2col(g) => g.backward(out_grad, parents),
             Self::DirectConv(g) => g.backward(out_grad, parents),
@@ -203,6 +208,7 @@ impl GradFn {
             | Self::MaxDim(_)
             | Self::MulAcc(_)
             | Self::Where(_)
+            | Self::Bce(_)
             | Self::Movement(_)
             | Self::Im2col(_)
             | Self::DirectConv(_)

@@ -155,6 +155,10 @@ mod edge_case_tests;
 mod axis_reduce_tests;
 
 #[cfg(test)]
+#[path = "lib_tests/loss_tests.rs"]
+mod loss_tests;
+
+#[cfg(test)]
 #[path = "lib_tests/gpu_tests.rs"]
 mod gpu_tests;
 

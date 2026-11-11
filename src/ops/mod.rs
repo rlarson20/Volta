@@ -4,6 +4,8 @@ pub mod binary;
 /// Elementwise comparisons (Bool results).
 pub mod compare;
 pub mod gpu_ops;
+/// Fused losses with their own gradient (binary cross entropy).
+pub mod loss;
 /// Matrix multiplication.
 pub mod matmul;
 /// Movement ops (reshape, permute, expand, pad, shrink, stride).
