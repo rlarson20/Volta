@@ -172,6 +172,49 @@ rulesets:
 		fi
 	done
 
+# ===== GIT & PR WORKFLOW (dev-docs/WORKFLOW.md) =====
+
+# Turn staged changes and/or commits ahead of origin/improvements into a pull request (e.g. `just pr`, `just pr fix/my-branch`)
+pr name="":
+	./scripts/pr.sh {{name}}
+
+# After merges: fast-forward improvements and delete local branches whose PR was squash-merged (`just sync dry-run` lists them first)
+sync mode="":
+	#!/usr/bin/env bash
+	set -euo pipefail
+	dry=false
+	case "{{mode}}" in
+		"") ;;
+		dry-run) dry=true ;;
+		*) echo "usage: just sync [dry-run]" >&2; exit 1 ;;
+	esac
+	git switch improvements
+	git pull --ff-only || { echo "sync: local improvements has commits origin lacks; run 'just pr' to move them to a PR branch" >&2; exit 1; }
+	git fetch --prune --quiet
+	# Squash merging leaves no ancestor link, so `git branch --merged` cannot see these: ask GitHub.
+	# Delete only when the PR's head commit is the local tip, so later local commits are never lost.
+	merged=$(gh pr list --state merged --base improvements --limit 200 --json headRefName,headRefOid)
+	for b in $(git for-each-ref --format='%(refname:short)' refs/heads); do
+		[[ "$b" == improvements || "$b" == main ]] && continue
+		tip=$(git rev-parse "refs/heads/$b")
+		if jq -e --arg b "$b" --arg t "$tip" 'any(.[]; .headRefName == $b and .headRefOid == $t)' <<<"$merged" >/dev/null; then
+			if $dry; then echo "would delete: $b"; else git branch -D "$b" >/dev/null && echo "deleted: $b"; fi
+		else
+			echo "kept: $b (no merged PR ends at this commit)"
+		fi
+	done
+
+# Your open PRs and the checks on the current branch's PR
+prs:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	gh pr status
+	b=$(git branch --show-current)
+	if [[ -n "$b" ]] && gh pr view "$b" >/dev/null 2>&1; then
+		echo
+		gh pr checks "$b" || true
+	fi
+
 # Licenses, RustSec advisories, duplicate versions, and sources (needs network for the advisory db)
 deny:
 	cargo deny check

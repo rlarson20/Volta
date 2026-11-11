@@ -46,7 +46,7 @@ Work that a Linux CPU can verify, and that reviews as a PR. Candidates are open 
 
 ## Pull requests
 
-Each PR branches from `improvements` and targets it. Open PRs are independent and can be reviewed and merged in any order; `improvements` merges into `main` at the merge gate (`CLAUDE.md`).
+Each PR branches from `improvements` and targets it. Open PRs are independent and can be reviewed and merged in any order; `improvements` merges into `main` at the merge gate (`CLAUDE.md`). The local `just pr` / `just sync` commands and the reasoning behind these rules are in `dev-docs/WORKFLOW.md`.
 
 - **Branch from `improvements`,** from its current tip, with one branch per task. Don't branch from another open PR's branch.
 - **One task per PR.** Keep the diff reviewable. A follow-up to an open PR is a new PR once that one has merged; before then, push to its branch.
