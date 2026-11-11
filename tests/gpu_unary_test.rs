@@ -55,7 +55,7 @@ fn test_new_unary_ops_gpu_autograd() {
     x.zero_grad();
 
     // Log2 (using positive inputs)
-    let x_log2 = RawTensor::new(vec![1.0, 2.0], &[2], false).to_device(dev.clone());
+    let x_log2 = RawTensor::new(vec![1.0, 2.0], &[2], false).to_device(dev);
     x_log2.set_requires_grad(true);
     let y_log2 = x_log2.log2();
     let loss_log2 = y_log2.sum();

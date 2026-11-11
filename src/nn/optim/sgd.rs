@@ -246,6 +246,10 @@ impl SGD {
 #[cfg(not(feature = "gpu"))]
 impl SGD {
     /// Stub for builds without the `gpu` feature; a GPU parameter cannot exist there.
+    #[expect(
+        clippy::unused_self,
+        reason = "keeps the GPU variant's signature so the call site is the same with and without the feature"
+    )]
     fn step_gpu_param(&mut self, _i: usize) {
         unreachable!("GPU step should not be called without GPU feature");
     }

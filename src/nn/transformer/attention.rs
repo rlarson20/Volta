@@ -118,7 +118,7 @@ impl ScaledDotProductAttention {
 
         // Apply causal mask if requested
         let scores = if causal {
-            let causal = self.create_causal_mask(seq_len, query);
+            let causal = Self::create_causal_mask(seq_len, query);
             scores.add(&causal)
         } else {
             scores
@@ -140,7 +140,7 @@ impl ScaledDotProductAttention {
 
     /// Additive mask `[seq_len, seq_len]`: `-inf` above the diagonal, 0 elsewhere, on
     /// `like`'s device and in its dtype.
-    fn create_causal_mask(&self, seq_len: usize, like: &Tensor) -> Tensor {
+    fn create_causal_mask(seq_len: usize, like: &Tensor) -> Tensor {
         let mut mask_data = Vec::with_capacity(seq_len * seq_len);
         for i in 0..seq_len {
             for j in 0..seq_len {

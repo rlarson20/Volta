@@ -2155,12 +2155,11 @@ mod conv2d_tests {
 
         // Copy weights from direct to im2col
         let direct_weight_data = conv_direct.weight.borrow().data.to_vec();
-        conv_im2col.weight.borrow_mut().data =
-            crate::storage::Storage::cpu(direct_weight_data.clone());
+        conv_im2col.weight.borrow_mut().data = crate::storage::Storage::cpu(direct_weight_data);
 
         if let (Some(direct_bias), Some(im2col_bias)) = (&conv_direct.bias, &conv_im2col.bias) {
             let direct_bias_data = direct_bias.borrow().data.to_vec();
-            im2col_bias.borrow_mut().data = crate::storage::Storage::cpu(direct_bias_data.clone());
+            im2col_bias.borrow_mut().data = crate::storage::Storage::cpu(direct_bias_data);
         }
 
         let x = RawTensor::randn(&[1, 2, 6, 6]);
@@ -2171,8 +2170,8 @@ mod conv2d_tests {
         let loss_direct = y_direct.sum();
         loss_direct.into_loss().expect("scalar loss").backward();
 
-        let x_grad_direct = x.grad().clone();
-        let w_grad_direct = conv_direct.weight.grad().clone();
+        let x_grad_direct = x.grad();
+        let w_grad_direct = conv_direct.weight.grad();
 
         // Clear gradients
         x.zero_grad();
@@ -2186,8 +2185,8 @@ mod conv2d_tests {
         let loss_im2col = y_im2col.sum();
         loss_im2col.into_loss().expect("scalar loss").backward();
 
-        let x_grad_im2col = x.grad().clone();
-        let w_grad_im2col = conv_im2col.weight.grad().clone();
+        let x_grad_im2col = x.grad();
+        let w_grad_im2col = conv_im2col.weight.grad();
 
         // Compare input gradients
         assert!(x_grad_direct.is_some() && x_grad_im2col.is_some());
@@ -2310,11 +2309,11 @@ mod conv2d_tests {
 
         // Copy weights
         let weight_data = conv_direct.weight.borrow().data.to_vec();
-        conv_igemm.weight.borrow_mut().data = crate::storage::Storage::cpu(weight_data.clone());
+        conv_igemm.weight.borrow_mut().data = crate::storage::Storage::cpu(weight_data);
 
         let bias_data = conv_direct.bias.as_ref().unwrap().borrow().data.to_vec();
         conv_igemm.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::cpu(bias_data.clone());
+            crate::storage::Storage::cpu(bias_data);
 
         let y_direct = conv_direct.forward(&x);
         let y_igemm = conv_igemm.forward(&x);
@@ -2378,11 +2377,11 @@ mod conv2d_tests {
 
         // Copy weights
         let weight_data = conv_direct.weight.borrow().data.to_vec();
-        conv_igemm.weight.borrow_mut().data = crate::storage::Storage::cpu(weight_data.clone());
+        conv_igemm.weight.borrow_mut().data = crate::storage::Storage::cpu(weight_data);
 
         let bias_data = conv_direct.bias.as_ref().unwrap().borrow().data.to_vec();
         conv_igemm.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::cpu(bias_data.clone());
+            crate::storage::Storage::cpu(bias_data);
 
         // Forward and backward
         let y_direct = conv_direct.forward(&x_direct);
@@ -2920,7 +2919,7 @@ mod conv2d_gpu_tests {
 
         // Create Conv2d layer on GPU
         let conv = Conv2d::new_on_device(3, 16, 3, 1, 1, true, device.clone());
-        let x = RawTensor::randn(&[1, 3, 32, 32]).to_device(device.clone());
+        let x = RawTensor::randn(&[1, 3, 32, 32]).to_device(device);
         let y = conv.forward(&x);
 
         assert_eq!(y.borrow().shape, vec![1, 16, 32, 32]);
@@ -2941,7 +2940,7 @@ mod conv2d_gpu_tests {
         let device = Device::gpu().unwrap();
 
         let conv = Conv2d::new_on_device(2, 4, 3, 1, 0, true, device.clone());
-        let x = RawTensor::randn(&[1, 2, 5, 5]).to_device(device.clone());
+        let x = RawTensor::randn(&[1, 2, 5, 5]).to_device(device);
         x.set_requires_grad(true);
 
         let y = conv.forward(&x);
@@ -2968,7 +2967,7 @@ mod conv2d_gpu_tests {
         let device = Device::gpu().unwrap();
 
         let conv = Conv2d::new_on_device(1, 4, 3, 2, 1, true, device.clone());
-        let x = RawTensor::randn(&[1, 1, 8, 8]).to_device(device.clone());
+        let x = RawTensor::randn(&[1, 1, 8, 8]).to_device(device);
         let y = conv.forward(&x);
 
         assert_eq!(y.borrow().shape, vec![1, 4, 4, 4]);
@@ -3000,7 +2999,7 @@ mod conv2d_gpu_tests {
 
         // Now try on GPU
         let x_gpu = x_cpu.to_device(device.clone());
-        let conv_gpu = Conv2d::new_on_device(1, 1, 2, 1, 0, false, device.clone());
+        let conv_gpu = Conv2d::new_on_device(1, 1, 2, 1, 0, false, device);
         conv_gpu.weight.borrow_mut().data = crate::storage::Storage::gpu(vec![1.0; 4]);
 
         let y_gpu = conv_gpu.forward(&x_gpu);
@@ -3033,7 +3032,7 @@ mod conv2d_gpu_tests {
         let x_cpu = RawTensor::randn(&[1, 1, 4, 4]);
         let x_padded_cpu = x_cpu.pad_with(&[(0, 0), (0, 0), (1, 1), (1, 1)], PadValue::ZERO);
 
-        let x_gpu = x_cpu.to_device(device.clone());
+        let x_gpu = x_cpu.to_device(device);
         let x_padded_gpu = x_gpu.pad_with(&[(0, 0), (0, 0), (1, 1), (1, 1)], PadValue::ZERO);
 
         // Check shapes
@@ -3138,7 +3137,7 @@ mod conv2d_gpu_tests {
 
         // Test that gradients flow correctly on GPU
         let conv = Conv2d::new_on_device(2, 4, 3, 1, 1, true, device.clone());
-        let x = RawTensor::randn(&[1, 2, 6, 6]).to_device(device.clone());
+        let x = RawTensor::randn(&[1, 2, 6, 6]).to_device(device);
         x.set_requires_grad(true);
 
         let y = conv.forward(&x);
@@ -3209,7 +3208,7 @@ mod conv2d_gpu_tests {
         let conv = Conv2d::new_on_device(2, 4, 3, 1, 1, true, device.clone());
         conv.set_algo(ConvAlgo::Direct);
 
-        let x = RawTensor::randn(&[1, 2, 8, 8]).to_device(device.clone());
+        let x = RawTensor::randn(&[1, 2, 8, 8]).to_device(device);
         x.set_requires_grad(true);
 
         let y = conv.forward(&x);
@@ -3267,7 +3266,7 @@ mod conv2d_gpu_tests {
         x_gpu.set_requires_grad(true);
 
         // Create conv with im2col algorithm
-        let conv = Conv2d::new_on_device(1, 2, 3, 1, 0, true, device.clone());
+        let conv = Conv2d::new_on_device(1, 2, 3, 1, 0, true, device);
         conv.set_algo(ConvAlgo::Im2col);
 
         // Forward pass
@@ -3282,7 +3281,7 @@ mod conv2d_gpu_tests {
         assert_eq!(grad_input.len(), 16);
 
         // Verify values are non-zero (col2im should have accumulated gradients)
-        let grad_data = grad_input.clone();
+        let grad_data = grad_input;
         let has_non_zero = grad_data.iter().any(|&v| v.abs() > 1e-6);
         assert!(has_non_zero, "col2im gradient should have non-zero values");
     }

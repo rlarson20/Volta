@@ -208,7 +208,7 @@ fn ternary_ops_gradcheck_in_f64() {
     assert_grad("MulAcc x", &x, |t| weighted(&t.mulacc(&y2, &z2), 54));
     let (x2, z3) = (x.clone(), z.clone());
     assert_grad("MulAcc y", &y, |t| weighted(&x2.mulacc(t, &z3), 54));
-    let (x3, y3) = (x.clone(), y.clone());
+    let (x3, y3) = (x, y);
     assert_grad("MulAcc z", &z, |t| weighted(&x3.mulacc(&y3, t), 54));
 
     let cond = RawTensor::from_typed(vec![true, false, true], &[3]);
@@ -216,7 +216,7 @@ fn ternary_ops_gradcheck_in_f64() {
     let b = leaf(&[2, 1], 56);
     let (c2, b2) = (cond.clone(), b.clone());
     assert_grad("Where true", &a, |t| weighted(&c2.where_op(t, &b2), 57));
-    let (c3, a3) = (cond.clone(), a.clone());
+    let (c3, a3) = (cond, a);
     assert_grad("Where false", &b, |t| weighted(&c3.where_op(&a3, t), 57));
 }
 

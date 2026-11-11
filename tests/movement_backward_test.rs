@@ -35,7 +35,7 @@ fn test_permute_backward_cpu_vs_gpu() {
     let cpu_permuted = cpu_t.permute(&[Axis(1), Axis(0)]);
 
     // Create same tensor on GPU
-    let gpu_t = RawTensor::new(data, &[2, 3], false).to_device(device.clone());
+    let gpu_t = RawTensor::new(data, &[2, 3], false).to_device(device);
     gpu_t.set_requires_grad(true);
     let gpu_permuted = gpu_t.permute(&[Axis(1), Axis(0)]);
 
@@ -77,7 +77,7 @@ fn test_expand_backward_cpu_vs_gpu() {
     let cpu_expanded = cpu_t.expand(&[2, 3]);
 
     // Create same tensor on GPU
-    let gpu_t = RawTensor::new(data, &[1, 3], false).to_device(device.clone());
+    let gpu_t = RawTensor::new(data, &[1, 3], false).to_device(device);
     gpu_t.set_requires_grad(true);
     let gpu_expanded = gpu_t.expand(&[2, 3]);
 
@@ -126,7 +126,7 @@ fn test_pad_backward_cpu_vs_gpu() {
     let cpu_padded = cpu_t.pad_with(&padding, PadValue::ZERO);
 
     // Create same tensor on GPU
-    let gpu_t = RawTensor::new(data, &[2, 2], false).to_device(device.clone());
+    let gpu_t = RawTensor::new(data, &[2, 2], false).to_device(device);
     gpu_t.set_requires_grad(true);
     let gpu_padded = gpu_t.pad_with(&padding, PadValue::ZERO);
 
@@ -197,7 +197,7 @@ fn test_shrink_backward_cpu_vs_gpu() {
     let cpu_shrunk = cpu_t.shrink(&ranges);
 
     // Create same tensor on GPU
-    let gpu_t = RawTensor::new(data, &[4, 4], false).to_device(device.clone());
+    let gpu_t = RawTensor::new(data, &[4, 4], false).to_device(device);
     gpu_t.set_requires_grad(true);
     let gpu_shrunk = gpu_t.shrink(&ranges);
 
@@ -240,7 +240,7 @@ fn test_stride_backward_cpu_vs_gpu() {
     let cpu_strided = cpu_t.stride_op(&strides);
 
     // Create same tensor on GPU
-    let gpu_t = RawTensor::new(data, &[4, 4], false).to_device(device.clone());
+    let gpu_t = RawTensor::new(data, &[4, 4], false).to_device(device);
     gpu_t.set_requires_grad(true);
     let gpu_strided = gpu_t.stride_op(&strides);
 
@@ -287,7 +287,7 @@ fn test_movement_backward_chain_cpu_vs_gpu() {
     let cpu_grad = cpu_t.grad_storage().unwrap().to_vec();
 
     // GPU path
-    let gpu_t = RawTensor::new(data, &[2, 1, 3], false).to_device(device.clone());
+    let gpu_t = RawTensor::new(data, &[2, 1, 3], false).to_device(device);
     gpu_t.set_requires_grad(true);
     let gpu_out = gpu_t
         .permute(&[Axis(2), Axis(1), Axis(0)])
@@ -320,7 +320,7 @@ fn test_expand_backward_multiple_dims() {
         .backward();
     let cpu_grad = cpu_t.grad_storage().unwrap().to_vec();
 
-    let gpu_t = RawTensor::new(data, &[1, 1, 3], false).to_device(device.clone());
+    let gpu_t = RawTensor::new(data, &[1, 1, 3], false).to_device(device);
     gpu_t.set_requires_grad(true);
     let gpu_expanded = gpu_t.expand(&[2, 2, 3]);
     gpu_expanded

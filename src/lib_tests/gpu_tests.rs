@@ -81,7 +81,7 @@ fn test_to_device_gpu_to_cpu() {
 
     let gpu_device = Device::gpu().expect("GPU should be available");
     let t = RawTensor::new(vec![5.0, 6.0, 7.0], &[3], false);
-    let t_gpu = t.to_device(gpu_device.clone());
+    let t_gpu = t.to_device(gpu_device);
 
     // Move back to CPU
     let t_cpu = t_gpu.to_device(Device::CPU);
@@ -135,7 +135,7 @@ fn test_matmul_backward_gpu() {
         &[3, 4],
         false,
     )
-    .to_device(gpu_device.clone());
+    .to_device(gpu_device);
     b.set_requires_grad(true);
     let c = a.matmul(&b);
 
@@ -239,8 +239,8 @@ fn test_sum_backward_gpu() {
 
     let gpu_device = Device::gpu().expect("GPU should be available");
 
-    let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false)
-        .to_device(gpu_device.clone());
+    let x =
+        RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false).to_device(gpu_device);
     x.set_requires_grad(true);
     let sum_result = x.sum();
 
@@ -274,8 +274,8 @@ fn test_mean_backward_gpu() {
 
     let gpu_device = Device::gpu().expect("GPU should be available");
 
-    let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false)
-        .to_device(gpu_device.clone());
+    let x =
+        RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false).to_device(gpu_device);
     x.set_requires_grad(true);
     let mean_result = x.mean();
 
@@ -310,8 +310,8 @@ fn test_max_backward_gpu() {
 
     let gpu_device = Device::gpu().expect("GPU should be available");
 
-    let x = RawTensor::new(vec![1.0, 5.0, 3.0, 4.0, 2.0, 6.0], &[2, 3], false)
-        .to_device(gpu_device.clone());
+    let x =
+        RawTensor::new(vec![1.0, 5.0, 3.0, 4.0, 2.0, 6.0], &[2, 3], false).to_device(gpu_device);
     x.set_requires_grad(true);
     let max_result = x.max_reduce();
 
@@ -394,7 +394,7 @@ fn test_reduction_backward_gpu_cpu_equivalence() {
     max_cpu.into_loss().expect("scalar loss").backward();
     let max_grad_cpu = x_cpu3.borrow().grad.as_ref().unwrap().to_vec();
 
-    let x_gpu3 = RawTensor::new(data.clone(), shape, false).to_device(gpu_device);
+    let x_gpu3 = RawTensor::new(data, shape, false).to_device(gpu_device);
     x_gpu3.set_requires_grad(true);
     let max_gpu = x_gpu3.max_reduce();
     max_gpu.into_loss().expect("scalar loss").backward();
@@ -418,7 +418,7 @@ fn test_sgd_optimizer_gpu() {
     let gpu_device = Device::gpu().expect("GPU should be available");
 
     // Create a simple parameter on GPU
-    let param = RawTensor::new(vec![0.5; 10], &[10], true).to_device(gpu_device.clone());
+    let param = RawTensor::new(vec![0.5; 10], &[10], true).to_device(gpu_device);
 
     // Create optimizer with the parameter
     let mut opt = SGD::new(vec![param.clone()], 0.01, 0.0, 0.0);
@@ -449,7 +449,7 @@ fn test_adam_optimizer_gpu() {
     let gpu_device = Device::gpu().expect("GPU should be available");
 
     // Create a simple parameter on GPU
-    let param = RawTensor::new(vec![0.5; 10], &[10], true).to_device(gpu_device.clone());
+    let param = RawTensor::new(vec![0.5; 10], &[10], true).to_device(gpu_device);
 
     // Create Adam optimizer with the parameter
     let mut opt = Adam::new(vec![param.clone()], 0.01, (0.9, 0.999), 1e-8, 0.0);
@@ -480,7 +480,7 @@ fn test_sgd_momentum_optimizer_gpu() {
     let gpu_device = Device::gpu().expect("GPU should be available");
 
     // Create a simple parameter on GPU
-    let param = RawTensor::new(vec![0.5; 10], &[10], true).to_device(gpu_device.clone());
+    let param = RawTensor::new(vec![0.5; 10], &[10], true).to_device(gpu_device);
 
     // Create SGD optimizer with momentum
     let mut opt = SGD::new(vec![param.clone()], 0.01, 0.9, 0.0);
@@ -547,7 +547,7 @@ fn test_optimizer_gpu_cpu_equivalence() {
     param_cpu.set_grad(Storage::cpu(grad_data.clone()));
 
     // GPU parameter and optimizer
-    let param_gpu = RawTensor::new(data, &[5], false).to_device(gpu_device.clone());
+    let param_gpu = RawTensor::new(data, &[5], false).to_device(gpu_device);
     param_gpu.set_requires_grad(true);
     let mut opt_gpu = Adam::new(vec![param_gpu.clone()], 0.01, (0.9, 0.999), 1e-8, 0.0);
     // Create GPU gradient
@@ -659,8 +659,7 @@ fn test_gpu_binary_backward_broadcast_add() {
         // b_grad should sum over dim 0: (1, 4)
         let a = RawTensor::new(vec![1.0, 2.0, 3.0], &[3, 1], false).to_device(gpu_device.clone());
         a.set_requires_grad(true);
-        let b = RawTensor::new(vec![10.0, 20.0, 30.0, 40.0], &[1, 4], false)
-            .to_device(gpu_device.clone());
+        let b = RawTensor::new(vec![10.0, 20.0, 30.0, 40.0], &[1, 4], false).to_device(gpu_device);
         b.set_requires_grad(true);
 
         let c = a.add(&b);
@@ -727,8 +726,7 @@ fn test_gpu_binary_backward_broadcast_mul() {
         // Test broadcasting multiplication
         let a = RawTensor::new(vec![1.0, 2.0], &[2, 1], false).to_device(gpu_device.clone());
         a.set_requires_grad(true);
-        let b =
-            RawTensor::new(vec![10.0, 20.0, 30.0], &[1, 3], false).to_device(gpu_device.clone());
+        let b = RawTensor::new(vec![10.0, 20.0, 30.0], &[1, 3], false).to_device(gpu_device);
         b.set_requires_grad(true);
 
         let c = a.elem_mul(&b);
@@ -769,7 +767,7 @@ fn test_gpu_binary_backward_broadcast_stress() {
             &[1000],
             true,
         )
-        .to_device(gpu_device.clone());
+        .to_device(gpu_device);
 
         let c = a.add(&b);
         c.sum().into_loss().expect("scalar loss").backward();

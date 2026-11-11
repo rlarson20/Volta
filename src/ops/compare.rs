@@ -31,7 +31,7 @@ pub enum CmpOp {
 
 impl CmpOp {
     /// The comparison on one pair.
-    fn apply<T: PartialOrd>(self, a: T, b: T) -> bool {
+    fn apply<T: PartialOrd + Copy>(self, a: T, b: T) -> bool {
         match self {
             Self::Lt => a < b,
             Self::Le => a <= b,

@@ -41,13 +41,13 @@ fn main() {
     let y_data = vec![0.0, 1.0, 1.0, 0.0];
 
     println!("\n--- Approach 1: Using new_on_device() Constructors ---");
-    train_with_device_constructors(x_data.clone(), y_data.clone(), &device.clone());
+    train_with_device_constructors(x_data.clone(), y_data.clone(), &device);
 
     println!("\n--- Approach 2: Using to_device() on Existing Model ---");
-    train_with_to_device(x_data.clone(), y_data.clone(), &device.clone());
+    train_with_to_device(x_data.clone(), y_data.clone(), &device);
 
     println!("\n--- Performance Comparison ---");
-    compare_cpu_vs_gpu(x_data, y_data);
+    compare_cpu_vs_gpu(&x_data, &y_data);
 
     let fallbacks = take_fallback_events();
     println!(
@@ -126,11 +126,11 @@ fn train_with_to_device(x_data: Vec<f32>, y_data: Vec<f32>, device: &Device) {
 }
 
 /// Compare CPU vs GPU training performance
-fn compare_cpu_vs_gpu(x_data: Vec<f32>, y_data: Vec<f32>) {
+fn compare_cpu_vs_gpu(x_data: &[f32], y_data: &[f32]) {
     // CPU training
     println!("Training on CPU...");
-    let x_cpu = RawTensor::new(x_data.clone(), &[4, 2], false);
-    let y_cpu = RawTensor::new(y_data.clone(), &[4, 1], false);
+    let x_cpu = RawTensor::new(x_data.to_vec(), &[4, 2], false);
+    let y_cpu = RawTensor::new(y_data.to_vec(), &[4, 1], false);
 
     let model_cpu = Sequential::new(vec![
         Box::new(Linear::new(2, 8, true)),
@@ -152,8 +152,8 @@ fn compare_cpu_vs_gpu(x_data: Vec<f32>, y_data: Vec<f32>) {
     #[cfg(feature = "gpu")]
     if let Some(device) = Device::gpu() {
         println!("\nTraining on GPU...");
-        let x_gpu = RawTensor::new(x_data, &[4, 2], false).to_device(device.clone());
-        let y_gpu = RawTensor::new(y_data, &[4, 1], false).to_device(device.clone());
+        let x_gpu = RawTensor::new(x_data.to_vec(), &[4, 2], false).to_device(device.clone());
+        let y_gpu = RawTensor::new(y_data.to_vec(), &[4, 1], false).to_device(device.clone());
 
         let mut model_gpu = Sequential::new(vec![
             Box::new(Linear::new(2, 8, true)),

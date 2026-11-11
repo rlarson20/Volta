@@ -726,6 +726,21 @@ Autograd is a sequential graph walk over `Rc<RefCell<_>>`, and nothing in it is 
 - The JSON is the source of truth, but nothing applies it automatically: after editing a file, run `just rulesets`. The recipe creates or updates by `name`, so it is safe to repeat.
 - *The `macos` job runs stable only.* GitHub's macOS runners are intermittently unavailable (a run failed because `macos (stable)` got no runner), and each extra macOS job is another chance to hit that. The MSRV is checked by `cpu-only (1.89)`. What this gives up: `accelerate` (and the macOS-only code paths) are no longer compiled with 1.89, so an MSRV break in that code is not caught by CI. Revisit if one slips through.
 
+### `unused_self` and `needless_pass_by_value` are denied; exceptions are per-site `#[expect]` (#171)
+
+**Decision:** both lints are `deny` in `[lints.clippy]`, and each exception is a `#[expect(.., reason = "..")]` at the item. The crate-wide `needless_pass_by_value = "allow"` is gone. Methods that never read `self` are associated functions, except the cases below.
+
+**Why:** a crate-wide allow hides every new by-value argument, and it had a rationale that covered one site (`Tensor::set_grad`). `#[expect]` fails the build when the exception stops being needed, so the list cannot rot.
+
+**Exceptions, and why they stay:**
+- *`step_gpu_param` stubs in `adam.rs` and `sgd.rs`.* They keep the GPU variant's `&mut self` signature so the shared call site compiles with and without the `gpu` feature.
+- *`backward` on the unit-struct grad fns `TransposeGradFn`, `MulAccGradFn`, `BceGradFn`.* They hold no state, so `self` is unused, but every other `GradFn` variant's `backward` takes `&self`, and `GradFn::backward` dispatches all of them as `g.backward(out_grad, parents)`. Keeping that uniform was chosen over three arms that call an associated fn.
+- *`Tensor::set_grad` and `Storage::gpu` take `Storage` / `Vec<f32>` by value:* the caller hands over a buffer it just built, and a reference would make every caller clone.
+
+**Revisit:** if more unit-struct grad fns appear, turning their `backward` into associated fns (and the dispatch arms into `Self::X(_) => XGradFn::backward(..)`) removes the `#[expect]`s. The cost is a dispatch that is no longer uniform.
+
+---
+
 ### One definition of CI (#120, #121)
 
 **Decision:** the justfile defines each check (`lint`, `lint-cpu`, `test-cpu`, `doc`, `doc-cpu`, `hack`), and `just ci`, the pre-commit clippy hook and `ci.yml` call those recipes. `just ci` now also runs `cargo test --no-default-features`, rustdoc with `-D warnings` for both feature sets, and the cargo-hack powerset (skipped with a notice when `cargo-hack` is not installed). Workflows run with `permissions: contents: read`, a per-job `timeout-minutes`, and actions pinned to commit SHAs that Dependabot updates. Job names are unchanged, so the rulesets are too.

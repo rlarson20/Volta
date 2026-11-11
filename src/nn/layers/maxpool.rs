@@ -179,7 +179,7 @@ impl MaxPool2dGradFn {
                 let grad_val = fetch(&g_host, idx);
                 *slot(&mut grad_input, max_linear_idx) += grad_val;
             }
-            vec![Some(RawTensor::from_shape_compute(out_grad.data.dtype(), grad_input, input_shape.clone()))]
+            vec![Some(RawTensor::from_shape_compute(out_grad.data.dtype(), grad_input, input_shape))]
         })
     }
 }
@@ -496,7 +496,7 @@ mod tests {
         loss.into_loss().expect("scalar loss").backward();
 
         let grad = x.grad().unwrap();
-        let grad_data = grad.clone();
+        let grad_data = grad;
 
         // Only max positions should receive gradient (value 1.0 from sum)
         // Window 1 max: [1,1] position, index 5 (value 8.0)
@@ -561,7 +561,7 @@ mod tests {
         loss.into_loss().expect("scalar loss").backward();
 
         let grad = x.grad().unwrap();
-        let grad_data = grad.clone();
+        let grad_data = grad;
 
         // Position 4 (center) should be max in all 4 windows
         // So it should accumulate gradient of 4.0
@@ -594,7 +594,7 @@ mod tests {
         loss.into_loss().expect("scalar loss").backward();
 
         let grad = x.grad().unwrap();
-        let grad_data = grad.clone();
+        let grad_data = grad;
 
         // With overlapping windows, gradients should accumulate
         // Sum of input gradients should equal number of outputs (9)
@@ -622,7 +622,7 @@ mod tests {
         let loss = y.sum();
         loss.into_loss().expect("scalar loss").backward();
         let grad = x.grad().unwrap();
-        assert_eq!(grad.clone().first().copied().unwrap(), 1.0);
+        assert_eq!(grad.first().copied().unwrap(), 1.0);
     }
 
     #[test]
@@ -640,7 +640,7 @@ mod tests {
         let loss = y.sum();
         loss.into_loss().expect("scalar loss").backward();
         let grad = x.grad().unwrap();
-        let grad_data = grad.clone();
+        let grad_data = grad;
 
         // Only the last position (value 15.0) should have gradient
         assert_eq!(
@@ -667,7 +667,7 @@ mod tests {
         loss.into_loss().expect("scalar loss").backward();
 
         let grad = x.grad().unwrap();
-        let grad_data = grad.clone();
+        let grad_data = grad;
 
         // Each batch should have its own gradients
         // Each batch has 16 elements (1 channel * 4 * 4)
@@ -691,7 +691,7 @@ mod tests {
         loss.into_loss().expect("scalar loss").backward();
 
         let grad = x.grad().unwrap();
-        let grad_data = grad.clone();
+        let grad_data = grad;
 
         // Each channel should have its own gradients
         // Each channel has 16 elements (4x4)

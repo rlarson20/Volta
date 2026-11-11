@@ -164,7 +164,7 @@ fn main() {
         .get(0..input_dim)
         .expect("the training data holds at least one image")
         .to_vec();
-    let x_test = RawTensor::new(test_img.clone(), &[1, input_dim], false);
+    let x_test = RawTensor::new(test_img, &[1, input_dim], false);
 
     let h = enc_fc1.forward(&x_test).relu();
     let mu = enc_mu.forward(&h);

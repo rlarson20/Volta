@@ -423,7 +423,7 @@ impl Layer for ConvTranspose2d {
             Device::CPU,
             GradFn::ConvTranspose2d(ConvTranspose2dGradFn {
                 spec,
-                weight: weight.clone(),
+                weight,
                 has_bias,
             }),
         )

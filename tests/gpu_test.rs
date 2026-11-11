@@ -74,7 +74,7 @@ mod gpu_tests {
         // d(loss)/d(a) = 2
         let c1 = a.add(&b).to_device(device.clone());
         let c2 = a.add(&b).to_device(device.clone());
-        let loss = c1.add(&c2).to_device(device.clone());
+        let loss = c1.add(&c2).to_device(device);
 
         loss.into_loss().expect("scalar loss").backward();
 
@@ -119,8 +119,8 @@ mod gpu_tests {
         assert_eq!(z_shrunk.data(), vec![5.0, 6.0, 9.0, 10.0]);
 
         // Test stride (subsample)
-        let w = RawTensor::new((0..16).map(|i| i as f32).collect(), &[4, 4], false)
-            .to_device(device.clone());
+        let w =
+            RawTensor::new((0..16).map(|i| i as f32).collect(), &[4, 4], false).to_device(device);
         let w_strided = w.stride_op(&[2, 2]);
         assert_eq!(w_strided.shape(), vec![2, 2]);
         assert_eq!(w_strided.data(), vec![0.0, 2.0, 8.0, 10.0]);
