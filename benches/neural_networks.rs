@@ -2,10 +2,11 @@
 //!
 //! Benchmarks for high-level neural network components including:
 //! - Linear layer (forward and backward pass)
-//! - Conv2d layer (various kernel sizes)
+//! - Conv2d layer (forward for various kernel sizes, and backward)
 //! - `MaxPool2d` layer
-//! - Sequential models (end-to-end forward pass)
-use criterion::{Criterion, black_box, criterion_main};
+//! - Sequential models (end-to-end forward, and forward plus backward)
+use criterion::measurement::WallTime;
+use criterion::{BenchmarkGroup, Criterion, black_box, criterion_main};
 use volta::{Conv2d, Layer, Linear, MaxPool2d, RawTensor, ReLU, Sequential, Tensor};
 
 /// Generate a random tensor of the given size
@@ -62,28 +63,60 @@ fn bench_linear_forward(c: &mut Criterion) {
     group.finish();
 }
 
+/// A fixed regression target with the shape of `model`'s output on `input`.
+///
+/// Taken from a forward pass, not hard-coded, so a shape change in a layer cannot turn
+/// the loss into a silent broadcast against a mis-sized target.
+fn target_for(model: &dyn Layer, input: &Tensor) -> Tensor {
+    let shape = model.forward(input).shape();
+    let dims = shape.truncate_rank();
+    let size = dims.iter().product();
+    let data: Vec<f32> = (0..size).map(|i| (i as f32 * 0.013).cos()).collect();
+    RawTensor::new(data, dims, false)
+}
+
+/// Benchmark one training step's gradient work on `model`: clear the parameter
+/// gradients, forward, MSE against a fixed target, backward.
+///
+/// `zero_grad` runs inside the measured loop, so every iteration does the same work
+/// as a real step instead of accumulating into the previous iteration's `grad`
+/// buffers. Its cost is part of a training step, so it belongs in the number.
+fn bench_train_step(
+    group: &mut BenchmarkGroup<'_, WallTime>,
+    name: &str,
+    mut model: Box<dyn Layer>,
+    input: &Tensor,
+) {
+    let target = target_for(model.as_ref(), input);
+    group.bench_function(name, |b| {
+        b.iter(|| {
+            model.zero_grad();
+            let output = model.forward(black_box(input));
+            RawTensor::mse_loss(&output, &target)
+                .into_loss()
+                .expect("MSE loss is a scalar that requires grad")
+                .backward();
+        });
+    });
+}
+
 /// `Linear` forward plus backward at 128x64 and 256x128.
 fn bench_linear_backward(c: &mut Criterion) {
     let mut group = c.benchmark_group("linear_backward");
 
     // Larger sizes for backward pass to make gradient computation meaningful
-    group.bench_function("backward_128x64", |b| {
-        let layer = Linear::new(128, 64, true);
-        let input = random_tensor_2d(16, 128);
-        b.iter(|| {
-            let output = layer.forward(&input);
-            output.into_loss().expect("scalar loss").backward();
-        });
-    });
-
-    group.bench_function("backward_256x128", |b| {
-        let layer = Linear::new(256, 128, true);
-        let input = random_tensor_2d(16, 256);
-        b.iter(|| {
-            let output = layer.forward(&input);
-            output.into_loss().expect("scalar loss").backward();
-        });
-    });
+    bench_train_step(
+        &mut group,
+        "backward_128x64",
+        Box::new(Linear::new(128, 64, true)),
+        &random_tensor_2d(16, 128),
+    );
+    bench_train_step(
+        &mut group,
+        "backward_256x128",
+        Box::new(Linear::new(256, 128, true)),
+        &random_tensor_2d(16, 256),
+    );
 
     group.finish();
 }
@@ -137,6 +170,26 @@ fn bench_conv2d_forward(c: &mut Criterion) {
         let input = random_tensor_4d(4, 3, 28, 28);
         b.iter(|| black_box(&layer).forward(black_box(&input)));
     });
+
+    group.finish();
+}
+
+/// `Conv2d` forward plus backward for 3x3 kernels on small grayscale and RGB inputs.
+fn bench_conv2d_backward(c: &mut Criterion) {
+    let mut group = c.benchmark_group("conv2d_backward");
+
+    bench_train_step(
+        &mut group,
+        "grayscale_1to8_3x3",
+        Box::new(Conv2d::new(1, 8, 3, 1, 0, true)),
+        &random_tensor_4d(4, 1, 28, 28),
+    );
+    bench_train_step(
+        &mut group,
+        "rgb_3to16_3x3",
+        Box::new(Conv2d::new(3, 16, 3, 1, 0, true)),
+        &random_tensor_4d(8, 3, 32, 32),
+    );
 
     group.finish();
 }
@@ -212,6 +265,35 @@ fn bench_sequential_forward(c: &mut Criterion) {
     group.finish();
 }
 
+/// `Sequential` forward plus backward end to end: the small `MLP` and the small conv +
+/// `ReLU` + pool model from `sequential_forward`.
+fn bench_sequential_backward(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sequential_backward");
+
+    bench_train_step(
+        &mut group,
+        "small_mlp",
+        Box::new(Sequential::new(vec![
+            Box::new(Linear::new(128, 64, true)),
+            Box::new(ReLU),
+            Box::new(Linear::new(64, 10, true)),
+        ])),
+        &random_tensor_2d(32, 128),
+    );
+    bench_train_step(
+        &mut group,
+        "small_cnn",
+        Box::new(Sequential::new(vec![
+            Box::new(Conv2d::new(3, 8, 3, 1, 0, true)),
+            Box::new(ReLU),
+            Box::new(MaxPool2d::new(2, 2, 0)),
+        ])),
+        &random_tensor_4d(8, 3, 28, 28),
+    );
+
+    group.finish();
+}
+
 // ===== ACTIVATION FUNCTIONS =====
 
 /// `ReLU` (1024 and 4096 elements), `sigmoid`, and `tanh` (1024 elements).
@@ -241,7 +323,8 @@ fn bench_activations(c: &mut Criterion) {
     group.finish();
 }
 
-// Runs the layer benchmarks: `Linear`, `Conv2d`, `MaxPool2d`, `Sequential`, and activations.
+// Runs the layer benchmarks: `Linear`, `Conv2d`, `MaxPool2d`, `Sequential`, and activations,
+// with backward groups for `Linear`, `Conv2d` and `Sequential`.
 // `criterion_group!` (criterion 0.5) generates an undocumented `pub fn benches`. A lint
 // attribute on the macro call is ignored, so the call lives in a module that carries the
 // `allow`, which keeps the lint active for everything else in this file.
@@ -258,8 +341,10 @@ mod group {
         super::bench_linear_forward,
         super::bench_linear_backward,
         super::bench_conv2d_forward,
+        super::bench_conv2d_backward,
         super::bench_maxpool2d,
         super::bench_sequential_forward,
+        super::bench_sequential_backward,
         super::bench_activations,
     );
 }
