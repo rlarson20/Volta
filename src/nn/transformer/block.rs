@@ -61,8 +61,6 @@ impl TransformerBlock {
     pub fn new(embed_dim: usize, num_heads: usize, expansion_factor: usize, dropout: f32) -> Self {
         Self {
             norm1: LayerNorm::new(vec![embed_dim]),
-            // Note: We'll use a simple attention wrapper for now
-            // In a real implementation, this would be MultiHeadAttention
             attention: MultiHeadAttention::new(embed_dim, num_heads, dropout),
             norm2: LayerNorm::new(vec![embed_dim]),
             ffn: FeedForward::new(embed_dim, expansion_factor, dropout),
@@ -83,7 +81,7 @@ impl TransformerBlock {
     /// Output tensor of shape [batch, `seq_len`, `embed_dim`]
     #[must_use]
     pub fn forward(&self, x: &Tensor, causal: bool) -> Tensor {
-        // Pre-LN Architecture:
+        // Pre-LN Architecture. Neither sublayer adds its own residual; the block adds both.
         // 1. LN → Attention → Add
         let x_norm1 = self.norm1.forward(x);
         let attn_out = self.attention.forward(&x_norm1, causal, None);
@@ -270,8 +268,7 @@ mod tests {
 
     #[test]
     fn test_block_assert_trainable() {
-        // SimpleAttention (the current placeholder attention) has no parameters of
-        // its own, so this exercises norm1/norm2/ffn — everything that does.
+        // Covers every parameter: norm1, attention's q/k/v/out projections, norm2, ffn.
         let block = TransformerBlock::new(16, 2, 2, 0.0);
         let x = crate::macros::trainable_input(&[2, 3, 16]);
         crate::assert_trainable!(block, x);
