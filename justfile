@@ -178,31 +178,13 @@ rulesets:
 pr name="":
 	./scripts/pr.sh {{name}}
 
-# After merges: fast-forward improvements and delete local branches whose PR was squash-merged (`just sync dry-run` lists them first)
+# After merges: fast-forward improvements and delete local branches it already holds, saying why each kept one stays (`just sync dry-run` lists them first)
 sync mode="":
-	#!/usr/bin/env bash
-	set -euo pipefail
-	dry=false
-	case "{{mode}}" in
-		"") ;;
-		dry-run) dry=true ;;
-		*) echo "usage: just sync [dry-run]" >&2; exit 1 ;;
-	esac
-	git switch improvements
-	git pull --ff-only || { echo "sync: local improvements has commits origin lacks; run 'just pr' to move them to a PR branch" >&2; exit 1; }
-	git fetch --prune --quiet
-	# Squash merging leaves no ancestor link, so `git branch --merged` cannot see these: ask GitHub.
-	# Delete only when the PR's head commit is the local tip, so later local commits are never lost.
-	merged=$(gh pr list --state merged --base improvements --limit 200 --json headRefName,headRefOid)
-	for b in $(git for-each-ref --format='%(refname:short)' refs/heads); do
-		[[ "$b" == improvements || "$b" == main ]] && continue
-		tip=$(git rev-parse "refs/heads/$b")
-		if jq -e --arg b "$b" --arg t "$tip" 'any(.[]; .headRefName == $b and .headRefOid == $t)' <<<"$merged" >/dev/null; then
-			if $dry; then echo "would delete: $b"; else git branch -D "$b" >/dev/null && echo "deleted: $b"; fi
-		else
-			echo "kept: $b (no merged PR ends at this commit)"
-		fi
-	done
+	./scripts/sync.sh {{mode}}
+
+# Check `just sync`'s delete and keep rules against a scratch repo and a stub gh
+test-sync:
+	./scripts/test-sync.sh
 
 # Your open PRs and the checks on the current branch's PR
 prs:
