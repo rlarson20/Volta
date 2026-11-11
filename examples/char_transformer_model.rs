@@ -10,9 +10,6 @@
 //
 // TODO: handle these concerns
 //
-// MultiHeadAttention::forward internally does x.add(&output) — so calling norm1.forward(mha.forward(x)) is Pre-LN applied to the post-residual output, which is slightly non-standard (Post-LN).
-// That's fine for a smoke test but worth fixing later by refactoring MHA to not embed the residual.
-//
 // The positional encoding is sinusoidal (fixed). For learned positions, construct it with
 // PositionalEncodingType::Learned and add its parameters to the model's.
 //
@@ -68,12 +65,12 @@ impl CharVocab {
 }
 
 // ===== Minimal Transformer Block =====
-// Note: MultiHeadAttention::forward already adds the residual (x + attn_out).
-// We apply LayerNorm after, then FFN + manual residual + LayerNorm.
+// Post-LN, as in the original Transformer: x = LN(x + Attn(x)), then LN(x + FFN(x)).
+// `MultiHeadAttention` adds no residual of its own (like torch), so the layer adds both.
 
-/// One transformer layer: causal self-attention, `LayerNorm`, feed-forward with a residual, `LayerNorm`.
+/// One Post-LN transformer layer: causal self-attention and a feed-forward network, each with a residual and a `LayerNorm`.
 struct TransformerLayer {
-    /// Causal self-attention. Its `forward` already adds the residual.
+    /// Causal self-attention, without a residual of its own.
     attn: MultiHeadAttention,
     /// Applied after attention (and its residual).
     norm1: LayerNorm,
@@ -96,8 +93,9 @@ impl TransformerLayer {
 
     /// Maps `[batch, seq, embed_dim]` to the same shape.
     fn forward(&self, x: &volta::Tensor) -> volta::Tensor {
-        // Attention + residual (MHA does this internally) + LayerNorm
-        let x = self.norm1.forward(&self.attn.forward(x, true, None));
+        // Attention + residual + LayerNorm
+        let attn_out = self.attn.forward(x, true, None);
+        let x = self.norm1.forward(&x.add(&attn_out));
         // FFN + residual + LayerNorm
         let ffn_out = self.ffn.forward(&x);
         self.norm2.forward(&x.add(&ffn_out))

@@ -1,5 +1,5 @@
 use crate::io::StateDict;
-use crate::nn::{Layer, LayerNorm, Linear, Module};
+use crate::nn::{Layer, Linear, Module};
 use crate::shape::Axis;
 use crate::tensor::Tensor;
 
@@ -7,6 +7,10 @@ use crate::tensor::Tensor;
 ///
 /// Splits the input into multiple heads, applies scaled dot-product attention to each,
 /// and concatenates the results. Used in transformer architectures.
+///
+/// Like `torch.nn.MultiheadAttention`, the layer returns only the projected attention
+/// output, `out_proj(Attn(x))`: it applies no layer norm and adds no residual. A
+/// transformer block adds `x + Attn(LN(x))` itself (see `TransformerBlock`).
 ///
 /// # Arguments
 /// * `embed_dim` - Total dimension of the model
@@ -33,8 +37,6 @@ pub struct MultiHeadAttention {
     v_proj: Linear,
     /// Output projection.
     out_proj: Linear,
-    /// Layer norm applied to the input, set by `new_with_norm`.
-    norm: Option<LayerNorm>,
     /// Dropout probability. Stored but not applied.
     #[allow(dead_code)]
     dropout: f32,
@@ -66,32 +68,6 @@ impl MultiHeadAttention {
             k_proj: Linear::new(embed_dim, embed_dim, false),
             v_proj: Linear::new(embed_dim, embed_dim, false),
             out_proj: Linear::new(embed_dim, embed_dim, true),
-            norm: None,
-            dropout,
-        }
-    }
-
-    /// Create a new multi-head attention layer with layer normalization
-    /// # Panics
-    /// `embed_dim` must be divisible by `num_heads`
-    #[must_use]
-    pub fn new_with_norm(embed_dim: usize, num_heads: usize, dropout: f32) -> Self {
-        assert!(
-            embed_dim.is_multiple_of(num_heads),
-            "embed_dim must be divisible by num_heads"
-        );
-
-        let head_dim = embed_dim / num_heads;
-
-        Self {
-            embed_dim,
-            num_heads,
-            head_dim,
-            q_proj: Linear::new(embed_dim, embed_dim, false),
-            k_proj: Linear::new(embed_dim, embed_dim, false),
-            v_proj: Linear::new(embed_dim, embed_dim, false),
-            out_proj: Linear::new(embed_dim, embed_dim, true),
-            norm: Some(LayerNorm::new(vec![embed_dim])),
             dropout,
         }
     }
@@ -104,7 +80,7 @@ impl MultiHeadAttention {
     /// * `attention_mask` - Optional additional mask
     ///
     /// # Returns
-    /// Output tensor of shape [batch, `seq_len`, `embed_dim`]
+    /// `out_proj(Attn(x))`, of shape [batch, `seq_len`, `embed_dim`], with no residual added.
     /// # Panics
     /// unwraps for batch size etc
     #[must_use]
@@ -115,13 +91,6 @@ impl MultiHeadAttention {
             input_shape.dim_at(1),
             input_shape.dim_at(2),
         );
-
-        // Apply layer norm if present
-        let x = if let Some(ref norm) = self.norm {
-            norm.forward(x)
-        } else {
-            x.clone()
-        };
 
         // Reshape to 2D for Linear layers: [batch, seq_len, embed_dim] -> [batch * seq_len, embed_dim]
         let x_2d = x.reshape(&[batch_size * seq_len, self.embed_dim]);
@@ -151,10 +120,7 @@ impl MultiHeadAttention {
         // Reshape to 2D for output projection
         let attn_2d = attn_output.reshape(&[batch_size * seq_len, self.embed_dim]);
         let output_2d = self.out_proj.forward(&attn_2d);
-        let output = output_2d.reshape(&[batch_size, seq_len, self.embed_dim]);
-
-        // Add residual connection
-        x.add(&output)
+        output_2d.reshape(&[batch_size, seq_len, self.embed_dim])
     }
 
     /// Splits `[batch, seq_len, embed_dim]` into heads: `[batch, num_heads, seq_len, head_dim]`.
@@ -247,11 +213,6 @@ impl Module for MultiHeadAttention {
         params.extend(self.v_proj.parameters());
         params.extend(self.out_proj.parameters());
 
-        // Include norm parameters if present
-        if let Some(ref norm) = self.norm {
-            params.extend(norm.parameters());
-        }
-
         params
     }
 
@@ -277,14 +238,6 @@ impl Module for MultiHeadAttention {
         let out_proj_state = self.out_proj.state_dict();
         for (key, value) in out_proj_state {
             state.insert(format!("out_proj.{key}"), value);
-        }
-
-        // Include norm parameters if present
-        if let Some(ref norm) = self.norm {
-            let norm_state = norm.state_dict();
-            for (key, value) in norm_state {
-                state.insert(format!("norm.{key}"), value);
-            }
         }
 
         state
@@ -313,19 +266,6 @@ impl Module for MultiHeadAttention {
             }
         }
 
-        // Load norm parameters if present
-        if let Some(ref mut norm) = self.norm {
-            let mut norm_state = StateDict::new();
-            for (key, value) in state {
-                if let Some(norm_key) = key.strip_prefix("norm.") {
-                    norm_state.insert(norm_key.to_string(), value.clone());
-                }
-            }
-            if !norm_state.is_empty() {
-                norm.load_state_dict(&norm_state)
-                    .map_err(|e| e.with_key_prefix("norm."))?;
-            }
-        }
         Ok(())
     }
 
@@ -352,15 +292,6 @@ mod tests {
         assert_eq!(mha.embed_dim, 512);
         assert_eq!(mha.num_heads, 8);
         assert_eq!(mha.head_dim, 64);
-    }
-
-    #[test]
-    fn test_mha_creation_with_norm() {
-        let mha = MultiHeadAttention::new_with_norm(256, 4, 0.1);
-        assert_eq!(mha.embed_dim, 256);
-        assert_eq!(mha.num_heads, 4);
-        assert_eq!(mha.head_dim, 64);
-        assert!(mha.norm.is_some());
     }
 
     #[test]

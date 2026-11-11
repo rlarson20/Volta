@@ -61,7 +61,6 @@ fn two_losses_sharing_an_intermediate_sum_their_gradients() {
 }
 
 #[test]
-#[ignore = "S10: attention's built-in residual is added again by the block: output is x + LN(x) + Attn(LN(x))"]
 fn transformer_block_with_zero_sublayers_is_the_identity() {
     // Pre-LN block: y = x + Attn(LN(x)); z = y + FFN(LN(y)). With out_proj and the FFN's
     // contract layer zeroed, both sublayers output 0, so z must equal x.
@@ -79,18 +78,15 @@ fn transformer_block_with_zero_sublayers_is_the_identity() {
 }
 
 #[test]
-#[ignore = "S11: new_with_norm returns LN(x) + Attn(LN(x)) instead of x + Attn(LN(x))"]
-fn mha_with_norm_and_zero_out_proj_returns_its_input() {
-    let mut mha = MultiHeadAttention::new_with_norm(4, 1, 0.0);
+fn mha_adds_no_residual() {
+    // S11. Like torch.nn.MultiheadAttention, the layer returns out_proj(Attn(x)) and
+    // leaves the residual to the block. With out_proj zeroed (weight and bias), the
+    // output is exactly zero for any input.
+    let mut mha = MultiHeadAttention::new(4, 1, 0.0);
     zero_matching(&mut mha, &["out_proj"]);
     let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[1, 1, 4], false);
     let got = mha.forward(&x, false, None).data();
-    for (i, (g, e)) in got.iter().zip([1.0f32, 2.0, 3.0, 4.0]).enumerate() {
-        assert!(
-            (g - e).abs() < 1e-5,
-            "y[{i}] = {g}, expected {e}; got {got:?}"
-        );
-    }
+    assert_eq!(got, vec![0.0; 4], "MultiHeadAttention added its input back");
 }
 
 #[test]

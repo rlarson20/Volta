@@ -674,6 +674,18 @@ Seeds spread about 0.25 points, so a 5-seed mean has a standard error near 0.05;
 
 **Not changed:** ops that take an `Axis` (`max_dim`, `mean_dim`, `softmax`, `permute`, ...) and the GPU layer's `Option` returns stay as they were. A binding range-checks an axis against `shape().rank()` itself until those get a `try_` form.
 
+## Layers
+
+### Attention owns no residual (#39, S10/S11)
+
+**Decision:** `MultiHeadAttention::forward` returns `out_proj(Attn(x))`, as `torch.nn.MultiheadAttention` does. The residual and the layer norm belong to the block: `TransformerBlock` is Pre-LN, `x + Attn(LN1(x))` then `+ FFN(LN2(.))`, which is `torch.nn.TransformerEncoderLayer(norm_first=True)`. `new_with_norm` and the optional `norm` field are removed.
+
+**Why:** attention added its own input, so the block computed `x + LN(x) + Attn(LN(x))` (S10), and `new_with_norm` returned `LN(x) + Attn(LN(x))` (S11). Without a residual inside attention, both layers can be checked against torch with loaded weights (`tests/torch_ref_transformer.rs`).
+
+**Rejected:**
+- *Keep the residual in attention and drop it from the block.* It works, but attention would not match any torch module, and a model ported from PyTorch adds the residual around attention itself, so it would add it twice.
+- *Keep `new_with_norm` as `Attn(LN(x))`.* Nothing called it, and a norm without the residual is half a sublayer with no torch counterpart. A Pre-LN sublayer is `TransformerBlock`'s job.
+
 ## Optimizers
 
 ### Muon follows the reference iteration, on the CPU and the GPU
