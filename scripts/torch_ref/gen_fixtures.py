@@ -314,6 +314,71 @@ def group_layers():
     save("layers", t)
 
 
+def module_case(t, name, module, x, out, split_in_proj):
+    """Record a module's weights, `out`, a random weighting `w`, and the gradients of
+    sum(out * w) for `x` and every parameter, keyed by the parameter's torch name.
+
+    `split_in_proj` names the fused `in_proj_weight` parameters (`[3E, E]`) to store as
+    separate `q`/`k`/`v` weights and gradients, the layout Volta uses. Volta's q/k/v
+    projections have no bias, so the caller zeroes `in_proj_bias` and it is not stored.
+    """
+    params = [(n, p) for n, p in module.named_parameters() if not n.endswith("in_proj_bias")]
+    w = torch.randn_like(out)
+    grads = torch.autograd.grad((out * w).sum(), [x] + [p for _, p in params])
+    t[f"{name}.x"] = x
+    t[f"{name}.out"] = out
+    t[f"{name}.w"] = w
+    t[f"{name}.grad_x"] = grads[0]
+    for (n, p), g in zip(params, grads[1:]):
+        if n in split_in_proj:
+            stem = n.removesuffix("in_proj_weight")
+            for part, pv, gv in zip("qkv", p.detach().chunk(3), g.chunk(3)):
+                t[f"{name}.{stem}{part}_proj.weight"] = pv
+                t[f"{name}.grad_{stem}{part}_proj.weight"] = gv
+        else:
+            t[f"{name}.{n}"] = p
+            t[f"{name}.grad_{n}"] = g
+
+
+def group_transformer():
+    """S10/S11: MultiheadAttention and a Pre-LN TransformerEncoderLayer, with torch's
+    weights loaded into Volta's `MultiHeadAttention` and `TransformerBlock`.
+
+    Neither torch module adds a residual inside attention. The block is
+    `x + Attn(LN1(x))`, then `+ FFN(LN2(.))`, with a GELU (erf) FFN and no dropout.
+    """
+    torch.manual_seed(SEED)
+    t = {}
+    E, H, B, L = 8, 2, 2, 3
+    causal = torch.triu(torch.full((L, L), -INF), diagonal=1)
+
+    for is_causal in (False, True):
+        name = "mha_causal" if is_causal else "mha"
+        mha = torch.nn.MultiheadAttention(E, H, dropout=0.0, bias=True, batch_first=True)
+        with torch.no_grad():
+            mha.in_proj_bias.zero_()
+        x = torch.randn(B, L, E).requires_grad_(True)
+        mask = causal if is_causal else None
+        out, _ = mha(x, x, x, attn_mask=mask, need_weights=False, is_causal=is_causal)
+        module_case(t, name, mha, x, out, {"in_proj_weight"})
+
+    for is_causal in (False, True):
+        name = "block_causal" if is_causal else "block"
+        block = torch.nn.TransformerEncoderLayer(
+            E, H, dim_feedforward=2 * E, dropout=0.0, activation="gelu",
+            layer_norm_eps=1e-5, batch_first=True, norm_first=True, bias=True,
+        )
+        block.train()  # keeps torch off its fused inference fast path
+        with torch.no_grad():
+            block.self_attn.in_proj_bias.zero_()
+        x = torch.randn(B, L, E).requires_grad_(True)
+        mask = causal if is_causal else None
+        out = block(x, src_mask=mask, is_causal=is_causal)
+        module_case(t, name, block, x, out, {"self_attn.in_proj_weight"})
+
+    save("transformer", t)
+
+
 def group_f64():
     """Forward and backward in float64 for ops, every layer kind, and Adam (Volta P3b).
 
@@ -741,7 +806,7 @@ def group_casts():
     print(f"wrote casts: {len(out)} tensors")
 
 
-GROUPS = {"ops": group_ops, "reductions": group_reductions, "optim": group_optim, "layers": group_layers, "dtypes": group_dtypes, "casts": group_casts, "f64": group_f64, "half": group_half, "intbool": group_intbool, "promotion": group_promotion, "autocast": group_autocast}
+GROUPS = {"ops": group_ops, "reductions": group_reductions, "optim": group_optim, "layers": group_layers, "transformer": group_transformer, "dtypes": group_dtypes, "casts": group_casts, "f64": group_f64, "half": group_half, "intbool": group_intbool, "promotion": group_promotion, "autocast": group_autocast}
 
 if __name__ == "__main__":
     wanted = sys.argv[1:] or list(GROUPS)
