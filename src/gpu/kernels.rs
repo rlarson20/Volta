@@ -9,6 +9,7 @@ use crate::dtype::DType;
 use crate::index::slot;
 use crate::ops::CmpOp;
 use crate::ops::{BinaryOp, UnaryOp};
+use crate::real::Real;
 use crate::spec::PadValue;
 
 /// Parameters for matrix dimensions (used in matmul shader)
@@ -25,14 +26,16 @@ pub struct MatMulParams {
     pub _padding: u32,
 }
 
-/// Parameters for reduction operations
+/// Parameters for one pass of a reduction (`reduce.wgsl`)
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ReduceParams {
-    /// Number of elements to reduce.
-    pub input_size: u32,
+    /// Number of values this pass reads.
+    pub n: u32,
+    /// Each output of the pass is divided by this: 1.0, except the last pass of a mean.
+    pub divisor: f32,
     /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
-    pub _padding: [u32; 3],
+    pub _padding: [u32; 2],
 }
 
 /// Parameters for reduction backward operations
@@ -43,10 +46,8 @@ pub struct ReduceBackwardParams {
     pub input_size: u32,
     /// Reduction being differentiated: 0 = sum, 1 = mean, 2 = max.
     pub op: u32,
-    /// Scalar upstream gradient of the reduced output.
-    pub grad_value: f32,
     /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
-    pub _padding: u32,
+    pub _padding: [u32; 2],
 }
 
 /// Parameters for optimizer step operations
@@ -401,69 +402,209 @@ pub struct BinaryBackwardParams {
     pub _padding: u32,
 }
 
-/// Run a reduction operation that returns a scalar f32 value
-fn reduce_scalar(input: &GpuBuffer, pipeline: &wgpu::ComputePipeline) -> Option<f32> {
+/// Which full-tensor reduction [`reduce_to_scalar`] runs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reduction {
+    /// Sum of the elements.
+    Sum,
+    /// Sum divided by the element count (the division is part of the last pass).
+    Mean,
+    /// Sum of the squares of the elements.
+    SumSquares,
+    /// Maximum, with the index it was found at.
+    Max,
+}
+
+/// Elements one workgroup of `reduce.wgsl` consumes per pass (256 threads x 4).
+const REDUCE_PER_GROUP: usize = 1024;
+
+/// Reduce `input` to one f32 on the device, in as many passes as it takes
+/// (`ceil(n / 1024)` partials per pass, until one is left), all in one command buffer.
+///
+/// Returns the f32 result as a one-element buffer, and for [`Reduction::Max`] the index of
+/// the maximum as a one-element buffer of `u32` bits (typed Bool, one word per element,
+/// like the `found` flag of `amp_unscale`). Nothing is read back.
+///
+/// # Panics
+/// If `input` is empty, or has too many elements for a pass's offsets to fit in a `u32`.
+fn reduce_to_scalar(input: &GpuBuffer, kind: Reduction) -> Option<(GpuBuffer, Option<GpuBuffer>)> {
     let ctx = get_gpu_context()?;
-    let result_buffer = GpuBuffer::zeros(1)?;
+    let pipelines = ctx.pipelines_for(input.dtype());
+    let (first, next) = match kind {
+        Reduction::Sum | Reduction::Mean => (&pipelines.sum_first, &pipelines.sum_next),
+        Reduction::SumSquares => (&pipelines.sumsq_first, &pipelines.sum_next),
+        Reduction::Max => (&pipelines.max_first, &pipelines.max_next),
+    };
+    let total = input.len();
+    assert!(total > 0, "GPU reduction of an empty buffer");
+    // A workgroup's first offset, `group * 1024`, is below `n + 1024`.
+    pack_u32(total + REDUCE_PER_GROUP);
 
-    // Create uniform buffer with input size (pad to 32 bytes for wgpu min uniform buffer size)
-    // Shader only reads first 4 u32s, but buffer must be at least 32 bytes
-    let params = [pack_u32(input.len()), 0, 0, 0];
-    let mut padded_params = [0u32; 8];
-    padded_params[..4].copy_from_slice(&params);
-    let params_buffer = ctx
-        .device()
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Params Buffer"),
-            contents: bytemuck::bytes_of(&padded_params),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-    // Create bind group
-    let bind_group_layout = pipeline.get_bind_group_layout(0);
-    let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Reduce Bind Group"),
-        layout: &bind_group_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: input.buffer().as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: result_buffer.buffer().as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: params_buffer.as_entire_binding(),
-            },
-        ],
-    });
-
-    // Create command encoder and dispatch
     let mut encoder = ctx
         .device()
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Reduce Encoder"),
         });
+    let mut n = total;
+    // The previous pass's partial values and (for max) indices; `None` on the first pass.
+    let mut previous: Option<(GpuBuffer, Option<GpuBuffer>)> = None;
+    loop {
+        let groups = n.div_ceil(REDUCE_PER_GROUP);
+        let out = GpuBuffer::zeros(groups)?;
+        let out_index = match kind {
+            Reduction::Max => Some(GpuBuffer::zeros_of(DType::Bool, groups)?),
+            Reduction::Sum | Reduction::Mean | Reduction::SumSquares => None,
+        };
+        let divisor = if kind == Reduction::Mean && groups == 1 {
+            <f32 as Real>::from_usize(total)
+        } else {
+            1.0
+        };
+        let params = ReduceParams {
+            n: pack_u32(n),
+            divisor,
+            _padding: [0; 2],
+        };
+        let params_buffer = ctx
+            .device()
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Reduce Params"),
+                contents: bytemuck::bytes_of(&params),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
 
-    {
-        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Reduce Pass"),
-            timestamp_writes: None,
+        // Exactly the bindings the entry point uses (the pipelines use an auto layout).
+        let pipeline = if previous.is_none() { first } else { next };
+        let mut bindings: Vec<(u32, &wgpu::Buffer)> = Vec::with_capacity(5);
+        match &previous {
+            None => bindings.push((0, input.buffer())),
+            Some((values, indices)) => {
+                bindings.push((1, values.buffer()));
+                if let Some(indices) = indices {
+                    bindings.push((3, indices.buffer()));
+                }
+            }
+        }
+        bindings.push((2, out.buffer()));
+        if let Some(index) = &out_index {
+            bindings.push((4, index.buffer()));
+        }
+        bindings.push((5, &params_buffer));
+        let entries: Vec<wgpu::BindGroupEntry> = bindings
+            .iter()
+            .map(|&(binding, buffer)| wgpu::BindGroupEntry {
+                binding,
+                resource: buffer.as_entire_binding(),
+            })
+            .collect();
+        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Reduce Bind Group"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &entries,
         });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Reduce Pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            dispatch_flat(&mut pass, pack_u32(groups));
+        }
 
-        compute_pass.set_pipeline(pipeline);
-        compute_pass.set_bind_group(0, &bind_group, &[]);
-        compute_pass.dispatch_workgroups(1, 1, 1);
+        previous = Some((out, out_index));
+        if groups == 1 {
+            break;
+        }
+        n = groups;
     }
 
     ctx.queue().submit(Some(encoder.finish()));
     ctx.increment_pending();
     ctx.maybe_sync();
+    previous
+}
 
-    // Read back the result
-    result_buffer.to_vec().first().copied()
+/// Broadcast a scalar gradient back to `input_size` elements: `op` 0 = sum, 1 = mean
+/// (divided by the count), 2 = max (only the element at `index[0]` gets it, the rest zero).
+///
+/// The gradient is read on the device (`out_grad` at binding 0), never fetched to the host.
+/// The result has `out_grad`'s dtype.
+fn reduce_backward(
+    op: u32,
+    out_grad: &GpuBuffer,
+    input_size: usize,
+    index: Option<&GpuBuffer>,
+) -> Option<GpuBuffer> {
+    let ctx = get_gpu_context()?;
+    let dtype = out_grad.dtype();
+    let result = GpuBuffer::zeros_of(dtype, input_size)?;
+    // Bound even when unused, so every op shares one layout.
+    let dummy_index;
+    let index = if let Some(index) = index {
+        index
+    } else {
+        dummy_index = GpuBuffer::zeros_of(DType::Bool, 1)?;
+        &dummy_index
+    };
+    let params = ReduceBackwardParams {
+        input_size: pack_u32(input_size),
+        op,
+        _padding: [0; 2],
+    };
+    let params_buffer = ctx
+        .device()
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Reduce Backward Params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+    let pipelines = ctx.pipelines_for(dtype);
+    let pipeline = match op {
+        0 => &pipelines.sum_backward,
+        1 => &pipelines.mean_backward,
+        _ => &pipelines.max_backward,
+    };
+    let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Reduce Backward Bind Group"),
+        layout: &pipeline.get_bind_group_layout(0),
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: out_grad.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: index.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: result.buffer().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: params_buffer.as_entire_binding(),
+            },
+        ],
+    });
+    let mut encoder = ctx
+        .device()
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Reduce Backward Encoder"),
+        });
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Reduce Backward Pass"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        dispatch_flat(&mut pass, pack_u32(input_size).div_ceil(256));
+    }
+    ctx.queue().submit(Some(encoder.finish()));
+    ctx.increment_pending();
+    ctx.maybe_sync();
+    Some(result)
 }
 
 /// Panics unless every buffer in `buffers` has one dtype: a kernel's pipeline is chosen
@@ -1561,294 +1702,73 @@ impl GpuKernels {
         Some(result)
     }
 
-    /// Sum all elements in a buffer
+    /// Sum all elements of a buffer, as a one-element buffer of the input's dtype. The
+    /// sum is never read back: a gradient that flows from it stays on the device.
     #[must_use]
-    pub fn sum(input: &GpuBuffer) -> Option<f32> {
-        let ctx = get_gpu_context()?;
-        reduce_scalar(input, &ctx.pipelines_for(input.dtype()).sum_reduce)
+    pub fn sum(input: &GpuBuffer) -> Option<GpuBuffer> {
+        let (value, _) = reduce_to_scalar(input, Reduction::Sum)?;
+        Self::round_to(value, input.dtype())
     }
 
-    /// Find the maximum value in a buffer
+    /// The maximum of a buffer and the index it was found at: a one-element buffer of the
+    /// input's dtype, and a one-element buffer holding the index as a `u32` (not a tensor;
+    /// it is only ever bound to `reduce_backward`). Ties go to the higher index (the CPU's
+    /// rule; the tie rule is the single `better` function in `reduce.wgsl`).
     #[must_use]
-    pub fn max(input: &GpuBuffer) -> Option<f32> {
-        let ctx = get_gpu_context()?;
-        reduce_scalar(input, &ctx.pipelines_for(input.dtype()).max_reduce)
+    pub fn max(input: &GpuBuffer) -> Option<(GpuBuffer, GpuBuffer)> {
+        let (value, index) = reduce_to_scalar(input, Reduction::Max)?;
+        Some((Self::round_to(value, input.dtype())?, index?))
     }
 
-    /// Compute the mean of all elements in a buffer
+    /// The mean of all elements of a buffer, as a one-element buffer of the input's dtype.
     #[must_use]
-    pub fn mean(input: &GpuBuffer) -> Option<f32> {
-        let ctx = get_gpu_context()?;
-        reduce_scalar(input, &ctx.pipelines_for(input.dtype()).mean_reduce)
+    pub fn mean(input: &GpuBuffer) -> Option<GpuBuffer> {
+        let (value, _) = reduce_to_scalar(input, Reduction::Mean)?;
+        Self::round_to(value, input.dtype())
     }
 
-    /// Sum backward: broadcast scalar gradient to all elements
+    /// The sum of squares of an f32 buffer, as a one-element f32 buffer (the Muon
+    /// Frobenius norm).
+    ///
+    /// # Panics
+    /// If `input` is not f32.
     #[must_use]
-    pub fn sum_backward(dtype: DType, grad: f32, input_size: usize) -> Option<GpuBuffer> {
-        let ctx = get_gpu_context()?;
-        let result = GpuBuffer::zeros_of(dtype, input_size)?;
+    pub(crate) fn sum_squares(input: &GpuBuffer) -> Option<GpuBuffer> {
+        assert_eq!(input.dtype(), DType::F32, "sum_squares: an f32 buffer");
+        Some(reduce_to_scalar(input, Reduction::SumSquares)?.0)
+    }
 
-        let params = ReduceBackwardParams {
-            input_size: pack_u32(input_size),
-            op: 0, // sum
-            grad_value: grad,
-            _padding: 0,
-        };
-
-        let grad_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Grad Buffer"),
-                contents: bytemuck::bytes_of(&grad),
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            });
-
-        let max_indices_buffer =
-            ctx.device()
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Max Indices Buffer"),
-                    contents: bytemuck::cast_slice(&[0u32; 1]),
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                });
-
-        let params_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Reduce Backward Params"),
-                contents: bytemuck::bytes_of(&params),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-
-        let pipeline = &ctx.pipelines_for(dtype).sum_backward;
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Sum Backward Bind Group"),
-            layout: &pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: grad_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: max_indices_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: result.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Sum Backward Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Sum Backward Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            let workgroup_count = pack_u32(input_size).div_ceil(256);
-            dispatch_flat(&mut compute_pass, workgroup_count);
+    /// An f32 reduction result rounded once to `dtype`, as the CPU rounds a half
+    /// reduction.
+    fn round_to(value: GpuBuffer, dtype: DType) -> Option<GpuBuffer> {
+        if dtype == DType::F32 {
+            Some(value)
+        } else {
+            Self::cast(&value, dtype)
         }
-
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
-        Some(result)
     }
 
-    /// Mean backward: broadcast scalar gradient / count to all elements
+    /// Sum backward: broadcast the scalar gradient `out_grad` to `input_size` elements.
     #[must_use]
-    pub fn mean_backward(dtype: DType, grad: f32, input_size: usize) -> Option<GpuBuffer> {
-        let ctx = get_gpu_context()?;
-        let result = GpuBuffer::zeros_of(dtype, input_size)?;
-
-        let params = ReduceBackwardParams {
-            input_size: pack_u32(input_size),
-            op: 1, // mean
-            grad_value: grad,
-            _padding: 0,
-        };
-
-        let grad_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Grad Buffer"),
-                contents: bytemuck::bytes_of(&grad),
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            });
-
-        let max_indices_buffer =
-            ctx.device()
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Max Indices Buffer"),
-                    contents: bytemuck::cast_slice(&[0u32; 1]),
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                });
-
-        let params_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Reduce Backward Params"),
-                contents: bytemuck::bytes_of(&params),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-
-        let pipeline = &ctx.pipelines_for(dtype).mean_backward;
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Mean Backward Bind Group"),
-            layout: &pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: grad_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: max_indices_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: result.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Mean Backward Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Mean Backward Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            let workgroup_count = pack_u32(input_size).div_ceil(256);
-            dispatch_flat(&mut compute_pass, workgroup_count);
-        }
-
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
-        Some(result)
+    pub fn sum_backward(out_grad: &GpuBuffer, input_size: usize) -> Option<GpuBuffer> {
+        reduce_backward(0, out_grad, input_size, None)
     }
 
-    /// Max backward: sparse gradient - only max element receives gradient
+    /// Mean backward: broadcast the scalar gradient / count to all elements.
+    #[must_use]
+    pub fn mean_backward(out_grad: &GpuBuffer, input_size: usize) -> Option<GpuBuffer> {
+        reduce_backward(1, out_grad, input_size, None)
+    }
+
+    /// Max backward: sparse gradient; only the element at `max_index` (the index buffer
+    /// from [`Self::max`]) receives the scalar gradient `out_grad`.
     #[must_use]
     pub fn max_backward(
-        dtype: DType,
-        grad: f32,
+        out_grad: &GpuBuffer,
         input_size: usize,
-        max_index: usize,
+        max_index: &GpuBuffer,
     ) -> Option<GpuBuffer> {
-        let ctx = get_gpu_context()?;
-        let result = GpuBuffer::zeros_of(dtype, input_size)?;
-
-        let params = ReduceBackwardParams {
-            input_size: pack_u32(input_size),
-            op: 2, // max
-            grad_value: grad,
-            _padding: 0,
-        };
-
-        let grad_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Grad Buffer"),
-                contents: bytemuck::bytes_of(&grad),
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            });
-
-        // Create max indices buffer
-        let mut indices = vec![0u32; input_size.div_ceil(256)];
-        *slot(&mut indices, 0) = pack_u32(max_index);
-        let max_indices_buffer =
-            ctx.device()
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Max Indices Buffer"),
-                    contents: bytemuck::cast_slice(&indices),
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                });
-
-        let params_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Reduce Backward Params"),
-                contents: bytemuck::bytes_of(&params),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-
-        let pipeline = &ctx.pipelines_for(dtype).max_backward;
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Max Backward Bind Group"),
-            layout: &pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: grad_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: max_indices_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: result.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Max Backward Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Max Backward Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            let workgroup_count = pack_u32(input_size).div_ceil(256);
-            dispatch_flat(&mut compute_pass, workgroup_count);
-        }
-
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
-        Some(result)
+        reduce_backward(2, out_grad, input_size, Some(max_index))
     }
 
     /// Permute tensor axes
@@ -2319,19 +2239,8 @@ impl GpuKernels {
 
         // Frobenius normalization: the sum of squares stays on the device.
         let ctx = get_gpu_context()?;
-        let norm_sq = GpuBuffer::zeros(1)?;
+        let norm_sq = Self::sum_squares(&x0)?;
         let len = pack_u32(x0.len());
-        muon_dispatch(
-            &ctx.pipelines().muon_sum_squares,
-            &[(0, &x0), (2, &norm_sq)],
-            &MuonParams {
-                n: len,
-                flag: 0,
-                alpha: 0.0,
-                beta: 0.0,
-            },
-            1,
-        )?;
         let mut x = GpuBuffer::zeros(x0.len())?;
         muon_dispatch(
             &ctx.pipelines().muon_normalize,

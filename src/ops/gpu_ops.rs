@@ -15,6 +15,18 @@ use crate::spec::PadValue;
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
 
+/// Where a GPU max reduction found its maximum, kept on the device: a one-element buffer of
+/// `u32` bits that only `gpu_max_backward` reads. Shared, so the gradient function that
+/// holds it stays `Clone`.
+#[cfg(feature = "gpu")]
+pub(crate) type DeviceIndex = std::sync::Arc<crate::gpu::GpuBuffer>;
+
+/// Without the `gpu` feature there is no device index: a placeholder so the signatures
+/// match, never built because every GPU kernel stub returns `None`.
+#[cfg(not(feature = "gpu"))]
+#[derive(Clone)]
+pub(crate) struct DeviceIndex;
+
 /// What a Muon step needs besides its three storages. The optimizer owns the values, so
 /// the CPU and GPU paths read the same ones.
 pub(crate) struct MuonStep {
@@ -145,37 +157,29 @@ impl RawTensor {
         None
     }
 
-    /// GPU-accelerated sum reduction - returns the scalar sum
+    /// GPU sum reduction: a one-element GPU storage in the input's dtype. The scalar is
+    /// never read back.
     #[cfg(feature = "gpu")]
-    pub(crate) fn gpu_sum_reduce(data: &Storage) -> Option<f32> {
-        let buf = data.gpu_buffer()?;
-        GpuKernels::sum(buf)
+    pub(crate) fn gpu_sum_reduce(data: &Storage) -> Option<Storage> {
+        Some(Storage::from_gpu_buffer(GpuKernels::sum(
+            data.gpu_buffer()?,
+        )?))
     }
 
-    /// GPU-accelerated max reduction - returns `(max_value, max_index)`
-    /// Uses GPU to find max value, then CPU to find the index
+    /// GPU max reduction: the maximum as a one-element GPU storage, and the index it was
+    /// found at (the highest, on a tie), found on the device by the same kernel.
     #[cfg(feature = "gpu")]
-    pub(crate) fn gpu_max_reduce(data: &Storage) -> Option<(f32, usize)> {
-        let buf = data.gpu_buffer()?;
-        let max_val = GpuKernels::max(buf)?;
-
-        // Find the index of the max value on CPU (using cached data, decoded: exact for
-        // half dtypes)
-        let cpu_data = data.to_f32_vec();
-        let max_idx = cpu_data
-            .iter()
-            .enumerate()
-            .find(|&(_, v)| (v - max_val).abs() < 1e-6)
-            .map_or(0, |(i, _)| i);
-
-        Some((max_val, max_idx))
+    pub(crate) fn gpu_max_reduce(data: &Storage) -> Option<(Storage, DeviceIndex)> {
+        let (max, index) = GpuKernels::max(data.gpu_buffer()?)?;
+        Some((Storage::from_gpu_buffer(max), std::sync::Arc::new(index)))
     }
 
-    /// GPU-accelerated mean reduction - returns the scalar mean
+    /// GPU mean reduction: a one-element GPU storage in the input's dtype.
     #[cfg(feature = "gpu")]
-    pub(crate) fn gpu_mean_reduce(data: &Storage) -> Option<f32> {
-        let buf = data.gpu_buffer()?;
-        GpuKernels::mean(buf)
+    pub(crate) fn gpu_mean_reduce(data: &Storage) -> Option<Storage> {
+        Some(Storage::from_gpu_buffer(GpuKernels::mean(
+            data.gpu_buffer()?,
+        )?))
     }
 
     /// GPU-accelerated matrix multiplication
@@ -589,14 +593,10 @@ impl RawTensor {
 
     /// GPU-accelerated sum backward operation
     ///
-    /// Broadcasts scalar gradient to all elements
+    /// Broadcasts the scalar gradient `out_grad` (read on the device) to all elements
     #[cfg(feature = "gpu")]
-    pub(crate) fn gpu_sum_backward(
-        dtype: crate::DType,
-        grad: f32,
-        input_size: usize,
-    ) -> Option<Storage> {
-        let result = GpuKernels::sum_backward(dtype, grad, input_size)?;
+    pub(crate) fn gpu_sum_backward(out_grad: &Storage, input_size: usize) -> Option<Storage> {
+        let result = GpuKernels::sum_backward(out_grad.gpu_buffer()?, input_size)?;
         Some(Storage::from_gpu_buffer(result))
     }
 
@@ -604,26 +604,21 @@ impl RawTensor {
     ///
     /// Broadcasts scalar gradient / count to all elements
     #[cfg(feature = "gpu")]
-    pub(crate) fn gpu_mean_backward(
-        dtype: crate::DType,
-        grad: f32,
-        input_size: usize,
-    ) -> Option<Storage> {
-        let result = GpuKernels::mean_backward(dtype, grad, input_size)?;
+    pub(crate) fn gpu_mean_backward(out_grad: &Storage, input_size: usize) -> Option<Storage> {
+        let result = GpuKernels::mean_backward(out_grad.gpu_buffer()?, input_size)?;
         Some(Storage::from_gpu_buffer(result))
     }
 
     /// GPU-accelerated max backward operation
     ///
-    /// Sparse gradient - only max element receives gradient
+    /// Sparse gradient - only the element at `max_index` receives the gradient
     #[cfg(feature = "gpu")]
     pub(crate) fn gpu_max_backward(
-        dtype: crate::DType,
-        grad: f32,
+        out_grad: &Storage,
         input_size: usize,
-        max_index: usize,
+        max_index: &DeviceIndex,
     ) -> Option<Storage> {
-        let result = GpuKernels::max_backward(dtype, grad, input_size, max_index)?;
+        let result = GpuKernels::max_backward(out_grad.gpu_buffer()?, input_size, max_index)?;
         Some(Storage::from_gpu_buffer(result))
     }
 
@@ -921,19 +916,19 @@ impl RawTensor {
 
     /// Not-gpu stub for `gpu_sum_reduce`.
     #[cfg(not(feature = "gpu"))]
-    pub(crate) fn gpu_sum_reduce(_data: &Storage) -> Option<f32> {
+    pub(crate) fn gpu_sum_reduce(_data: &Storage) -> Option<Storage> {
         None
     }
 
     /// Not-gpu stub for `gpu_max_reduce`.
     #[cfg(not(feature = "gpu"))]
-    pub(crate) fn gpu_max_reduce(_data: &Storage) -> Option<(f32, usize)> {
+    pub(crate) fn gpu_max_reduce(_data: &Storage) -> Option<(Storage, DeviceIndex)> {
         None
     }
 
     /// Not-gpu stub for `gpu_mean_reduce`.
     #[cfg(not(feature = "gpu"))]
-    pub(crate) fn gpu_mean_reduce(_data: &Storage) -> Option<f32> {
+    pub(crate) fn gpu_mean_reduce(_data: &Storage) -> Option<Storage> {
         None
     }
 
@@ -985,31 +980,22 @@ impl RawTensor {
 
     /// Not-gpu stub for `gpu_sum_backward`.
     #[cfg(not(feature = "gpu"))]
-    pub(crate) fn gpu_sum_backward(
-        _dtype: crate::DType,
-        _grad: f32,
-        _input_size: usize,
-    ) -> Option<Storage> {
+    pub(crate) fn gpu_sum_backward(_out_grad: &Storage, _input_size: usize) -> Option<Storage> {
         None
     }
 
     /// Not-gpu stub for `gpu_mean_backward`.
     #[cfg(not(feature = "gpu"))]
-    pub(crate) fn gpu_mean_backward(
-        _dtype: crate::DType,
-        _grad: f32,
-        _input_size: usize,
-    ) -> Option<Storage> {
+    pub(crate) fn gpu_mean_backward(_out_grad: &Storage, _input_size: usize) -> Option<Storage> {
         None
     }
 
     /// Not-gpu stub for `gpu_max_backward`.
     #[cfg(not(feature = "gpu"))]
     pub(crate) fn gpu_max_backward(
-        _dtype: crate::DType,
-        _grad: f32,
+        _out_grad: &Storage,
         _input_size: usize,
-        _max_index: usize,
+        _max_index: &DeviceIndex,
     ) -> Option<Storage> {
         None
     }

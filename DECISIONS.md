@@ -152,6 +152,25 @@ Naïve parallel reduction over broadcast axes causes write races when multiple t
 
 This serializes the final accumulation, eliminating the race.
 
+### Full-tensor GPU reductions: a multi-pass tree, f32 partials, nothing read back (#80)
+
+**Decision:** `sum`, `mean`, `max_reduce` and the Muon Frobenius norm run `reduce.wgsl`: a 256-thread workgroup folds 1024 values (4 per thread, then a shared-memory tree) into one f32 partial, and the host chains passes in one command buffer until one value is left. The scalar stays in a one-element GPU buffer, rounded once to the input's dtype by the cast kernel. A max pass carries `(value, index)`, starts from a real element (not a sentinel), and leaves the index in a GPU buffer that `MaxReduceGradFn` holds (`MaxIndex::Device`). The backward kernels read the upstream scalar from `out_grad` on the device.
+
+**Why:** the kernels were `workgroup_size(1)` loops with a host readback after the forward and another before each backward (and `max_reduce` downloaded the whole tensor to find its index). Measured on the Apple M2, release, median of 5 (ms, `before -> after`):
+
+| n | sum | max | sum fwd+bwd |
+| --- | --- | --- | --- |
+| 65,536 | 15.4 -> 1.45 | 15.9 -> 1.43 | 16.8 -> 1.78 |
+| 1,048,576 | 154.8 -> 1.42 | 144.4 -> 1.42 | 176.1 -> 3.35 |
+| 8,388,608 | 1308 -> 1.42 | 1250 -> 2.75 | 1302 -> 18.1 |
+
+A Muon step on 4096x4096 took 25.5 s before and after: it is the matmuls, not the norm, so the issue's worry about the single-workgroup norm did not hold at that size. The norm still moved onto the shared kernel, which is exact in a tree and needs no second code path. The 1.4 ms floor in the table is the synchronous `item()` readback, not the kernel.
+
+**Choices:**
+- *The tree is also the accuracy fix:* a chain of 2^25 f32 adds stalls at 2^24, a tree does not (S6, #41; the CPU half of S6 is separate).
+- *The tie rule is one WGSL function, `better`,* currently the CPU's `max_by` (the highest index wins), so CPU and GPU agree. Torch splits the gradient evenly over ties (S4, #40); that change is `better` plus the backward kernel, and the max value buffer is already on the device for the `x == max` mask.
+- *The index lives in a Bool-typed buffer* (one `u32` word per element, like `amp_unscale`'s `found` flag), never exposed as a tensor. `DeviceIndex` is defined in `gpu_ops.rs` with a not-gpu stub, so `reduce.rs` carries no `cfg`.
+
 ---
 
 ## Invariant Wall (ADDENDUM Phase 1)
