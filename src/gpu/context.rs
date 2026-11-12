@@ -260,12 +260,16 @@ pub struct ComputePipelines {
     pub mod_broadcast_pass2: wgpu::ComputePipeline,
 
     // Reductions
-    /// Reduces all elements to their sum.
-    pub sum_reduce: wgpu::ComputePipeline,
-    /// Reduces all elements to their maximum.
-    pub max_reduce: wgpu::ComputePipeline,
-    /// Reduces all elements to their mean.
-    pub mean_reduce: wgpu::ComputePipeline,
+    /// First pass of a sum or mean: input to one partial sum per 1024 elements.
+    pub sum_first: wgpu::ComputePipeline,
+    /// Later pass of a sum or mean: partial sums to fewer partial sums.
+    pub sum_next: wgpu::ComputePipeline,
+    /// First pass of a sum of squares (finished by `sum_next`).
+    pub sumsq_first: wgpu::ComputePipeline,
+    /// First pass of a maximum: input to one (value, index) pair per 1024 elements.
+    pub max_first: wgpu::ComputePipeline,
+    /// Later pass of a maximum: (value, index) pairs to fewer pairs.
+    pub max_next: wgpu::ComputePipeline,
 
     // Movement operations
     /// Forward `permute` movement op.
@@ -316,9 +320,7 @@ pub struct ComputePipelines {
     // Muon: momentum, Frobenius norm, and the elementwise pieces of Newton-Schulz
     /// Muon momentum buffer update (optionally Nesterov).
     pub muon_momentum: wgpu::ComputePipeline,
-    /// Sum of squares of a buffer, for the Frobenius norm.
-    pub muon_sum_squares: wgpu::ComputePipeline,
-    /// Divides a buffer by the norm from `muon_sum_squares` (plus an epsilon).
+    /// Divides a buffer by the norm from the `sumsq_first` reduction (plus an epsilon).
     pub muon_normalize: wgpu::ComputePipeline,
     /// Computes `alpha * x + beta * y`.
     pub muon_axpby: wgpu::ComputePipeline,
@@ -1200,9 +1202,15 @@ impl GpuContext {
             ),
 
             // Reductions
-            sum_reduce: create_pipeline(&reduce_shader, "sum_reduce", "Sum Reduce Pipeline"),
-            max_reduce: create_pipeline(&reduce_shader, "max_reduce", "Max Reduce Pipeline"),
-            mean_reduce: create_pipeline(&reduce_shader, "mean_reduce", "Mean Reduce Pipeline"),
+            sum_first: create_pipeline(&reduce_shader, "sum_first", "Sum First Pipeline"),
+            sum_next: create_pipeline(&reduce_shader, "sum_next", "Sum Next Pipeline"),
+            sumsq_first: create_pipeline(
+                &reduce_shader,
+                "sumsq_first",
+                "Sum Squares First Pipeline",
+            ),
+            max_first: create_pipeline(&reduce_shader, "max_first", "Max First Pipeline"),
+            max_next: create_pipeline(&reduce_shader, "max_next", "Max Next Pipeline"),
 
             // Movement operations
             permute: create_pipeline(&movement_shader, "permute", "Permute Pipeline"),
@@ -1271,11 +1279,6 @@ impl GpuContext {
 
             // Muon
             muon_momentum: create_pipeline(&muon_shader, "momentum", "Muon Momentum Pipeline"),
-            muon_sum_squares: create_pipeline(
-                &muon_shader,
-                "sum_squares",
-                "Muon Sum Squares Pipeline",
-            ),
             muon_normalize: create_pipeline(&muon_shader, "normalize", "Muon Normalize Pipeline"),
             muon_axpby: create_pipeline(&muon_shader, "axpby", "Muon Axpby Pipeline"),
 

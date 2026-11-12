@@ -1,4 +1,4 @@
-// Muon optimizer kernels: momentum, the Frobenius norm, and the Newton-Schulz
+// Muon optimizer kernels: momentum, the normalization, and the Newton-Schulz
 // building blocks that `GpuKernels::muon_*` composes with `matmul` and `permute`.
 //
 // Every entry point reads its element count from `params.n`, never from `arrayLength`:
@@ -8,8 +8,8 @@
 // The four buffer slots are shared by all entry points; each entry binds only the slots
 // it uses (the pipelines use an auto layout):
 //   momentum:    0 = velocity (read/write), 1 = grad, 2 = update (out)
-//   sum_squares: 0 = input, 2 = result (one element)
-//   normalize:   0 = input, 1 = sum of squares (one element), 2 = output
+//   normalize:   0 = input, 1 = sum of squares (one element, from `reduce.wgsl`'s
+//                `sumsq_first`), 2 = output
 //   axpby:       0 = x, 1 = y, 2 = output
 
 struct MuonParams {
@@ -41,31 +41,6 @@ fn momentum(
         st_buf2(idx, params.alpha * v + ld_buf1(idx));
     } else {
         st_buf2(idx, v);
-    }
-}
-
-// result[0] = sum of buf0[i]^2. One workgroup: each thread sums a strided slice, then the
-// partial sums are combined by a tree reduction in shared memory.
-var<workgroup> partial: array<f32, 256>;
-
-@compute @workgroup_size(256)
-fn sum_squares(@builtin(local_invocation_id) local_id: vec3<u32>) {
-    let tid = local_id.x;
-    var acc: f32 = 0.0;
-    for (var i: u32 = tid; i < params.n; i = i + 256u) {
-        let v = ld_buf0(i);
-        acc = acc + v * v;
-    }
-    partial[tid] = acc;
-    workgroupBarrier();
-    for (var stride: u32 = 128u; stride > 0u; stride = stride >> 1u) {
-        if (tid < stride) {
-            partial[tid] = partial[tid] + partial[tid + stride];
-        }
-        workgroupBarrier();
-    }
-    if (tid == 0u) {
-        st_buf2(0, partial[0]);
     }
 }
 
