@@ -24,7 +24,7 @@ pub(crate) use context::set_f16_emulation;
 pub(crate) use context::{BinaryBackwardPipelines, ComputePipelines};
 pub use context::{GpuContext, GpuSyncError};
 pub use early_warning::{EarlyWarningSystem, HealthStatus as EarlyWarningHealthStatus, TrendData};
-pub(crate) use kernels::{GpuKernels, OptimizerStepParams};
+pub(crate) use kernels::{GpuKernels, MaxResult, OptimizerStepParams};
 pub use monitor::{ResourceStatus, check_system_resources, get_process_memory_mb};
 pub use system_monitor::{MonitorStats, SystemMonitor};
 

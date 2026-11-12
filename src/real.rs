@@ -49,6 +49,8 @@ pub(crate) trait Real:
 
     /// Square root.
     fn sqrt(self) -> Self;
+    /// Whether the value is NaN.
+    fn is_nan(self) -> bool;
     /// Dense row-major `(m,k) @ (k,n)`, see `RawTensor::matmul_raw`.
     fn gemm(a: &[Self], b: &[Self], m: usize, k: usize, n: usize) -> Vec<Self>;
 }
@@ -87,6 +89,9 @@ macro_rules! real {
             }
             fn sqrt(self) -> Self {
                 <$t>::sqrt(self)
+            }
+            fn is_nan(self) -> bool {
+                <$t>::is_nan(self)
             }
             fn gemm(a: &[Self], b: &[Self], m: usize, k: usize, n: usize) -> Vec<Self> {
                 crate::RawTensor::$gemm(a, b, m, k, n)

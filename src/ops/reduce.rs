@@ -1,8 +1,9 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::device_policy::kernel_failed;
-use crate::index::{fetch, slot};
-use crate::ops::gpu_ops::DeviceIndex;
+use crate::index::fetch;
+use crate::ops::gpu_ops::DeviceMax;
+use crate::ops::max_rule::{is_max, max_and_count};
 use crate::real::{Real, compute_dtype, dispatch_real};
 use crate::shape::Shape;
 use crate::storage::Storage;
@@ -67,40 +68,44 @@ impl SumGradFn {
 
 /// Gradient function for Max reduction
 ///
-/// Only the maximum element receives gradient; all others get zero.
+/// As `torch.max()`: the gradient is split evenly over every element equal to the maximum,
+/// or over every NaN when the maximum is NaN (S4).
 #[derive(Clone)]
 pub(crate) struct MaxReduceGradFn {
     /// Shape of the reduced input.
     input_shape: Shape,
-    /// Linear index of the maximum element.
-    max_index: MaxIndex,
+    /// Where the maximum was found.
+    winners: MaxWinners,
 }
 
-/// Where a max reduction found its maximum: on the host for a CPU input, and on the device
-/// (never read back) for a GPU input.
+/// How a max reduction's backward finds its winners: on the host for a CPU input, by
+/// scanning the saved input again, and on the device (never read back) for a GPU input.
 #[derive(Clone)]
-enum MaxIndex {
-    /// Linear index on the host.
-    Host(usize),
-    /// Linear index in a one-element GPU buffer.
-    Device(DeviceIndex),
+enum MaxWinners {
+    /// Re-scan the parent's values.
+    Host,
+    /// The maximum and its tie count, in GPU buffers.
+    Device(DeviceMax),
 }
 
 impl MaxReduceGradFn {
-    /// Routes the scalar gradient to `max_index`; every other element gets zero.
-    pub(crate) fn backward(
-        &self,
-        out_grad: &RawTensor,
-        _parents: &[Tensor],
-    ) -> Vec<Option<Tensor>> {
+    /// Splits the scalar gradient evenly over the maximum elements; every other element
+    /// gets zero.
+    pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let size: usize = self.input_shape.iter().product();
         // GPU path for a GPU gradient, read on the device; a `None` from the kernel is a
-        // failure. The index was found on the same device as the gradient lives on.
+        // failure. The maximum was found on the same device as the gradient lives on.
         if out_grad.device.is_gpu() {
-            let MaxIndex::Device(index) = &self.max_index else {
-                panic!("MaxReduce backward: a GPU gradient for a max index found on the CPU");
+            let MaxWinners::Device(index) = &self.winners else {
+                panic!("MaxReduce backward: a GPU gradient for a max found on the CPU");
             };
-            let storage = crate::RawTensor::gpu_max_backward(&out_grad.data, size, index)
+            let input = parents
+                .first()
+                .expect("MaxReduce backward: one parent")
+                .borrow()
+                .data
+                .clone();
+            let storage = crate::RawTensor::gpu_max_backward(&out_grad.data, &input, size, index)
                 .unwrap_or_else(|| kernel_failed("MaxReduce"));
             return vec![Some(RawTensor::new_with_storage(
                 storage,
@@ -110,13 +115,25 @@ impl MaxReduceGradFn {
             ))];
         }
 
-        // CPU path, in the gradient's dtype.
-        let MaxIndex::Host(max_index) = self.max_index else {
-            panic!("MaxReduce backward: a CPU gradient for a max index found on the GPU");
+        // CPU path, in the gradient's dtype. `saves_input` makes an in-place edit of the
+        // input since the forward pass an error, so this scan finds the forward's winners.
+        let MaxWinners::Host = self.winners else {
+            panic!("MaxReduce backward: a CPU gradient for a max found on the GPU");
         };
+        let input = parents
+            .first()
+            .expect("MaxReduce backward: one parent")
+            .borrow()
+            .data
+            .clone();
         let grad = dispatch_real!(out_grad.data.dtype(), T => {
-            let mut grad_data = vec![T::ZERO; size];
-            *slot(&mut grad_data, max_index) = fetch(&out_grad.data.host::<T>(), 0);
+            let xs = input.host::<T>();
+            let (max, count) = max_and_count(&xs);
+            let share = fetch(&out_grad.data.host::<T>(), 0) / T::from_usize(count);
+            let grad_data: Vec<T> = xs
+                .iter()
+                .map(|&x| if is_max(x, max) { share } else { T::ZERO })
+                .collect();
             Storage::from_compute(out_grad.data.dtype(), grad_data)
         });
         vec![Some(RawTensor::new_with_storage(
@@ -233,26 +250,21 @@ impl RawTensor {
                 (sum, GradFn::Sum(SumGradFn { input_shape: shape }))
             }
             ReduceOp::Max => {
-                let (max, max_index) = if device.is_gpu() {
+                let (max, winners) = if device.is_gpu() {
                     let (max, index) =
                         Self::gpu_max_reduce(&data).unwrap_or_else(|| kernel_failed("MaxReduce"));
-                    (max, MaxIndex::Device(index))
+                    (max, MaxWinners::Device(index))
                 } else {
                     dispatch_real!(dtype, T => {
-                        let (max_idx, &max_val) = data
-                            .host::<T>()
-                            .iter()
-                            .enumerate()
-                            .max_by(|(_, a), (_, b)| a.partial_cmp(b).expect("MaxReduce: a NaN input has no maximum (S3: PyTorch propagates NaN)"))
-                            .expect("MaxReduce: a tensor has at least one element");
-                        (Storage::from_compute(dtype, vec![max_val]), MaxIndex::Host(max_idx))
+                        let (max_val, _) = max_and_count(&data.host::<T>());
+                        (Storage::from_compute(dtype, vec![max_val]), MaxWinners::Host)
                     })
                 };
                 (
                     max,
                     GradFn::MaxReduce(MaxReduceGradFn {
                         input_shape: shape,
-                        max_index,
+                        winners,
                     }),
                 )
             }

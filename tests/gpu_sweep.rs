@@ -52,6 +52,50 @@ fn gpu_max_gradient_goes_to_the_true_maximum_on_a_near_tie() {
 }
 
 #[test]
+fn gpu_max_elem_matches_the_cpu_on_ties_and_nan() {
+    if skip_or_mark("gpu_max_elem_matches_the_cpu_on_ties_and_nan") {
+        return;
+    }
+    // torch.maximum: a tie splits the gradient in half, and a NaN operand gives NaN and
+    // sends the whole gradient to both sides.
+    let a = vec![3.0, 1.0, 2.0, f32::NAN, 1.0];
+    let b = vec![3.0, 2.0, 2.0, 1.0, f32::NAN];
+    let cpu_a = RawTensor::new(a.clone(), &[5], true);
+    let cpu_b = RawTensor::new(b.clone(), &[5], true);
+    let (gpu_a, gpu_b) = (on_gpu(a, &[5], true), on_gpu(b, &[5], true));
+    let cpu = cpu_a.max_elem(&cpu_b);
+    let gpu = gpu_a.max_elem(&gpu_b);
+    for (c, g) in cpu.data().iter().zip(gpu.data()) {
+        assert!(
+            c.to_bits() == g.to_bits() || (c.is_nan() && g.is_nan()),
+            "{c} vs {g}"
+        );
+    }
+    assert!(gpu.data()[3].is_nan() && gpu.data()[4].is_nan());
+    cpu.sum().into_loss().expect("scalar").backward();
+    gpu.sum().into_loss().expect("scalar").backward();
+    let (want_a, want_b) = (vec![0.5, 0.0, 0.5, 1.0, 1.0], vec![0.5, 1.0, 0.5, 1.0, 1.0]);
+    assert_eq!(cpu_a.grad().expect("cpu a"), want_a);
+    assert_eq!(cpu_b.grad().expect("cpu b"), want_b);
+    assert_eq!(gpu_a.grad().expect("gpu a"), want_a);
+    assert_eq!(gpu_b.grad().expect("gpu b"), want_b);
+}
+
+#[test]
+fn gpu_relu_keeps_nan_and_gives_it_no_gradient() {
+    if skip_or_mark("gpu_relu_keeps_nan_and_gives_it_no_gradient") {
+        return;
+    }
+    let x = on_gpu(vec![f32::NAN, -1.0, 2.0], &[3], true);
+    let y = x.relu();
+    let out = y.data();
+    assert!(out[0].is_nan(), "relu(NaN) on the GPU is {}", out[0]);
+    assert_eq!((out[1], out[2]), (0.0, 2.0));
+    y.sum().into_loss().expect("scalar").backward();
+    assert_eq!(x.grad().expect("grad"), vec![0.0, 0.0, 1.0]);
+}
+
+#[test]
 fn modulo_agrees_between_cpu_and_gpu() {
     if skip_or_mark("modulo_agrees_between_cpu_and_gpu") {
         return;

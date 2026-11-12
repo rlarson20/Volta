@@ -15,10 +15,6 @@ struct CompareParams {
 }
 @group(0) @binding(3) var<uniform> params: CompareParams;
 
-fn is_nan(x: f32) -> bool {
-    return (bitcast<u32>(x) & 0x7fffffffu) > 0x7f800000u;
-}
-
 // Whether either operand of element `i` is NaN, with both operands loaded.
 fn operands(i: u32) -> vec3<f32> {
     let x = ld_a(i);

@@ -48,7 +48,9 @@ fn relu(
     let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_input()) {
-        st_result(idx, max(ld_input(idx), 0.0));
+        // torch.relu keeps NaN (WGSL's max may return the 0).
+        let x = ld_input(idx);
+        st_result(idx, select(max(x, 0.0), x, is_nan(x)));
     }
 }
 

@@ -64,8 +64,11 @@ def group_ops():
     t.update({"max_elem.a": a, "max_elem.b": b, "max_elem.out": out, "max_elem.grad_a": ga, "max_elem.grad_b": gb})
 
     # S4: NaN propagates through maximum.
+    # A NaN operand sends the whole gradient to both sides.
     a, b = leaf([NAN, 1.0]), leaf([1.0, NAN])
-    t.update({"max_elem_nan.a": a, "max_elem_nan.b": b, "max_elem_nan.out": torch.maximum(a, b)})
+    out = torch.maximum(a, b)
+    ga, gb = grad_of(out, a, b)
+    t.update({"max_elem_nan.a": a, "max_elem_nan.b": b, "max_elem_nan.out": out, "max_elem_nan.grad_a": ga, "max_elem_nan.grad_b": gb})
 
     # S4: full max() with a tie splits the gradient evenly.
     x = leaf([2.0, 5.0, 5.0, 1.0])
@@ -76,6 +79,12 @@ def group_ops():
     # S4: full max() with NaN returns NaN.
     x = leaf([1.0, NAN, 3.0])
     t.update({"max_all_nan.x": x, "max_all_nan.out": x.max().reshape(1)})
+
+    # S4: two NaNs in a full max(): the output is NaN and the gradient splits over the NaNs.
+    x = leaf([NAN, 2.0, NAN, 1.0])
+    out = x.max()
+    (gx,) = grad_of(out, x)
+    t.update({"max_all_nan2.x": x, "max_all_nan2.out": out.reshape(1), "max_all_nan2.grad": gx})
 
     # S4: relu(NaN) is NaN.
     x = leaf([NAN, -1.0, 2.0])
@@ -96,6 +105,25 @@ def group_ops():
     # S2: max_dim with NaN in a row returns NaN.
     x = leaf([[NAN, 3.0], [1.0, 2.0]])
     t.update({"max_dim_nan.x": x, "max_dim_nan.out": x.max(dim=1).values})
+
+    # max(dim) on a tie: one winner (the first index) gets the whole gradient.
+    x = leaf([[2.0, 5.0, 5.0], [7.0, 7.0, 1.0]])
+    out = x.max(dim=1).values
+    (gx,) = grad_of(out, x, weights=torch.tensor([1.0, 10.0]))
+    t.update({"max_dim_tie.x": x, "max_dim_tie.out": out, "max_dim_tie.grad": gx})
+
+    # max(dim) with two NaNs in a row: NaN out, the gradient goes to one NaN.
+    x = leaf([[NAN, 3.0, NAN], [1.0, 2.0, 3.0]])
+    out = x.max(dim=1).values
+    (gx,) = grad_of(out, x, weights=torch.tensor([1.0, 10.0]))
+    t.update({"max_dim_nan2.x": x, "max_dim_nan2.out": out, "max_dim_nan2.grad": gx})
+
+    # S2: softmax of a fully masked (-inf) row is NaN in torch, and must not touch row 0.
+    x = leaf([[1.0, 2.0], [-INF, -INF]])
+    w = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+    out = torch.softmax(x, dim=1)
+    (gx,) = grad_of(out, x, weights=w)
+    t.update({"softmax_masked.x": x, "softmax_masked.w": w, "softmax_masked.out": out, "softmax_masked.grad": gx})
 
     # S7: BCE at the clamp (log clamped to >= -100).
     p, y = leaf([0.0, 1.0, 0.0, 1.0, 0.3]), torch.tensor([0.0, 1.0, 1.0, 0.0, 1.0])
@@ -230,12 +258,14 @@ def muon_trajectory(t, name, shape, steps=5):
         assert drift < 5e-3, f"{name} step {k}: f32 reference drifts {drift} from torch.optim.Muon"
 
 
-def case(t, name, out, inputs, seed_w=True):
-    """Record `out`, a random weighting `w`, and the gradient of sum(out * w) per input.
+def case(t, name, out, inputs, seed_w=True, w=None):
+    """Record `out`, a weighting `w`, and the gradient of sum(out * w) per input.
 
-    `inputs` maps a short name to a leaf tensor already stored by the caller.
+    `inputs` maps a short name to a leaf tensor already stored by the caller. `w` defaults
+    to random draws; pass one to leave the RNG stream (and every later case) untouched.
     """
-    w = torch.randn_like(out)
+    if w is None:
+        w = torch.randn_like(out)
     names = list(inputs)
     grads = torch.autograd.grad((out * w).sum(), [inputs[n] for n in names], allow_unused=True)
     t[f"{name}.out"] = out
@@ -297,6 +327,25 @@ def group_layers():
     x = torch.tensor([[[[1.0, NAN], [2.0, 3.0]]]])
     t["maxpool_nan.x"] = x
     t["maxpool_nan.out"] = F.max_pool2d(x, 2, 2)
+
+    # A tie in a window: the first element in scan order wins the whole gradient.
+    x = torch.tensor([[[[5.0, 5.0], [1.0, 5.0]]]], requires_grad=True)
+    t["maxpool_tie.x"] = x
+    case(t, "maxpool_tie", F.max_pool2d(x, 2, 2), {"x": x}, w=torch.tensor([3.0]).reshape(1, 1, 1, 1))
+
+    # Two NaNs in a window: NaN out, and torch picks one NaN for the gradient.
+    x = torch.tensor([[[[NAN, 1.0], [NAN, 3.0]]]], requires_grad=True)
+    t["maxpool_nan2.x"] = x
+    case(t, "maxpool_nan2", F.max_pool2d(x, 2, 2), {"x": x}, w=torch.tensor([3.0]).reshape(1, 1, 1, 1))
+
+    # S3 with padding: a channel of -inf has windows that mix padding and real -inf.
+    x = torch.tensor([[[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], [[-INF] * 3] * 3]], requires_grad=True)
+    t["maxpool_neginf_pad.x"] = x
+    out = F.max_pool2d(x, 2, 2, padding=1)
+    w = torch.arange(1.0, 9.0).reshape(1, 2, 2, 2)
+    t["maxpool_neginf_pad.out"] = out
+    t["maxpool_neginf_pad.w"] = w
+    t["maxpool_neginf_pad.grad_x"] = torch.autograd.grad((out * w).sum(), x)[0]
 
     # BatchNorm2d, training mode: output, gradients, and the running statistics it leaves.
     x, g, b = rl(3, 2, 2, 2), rl(2), rl(2)

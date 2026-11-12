@@ -50,8 +50,8 @@ define_ops! {
                 g * s * (1.0 - s)
             },
             gpu(sigmoid, sigmoid_backward);
-        /// d(max(0,x))/dx = x > 0 ? 1 : 0
-        ReLU => |x| x.max(0.0), |g, x| if x > 0.0 { g } else { 0.0 }, gpu(relu, relu_backward);
+        /// max(0, x), with NaN kept (torch.relu(NaN) is NaN); d/dx = x > 0 ? 1 : 0
+        ReLU => |x| if x.is_nan() { x } else { x.max(0.0) }, |g, x| if x > 0.0 { g } else { 0.0 }, gpu(relu, relu_backward);
         /// d(erf(x))/dx = 2/√π · exp(-x²)
         Erf => |x| fl::erf(x),
             |g, x| g * (2.0 / fl::PI.sqrt()) * (-x * x).exp(),

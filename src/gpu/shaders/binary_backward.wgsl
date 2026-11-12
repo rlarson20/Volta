@@ -129,7 +129,9 @@ fn div_backward_b(
     }
 }
 
-// For max: d(max(a,b))/da = 1 if a >= b else 0
+// For max (`max_grad_a`/`max_grad_b`, torch.maximum): the larger operand gets the gradient,
+// a tie splits it in half, and a NaN operand gives both sides all of it.
+// d(max(a,b))/da:
 @compute @workgroup_size(256)
 fn max_backward_a(
     @builtin(global_invocation_id) global_id_2d: vec3<u32>,
@@ -138,12 +140,11 @@ fn max_backward_a(
     let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
-        let grad = select(0.0, ld_out_grad(idx), ld_a(idx) >= ld_b(idx));
-        st_result_grad(idx, grad);
+        st_result_grad(idx, max_grad_a(ld_out_grad(idx), ld_a(idx), ld_b(idx)));
     }
 }
 
-// For max: d(max(a,b))/db = 1 if b > a else 0
+// d(max(a,b))/db:
 @compute @workgroup_size(256)
 fn max_backward_b(
     @builtin(global_invocation_id) global_id_2d: vec3<u32>,
@@ -152,8 +153,7 @@ fn max_backward_b(
     let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
-        let grad = select(0.0, ld_out_grad(idx), ld_b(idx) > ld_a(idx));
-        st_result_grad(idx, grad);
+        st_result_grad(idx, max_grad_b(ld_out_grad(idx), ld_a(idx), ld_b(idx)));
     }
 }
 

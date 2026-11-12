@@ -8,6 +8,8 @@ pub mod gpu_ops;
 pub mod loss;
 /// Matrix multiplication.
 pub mod matmul;
+/// Tie and NaN rules of the max family, one per PyTorch op.
+pub(crate) mod max_rule;
 /// Movement ops (reshape, permute, expand, pad, shrink, stride).
 pub mod movement;
 /// Reductions (sum, max, mean, and per-axis forms).

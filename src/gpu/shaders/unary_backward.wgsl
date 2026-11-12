@@ -40,8 +40,9 @@ fn relu_backward(
     let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
-        // d(max(0, x))/dx = x > 0 ? 1 : 0
-        st_result(idx, select(0.0, ld_out_grad(idx), ld_x(idx) > 0.0));
+        // d(max(0, x))/dx = x > 0 ? 1 : 0, and 0 for NaN
+        let x = ld_x(idx);
+        st_result(idx, select(0.0, ld_out_grad(idx), !is_nan(x) && x > 0.0));
     }
 }
 

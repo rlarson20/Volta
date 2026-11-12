@@ -266,9 +266,9 @@ pub struct ComputePipelines {
     pub sum_next: wgpu::ComputePipeline,
     /// First pass of a sum of squares (finished by `sum_next`).
     pub sumsq_first: wgpu::ComputePipeline,
-    /// First pass of a maximum: input to one (value, index) pair per 1024 elements.
+    /// First pass of a maximum: input to one (value, count of elements equal to it) pair per 1024 elements.
     pub max_first: wgpu::ComputePipeline,
-    /// Later pass of a maximum: (value, index) pairs to fewer pairs.
+    /// Later pass of a maximum: (value, count) pairs to fewer pairs.
     pub max_next: wgpu::ComputePipeline,
 
     // Movement operations
@@ -1268,7 +1268,11 @@ impl GpuContext {
                 "main",
                 "Mean Backward Pipeline",
             ),
-            max_backward: create_pipeline(&reduce_backward_shader, "main", "Max Backward Pipeline"),
+            max_backward: create_pipeline(
+                &reduce_backward_shader,
+                "max_backward",
+                "Max Backward Pipeline",
+            ),
 
             // Optimizer step
             optimizer_step: create_pipeline(

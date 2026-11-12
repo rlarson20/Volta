@@ -1,4 +1,4 @@
-// Parallel full-tensor reductions (sum, mean, sum of squares, max with index).
+// Parallel full-tensor reductions (sum, mean, sum of squares, max with its tie count).
 //
 // One pass turns `params.n` values into `ceil(n / 1024)` partial results: a workgroup of
 // 256 threads owns 1024 consecutive inputs, each thread folds 4 of them (stride 256, so
@@ -10,8 +10,8 @@
 // scalar in a one-element buffer.
 //
 // Bindings (each entry binds only the ones it uses; the pipelines use an auto layout):
-//   *_first: 0 = input (ELEM),  2 = out (f32),  4 = out_index (u32, max only), 5 = params
-//   *_next:  1 = partials (f32), 2 = out (f32), 3 = in_index, 4 = out_index (max), 5 = params
+//   *_first: 0 = input (ELEM),  2 = out (f32),  4 = out_count (u32, max only), 5 = params
+//   *_next:  1 = partials (f32), 2 = out (f32), 3 = in_count, 4 = out_count (max), 5 = params
 //
 // Every entry reads its element count from `params.n`, never from `arrayLength`: pooled
 // buffers are allocated in power-of-2 buckets, so a binding can be longer than its tensor.
@@ -26,8 +26,8 @@ struct Params {
 @group(0) @binding(0) var<storage, read> input: array<ELEM>;
 @group(0) @binding(1) var<storage, read> partials: array<ELEM2>;
 @group(0) @binding(2) var<storage, read_write> out: array<ELEM2>;
-@group(0) @binding(3) var<storage, read> in_index: array<u32>;
-@group(0) @binding(4) var<storage, read_write> out_index: array<u32>;
+@group(0) @binding(3) var<storage, read> in_count: array<u32>;
+@group(0) @binding(4) var<storage, read_write> out_count: array<u32>;
 @group(0) @binding(5) var<uniform> params: Params;
 
 const WG: u32 = 256u;
@@ -35,7 +35,7 @@ const PER_THREAD: u32 = 4u;
 const PER_GROUP: u32 = 1024u; // WG * PER_THREAD; the host depends on it
 
 var<workgroup> sh_val: array<f32, 256>;
-var<workgroup> sh_idx: array<u32, 256>;
+var<workgroup> sh_cnt: array<u32, 256>;
 
 // The flat index of this workgroup in a (possibly 2-D) dispatch (`kernels::dispatch_flat`).
 fn group_id(wid: vec3<u32>, num_wg: vec3<u32>) -> u32 {
@@ -120,33 +120,45 @@ fn sumsq_first(
     }
 }
 
-// Whether candidate (v, i) replaces the running best (bv, bi). This is the one place the
-// tie rule lives: the larger value wins and an exact tie goes to the higher index, which
-// is the CPU's `Iterator::max_by` (the last maximum). It is a total order on (value,
-// index), so the result does not depend on how the work is grouped. NaN never wins.
-fn better(v: f32, i: u32, bv: f32, bi: u32) -> bool {
-    return v > bv || (v == bv && i > bi);
+// A running maximum and how many elements equal it: `torch.max()` splits its gradient over
+// them (S4). `c == 0` is the empty identity, so a thread with no elements of its own
+// contributes nothing (never a sentinel such as -1e9).
+struct Best {
+    v: f32,
+    c: u32,
 }
 
-// Combine the workgroup's (value, index) pairs with `better`, leaving the winner in slot 0.
+// Merge two (maximum, count) pairs. A NaN beats every number and NaNs count together, equal
+// maxima add their counts, and the larger value wins otherwise. It is commutative and
+// associative, so the result does not depend on how the work is grouped. NaN is tested
+// from its bits (`is_nan`) before any float comparison.
+fn combine(a: Best, b: Best) -> Best {
+    if (a.c == 0u) { return b; }
+    if (b.c == 0u) { return a; }
+    let na = is_nan(a.v);
+    let nb = is_nan(b.v);
+    if (na && nb) { return Best(a.v, a.c + b.c); }
+    if (na) { return a; }
+    if (nb) { return b; }
+    if (a.v > b.v) { return a; }
+    if (b.v > a.v) { return b; }
+    return Best(a.v, a.c + b.c);
+}
+
+// Combine the workgroup's (value, count) pairs, leaving the result in slot 0.
 fn tree_max(tid: u32) {
     workgroupBarrier();
     for (var s: u32 = WG / 2u; s > 0u; s = s >> 1u) {
         if (tid < s) {
-            let ov = sh_val[tid + s];
-            let oi = sh_idx[tid + s];
-            if (better(ov, oi, sh_val[tid], sh_idx[tid])) {
-                sh_val[tid] = ov;
-                sh_idx[tid] = oi;
-            }
+            let m = combine(Best(sh_val[tid], sh_cnt[tid]), Best(sh_val[tid + s], sh_cnt[tid + s]));
+            sh_val[tid] = m.v;
+            sh_cnt[tid] = m.c;
         }
         workgroupBarrier();
     }
 }
 
-// Max of the input. Every thread starts from the group's first element (never from a
-// sentinel such as -1e9), so a thread with no elements of its own repeats an element that
-// is in the group anyway, which `better` ignores.
+// Max of the input and the number of elements equal to it.
 @compute @workgroup_size(256)
 fn max_first(
     @builtin(local_invocation_id) lid: vec3<u32>,
@@ -155,33 +167,23 @@ fn max_first(
 ) {
     let g = group_id(wid, num_wg);
     let base = g * PER_GROUP;
-    var best_v: f32 = 0.0;
-    var best_i: u32 = 0u;
-    if (base < params.n) {
-        best_v = ld_input(base);
-        best_i = base;
-    }
+    var best = Best(0.0, 0u);
     for (var k: u32 = 0u; k < PER_THREAD; k = k + 1u) {
         let i = base + lid.x + k * WG;
         if (i < params.n) {
-            let v = ld_input(i);
-            if (better(v, i, best_v, best_i)) {
-                best_v = v;
-                best_i = i;
-            }
+            best = combine(best, Best(ld_input(i), 1u));
         }
     }
-    sh_val[lid.x] = best_v;
-    sh_idx[lid.x] = best_i;
+    sh_val[lid.x] = best.v;
+    sh_cnt[lid.x] = best.c;
     tree_max(lid.x);
     if (lid.x == 0u && base < params.n) {
         st_out(g, sh_val[0]);
-        out_index[g] = sh_idx[0];
+        out_count[g] = sh_cnt[0];
     }
 }
 
-// Max of the partial (value, index) pairs from an earlier pass; `in_index` carries each
-// partial's index into the original input.
+// Max of the partial (value, count) pairs from an earlier pass.
 @compute @workgroup_size(256)
 fn max_next(
     @builtin(local_invocation_id) lid: vec3<u32>,
@@ -190,28 +192,18 @@ fn max_next(
 ) {
     let g = group_id(wid, num_wg);
     let base = g * PER_GROUP;
-    var best_v: f32 = 0.0;
-    var best_i: u32 = 0u;
-    if (base < params.n) {
-        best_v = ld_partials(base);
-        best_i = in_index[base];
-    }
+    var best = Best(0.0, 0u);
     for (var k: u32 = 0u; k < PER_THREAD; k = k + 1u) {
         let j = base + lid.x + k * WG;
         if (j < params.n) {
-            let v = ld_partials(j);
-            let i = in_index[j];
-            if (better(v, i, best_v, best_i)) {
-                best_v = v;
-                best_i = i;
-            }
+            best = combine(best, Best(ld_partials(j), in_count[j]));
         }
     }
-    sh_val[lid.x] = best_v;
-    sh_idx[lid.x] = best_i;
+    sh_val[lid.x] = best.v;
+    sh_cnt[lid.x] = best.c;
     tree_max(lid.x);
     if (lid.x == 0u && base < params.n) {
         st_out(g, sh_val[0]);
-        out_index[g] = sh_idx[0];
+        out_count[g] = sh_cnt[0];
     }
 }

@@ -6,6 +6,7 @@ use crate::dtype::DType;
 use crate::index::{fetch, slot, span};
 use crate::ops::binary::BinaryOp;
 use crate::ops::compare::CmpOp;
+use crate::ops::max_rule::dim_scan_replaces;
 use crate::ops::reduce::{ReduceOp, pairwise_sum_by};
 use crate::ops::ternary::TernaryOp;
 use crate::ops::unary::UnaryOp;
@@ -1405,7 +1406,9 @@ impl RawTensor {
 
     /// Max along a specific axis
     ///
-    /// Returns maximum value along dimension and stores indices for backward pass.
+    /// Returns maximum value along dimension and stores indices for backward pass. Like
+    /// `torch.max(x, dim)`, a tie goes to the first index, a NaN in the row makes the result
+    /// NaN (the first NaN wins), and all of the gradient goes to that one element.
     /// # Panics
     /// dim out of bounds
     #[must_use]
@@ -1429,19 +1432,24 @@ impl RawTensor {
 
         // Find max over the target dimension using stride arithmetic, in the input's dtype.
         let storage = dispatch_real!(dtype, T => {
-            let mut result = vec![T::NEG_INFINITY; out_size];
+            let mut result = vec![T::ZERO; out_size];
             let data = data.host::<T>();
             for outer in 0..outer_size {
                 for inner in 0..inner_size {
                     let out_idx = outer * inner_size + inner;
-                    for k in 0..dim_size {
+                    // Each row starts from its own first element, so a row with no
+                    // winner (all -inf) keeps its gradient in that row (S2).
+                    let first = outer * dim_size * inner_size + inner;
+                    let (mut best, mut best_idx) = (fetch(&data, first), first);
+                    for k in 1..dim_size {
                         let in_idx = outer * dim_size * inner_size + k * inner_size + inner;
                         let in_val = fetch(&data, in_idx);
-                        if in_val > fetch(&result, out_idx) {
-                            *slot(&mut result, out_idx) = in_val;
-                            *slot(&mut max_indices, out_idx) = in_idx;
+                        if dim_scan_replaces(in_val, best) {
+                            (best, best_idx) = (in_val, in_idx);
                         }
                     }
+                    *slot(&mut result, out_idx) = best;
+                    *slot(&mut max_indices, out_idx) = best_idx;
                 }
             }
             Storage::from_compute(dtype, result)
@@ -1718,7 +1726,8 @@ impl Tensor {
         RawTensor::binary_op(self, other, BinaryOp::Div)
     }
 
-    /// Elementwise maximum, with broadcasting.
+    /// Elementwise maximum, with broadcasting, as `torch.maximum`: NaN if either input is
+    /// NaN. A tie splits the gradient in half, and a NaN input gives both sides all of it.
     #[must_use]
     pub fn max_elem(&self, other: &Self) -> Self {
         RawTensor::binary_op(self, other, BinaryOp::Max)
@@ -1833,7 +1842,8 @@ impl Tensor {
         RawTensor::unary_op(self, UnaryOp::Sigmoid)
     }
 
-    /// Rectified linear unit, elementwise.
+    /// Rectified linear unit, elementwise. `relu(NaN)` is NaN, as in torch, and has no
+    /// gradient.
     #[must_use]
     pub fn relu(&self) -> Self {
         RawTensor::unary_op(self, UnaryOp::ReLU)
@@ -1851,7 +1861,9 @@ impl Tensor {
         RawTensor::reduce_op(self, ReduceOp::Sum)
     }
 
-    /// Maximum of all elements, as a scalar.
+    /// Maximum of all elements, as a scalar, as `torch.max()`: NaN if any element is NaN.
+    /// The gradient is split evenly over every element equal to the maximum (every NaN,
+    /// when the maximum is NaN).
     #[must_use]
     pub fn max_reduce(&self) -> Self {
         RawTensor::reduce_op(self, ReduceOp::Max)
@@ -2005,7 +2017,8 @@ impl Tensor {
         RawTensor::sum_dim(self, dim, keepdim)
     }
 
-    /// Maximum along `dim`.
+    /// Maximum along `dim`, as `torch.max(x, dim)`: a NaN in a lane makes it NaN, and the
+    /// whole gradient goes to one element per lane (the first on a tie, the first NaN).
     #[must_use]
     pub fn max_dim(&self, dim: Axis, keepdim: bool) -> Self {
         RawTensor::max_dim(self, dim, keepdim)

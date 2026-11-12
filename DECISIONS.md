@@ -154,7 +154,7 @@ This serializes the final accumulation, eliminating the race.
 
 ### Full-tensor GPU reductions: a multi-pass tree, f32 partials, nothing read back (#80)
 
-**Decision:** `sum`, `mean`, `max_reduce` and the Muon Frobenius norm run `reduce.wgsl`: a 256-thread workgroup folds 1024 values (4 per thread, then a shared-memory tree) into one f32 partial, and the host chains passes in one command buffer until one value is left. The scalar stays in a one-element GPU buffer, rounded once to the input's dtype by the cast kernel. A max pass carries `(value, index)`, starts from a real element (not a sentinel), and leaves the index in a GPU buffer that `MaxReduceGradFn` holds (`MaxIndex::Device`). The backward kernels read the upstream scalar from `out_grad` on the device.
+**Decision:** `sum`, `mean`, `max_reduce` and the Muon Frobenius norm run `reduce.wgsl`: a 256-thread workgroup folds 1024 values (4 per thread, then a shared-memory tree) into one f32 partial, and the host chains passes in one command buffer until one value is left. The scalar stays in a one-element GPU buffer, rounded once to the input's dtype by the cast kernel. A max pass carries `(value, count of elements equal to it)`, starts each thread from an empty identity (not a sentinel), and leaves both in GPU buffers that `MaxReduceGradFn` holds (`MaxWinners::Device`; it carried an index until #40, see "Max ties and NaN follow torch, op by op"). The backward kernels read the upstream scalar from `out_grad` on the device.
 
 **Why:** the kernels were `workgroup_size(1)` loops with a host readback after the forward and another before each backward (and `max_reduce` downloaded the whole tensor to find its index). Measured on the Apple M2, release, median of 5 (ms, `before -> after`):
 
@@ -168,8 +168,8 @@ A Muon step on 4096x4096 took 25.5 s before and after: it is the matmuls, not th
 
 **Choices:**
 - *The tree is also the accuracy fix:* a chain of 2^25 f32 adds stalls at 2^24, a tree does not (S6, #41; the CPU half of S6 is separate).
-- *The tie rule is one WGSL function, `better`,* currently the CPU's `max_by` (the highest index wins), so CPU and GPU agree. Torch splits the gradient evenly over ties (S4, #40); that change is `better` plus the backward kernel, and the max value buffer is already on the device for the `x == max` mask.
-- *The index lives in a Bool-typed buffer* (one `u32` word per element, like `amp_unscale`'s `found` flag), never exposed as a tensor. `DeviceIndex` is defined in `gpu_ops.rs` with a not-gpu stub, so `reduce.rs` carries no `cfg`.
+- *The tie rule is one WGSL function, `combine`,* which since #40 splits the gradient evenly over ties and NaNs like torch (it was `better`, which picked the highest index to match the CPU's `max_by`).
+- *The count lives in a Bool-typed buffer* (one `u32` word per element, like `amp_unscale`'s `found` flag), never exposed as a tensor. `DeviceMax` is defined in `gpu_ops.rs` with a not-gpu stub, so `reduce.rs` carries no `cfg`.
 
 ---
 
@@ -809,3 +809,28 @@ Autograd is a sequential graph walk over `Rc<RefCell<_>>`, and nothing in it is 
 - *A major crate bump gets its own PR* because it usually needs code changes (wgpu); the `cpu-only (1.89)` lane catches a bump that raises the MSRV.
 
 **Revisit:** gate coverage (e.g. no drop on `autograd.rs` and `ops/`) once a few weeks of summaries give a baseline.
+
+---
+
+### Max ties and NaN follow torch, op by op (#40, S2/S3/S4)
+
+**Decision:** the max family has no single tie rule, because torch has none. Each op copies its torch counterpart, and `src/ops/max_rule.rs` and the shared WGSL prelude hold the rules in one place:
+
+| Volta op | torch op | Output with NaN | Tied maxima | Gradient |
+| --- | --- | --- | --- | --- |
+| `max_elem` | `torch.maximum` | NaN | equal | split in half; a NaN operand gives both sides all of it |
+| `max_reduce` | `torch.max()` | NaN | equal | `g / count` over every maximum (every NaN, for a NaN maximum) |
+| `max_dim` | `torch.max(x, dim)` | NaN (the first NaN) | the first index | all of `g` to that one element |
+| `MaxPool2d` | `max_pool2d` | NaN (the last NaN) | the first element in scan order | all of `g` to that one element |
+| `relu` | `torch.relu` | NaN | n/a | `g` where `x > 0`, so none for NaN |
+
+**Why:** #40 asked for "one rule for max, ties, and NaN". The fixtures show torch splits a tie in `maximum` and `max()` and does not in `max(dim)` and `max_pool2d` (the ops that return an index). One rule would have matched half of them. The first NaN in `max(dim)` and the last in pooling are torch's, read from fixtures (`max_dim_nan2`, `maxpool_nan2`), not chosen.
+
+**Before:** `max_dim` and `MaxPool2d` started a window with no winner (all `-inf`) from flat index 0 of the whole tensor, so a masked row's gradient landed in row 0 (S2) and an all `-inf` channel's in channel 0 (S3). `>` skipped NaN, `f32::max` dropped it, `relu(NaN)` was 0, and `max_reduce` panicked on NaN (`partial_cmp().unwrap()`).
+
+**Choices:**
+- *Start each row or window from its own first element,* and in pooling from its first real (non-padding) element, as torch does. Padding is skipped by an explicit coordinate check, and every window has a real element because padding is at most half the kernel.
+- *`MaxReduce` backward re-reads its input* instead of saving an index, because the winners are a set. `GradFn::saves_input` is now `true` for it, so an in-place edit between forward and backward panics (S9), as it does for `Mul`.
+- *The GPU reduction merges `(value, count)` pairs* with a commutative, associative `combine` (a NaN absorbs, equal maxima add counts, `count == 0` is the identity), so the result does not depend on how the work is grouped, and a multi-pass tie or NaN is counted once. NaN is tested from its bits, never with a float comparison, as for `tanh_sat` (WGSL lets a compiler assume no NaN).
+- *`max_backward` is its own entry point* in `reduce_backward.wgsl`, so `sum`/`mean` backward no longer bind a dummy buffer.
+- *The GPU `max_broadcast_pass2` kernel follows the same rule but is unreachable* (GPU broadcast backward panics, #60), so it has no test.
