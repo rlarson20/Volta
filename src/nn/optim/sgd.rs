@@ -127,6 +127,8 @@ impl SGD {
             Some(g) => g.clone(),
             None => return,
         };
+        // The step rewrites the parameter in place (S9).
+        p.bump_version();
 
         let len = p.data.len();
         let device = p.device.clone();
@@ -181,6 +183,8 @@ impl SGD {
             Some(g) => g.clone(),
             None => return,
         };
+        // The step rewrites the parameter in place (S9).
+        p.bump_version();
 
         let dtype = p.data.dtype();
         dispatch_real!(dtype, T => {

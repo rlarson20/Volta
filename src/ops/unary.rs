@@ -74,6 +74,26 @@ impl UnaryGradFn {
         format!("Unary({:?})", self.op)
     }
 
+    /// Whether backward reads the input's values. Only `Neg`'s derivative is a constant.
+    /// Every op is spelled out so a new one has to decide.
+    pub(crate) const fn saves_input(&self) -> bool {
+        match self.op {
+            UnaryOp::Neg => false,
+            UnaryOp::Recip
+            | UnaryOp::Sqrt
+            | UnaryOp::Exp2
+            | UnaryOp::Exp
+            | UnaryOp::Log2
+            | UnaryOp::Log
+            | UnaryOp::Sin
+            | UnaryOp::Cos
+            | UnaryOp::Tanh
+            | UnaryOp::Sigmoid
+            | UnaryOp::ReLU
+            | UnaryOp::Erf => true,
+        }
+    }
+
     /// Gradient for the single input: `out_grad` times the op's derivative.
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let x = parents

@@ -68,6 +68,16 @@ impl BinaryGradFn {
         format!("Binary({:?})", self.op)
     }
 
+    /// Whether backward reads the operands' values. `Add` and `Sub` have constant
+    /// derivatives, so changing an operand in place can't change their gradients. Every
+    /// op is spelled out so a new one has to decide.
+    pub(crate) const fn saves_input(&self) -> bool {
+        match self.op {
+            BinaryOp::Add | BinaryOp::Sub => false,
+            BinaryOp::Mul | BinaryOp::Div | BinaryOp::Max | BinaryOp::Mod => true,
+        }
+    }
+
     /// Gradients for both operands, reduced back to each operand's pre-broadcast shape.
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         let [x_ref, y_ref] = parents else {

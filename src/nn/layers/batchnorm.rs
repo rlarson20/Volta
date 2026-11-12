@@ -173,6 +173,8 @@ impl BatchNorm2d {
                 let _no_grad = crate::autograd::no_grad();
                 let mut rm = self.running_mean.borrow_mut();
                 let mut rv = self.running_var.borrow_mut();
+                rm.bump_version();
+                rv.bump_version();
                 let dtype = rm.data.dtype();
                 dispatch_real!(dtype, T => {
                 let bm_ref = batch_mean.borrow();
@@ -397,6 +399,8 @@ impl BatchNorm1d {
                 let _no_grad = crate::autograd::no_grad();
                 let mut rm = self.running_mean.borrow_mut();
                 let mut rv = self.running_var.borrow_mut();
+                rm.bump_version();
+                rv.bump_version();
                 let dtype = rm.data.dtype();
                 dispatch_real!(dtype, T => {
                 let bm_ref = batch_mean.borrow();

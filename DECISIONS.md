@@ -1,7 +1,7 @@
 # DECISIONS.md — Design decisions
 
 Why the code is the way it is, and what was tried and rejected. What was done is in the commit log; what is open is in the GitHub issues.
-Updated: 2026-11-02
+Updated: 2026-11-12
 
 ---
 
@@ -55,6 +55,27 @@ Recursive DFS risks stack overflow on deep computation graphs. Iterative DFS wit
 - `RawTensor.grad_fn` is now `pub(crate)`, and the `*GradFn` structs and the `GradFn` re-export left the public API. With the trait gone they had no public methods or constructors.
 - The variant is `Igemm`, not `IGEMM`, for `clippy::upper_case_acronyms`. The struct keeps its name.
 - `autograd.rs` imports the conv, pool, and embedding structs from `nn::layers`, a crate-internal layering cost of a closed enum.
+
+---
+
+### In-place writes bump a version counter; backward checks the inputs it reads (#43, S9)
+
+**Decision:** every `RawTensor` has a `version`, bumped by each in-place write to its `data` (an optimizer step, `load_weight`, `cast_in_place`, `Module::to_device`, BatchNorm's running statistics) through `RawTensor::bump_version`. `edge()` records the version of each parent whose values the op's backward reads (`GradFn::saves_input`), and `run_backward` panics before calling that op's backward if one has moved: `Binary(Mul): input 1 was modified by an inplace operation ...`. It is PyTorch's rule and message.
+
+**Before:** nothing was saved at forward time. Backward read each parent's current `data`, so `y = w * x`, then a step on `w`, then `backward()` gave `x.grad` = the new `w`, silently. An optimizer step was one writer; loading a state dict or moving a model's dtype or device did the same.
+
+**Choices:**
+- *Only the inputs backward reads are checked.* `Add`, `Sub`, `Neg`, `Sum`, `Mean`, reshapes and casts have gradients that don't depend on an input's values, so a step in between is harmless and torch allows it. `Where`'s mask, `MaxPool2d`'s indices and `Embedding`'s indices live in the `GradFn`, not in a parent. `saves_input` spells out every variant, as `is_trivial` does, so a new op has to decide. A mask that errs toward `true` only costs a spurious panic; toward `false` it reopens S9.
+- *A panic, not a `Result`.* Both sides are tensors the program built, so this is a contract violation (invariant 8), and backward has no error channel.
+- *One bump per write path, no wrapper around `data`.* `data` is `pub`, but `borrow_mut()` is `pub(crate)` and invariant 2 keeps writers in `autograd.rs`, `ops/` and the few places listed above, so the call sites are countable. A new in-place writer calls `bump_version`.
+
+**Rejected: save a copy-on-write snapshot of each parent's `Storage` in `edge()`.** Backward would use the forward-time values and never fail. But the usual `loss.backward(); step()` leaves the loss graph alive while the step writes the parameter, so every step would copy every parameter to keep the snapshot unshared. It also quietly differs from torch, where this is an error, and the issue asks for torch's behaviour.
+
+**Rejected: a documented rule only.** The ignored repro could not pass, and the hole stayed open for every other in-place writer.
+
+**Not covered:** a `detach()`ed tensor has its own counter (it copies on write, so it keeps the old values and is safe). The GPU optimizer paths bump the same field, since the counter is on the host-side `RawTensor`, not the buffer.
+
+**Tests:** `tests/inplace_version.rs` (each writer, the ops that read and the ones that don't, the training-loop order) and `tests/sweep_repros.rs` (`backward_after_an_optimizer_step_refuses_the_stale_graph`).
 
 ---
 

@@ -191,6 +191,8 @@ impl Muon {
             let Some(grad) = p.grad.clone() else {
                 continue;
             };
+            // The step rewrites the parameter in place (S9).
+            p.bump_version();
             // Allocated on the parameter's first step, on its current device and dtype.
             let velocity = velocity.get_or_insert_with(|| super::zeros_like(&p));
 
