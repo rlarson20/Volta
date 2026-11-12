@@ -223,34 +223,22 @@ fn test_external_model_loading_integration() {
     // Layer 1: Linear(2, 3) -> PyTorch shape [3, 2]
     pytorch_state.insert(
         "fc1.weight".to_string(),
-        TensorData {
-            // PyTorch: [out=3, in=2] row-major: [[w00,w01], [w10,w11], [w20,w21]]
-            data: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-            shape: vec![3, 2],
-        },
+        // PyTorch: [out=3, in=2] row-major: [[w00,w01], [w10,w11], [w20,w21]]
+        TensorData::from_f32(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![3, 2]),
     );
     pytorch_state.insert(
         "fc1.bias".to_string(),
-        TensorData {
-            data: vec![0.1, 0.2, 0.3],
-            shape: vec![3],
-        },
+        TensorData::from_f32(vec![0.1, 0.2, 0.3], vec![3]),
     );
 
     // Layer 2: Linear(3, 1) -> PyTorch shape [1, 3]
     pytorch_state.insert(
         "fc2.weight".to_string(),
-        TensorData {
-            data: vec![0.5, 0.6, 0.7],
-            shape: vec![1, 3],
-        },
+        TensorData::from_f32(vec![0.5, 0.6, 0.7], vec![1, 3]),
     );
     pytorch_state.insert(
         "fc2.bias".to_string(),
-        TensorData {
-            data: vec![0.01],
-            shape: vec![1],
-        },
+        TensorData::from_f32(vec![0.01], vec![1]),
     );
 
     // Save the "PyTorch" state dict
@@ -280,7 +268,11 @@ fn test_external_model_loading_integration() {
     // Verify transpose correctness for encoder.weight
     // Original PyTorch [3,2]: [1,2, 3,4, 5,6]
     // Transposed [2,3]: [1,3,5, 2,4,6]
-    let encoder_weight = &volta_state.get("encoder.weight").unwrap().data;
+    let encoder_weight = &volta_state
+        .get("encoder.weight")
+        .unwrap()
+        .to_vec_as::<f32>()
+        .expect("f32");
     assert_eq!(
         encoder_weight
             .first()

@@ -8,13 +8,13 @@ fn running_stats(state: &io::StateDict) -> (Vec<f32>, Vec<f32>) {
     let rm = state
         .get("running_mean")
         .expect("state dict missing running_mean")
-        .data
-        .clone();
+        .to_vec_as::<f32>()
+        .expect("f32 running_mean");
     let rv = state
         .get("running_var")
         .expect("state dict missing running_var")
-        .data
-        .clone();
+        .to_vec_as::<f32>()
+        .expect("f32 running_var");
     (rm, rv)
 }
 
@@ -87,17 +87,11 @@ fn bn1d_eval_uses_running_stats() {
     let mut state = <BatchNorm1d as Module>::state_dict(&layer);
     state.insert(
         "running_mean".to_string(),
-        io::TensorData {
-            data: vec![5.0, -5.0],
-            shape: vec![2],
-        },
+        io::TensorData::from_f32(vec![5.0, -5.0], vec![2]),
     );
     state.insert(
         "running_var".to_string(),
-        io::TensorData {
-            data: vec![4.0, 4.0],
-            shape: vec![2],
-        },
+        io::TensorData::from_f32(vec![4.0, 4.0], vec![2]),
     );
     <BatchNorm1d as Module>::load_state_dict(&mut layer, &state).expect("state loads");
     layer.train(false);

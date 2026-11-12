@@ -218,13 +218,13 @@ fn batchnorm2d_train_and_eval_match_torch() {
     let state = bn.state_dict();
     torch_ref::assert_close(
         "running_mean",
-        &state["running_mean"].data,
+        &state["running_mean"].to_vec_as::<f32>().expect("f32"),
         &f.values("bn.running_mean"),
         FWD,
     );
     torch_ref::assert_close(
         "running_var",
-        &state["running_var"].data,
+        &state["running_var"].to_vec_as::<f32>().expect("f32"),
         &f.values("bn.running_var"),
         FWD,
     );

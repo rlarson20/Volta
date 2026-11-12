@@ -58,7 +58,8 @@ pub trait Module {
     fn parameters(&self) -> Vec<Tensor>;
 
     // State dict methods
-    /// The parameters as a name-to-values map, ready to save with [`crate::io`].
+    /// The parameters as a name-to-values map, ready to save with [`crate::io`]. Each
+    /// entry keeps its parameter's dtype.
     fn state_dict(&self) -> StateDict;
 
     /// Loads the entries of `state` that match this module's parameters.
@@ -66,13 +67,14 @@ pub trait Module {
     /// Keys the module does not have are ignored, and parameters with no entry keep
     /// their values (use [`crate::io::load_state_dict_checked`] to see which). An entry
     /// that is present must fit: it keeps the parameter's shape, device, and
-    /// `requires_grad`, and only the values change.
+    /// `requires_grad`, and only the values change. An entry in another dtype is cast to
+    /// the parameter's (following [`crate::Storage::cast`]).
     ///
     /// # Errors
     ///
     /// `VoltaError::StateShapeMismatch` if an entry's shape differs from its
     /// parameter's, `VoltaError::StateDataLength` if an entry has the wrong number of
-    /// values for its own shape. The `key` is the entry's name in `state`. A checkpoint
+    /// bytes for its own shape and dtype. The `key` is the entry's name in `state`. A checkpoint
     /// is data from outside the program, so this is an `Err`, not a panic.
     ///
     /// On `Err` the module may be partly loaded: entries before the bad one have

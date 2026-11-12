@@ -54,7 +54,12 @@ impl Fixture {
             .tensors
             .get(name)
             .unwrap_or_else(|| panic!("fixture {}: no tensor {name:?}", self.group));
-        (t.data.clone(), t.shape.clone())
+        // Fixtures are stored in their own dtype; this reader decodes to f32.
+        let values = t
+            .to_storage(name)
+            .unwrap_or_else(|e| panic!("fixture {}: {e}", self.group))
+            .to_f32_vec();
+        (values, t.shape.clone())
     }
 
     /// Whether the fixture holds a tensor called `name`.
@@ -150,10 +155,7 @@ pub fn state_of(entries: &[(&str, Vec<f32>, Vec<usize>)]) -> StateDict {
         .map(|(k, data, shape)| {
             (
                 (*k).to_string(),
-                volta::io::TensorData {
-                    data: data.clone(),
-                    shape: shape.clone(),
-                },
+                volta::io::TensorData::from_f32(data.clone(), shape.clone()),
             )
         })
         .collect()

@@ -1,6 +1,6 @@
 use crate::dtype::DType;
 use crate::nn::Module;
-use crate::storage::Storage;
+use crate::storage::{Element, Storage};
 use crate::tensor::Tensor;
 use bincode::{Decode, Encode, config};
 use safetensors::SafeTensors;
@@ -16,14 +16,22 @@ pub mod mapping;
 /// Parameter name to saved values.
 pub type StateDict = BTreeMap<String, TensorData>;
 
-// Serializable representation of tensor data
-/// Serializable copy of one tensor: its values and its shape.
-#[derive(Encode, Decode, Clone)]
+/// Serializable copy of one tensor: its values in their own dtype, and its shape.
+///
+/// `data` holds the elements' bytes exactly as [`Storage::as_bytes`] gives them
+/// (native-endian, which is little-endian on every platform Volta builds for, the same
+/// layout safetensors uses), so a save and load is bit-exact for every dtype. The fields
+/// are public, so nothing stops a caller from building an entry whose byte count does not
+/// match `shape` and `dtype`; [`TensorData::to_storage`] checks that before decoding, and
+/// the loaders check every entry they read.
+#[derive(Encode, Decode, Clone, Debug, PartialEq, Eq)]
 pub struct TensorData {
-    /// Row-major values.
-    pub data: Vec<f32>,
+    /// Row-major element bytes: `shape.iter().product::<usize>() * dtype.size_of()` of them.
+    pub data: Vec<u8>,
     /// Dimension sizes, outermost first.
     pub shape: Vec<usize>,
+    /// Element type of `data`.
+    pub dtype: DType,
 }
 
 /// Summary of differences between two state dicts.
@@ -84,25 +92,135 @@ impl fmt::Display for StateDictDiff {
 }
 
 impl TensorData {
-    /// Copies a tensor's values and shape out of the graph.
-    ///
-    /// # Panics
-    /// If the tensor is not f32: `TensorData` holds f32, and narrowing another dtype on the
-    /// way would be silent.
+    /// Copies a tensor's values (in its own dtype) and shape out of the graph. A GPU
+    /// tensor is read through its host copy.
     #[must_use]
     pub fn from_tensor(t: &Tensor) -> Self {
         let borrowed = t.borrow();
         Self {
-            data: borrowed.data.to_vec(),
+            data: borrowed.data.as_bytes().to_vec(),
             shape: borrowed.shape.truncate_rank().to_vec(),
+            dtype: borrowed.data.dtype(),
         }
     }
 
-    /// Rebuilds a tensor from the saved values with the given `requires_grad`.
+    /// An f32 entry from row-major values. The common case, and unambiguous with float
+    /// literals (unlike [`Self::from_typed`], where `vec![1.0]` would infer f64).
     #[must_use]
-    pub fn to_tensor(&self, requires_grad: bool) -> Tensor {
-        crate::RawTensor::new(self.data.clone(), &self.shape, requires_grad)
+    pub fn from_f32(values: Vec<f32>, shape: Vec<usize>) -> Self {
+        Self::from_typed(values, shape)
     }
+
+    /// An entry from row-major values of any element type; the dtype follows `T`.
+    #[must_use]
+    pub fn from_typed<T: Element>(values: Vec<T>, shape: Vec<usize>) -> Self {
+        Self {
+            data: Storage::from_typed(values).as_bytes().to_vec(),
+            shape,
+            dtype: T::DTYPE,
+        }
+    }
+
+    /// Number of elements `shape` describes.
+    ///
+    /// # Panics
+    /// If the product of `shape` overflows `usize`. [`Self::to_storage`] reports that as
+    /// an error instead.
+    #[must_use]
+    pub fn numel(&self) -> usize {
+        checked_numel(&self.shape).expect("TensorData::numel: shape product overflows usize")
+    }
+
+    /// Checks that `data` holds exactly the bytes `shape` and `dtype` need, and that every
+    /// `Bool` byte is 0 or 1. Allocates nothing. `key` names the entry in the error.
+    ///
+    /// # Errors
+    /// `VoltaError::StateDataLength` (counted in bytes; `expected` is `usize::MAX` when the
+    /// shape's size overflows) if the byte count is wrong, and
+    /// `VoltaError::InvalidParameter` if a `Bool` byte is neither 0 nor 1.
+    pub fn validate(&self, key: &str) -> crate::Result<()> {
+        let expected = checked_numel(&self.shape)
+            .and_then(|n| n.checked_mul(self.dtype.size_of()))
+            .unwrap_or(usize::MAX);
+        if self.data.len() != expected {
+            return Err(crate::VoltaError::StateDataLength {
+                key: key.to_string(),
+                expected,
+                len: self.data.len(),
+            });
+        }
+        if self.dtype == DType::Bool
+            && let Some((i, b)) = self.data.iter().enumerate().find(|&(_, &b)| b > 1)
+        {
+            return Err(crate::VoltaError::InvalidParameter(format!(
+                "state dict entry '{key}': bool element {i} is the byte {b}, not 0 or 1"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Decodes `data` as `dtype`, after [`Self::validate`]. `key` names the entry in the
+    /// error.
+    ///
+    /// # Errors
+    /// Whatever [`Self::validate`] returns; nothing is allocated before it passes.
+    pub fn to_storage(&self, key: &str) -> crate::Result<Storage> {
+        self.validate(key)?;
+        Storage::try_from_bytes(&self.data, self.dtype).map_err(|e| {
+            crate::VoltaError::InvalidParameter(format!("state dict entry '{key}': {e}"))
+        })
+    }
+
+    /// The values in their own dtype, without conversion. `T` names the dtype, as in
+    /// [`Tensor::to_vec_as`].
+    ///
+    /// # Errors
+    /// Whatever [`Self::to_storage`] returns, and `VoltaError::DTypeMismatch` if `T` is
+    /// not `dtype`.
+    pub fn to_vec_as<T: Element>(&self) -> crate::Result<Vec<T>> {
+        self.to_storage("")?.as_host::<T>().map(<[T]>::to_vec)
+    }
+
+    /// Rebuilds a CPU tensor from the saved values, in the saved dtype, with the given
+    /// `requires_grad`.
+    ///
+    /// # Errors
+    /// Whatever [`Self::validate`] returns, and whatever [`crate::shape::Shape::from_dims`]
+    /// returns for `shape` (a zero dim, or too many elements).
+    pub fn try_to_tensor(&self, requires_grad: bool) -> crate::Result<Tensor> {
+        let storage = self.to_storage("")?;
+        let shape = crate::shape::Shape::from_dims(self.shape.clone())?;
+        crate::RawTensor::try_new_with_storage(storage, shape, crate::Device::CPU, requires_grad)
+    }
+
+    /// Panicking form of [`Self::try_to_tensor`].
+    ///
+    /// # Panics
+    /// Whenever `try_to_tensor` returns an error.
+    #[must_use]
+    #[track_caller]
+    pub fn to_tensor(&self, requires_grad: bool) -> Tensor {
+        self.try_to_tensor(requires_grad)
+            .unwrap_or_else(|e| panic!("to_tensor: {e}"))
+    }
+}
+
+/// Product of `shape`, or `None` if it overflows `usize`.
+fn checked_numel(shape: &[usize]) -> Option<usize> {
+    shape.iter().try_fold(1usize, |n, &d| n.checked_mul(d))
+}
+
+/// Checks every entry of a state dict read from outside the program.
+///
+/// # Errors
+/// `InvalidData`, wrapping the [`crate::VoltaError`] from [`TensorData::to_storage`], for
+/// the first malformed entry.
+fn validate_state(state: &StateDict) -> Result<()> {
+    for (key, td) in state {
+        td.validate(key)
+            .map_err(|e| Error::new(std::io::ErrorKind::InvalidData, e))?;
+    }
+    Ok(())
 }
 
 /// Compute a diff between an "expected" and a "loaded" state dict.
@@ -171,6 +289,9 @@ pub fn load_state_dict_checked<M: Module + ?Sized>(
     Ok(diff)
 }
 
+/// Saves a state dict in Volta's bincode format. Every entry keeps its own dtype, so
+/// the round trip through [`load_state_dict`] is bit-exact.
+///
 /// # Errors
 /// file opening errors
 pub fn save_state_dict(state: &StateDict, path: &str) -> Result<()> {
@@ -179,14 +300,20 @@ pub fn save_state_dict(state: &StateDict, path: &str) -> Result<()> {
     file.write_all(&encoded)?;
     Ok(())
 }
+/// Loads a state dict saved by [`save_state_dict`]. Entries keep the dtype they were
+/// saved in; [`Module::load_state_dict`] casts each one to its parameter's dtype.
+///
 /// # Errors
-/// file opening errors
+/// The file can't be read or decoded, or (`InvalidData`, wrapping the
+/// [`crate::VoltaError`] from [`TensorData::validate`]) an entry's byte count does not
+/// match its shape and dtype.
 pub fn load_state_dict(path: &str) -> Result<StateDict> {
     let mut file = File::open(path)?;
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)?;
     let (state, _): (StateDict, _) =
         bincode::decode_from_slice(&buffer, config::standard()).map_err(Error::other)?;
+    validate_state(&state)?;
     Ok(state)
 }
 
@@ -252,12 +379,10 @@ const fn volta_dtype_to_safetensors(dtype: DType) -> safetensors::Dtype {
     }
 }
 
-/// Load a `SafeTensors` file into a `StateDict` (converts all tensors to f32)
+/// Load a `SafeTensors` file into a `StateDict`, each entry in its stored dtype.
 ///
-/// This is the simplest API for loading pretrained models. All tensors are
-/// converted to f32 to match the existing `StateDict` format.
-///
-/// For native dtype loading, use `load_safetensors_raw()`.
+/// The values are not converted: [`Module::load_state_dict`] casts each entry to its
+/// parameter's dtype.
 /// # Errors
 /// The file can't be read or parsed, or an entry has a dtype Volta does not support
 /// (`InvalidData`; I8, U16, U32, U64, the f8 formats, ...).
@@ -272,22 +397,16 @@ pub fn load_safetensors<P: AsRef<Path>>(path: P) -> Result<StateDict> {
     let mut state_dict = StateDict::new();
 
     for (name, tensor) in tensors.tensors() {
-        let shape: Vec<usize> = tensor.shape().to_vec();
-        let dtype = entry_dtype(&name, &tensor)?;
-        // safetensors has checked the byte length against shape and dtype; this
-        // check repeats it so a mismatch is an error here too, not a panic.
-        let storage = Storage::try_from_bytes(tensor.data(), dtype)
-            .map_err(|e| Error::new(std::io::ErrorKind::InvalidData, format!("'{name}': {e}")))?;
-        let f32_data = storage.to_f32_vec();
-
-        state_dict.insert(
-            name.clone(),
-            TensorData {
-                data: f32_data,
-                shape,
-            },
-        );
+        let entry = TensorData {
+            data: tensor.data().to_vec(),
+            shape: tensor.shape().to_vec(),
+            dtype: entry_dtype(&name, &tensor)?,
+        };
+        state_dict.insert(name, entry);
     }
+    // safetensors has checked each byte length against shape and dtype; this repeats it
+    // (and checks bool bytes) so a mismatch is an error here too, not a later panic.
+    validate_state(&state_dict)?;
 
     Ok(state_dict)
 }
@@ -304,16 +423,19 @@ pub struct TypedTensorData {
 }
 
 impl TypedTensorData {
-    /// Convert to f32 `TensorData`, decoding the bytes as `dtype`.
+    /// The same entry as a [`TensorData`], in the same dtype (the bytes are copied, not
+    /// converted).
     ///
     /// # Errors
-    /// `InvalidParameter` if the bytes don't decode as `dtype` (see
-    /// [`Storage::try_from_bytes`]).
+    /// Whatever [`TensorData::validate`] returns for it.
     pub fn to_tensor_data(&self) -> crate::Result<TensorData> {
-        Ok(TensorData {
-            data: self.to_storage()?.to_f32_vec(),
+        let td = TensorData {
+            data: self.data.clone(),
             shape: self.shape.clone(),
-        })
+            dtype: self.dtype,
+        };
+        td.validate("")?;
+        Ok(td)
     }
 
     /// Storage holding the data in its own dtype.
@@ -364,25 +486,31 @@ pub fn load_safetensors_raw<P: AsRef<Path>>(path: P) -> Result<BTreeMap<String, 
     Ok(result)
 }
 
-/// Save a `StateDict` to `SafeTensors` format
-///
-/// All tensors are saved as F32 since `StateDict` uses f32.
-/// # Panics
-/// failing to create `TensorView`
+/// Save a `StateDict` to `SafeTensors` format, each entry in its own dtype.
 /// # Errors
-/// returns nothing on success
+/// The file can't be written, or (`InvalidData`, wrapping the [`crate::VoltaError`] from
+/// [`TensorData::validate`]) an entry's byte count does not match its shape and dtype.
 pub fn save_safetensors<P: AsRef<Path>>(state: &StateDict, path: P) -> Result<()> {
-    use safetensors::tensor::{Dtype, TensorView};
+    use safetensors::tensor::TensorView;
 
-    let tensors: Vec<(String, TensorView<'_>)> = state
+    validate_state(state)?;
+    let tensors = state
         .iter()
         .map(|(name, td)| {
-            let view =
-                TensorView::new(Dtype::F32, td.shape.clone(), bytemuck::cast_slice(&td.data))
-                    .expect("Failed to create TensorView");
-            (name.clone(), view)
+            TensorView::new(
+                volta_dtype_to_safetensors(td.dtype),
+                td.shape.clone(),
+                &td.data,
+            )
+            .map(|view| (name.clone(), view))
+            .map_err(|e| {
+                Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("SafeTensors entry '{name}': {e}"),
+                )
+            })
         })
-        .collect();
+        .collect::<Result<Vec<(String, TensorView<'_>)>>>()?;
 
     let bytes = safetensors::tensor::serialize(tensors, None)
         .map_err(|e| Error::other(format!("SafeTensors serialize error: {e}")))?;
@@ -487,7 +615,7 @@ pub fn load_safetensors_with_mapping<P: AsRef<Path>>(
 mod io_tests {
     use super::*;
     use crate::nn::Module;
-    use crate::{Linear, ReLU, Sequential};
+    use crate::{Linear, RawTensor, ReLU, Sequential};
 
     /// A temp-file path unique to this process, removed on drop (also when the test
     /// fails). A fixed name would race with another test process running at once.
@@ -572,10 +700,7 @@ mod io_tests {
         // Add an unexpected key.
         loaded.insert(
             "extra".to_string(),
-            TensorData {
-                data: vec![0.0],
-                shape: vec![1],
-            },
+            TensorData::from_f32(vec![0.0], vec![1]),
         );
 
         // Corrupt the shape of "weight".
@@ -630,16 +755,282 @@ mod io_tests {
         // Load from SafeTensors
         let loaded_state = load_safetensors(path).unwrap();
 
-        // Verify keys match
-        assert_eq!(state.len(), loaded_state.len());
+        // Every entry comes back with the same dtype, shape and bytes.
+        assert_eq!(state, loaded_state);
+    }
+
+    /// A two-layer model converted to `dtype`, so `state_dict()` has entries in it.
+    fn model_in(dtype: DType) -> Sequential {
+        let mut model = Sequential::new(vec![
+            Box::new(Linear::new(3, 4, true)),
+            Box::new(ReLU),
+            Box::new(Linear::new(4, 2, true)),
+        ]);
+        model.to_dtype(dtype);
+        model
+    }
+
+    /// Saves `dtype` model's state dict with `save`, loads it with `load` into a fresh
+    /// model of the same dtype, and checks the dtype is kept and the values are bit-exact,
+    /// in the loaded dict and in the loaded model's parameters (A8, #53).
+    fn assert_round_trip(
+        dtype: DType,
+        name: &str,
+        save: fn(&StateDict, &std::path::Path),
+        load: fn(&std::path::Path) -> StateDict,
+    ) {
+        let model = model_in(dtype);
+        let state = model.state_dict();
+        assert_eq!(state.len(), 4);
         for (key, td) in &state {
-            let loaded_td = loaded_state.get(key).expect("Key should exist");
-            assert_eq!(td.shape, loaded_td.shape);
-            // Check data (with small tolerance for f32 roundtrip)
-            for (a, b) in td.data.iter().zip(loaded_td.data.iter()) {
-                assert!((a - b).abs() < 1e-6, "Data mismatch for key {key}");
-            }
+            assert_eq!(td.dtype, dtype, "state_dict() entry {key}");
         }
+
+        let tmp = TempFile::new(name);
+        save(&state, tmp.path());
+        let loaded = load(tmp.path());
+        for (key, td) in &state {
+            let back = loaded.get(key).expect("key survives the round trip");
+            assert_eq!(back.dtype, dtype, "{key}: dtype");
+            assert_eq!(back.shape, td.shape, "{key}: shape");
+            assert_eq!(back.data, td.data, "{key}: bytes");
+        }
+        assert_eq!(loaded.len(), state.len());
+
+        let mut fresh = model_in(dtype);
+        fresh
+            .load_state_dict(&loaded)
+            .expect("same architecture loads");
+        let (want, got) = (model.parameters(), fresh.parameters());
+        assert_eq!(want.len(), got.len());
+        for (w, g) in want.iter().zip(&got) {
+            assert_eq!(g.dtype(), dtype);
+            assert_eq!(g.borrow().data.as_bytes(), w.borrow().data.as_bytes());
+        }
+    }
+
+    /// The bincode pair as `assert_round_trip` takes it.
+    fn bincode_save(state: &StateDict, path: &std::path::Path) {
+        save_state_dict(state, path.to_str().expect("utf-8 temp path")).expect("save");
+    }
+
+    /// The bincode loader as `assert_round_trip` takes it.
+    fn bincode_load(path: &std::path::Path) -> StateDict {
+        load_state_dict(path.to_str().expect("utf-8 temp path")).expect("load")
+    }
+
+    /// The safetensors saver as `assert_round_trip` takes it.
+    fn safetensors_save(state: &StateDict, path: &std::path::Path) {
+        save_safetensors(state, path).expect("save");
+    }
+
+    /// The safetensors loader as `assert_round_trip` takes it.
+    fn safetensors_load(path: &std::path::Path) -> StateDict {
+        load_safetensors(path).expect("load")
+    }
+
+    #[test]
+    fn f64_state_dict_round_trips_through_bincode() {
+        assert_round_trip(DType::F64, "f64.bin", bincode_save, bincode_load);
+    }
+
+    #[test]
+    fn f16_state_dict_round_trips_through_bincode() {
+        assert_round_trip(DType::F16, "f16.bin", bincode_save, bincode_load);
+    }
+
+    #[test]
+    fn bf16_state_dict_round_trips_through_bincode() {
+        assert_round_trip(DType::BF16, "bf16.bin", bincode_save, bincode_load);
+    }
+
+    #[test]
+    fn f64_state_dict_round_trips_through_safetensors() {
+        assert_round_trip(
+            DType::F64,
+            "f64.safetensors",
+            safetensors_save,
+            safetensors_load,
+        );
+    }
+
+    #[test]
+    fn f16_state_dict_round_trips_through_safetensors() {
+        assert_round_trip(
+            DType::F16,
+            "f16.safetensors",
+            safetensors_save,
+            safetensors_load,
+        );
+    }
+
+    #[test]
+    fn bf16_state_dict_round_trips_through_safetensors() {
+        assert_round_trip(
+            DType::BF16,
+            "bf16.safetensors",
+            safetensors_save,
+            safetensors_load,
+        );
+    }
+
+    /// f64 values that f32 cannot hold survive a save and load unchanged: the entry is not
+    /// narrowed on the way (A8).
+    #[test]
+    fn f64_values_beyond_f32_precision_survive() {
+        let vals = vec![0.1f64, 1.0 + 1e-12, -3.0e-300, 1.0e300];
+        let t = RawTensor::from_typed(vals.clone(), &[2, 2]);
+        let td = TensorData::from_tensor(&t);
+        let mut state = StateDict::new();
+        state.insert("w".to_string(), td);
+        let tmp = TempFile::new("f64_precision.bin");
+        bincode_save(&state, tmp.path());
+        let back = bincode_load(tmp.path());
+        assert_eq!(back["w"].to_vec_as::<f64>().expect("f64 entry"), vals);
+    }
+
+    /// Loading an entry into a parameter of another dtype casts it, explicitly, as
+    /// before: an f64 checkpoint loads into an f32 model, rounded to nearest.
+    #[test]
+    fn loading_into_another_dtype_casts() {
+        let src = model_in(DType::F64);
+        let mut dst = model_in(DType::F32);
+        dst.load_state_dict(&src.state_dict())
+            .expect("loads with a cast");
+        for (s, d) in src.parameters().iter().zip(&dst.parameters()) {
+            assert_eq!(d.dtype(), DType::F32);
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "the expected value is the f64 rounded to f32, as the cast does"
+            )]
+            let want: Vec<f32> = s
+                .to_vec_as::<f64>()
+                .expect("f64 source")
+                .iter()
+                .map(|&x| x as f32)
+                .collect();
+            assert_eq!(d.to_vec_as::<f32>().expect("f32 destination"), want);
+        }
+    }
+
+    /// A bincode file whose entry holds fewer bytes than its shape and dtype need is
+    /// rejected on load with the `VoltaError`, not returned to panic later.
+    #[test]
+    fn bincode_load_rejects_a_corrupted_length() {
+        let mut td = TensorData::from_typed(vec![1.0f64, 2.0, 3.0, 4.0], vec![2, 2]);
+        td.data.truncate(31);
+        let mut state = StateDict::new();
+        state.insert("w".to_string(), td);
+        let tmp = TempFile::new("corrupt.bin");
+        bincode_save(&state, tmp.path());
+
+        let err = load_state_dict(tmp.path().to_str().expect("utf-8 temp path"))
+            .expect_err("a short entry is an error");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        let inner = err
+            .get_ref()
+            .and_then(|e| e.downcast_ref::<crate::VoltaError>())
+            .expect("wraps a VoltaError");
+        assert!(
+            matches!(
+                inner,
+                crate::VoltaError::StateDataLength { key, expected: 32, len: 31 } if key == "w"
+            ),
+            "{inner:?}"
+        );
+    }
+
+    /// A program-built entry with the wrong byte count is an `Err` from
+    /// `load_state_dict` and from `save_safetensors`, and leaves the parameter alone.
+    #[test]
+    fn malformed_entry_is_an_error_everywhere() {
+        let mut layer = Linear::new(2, 2, false);
+        let before = layer.weight.data();
+        let mut td = TensorData::from_f32(vec![1.0; 4], vec![2, 2]);
+        td.data.pop();
+        let mut state = StateDict::new();
+        state.insert("weight".to_string(), td);
+
+        let err = layer.load_state_dict(&state).expect_err("short entry");
+        assert!(
+            matches!(
+                err,
+                crate::VoltaError::StateDataLength {
+                    expected: 16,
+                    len: 15,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+        assert_eq!(layer.weight.data(), before);
+
+        let tmp = TempFile::new("malformed.safetensors");
+        let err = save_safetensors(&state, tmp.path()).expect_err("short entry");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    /// `to_tensor` rebuilds the tensor in the saved dtype, and `try_to_tensor` refuses a
+    /// malformed entry instead of panicking.
+    #[test]
+    fn to_tensor_keeps_the_dtype_and_try_form_rejects_bad_entries() {
+        let vals: Vec<half::f16> = [0.5f32, -1.25, 3.0]
+            .iter()
+            .map(|&x| half::f16::from_f32(x))
+            .collect();
+        let t = RawTensor::from_typed(vals.clone(), &[3]);
+        let back = TensorData::from_tensor(&t).to_tensor(false);
+        assert_eq!(back.dtype(), DType::F16);
+        assert_eq!(back.to_vec_as::<half::f16>().expect("f16"), vals);
+
+        let mut bad = TensorData::from_f32(vec![1.0; 4], vec![2, 2]);
+        bad.data.truncate(12);
+        assert!(matches!(
+            bad.try_to_tensor(false),
+            Err(crate::VoltaError::StateDataLength { .. })
+        ));
+    }
+
+    /// A bool entry whose byte is not 0 or 1 fails validation.
+    #[test]
+    fn bool_entry_with_a_bad_byte_is_rejected() {
+        let td = TensorData {
+            data: vec![0, 1, 2],
+            shape: vec![3],
+            dtype: DType::Bool,
+        };
+        assert!(matches!(
+            td.validate("mask"),
+            Err(crate::VoltaError::InvalidParameter(_))
+        ));
+    }
+
+    /// `StateDictMapper`'s transpose moves whole elements, so a half entry keeps its dtype
+    /// and its values land transposed (square and asymmetric, so a missing transpose
+    /// shows).
+    #[test]
+    fn mapper_transposes_a_bf16_entry() {
+        let vals: Vec<half::bf16> = [1.0f32, 2.0, 3.0, 4.0]
+            .iter()
+            .map(|&x| half::bf16::from_f32(x))
+            .collect();
+        let mut state = StateDict::new();
+        state.insert(
+            "fc.weight".to_string(),
+            TensorData::from_typed(vals, vec![2, 2]),
+        );
+        let mapped = mapping::StateDictMapper::new()
+            .transpose_linear("fc")
+            .map(state);
+        let w = &mapped["fc.weight"];
+        assert_eq!(w.dtype, DType::BF16);
+        let got: Vec<f32> = w
+            .to_vec_as::<half::bf16>()
+            .expect("bf16 entry")
+            .iter()
+            .map(|x| x.to_f32())
+            .collect();
+        assert_eq!(got, vec![1.0, 3.0, 2.0, 4.0]);
     }
 
     #[test]
