@@ -11,6 +11,14 @@ pub use sgd::SGD;
 
 use crate::Tensor;
 
+/// Zeroed optimizer state shaped like `p`'s data, in its current dtype and on its current
+/// device. Called on a parameter's first step, not at construction, so a model converted
+/// with `to_device` or `to_dtype` before then is stepped in its new device and dtype.
+pub(crate) fn zeros_like(p: &crate::RawTensor) -> crate::Storage {
+    // In the parameter's dtype on its device (a no-op cast for f32).
+    crate::Storage::new_zeros(p.data.len(), &p.device).cast(p.data.dtype())
+}
+
 /// `Ok` if `value` is at least 0 (NaN is not), else PyTorch's message:
 /// `Invalid <name> value: <value>`. Optimizer hyperparameters are arguments a user
 /// supplies, so they are checked before any state is allocated (invariant 8).

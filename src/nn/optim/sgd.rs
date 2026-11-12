@@ -18,8 +18,11 @@ pub struct SGD {
     momentum: f32,
     /// L2 penalty.
     weight_decay: f32,
-    /// Momentum buffer per parameter, on that parameter's device (empty if `momentum` is 0).
-    velocity: Vec<Storage>,
+    /// Momentum buffer per parameter, allocated on the parameter's first step (`None` until
+    /// then, and always when `momentum` is 0), so a model converted with `to_device` or
+    /// `to_dtype` before that step is stepped in its new device and dtype. A conversion
+    /// after the first step panics instead.
+    velocity: Vec<Option<Storage>>,
 }
 
 impl SGD {
@@ -54,23 +57,7 @@ impl SGD {
         super::check_non_negative("learning rate", lr)?;
         super::check_non_negative("momentum", momentum)?;
         super::check_non_negative("weight_decay", weight_decay)?;
-        // Create velocity state matching the device and dtype of each parameter
-        let velocity = if momentum > 0.0 {
-            params
-                .iter()
-                .map(|p| {
-                    let param = p.borrow();
-                    let len = param.data.len();
-                    let device = param.device.clone();
-                    let dtype = param.data.dtype();
-                    drop(param);
-                    // In the parameter's dtype on its device (a no-op cast for f32).
-                    Storage::new_zeros(len, &device).cast(dtype)
-                })
-                .collect()
-        } else {
-            vec![]
-        };
+        let velocity = params.iter().map(|_| None).collect();
 
         Ok(Self {
             params,
@@ -151,13 +138,14 @@ impl SGD {
         let (op, beta1, state1) = if self.momentum == 0.0 {
             (0, 0.0, &mut dummy_state1)
         } else {
-            // Velocity is already on the GPU, with the parameter.
+            // Allocated on the parameter's first step, on its current device.
             (
                 1,
                 self.momentum,
                 self.velocity
                     .get_mut(i)
-                    .expect("SGD: velocity per parameter when momentum > 0"),
+                    .expect("SGD: velocity slot per parameter")
+                    .get_or_insert_with(|| super::zeros_like(&p)),
             )
         };
 
@@ -212,12 +200,16 @@ impl SGD {
         }
 
         if self.momentum > 0.0 {
-            // Get mutable access to CPU velocity state
-            let vel = self.velocity.get_mut(i).expect("SGD: a velocity per parameter");
+            // Allocated on the parameter's first step, in its current dtype.
+            let vel = self
+                .velocity
+                .get_mut(i)
+                .expect("SGD: velocity slot per parameter")
+                .get_or_insert_with(|| super::zeros_like(&p));
             assert_eq!(
                 vel.dtype(),
                 dtype,
-                "SGD velocity dtype; build the optimizer after Module::to_dtype"
+                "SGD velocity dtype; convert the model before the optimizer's first step"
             );
             let mut vel_slice = vel.host_mut::<T>();
 
