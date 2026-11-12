@@ -927,7 +927,9 @@ impl RawTensor {
     ///
     /// # Panics
     /// If integer targets are not `[N]` or hold an index outside `0..C` (there is no
-    /// `ignore_index`), or float targets don't match the logits (`elem_mul`'s checks).
+    /// `ignore_index`), or float targets are not exactly `[N, C]`, the logits' shape. Float
+    /// targets are never broadcast, so float class indices `[N]` are rejected rather than
+    /// read as probabilities; class indices must be an I64 or I32 tensor.
     #[must_use]
     #[track_caller]
     pub fn cross_entropy_loss(logits: &Tensor, targets: &Tensor) -> Tensor {
@@ -1002,6 +1004,16 @@ impl RawTensor {
             let zeros = log_probs.constant_like(vec![0.0; n * c], &[n, c]);
             mask.where_op(log_probs, &zeros)
         } else {
+            // Exact match, no broadcast: float class indices `[N]` broadcast against
+            // `[N, C]` whenever N == C or N == 1 and give a number that is no cross entropy.
+            let (ts, lp) = (targets.shape(), log_probs.shape());
+            assert!(
+                ts == lp,
+                "{op}: float targets must match the logits' shape {:?}, got {:?} \
+                 (class indices must be an I64/I32 tensor)",
+                lp.truncate_rank(),
+                ts.truncate_rank()
+            );
             targets.elem_mul(log_probs)
         };
         let sum = Self::sum_dim(&picked, Axis(1), false);
@@ -2231,6 +2243,9 @@ pub fn mse_loss(pred: &Tensor, target: &Tensor) -> Tensor {
 }
 
 /// Free-function form of [`RawTensor::cross_entropy_loss`].
+///
+/// # Panics
+/// As [`RawTensor::cross_entropy_loss`].
 #[must_use]
 #[track_caller]
 pub fn cross_entropy_loss(logits: &Tensor, targets: &Tensor) -> Tensor {
@@ -2238,6 +2253,9 @@ pub fn cross_entropy_loss(logits: &Tensor, targets: &Tensor) -> Tensor {
 }
 
 /// Free-function form of [`RawTensor::nll_loss`].
+///
+/// # Panics
+/// As [`RawTensor::nll_loss`].
 #[must_use]
 #[track_caller]
 pub fn nll_loss(log_probs: &Tensor, targets: &Tensor) -> Tensor {
