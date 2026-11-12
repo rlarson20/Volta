@@ -65,7 +65,7 @@ Decide by where an argument comes from (DECISIONS.md, "Panic inside the program,
 | Left out | Why |
 | --- | --- |
 | `time_sequence` | Trains to NaN and runs past 4 minutes (#88). Add it back with the fix. |
-| `mnist_cnn`, `mnist_rnn`, `mnist_autocast`, `vae`, `dcgan` | Need MNIST in `data/mnist`, and run for minutes (#59 is the MNIST lane; #54 for DCGAN). |
+| `mnist_cnn`, `mnist_rnn`, `mnist_autocast`, `vae`, `dcgan` | Need MNIST in `data/mnist`, and run for minutes (#59 is the MNIST lane). One `dcgan` epoch takes hours on the CPU, almost all of it in convolution backward passes (#230, #231). |
 | `gpu` | Does nothing without the `gpu` feature. |
 
 A new example joins the set when it needs no downloaded data and runs in seconds; add it to the `smoke` list in the script and to this table, with its loss assertion.

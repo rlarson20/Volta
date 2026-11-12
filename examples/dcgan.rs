@@ -3,6 +3,9 @@
 //! Needs the MNIST training images in `data/mnist/`; it exits with download instructions if they are missing, rather than train on made-up data.
 //!
 //! Images are normalized to `[-1, 1]` to match the generator's `Tanh` output. The example asserts that range before it trains, and exits if the losses go non-finite or the generator's output collapses to a constant.
+//!
+//! Each epoch prints the mean D/G losses and the generator's output statistics on a fixed noise batch.
+//! The number of epochs is the optional first argument (default 5): `cargo run --release --example dcgan -- 1`.
 use volta::{
     Adam, Conv2d, ConvTranspose2d, Flatten, Layer, Linear, Module, ProgressBar, RawTensor, Tanh,
     Tensor, bce_with_logits_loss, load_mnist_images, normalize, randn,
@@ -128,7 +131,16 @@ fn main() {
 
     let latent_dim = 100;
     let batch_size = 64;
-    let num_epochs = 5;
+    let num_epochs: usize = match std::env::args().nth(1) {
+        None => 5,
+        Some(arg) => match arg.parse() {
+            Ok(n) if n > 0 => n,
+            _ => {
+                eprintln!("usage: dcgan [EPOCHS]  (EPOCHS is a positive integer, default 5)");
+                std::process::exit(2);
+            }
+        },
+    };
     let learning_rate = 0.0002;
 
     // Load MNIST data
@@ -138,9 +150,7 @@ fn main() {
         Err(err) => {
             eprintln!("Could not load MNIST images from {train_images_path}: {err}");
             eprintln!("\nTo download MNIST data:");
-            eprintln!("  mkdir -p data/mnist && cd data/mnist");
-            eprintln!("  curl -O http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz");
-            eprintln!("  gunzip *.gz");
+            eprintln!("  just mnist-data");
             std::process::exit(1);
         }
     };
@@ -209,9 +219,10 @@ fn main() {
             let real_images = RawTensor::new(batch_data, &[batch_size, 1, 28, 28], false);
             let real_labels = RawTensor::ones(&[batch_size, 1]);
 
-            // Fake images
+            // Fake images. Detached: the discriminator step must not backpropagate into the
+            // generator, whose gradients `g_optimizer.zero_grad()` would discard anyway.
             let noise = randn(&[batch_size, latent_dim]);
-            let fake_images = generator.forward(&noise);
+            let fake_images = generator.forward(&noise).detach();
             let fake_labels = RawTensor::zeros(&[batch_size, 1]);
 
             // D(real) should be close to 1
@@ -244,15 +255,35 @@ fn main() {
 
             g_loss.into_loss().expect("scalar loss").backward();
             g_optimizer.step();
+
+            // An epoch takes a long time on the CPU, so report the running means as it goes.
+            let done = batch_idx + 1;
+            if done % 100 == 0 {
+                println!(
+                    "  epoch {} batch {done}/{num_batches}: D_loss={:.4}, G_loss={:.4}",
+                    epoch + 1,
+                    total_d_loss / done as f32,
+                    total_g_loss / done as f32
+                );
+            }
         }
 
         progress.update(epoch + 1);
 
         let avg_d_loss = total_d_loss / num_batches as f32;
         let avg_g_loss = total_g_loss / num_batches as f32;
-        println!(" D_loss={avg_d_loss:.4}, G_loss={avg_g_loss:.4}");
+        let (mean, std) = mean_std(&generator.forward(&probe_noise));
+        println!(
+            " epoch {}: D_loss={avg_d_loss:.4}, G_loss={avg_g_loss:.4}, generator output mean={mean:.4}, std={std:.4}",
+            epoch + 1
+        );
         if !avg_d_loss.is_finite() || !avg_g_loss.is_finite() {
             eprintln!("Training diverged: D_loss={avg_d_loss}, G_loss={avg_g_loss}");
+            std::process::exit(1);
+        }
+        // A generator that collapsed (or saturated tanh) emits one constant image.
+        if std < 1e-3 {
+            eprintln!("Generator output collapsed to a constant (std={std})");
             std::process::exit(1);
         }
     }
@@ -261,11 +292,6 @@ fn main() {
 
     let (mean_after, std_after) = mean_std(&generator.forward(&probe_noise));
     println!("Generator output after training: mean={mean_after:.4}, std={std_after:.4}");
-    // A generator that collapsed (or saturated tanh) emits one constant image.
-    if std_after < 1e-3 {
-        eprintln!("Generator output collapsed to a constant (std={std_after})");
-        std::process::exit(1);
-    }
 
     // Generate sample images
     println!("\nGenerating sample images:");
