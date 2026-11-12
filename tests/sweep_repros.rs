@@ -224,23 +224,16 @@ fn attention_supports_cross_attention_lengths() {
 }
 
 #[test]
-#[ignore = "S9: an optimizer step rewrites a parameter in place after the forward pass saved it; backward then uses the new value (torch raises 'modified by an inplace operation')"]
-fn backward_after_an_optimizer_step_does_not_silently_use_the_new_weights() {
-    // y = sum(w * x), w = 2, x = 3, so dy/dx = w = 2 at forward time.
+#[should_panic(expected = "modified by an inplace operation")]
+fn backward_after_an_optimizer_step_refuses_the_stale_graph() {
+    // y = sum(w * x), w = 2, x = 3, so dy/dx = w = 2 at forward time. Torch raises when
+    // backward then finds `w` rewritten in place by the optimizer step.
     let w = RawTensor::new(vec![2.0], &[1], true);
     let x = RawTensor::new(vec![3.0], &[1], true);
     let loss = w.elem_mul(&x).sum().into_loss().expect("scalar");
     w.set_grad(Storage::cpu(vec![1.0]));
     SGD::new(vec![w], 1.0, 0.0, 0.0).step(); // w becomes 1
-    // Either backward refuses (a panic), or it uses the forward-time w = 2.
-    let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| loss.backward()));
-    if ran.is_ok() {
-        assert_eq!(
-            x.grad().expect("grad"),
-            vec![2.0],
-            "x.grad used the post-step weight"
-        );
-    }
+    loss.backward();
 }
 
 #[test]

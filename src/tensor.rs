@@ -141,6 +141,7 @@ impl Tensor {
         }
         let cpu = Storage::cpu(src.data.clone()).cast(t.data.dtype());
         t.data = cpu.to_device(&t.device);
+        t.bump_version();
         Ok(())
     }
 
@@ -166,6 +167,7 @@ impl Tensor {
             VoltaError::NotDifferentiable { dtype }
         );
         t.data = t.data.cast(dtype);
+        t.bump_version();
         let grad = t.grad.clone();
         drop(t);
         // Through `set_grad`, one of the sanctioned writers of `grad` (invariant 3).
@@ -291,6 +293,8 @@ impl Tensor {
                 grad_fn: None,
                 parents: vec![],
                 device: t.device.clone(),
+                version: 0,
+                saved_versions: vec![],
             })),
         }
     }
@@ -414,6 +418,13 @@ pub struct RawTensor {
     pub parents: Vec<Tensor>,
     /// Where `data` lives.
     pub device: Device,
+    /// Bumped by every in-place write to `data` (an optimizer step, `load_weight`, a dtype
+    /// or device move), as PyTorch's version counter is. `edge()` records it for each input
+    /// a backward pass reads, and backward panics if it has moved (S9).
+    pub(crate) version: u64,
+    /// For an op output, one entry per parent: the parent's `version` at forward time if
+    /// this op's backward reads that parent's values, else `None`.
+    pub(crate) saved_versions: Vec<Option<u64>>,
 }
 
 // ===== RNG HELPERS =====
@@ -451,6 +462,14 @@ where
     })
 }
 
+impl RawTensor {
+    /// Records an in-place write to `data`, so a backward pass that saved this tensor's
+    /// values can tell they changed (S9). Every in-place writer calls it.
+    pub(crate) const fn bump_version(&mut self) {
+        self.version += 1;
+    }
+}
+
 impl Clone for RawTensor {
     fn clone(&self) -> Self {
         Self {
@@ -461,6 +480,8 @@ impl Clone for RawTensor {
             grad_fn: self.grad_fn.clone(),
             parents: self.parents.clone(),
             device: self.device.clone(),
+            version: self.version,
+            saved_versions: self.saved_versions.clone(),
         }
     }
 }
@@ -522,6 +543,8 @@ impl RawTensor {
             grad_fn: None,
             parents: vec![],
             device: Device::CPU,
+            version: 0,
+            saved_versions: vec![],
         };
         Ok(Tensor {
             inner: Rc::new(RefCell::new(raw)),
@@ -572,6 +595,8 @@ impl RawTensor {
             grad_fn: None,
             parents: vec![],
             device,
+            version: 0,
+            saved_versions: vec![],
         };
         Ok(Tensor {
             inner: Rc::new(RefCell::new(raw)),

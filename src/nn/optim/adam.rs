@@ -144,6 +144,8 @@ impl Adam {
             Some(g) => g.clone(),
             None => return,
         };
+        // The step rewrites the parameter in place (S9).
+        p.bump_version();
 
         // Allocated here on the parameter's first step, on its current device.
         let state = self
@@ -181,6 +183,8 @@ impl Adam {
             Some(g) => g.clone(),
             None => return,
         };
+        // The step rewrites the parameter in place (S9).
+        p.bump_version();
 
         let dtype = p.data.dtype();
         dispatch_real!(dtype, T => {

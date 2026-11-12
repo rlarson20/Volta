@@ -113,6 +113,7 @@ pub trait Module {
                 // `Storage::to_device` panics when the GPU is unavailable rather than
                 // leaving the data on the CPU under a GPU label.
                 p.data = p.data.to_device(&device);
+                p.bump_version();
                 p.device = device.clone();
             }
             // `set_grad` moves an existing gradient onto the parameter's new device.

@@ -190,6 +190,41 @@ impl GradFn {
         }
     }
 
+    /// Whether this op's backward reads the values of parent `i` when it runs, so that an
+    /// in-place write to it after the forward pass would change the gradient (S9). An op
+    /// whose derivative doesn't depend on an input's values (`Add`, `Sum`, a reshape), or
+    /// that saved what it needs in its own state (`MaxPool2d`'s indices, `Where`'s mask),
+    /// returns `false`: PyTorch doesn't complain about those either. Every variant is
+    /// spelled out so a new one has to decide.
+    pub(crate) fn saves_input(&self, i: usize) -> bool {
+        match self {
+            Self::Unary(g) => g.saves_input(),
+            Self::Binary(g) => g.saves_input(),
+            // The first two operands (x and y; input and weight). `MulAcc`'s addend and a
+            // conv's bias (parent 2) are not read.
+            Self::MulAcc(_)
+            | Self::MatMul(_)
+            | Self::Bce(_)
+            | Self::DirectConv(_)
+            | Self::Igemm(_)
+            | Self::ConvTranspose2d(_) => i < 2,
+            Self::Transpose(_)
+            | Self::Sum(_)
+            | Self::MaxReduce(_)
+            | Self::Mean(_)
+            | Self::SumDim(_)
+            | Self::MaxDim(_)
+            | Self::Where(_)
+            | Self::Movement(_)
+            | Self::Im2col(_)
+            | Self::MaxPool2d(_)
+            | Self::Embedding(_)
+            | Self::ToDevice(_)
+            | Self::Cast(_)
+            | Self::Compare(_) => false,
+        }
+    }
+
     /// Whether this gradient function is a no-op (`Mod`, which has no useful derivative,
     /// and comparisons). `edge()` never attaches a trivial
     /// `GradFn`, even if an input requires grad. Every variant is spelled out so a new
@@ -294,6 +329,14 @@ pub(crate) fn edge(
     if requires_grad {
         let mut o = out.borrow_mut();
         o.parents = inputs.as_ref().to_vec();
+        // The versions of the inputs backward will read, to catch an in-place write in
+        // between (S9).
+        o.saved_versions = inputs
+            .as_ref()
+            .iter()
+            .enumerate()
+            .map(|(i, p)| grad.saves_input(i).then(|| p.borrow().version))
+            .collect();
         o.grad_fn = Some(grad);
     }
     out
@@ -364,6 +407,26 @@ impl Drop for NoGradGuard {
 // ===== BACKPROPAGATION =====
 
 impl RawTensor {
+    /// Panics if an input that `grad_fn`'s backward reads was written in place after the
+    /// forward pass recorded its version (S9): the gradient would silently use the new
+    /// values, where PyTorch raises "modified by an inplace operation".
+    #[track_caller]
+    fn check_saved_versions(grad_fn: &GradFn, parents: &[Tensor], saved: &[Option<u64>]) {
+        for (i, (parent, saved)) in parents.iter().zip(saved).enumerate() {
+            if let Some(expected) = saved {
+                let now = parent.borrow().version;
+                assert!(
+                    *expected == now,
+                    "{}: input {i} was modified by an inplace operation after the forward \
+                     pass saved it (version {expected} at forward, {now} now); an optimizer \
+                     step, `load_state_dict`, or a dtype/device move before backward changes \
+                     the gradient. Run backward before stepping, or redo the forward pass",
+                    grad_fn.op_name()
+                );
+            }
+        }
+    }
+
     /// Run backpropagation from a scalar loss.
     ///
     /// Only reachable through [`ScalarLoss::backward`], which has already checked
@@ -444,11 +507,12 @@ impl RawTensor {
         // topo_order has [leaf, ..., root]. We reverse to get [root, ..., leaf].
 
         for tensor in topo_order.into_iter().rev() {
-            let (grad_fn, parents, shape, device) = {
+            let (grad_fn, parents, saved_versions, shape, device) = {
                 let t = tensor.borrow();
                 (
                     t.grad_fn.clone(),
                     t.parents.clone(),
+                    t.saved_versions.clone(),
                     t.shape.clone(),
                     t.device.clone(),
                 )
@@ -466,7 +530,11 @@ impl RawTensor {
                     grad_fn: None,
                     parents: vec![],
                     device,
+                    version: 0,
+                    saved_versions: vec![],
                 };
+
+                Self::check_saved_versions(&grad_fn, &parents, &saved_versions);
 
                 // Compute gradients for parent tensors
                 let parent_grads = grad_fn.backward(&grad_out, &parents);
@@ -573,6 +641,13 @@ impl ScalarLoss {
     ///
     /// Calling it again adds that pass's gradient to each leaf's existing one. A tensor
     /// that is the output of an op keeps no `grad`.
+    ///
+    /// # Panics
+    /// If a tensor an op saved for backward (a parameter it multiplied, say) was written in
+    /// place after the forward pass: by an optimizer step, `load_state_dict`, or a dtype or
+    /// device move. PyTorch raises the same "modified by an inplace operation" error. Ops
+    /// whose gradient doesn't depend on an input's values (`add`, `sum`, `reshape`) don't
+    /// check it.
     pub fn backward(&self) {
         RawTensor::run_backward(&self.0);
     }
