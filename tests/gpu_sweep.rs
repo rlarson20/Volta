@@ -31,7 +31,6 @@ fn on_gpu(data: Vec<f32>, shape: &[usize], requires_grad: bool) -> Tensor {
 }
 
 #[test]
-#[ignore = "S21: the GPU max_reduce kernel starts its running maximum at -1e9, so the max of values below that is wrong"]
 fn gpu_max_of_values_below_minus_1e9() {
     if skip_or_mark("gpu_max_of_values_below_minus_1e9") {
         return;
@@ -41,7 +40,6 @@ fn gpu_max_of_values_below_minus_1e9() {
 }
 
 #[test]
-#[ignore = "S21: the GPU max index is found by |v - max| < 1e-6, so a near-tie sends the gradient to the first of two values 2.4e-7 apart"]
 fn gpu_max_gradient_goes_to_the_true_maximum_on_a_near_tie() {
     if skip_or_mark("gpu_max_gradient_goes_to_the_true_maximum_on_a_near_tie") {
         return;
@@ -80,7 +78,6 @@ fn modulo_agrees_between_cpu_and_gpu() {
 }
 
 #[test]
-#[ignore = "S22: the GPU erf is Abramowitz-Stegun 7.1.26 (abs error 1.5e-7), so its relative error near 0 is about 1e-4"]
 fn gpu_erf_is_relatively_accurate_near_zero() {
     if skip_or_mark("gpu_erf_is_relatively_accurate_near_zero") {
         return;
@@ -91,6 +88,69 @@ fn gpu_erf_is_relatively_accurate_near_zero() {
     for (i, (c, g)) in cpu.iter().zip(&gpu).enumerate() {
         assert!(((c - g) / c).abs() < 1e-5, "erf[{i}]: cpu {c} gpu {g}");
     }
+}
+
+#[test]
+fn gpu_erf_matches_cpu_to_a_few_ulps_across_the_range() {
+    if skip_or_mark("gpu_erf_matches_cpu_to_a_few_ulps_across_the_range") {
+        return;
+    }
+    // Magnitudes from 1e-8 up, so the shader's absolute error shows as relative error
+    // near zero, then a geometric sweep through the bend and into saturation.
+    let mut xs = vec![0.0f32];
+    for e in -8..=0 {
+        for m in [1.0f32, 1.7, 3.1] {
+            let v = m * 10f32.powi(e);
+            xs.extend([v, -v]);
+        }
+    }
+    let mut x = 1.0f32;
+    while x < 7.0 {
+        xs.extend([x, -x]);
+        x *= 1.07;
+    }
+    let n = xs.len();
+    let cpu = RawTensor::new(xs.clone(), &[n], false).erf().data();
+    let gpu = on_gpu(xs.clone(), &[n], false).erf().data();
+    assert_eq!(cpu.len(), gpu.len());
+    let mut worst = (0.0f32, 0.0f32);
+    for (i, (c, g)) in cpu.iter().zip(&gpu).enumerate() {
+        if *c == 0.0 {
+            assert_eq!(*g, 0.0, "erf({}): cpu 0, gpu {g}", xs[i]);
+            continue;
+        }
+        let rel = ((c - g) / c).abs();
+        if rel > worst.0 {
+            worst = (rel, xs[i]);
+        }
+    }
+    println!("erf worst relative error {} at x = {}", worst.0, worst.1);
+    assert!(
+        worst.0 < 5e-7,
+        "erf relative error {} at x = {}",
+        worst.0,
+        worst.1
+    );
+}
+
+#[test]
+fn gpu_erf_is_odd_and_saturates_without_nan() {
+    if skip_or_mark("gpu_erf_is_odd_and_saturates_without_nan") {
+        return;
+    }
+    let xs = vec![0.3, 0.97, 1.0, 2.5, 6.0, 20.0, 1.0e30, f32::INFINITY];
+    let neg: Vec<f32> = xs.iter().map(|x| -x).collect();
+    let n = xs.len();
+    let pos = on_gpu(xs.clone(), &[n], false).erf().data();
+    let negated = on_gpu(neg, &[n], false).erf().data();
+    for (i, (p, m)) in pos.iter().zip(&negated).enumerate() {
+        assert_eq!(*p, -*m, "erf is odd at x = {}", xs[i]);
+        assert!(p.is_finite() && *p <= 1.0, "erf({}) = {p}", xs[i]);
+    }
+    assert_eq!(pos[5], 1.0);
+    assert_eq!(pos[7], 1.0);
+    let nan = on_gpu(vec![f32::NAN, 0.5], &[2], false).erf().data();
+    assert!(nan[0].is_nan(), "erf(NaN) = {}", nan[0]);
 }
 
 #[test]
