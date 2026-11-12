@@ -714,6 +714,18 @@ Seeds spread about 0.25 points, so a 5-seed mean has a standard error near 0.05;
 
 **Not changed:** ops that take an `Axis` (`max_dim`, `mean_dim`, `softmax`, `permute`, ...) and the GPU layer's `Option` returns stay as they were. A binding range-checks an axis against `shape().rank()` itself until those get a `try_` form.
 
+---
+
+### `check_gradients` refuses half-precision inputs and fails on NaN (#57/A6, #90)
+
+**Decision:** `check_gradients` (and `check_gradients_simple`, which calls it) panics when the input is f16 or bf16, saying the finite difference is meaningless at that precision and to cast to f32 or f64 first. A NaN or infinite relative error at any element fails the check and is what `max_error` reports.
+
+**Why refuse, not warn or document:** a central difference at half precision can't resolve the step (bf16 has 8 mantissa bits), so the check fails correct gradients (A6). Torch's `gradcheck` warns and then fails; a warning in a library that never prints is a `log::warn!` most callers never see, and documenting it leaves the trap in place. The input dtype is chosen by the program, so per "Panic inside the program" this is a panic under `# Panics`, not a `VoltaError`. A test that wants to check a half-precision op casts inside `loss_fn` (`x.to_dtype(DType::F16)`) on an f32 or f64 input.
+
+**Why NaN fails:** `f64::max` drops a NaN operand, so a NaN gradient (an op evaluated outside its domain, or a real backward bug) left `max_error` at 0 and `passed` true (#90). Every gradient test is built on this function, so none of them could catch a NaN.
+
+---
+
 ## Layers
 
 ### Attention owns no residual (#39, S10/S11)
