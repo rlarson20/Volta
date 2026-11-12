@@ -119,7 +119,6 @@ fn remainder_matches_torch_forward_and_gradient() {
 }
 
 #[test]
-#[ignore = "S2: a row with no winner keeps flat index 0 of the whole tensor, so its gradient lands in row 0"]
 fn max_dim_all_neg_inf_row_keeps_gradient_in_its_row() {
     // S2
     let f = Fixture::load("ops");
@@ -137,7 +136,6 @@ fn max_dim_all_neg_inf_row_keeps_gradient_in_its_row() {
 }
 
 #[test]
-#[ignore = "S2: > skips NaN, so max_dim([NaN, 3]) is 3; torch returns NaN"]
 fn max_dim_propagates_nan_like_torch() {
     // S2/S4
     let f = Fixture::load("ops");
@@ -147,6 +145,56 @@ fn max_dim_propagates_nan_like_torch() {
         &x.max_dim(Axis(1), false).data(),
         &f.values("max_dim_nan.out"),
         TOL_FWD,
+    );
+}
+
+#[test]
+fn max_dim_tie_sends_the_whole_gradient_to_the_first_index() {
+    // Unlike `max()`, `max(dim)` does not split a tie.
+    let f = Fixture::load("ops");
+    let x = f.tensor("max_dim_tie.x", true);
+    let out = x.max_dim(Axis(1), false);
+    assert_close("out", &out.data(), &f.values("max_dim_tie.out"), TOL_FWD);
+    let w = RawTensor::new(vec![1.0, 10.0], &[2], false);
+    backward_weighted(&out, Some(&w));
+    assert_close(
+        "grad",
+        &grad_of("x", &x),
+        &f.values("max_dim_tie.grad"),
+        TOL_BWD,
+    );
+}
+
+#[test]
+fn max_dim_with_two_nans_sends_the_gradient_to_the_first() {
+    let f = Fixture::load("ops");
+    let x = f.tensor("max_dim_nan2.x", true);
+    let out = x.max_dim(Axis(1), false);
+    assert_close("out", &out.data(), &f.values("max_dim_nan2.out"), TOL_FWD);
+    let w = RawTensor::new(vec![1.0, 10.0], &[2], false);
+    backward_weighted(&out, Some(&w));
+    assert_close(
+        "grad",
+        &grad_of("x", &x),
+        &f.values("max_dim_nan2.grad"),
+        TOL_BWD,
+    );
+}
+
+#[test]
+fn softmax_of_a_fully_masked_row_leaves_the_other_row_clean() {
+    // S2: the masked row is NaN in torch too, but its gradient must not land in row 0.
+    let f = Fixture::load("ops");
+    let x = f.tensor("softmax_masked.x", true);
+    let out = x.softmax(Axis(1));
+    assert_close("out", &out.data(), &f.values("softmax_masked.out"), TOL_FWD);
+    let w = RawTensor::new(f.values("softmax_masked.w"), &[2, 2], false);
+    backward_weighted(&out, Some(&w));
+    assert_close(
+        "grad",
+        &grad_of("x", &x),
+        &f.values("softmax_masked.grad"),
+        TOL_BWD,
     );
 }
 
