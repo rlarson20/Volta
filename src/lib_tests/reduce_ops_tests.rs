@@ -105,3 +105,54 @@ fn max_dim_routes_grad_to_argmax_per_row() {
     // argmax row 0 -> col 1; row 1 -> col 0
     assert_eq!(x.grad(), Some(vec![0.0, 1.0, 0.0, 1.0, 0.0, 0.0]));
 }
+
+/// 1.0 then many terms below half an ulp of 1.0: a running sum never moves off 1.0, an error
+/// of 3e-3 for 100000 terms (S6). Pairwise summation is off by under 1e-5 (the first leaf run
+/// of 128 still adds in sequence).
+fn one_then_tiny(n: usize) -> Vec<f32> {
+    let mut v = vec![3.0e-8f32; n];
+    *crate::index::slot(&mut v, 0) = 1.0;
+    v
+}
+
+#[test]
+fn sum_dim_adds_a_long_strided_axis_pairwise() {
+    // Axis 0 of (n, 2): column 0 is `one_then_tiny`, column 1 is zero, so the sum strides
+    // by 2 through the data (inner_size > 1).
+    let n = 100_001;
+    let data: Vec<f32> = one_then_tiny(n)
+        .into_iter()
+        .flat_map(|v| [v, 0.0])
+        .collect();
+    let x = RawTensor::new(data, &[n, 2], false);
+    let s = x.sum_dim(Axis(0), false).data();
+    let want = 1.0 + 100_000.0 * 3.0e-8_f64;
+    assert!(
+        (f64::from(fetch(&s, 0)) - want).abs() < 1e-5,
+        "col 0: {}, exact {want}",
+        fetch(&s, 0)
+    );
+    assert_eq!(fetch(&s, 1), 0.0);
+}
+
+#[test]
+fn sum_dim_of_2_pow_25_ones_is_exact() {
+    let n = 1usize << 25;
+    let x = RawTensor::new(vec![1.0; n], &[1, n], false);
+    assert_eq!(x.sum_dim(Axis(1), false).data(), vec![33_554_432.0]);
+}
+
+#[test]
+fn mean_dim_of_2_pow_25_ones_is_one() {
+    let n = 1usize << 25;
+    let x = RawTensor::new(vec![1.0; n], &[1, n], false);
+    assert_eq!(x.mean_dim(Axis(1), false).data(), vec![1.0]);
+}
+
+#[test]
+fn sum_and_mean_add_pairwise() {
+    let x = RawTensor::new(one_then_tiny(100_001), &[100_001], false);
+    let want = 1.0 + 100_000.0 * 3.0e-8_f64;
+    assert!((f64::from(x.sum().item()) - want).abs() < 1e-5);
+    assert!((f64::from(x.mean().item()) - want / 100_001.0).abs() < 1e-9);
+}
