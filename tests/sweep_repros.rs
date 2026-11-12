@@ -96,7 +96,6 @@ fn feed_forward_intermediate_dim_is_the_hidden_width() {
 }
 
 #[test]
-#[ignore = "S19: add_prefix removes each old key as it inserts the new one, so a key that is another's new name is lost"]
 fn add_prefix_keeps_every_tensor() {
     let td = |v: f32| TensorData {
         data: vec![v],
@@ -237,7 +236,6 @@ fn backward_after_an_optimizer_step_refuses_the_stale_graph() {
 }
 
 #[test]
-#[ignore = "S20: DataLoader::new does not check that targets cover every sample; the mismatch surfaces as a slice panic partway through an epoch"]
 fn dataloader_rejects_targets_shorter_than_data_up_front() {
     // 4 samples of 2 values, but targets for only 2 samples.
     let built = std::panic::catch_unwind(|| {

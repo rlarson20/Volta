@@ -2069,6 +2069,9 @@ pub struct DataLoader {
 
 impl DataLoader {
     /// Builds a loader over `data` and `targets`, whose sample count is `data.len()` divided by the elements of `data_shape`. Shuffles once if `shuffle`.
+    ///
+    /// # Panics
+    /// Wherever [`DataLoader::try_new`] returns an error.
     #[must_use]
     pub fn new(
         data: Vec<f32>,
@@ -2078,7 +2081,34 @@ impl DataLoader {
         batch_size: usize,
         shuffle: bool,
     ) -> Self {
+        Self::try_new(data, targets, data_shape, target_shape, batch_size, shuffle)
+            .unwrap_or_else(|e| panic!("DataLoader::new: {e}"))
+    }
+
+    /// As [`DataLoader::new`], returning an error instead of panicking.
+    ///
+    /// # Errors
+    /// [`VoltaError::InvalidParameter`] if `targets` does not hold exactly one target of
+    /// `target_shape` per sample. Checked before anything is allocated or shuffled.
+    pub fn try_new(
+        data: Vec<f32>,
+        targets: Vec<f32>,
+        data_shape: &[usize],
+        target_shape: &[usize],
+        batch_size: usize,
+        shuffle: bool,
+    ) -> Result<Self> {
         let num_samples = data.len() / data_shape.iter().product::<usize>();
+        let target_size = target_shape.iter().product::<usize>();
+        let expected_targets = num_samples.checked_mul(target_size);
+        if expected_targets != Some(targets.len()) {
+            return Err(VoltaError::InvalidParameter(format!(
+                "DataLoader: {num_samples} samples of shape {data_shape:?} need {} target values of shape {target_shape:?}, got {}",
+                expected_targets
+                    .map_or_else(|| "more than usize::MAX".to_string(), |n| n.to_string()),
+                targets.len()
+            )));
+        }
         let mut indices: Vec<usize> = (0..num_samples).collect();
 
         if shuffle {
@@ -2086,7 +2116,7 @@ impl DataLoader {
             with_rng(|rng| indices.shuffle(rng));
         }
 
-        Self {
+        Ok(Self {
             data,
             targets,
             data_shape: data_shape.to_vec(),
@@ -2096,7 +2126,7 @@ impl DataLoader {
             indices,
             current: 0,
             device: None, // Default: no GPU prefetch
-        }
+        })
     }
 
     /// Enable automatic GPU prefetch for batches

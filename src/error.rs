@@ -94,6 +94,18 @@ pub enum VoltaError {
         len: usize,
     },
 
+    /// A [`StateDictMapper`](crate::io::mapping::StateDictMapper) renaming step would give
+    /// two entries the same name, so one of them would be lost.
+    #[error("State dict entries '{first}' and '{second}' both map to '{key}'")]
+    StateKeyCollision {
+        /// The name both entries would end up under.
+        key: String,
+        /// The first entry's original name (in key order).
+        first: String,
+        /// The second entry's original name.
+        second: String,
+    },
+
     /// Gradients were requested for a tensor whose dtype has none (integers and bool).
     #[error("Only floating-point tensors can require gradients, got {dtype}")]
     NotDifferentiable {
