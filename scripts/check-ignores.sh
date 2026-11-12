@@ -13,20 +13,26 @@
 # VOLTA_REQUIRE_GH=1 turns that skip into a failure (CI). The repository is $GITHUB_REPOSITORY
 # when set (CI), else the owner/name in the `origin` URL.
 #
+# `--list` also prints each ignored test as `file:line  test  ID  issues` (issues are `-` when
+# the issue check is skipped).
+#
 # Not caught: an ignore reason that starts on the line after `#[ignore =` (it fails step 1,
 # loudly), and an `ignore` spelled through a macro.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 offline=0
-case "${1:-}" in
-"") ;;
---offline) offline=1 ;;
-*)
-    echo "usage: $0 [--offline]" >&2
-    exit 2
-    ;;
-esac
+list=0
+for arg in "$@"; do
+    case "$arg" in
+    --offline) offline=1 ;;
+    --list) list=1 ;;
+    *)
+        echo "usage: $0 [--offline] [--list]" >&2
+        exit 2
+        ;;
+    esac
+done
 
 dirs=(src tests examples benches)
 id_re='#[0-9]+|[A-Z]+[0-9]+'
@@ -50,6 +56,15 @@ while IFS= read -r hit; do
     fi
 done <<<"$hits"
 
+# `--list`: `file:line  test  ID  issues` for each ignored test. The test is the first `fn` at or
+# after the attribute; the issues are filled in by check_issues, or "-" when it does not run.
+test_name() {
+    awk -v n="${1#*:}" 'NR >= n && match($0, /fn [A-Za-z0-9_]+/) { print substr($0, RSTART + 3, RLENGTH - 3); exit }' "${1%%:*}"
+}
+print_entry() { # loc id issues
+    printf '  %s  %s  %s  %s\n' "$1" "$(test_name "$1")" "$2" "$3"
+}
+
 status=0
 if [ ${#bad[@]} -gt 0 ]; then
     echo "#[ignore] without a defect ID (write #[ignore = \"S<n>: <why>\"] or #[ignore = \"#<issue>: <why>\"]):" >&2
@@ -63,6 +78,7 @@ skip() {
         exit 1
     fi
     echo "check-ignores: issue check skipped ($1)"
+    list_unresolved
 }
 
 check_issues() {
@@ -113,6 +129,15 @@ check_issues() {
             }')
         open=$(printf '%s' "$matches" | awk -F'\t' '$2 == "open" { printf "%s#%s", sep, $1; sep = ", " }')
         closed=$(printf '%s' "$matches" | awk -F'\t' '$2 == "closed" { printf "%s#%s", sep, $1; sep = ", " }')
+        if [ "$list" = 1 ]; then
+            print_entry "$loc" "$id" "$(
+                [ -n "$open" ] && printf 'open %s' "$open"
+                [ -n "$open" ] && [ -n "$closed" ] && printf '; '
+                [ -n "$closed" ] && printf 'closed %s' "$closed"
+                [ -z "$open" ] && [ -z "$closed" ] && printf 'no issue'
+                true
+            )"
+        fi
         if [ -n "$open" ]; then
             continue
         elif [ -n "$closed" ]; then
@@ -136,8 +161,17 @@ check_issues() {
         echo "check-ignores: ${#ids[@]} ignored tests, each names an open issue"
 }
 
+list_unresolved() {
+    [ "$list" = 1 ] || return 0
+    local entry
+    for entry in "${ids[@]}"; do
+        print_entry "${entry#*$'\t'}" "${entry%%$'\t'*}" "-"
+    done
+}
+
 if [ "$offline" = 1 ]; then
     echo "check-ignores: issue check skipped (--offline)"
+    list_unresolved
 elif [ ${#ids[@]} -gt 0 ]; then
     check_issues
 fi
