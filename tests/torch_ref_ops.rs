@@ -4,6 +4,9 @@
 //! A test marked `#[ignore = "S<n>: ..."]` asserts PyTorch's answer and fails today: it
 //! documents a confirmed divergence in `docs/audits/2026-11-sweep.md`. Run them with
 //! `cargo test --no-default-features --test torch_ref_ops -- --ignored`.
+//!
+//! The max family follows torch op by op (S2, S3, S4): `maximum` and `max()` split a tied
+//! gradient evenly and propagate NaN; `max(dim)` and `max_pool2d` send it all to one index.
 
 #[path = "torch_ref/mod.rs"]
 mod torch_ref;
@@ -12,7 +15,6 @@ use torch_ref::{Fixture, TOL_BWD, TOL_FWD, assert_close, backward_weighted, grad
 use volta::{Axis, DType, RawTensor};
 
 #[test]
-#[ignore = "S4: max_elem gives the whole gradient to a on a tie; torch.maximum splits it 0.5/0.5"]
 fn max_elem_tie_splits_gradient_like_torch_maximum() {
     // S4
     let f = Fixture::load("ops");
@@ -40,24 +42,36 @@ fn max_elem_tie_splits_gradient_like_torch_maximum() {
 }
 
 #[test]
-#[ignore = "S4: f32::max drops NaN; torch.maximum returns NaN"]
 fn max_elem_propagates_nan_like_torch_maximum() {
-    // S4
+    // S4: the output is NaN, and a NaN operand gives both sides the whole gradient.
     let f = Fixture::load("ops");
     let (a, b) = (
-        f.tensor("max_elem_nan.a", false),
-        f.tensor("max_elem_nan.b", false),
+        f.tensor("max_elem_nan.a", true),
+        f.tensor("max_elem_nan.b", true),
     );
+    let out = a.max_elem(&b);
     assert_close(
         "max_elem_nan.out",
-        &a.max_elem(&b).data(),
+        &out.data(),
         &f.values("max_elem_nan.out"),
         TOL_FWD,
+    );
+    backward_weighted(&out, None);
+    assert_close(
+        "grad_a",
+        &grad_of("a", &a),
+        &f.values("max_elem_nan.grad_a"),
+        TOL_BWD,
+    );
+    assert_close(
+        "grad_b",
+        &grad_of("b", &b),
+        &f.values("max_elem_nan.grad_b"),
+        TOL_BWD,
     );
 }
 
 #[test]
-#[ignore = "S4: max_reduce sends the gradient to the last tied element; torch splits it evenly"]
 fn max_reduce_tie_splits_gradient_like_torch_max() {
     // S4
     let f = Fixture::load("ops");
@@ -74,9 +88,8 @@ fn max_reduce_tie_splits_gradient_like_torch_max() {
 }
 
 #[test]
-#[ignore = "S4: partial_cmp().unwrap() panics on NaN; torch.max returns NaN"]
 fn max_reduce_propagates_nan_like_torch_max() {
-    // S4: panics today (partial_cmp().unwrap()).
+    // S4: a NaN used to panic (partial_cmp().unwrap()); torch returns NaN.
     let f = Fixture::load("ops");
     let x = f.tensor("max_all_nan.x", false);
     assert_close(
@@ -88,7 +101,22 @@ fn max_reduce_propagates_nan_like_torch_max() {
 }
 
 #[test]
-#[ignore = "S4: relu is x.max(0.0), which maps NaN to 0; torch.relu(NaN) is NaN"]
+fn max_reduce_with_two_nans_splits_the_gradient_over_them() {
+    // S4: torch's `max()` marks every NaN as a maximum.
+    let f = Fixture::load("ops");
+    let x = f.tensor("max_all_nan2.x", true);
+    let out = x.max_reduce();
+    assert_close("out", &out.data(), &f.values("max_all_nan2.out"), TOL_FWD);
+    backward_weighted(&out, None);
+    assert_close(
+        "grad",
+        &grad_of("x", &x),
+        &f.values("max_all_nan2.grad"),
+        TOL_BWD,
+    );
+}
+
+#[test]
 fn relu_propagates_nan_like_torch() {
     // S4
     let f = Fixture::load("ops");

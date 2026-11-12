@@ -1726,7 +1726,8 @@ impl Tensor {
         RawTensor::binary_op(self, other, BinaryOp::Div)
     }
 
-    /// Elementwise maximum, with broadcasting.
+    /// Elementwise maximum, with broadcasting, as `torch.maximum`: NaN if either input is
+    /// NaN. A tie splits the gradient in half, and a NaN input gives both sides all of it.
     #[must_use]
     pub fn max_elem(&self, other: &Self) -> Self {
         RawTensor::binary_op(self, other, BinaryOp::Max)
@@ -1841,7 +1842,8 @@ impl Tensor {
         RawTensor::unary_op(self, UnaryOp::Sigmoid)
     }
 
-    /// Rectified linear unit, elementwise.
+    /// Rectified linear unit, elementwise. `relu(NaN)` is NaN, as in torch, and has no
+    /// gradient.
     #[must_use]
     pub fn relu(&self) -> Self {
         RawTensor::unary_op(self, UnaryOp::ReLU)
@@ -1859,7 +1861,9 @@ impl Tensor {
         RawTensor::reduce_op(self, ReduceOp::Sum)
     }
 
-    /// Maximum of all elements, as a scalar.
+    /// Maximum of all elements, as a scalar, as `torch.max()`: NaN if any element is NaN.
+    /// The gradient is split evenly over every element equal to the maximum (every NaN,
+    /// when the maximum is NaN).
     #[must_use]
     pub fn max_reduce(&self) -> Self {
         RawTensor::reduce_op(self, ReduceOp::Max)

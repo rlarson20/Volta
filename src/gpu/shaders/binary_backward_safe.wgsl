@@ -512,8 +512,8 @@ fn div_broadcast_pass2(
 }
 
 // Maximum: max(a, b)
-// grad_a = out_grad if a > b else 0
-// grad_b = out_grad if b >= a else 0
+// grad_a = max_grad_a(out_grad, a, b), grad_b = max_grad_b(..): torch.maximum's rule (the
+// larger operand, half each on a tie, both on NaN; see the prelude in shader_template.rs)
 @compute @workgroup_size(256)
 fn max_broadcast_pass1(
     @builtin(global_invocation_id) global_id_2d: vec3<u32>,
@@ -585,7 +585,7 @@ fn max_broadcast_pass2(
         return;
     }
 
-    // grad_a = out_grad if a > b else 0
+    // grad_a: each output element that read this a contributes max_grad_a
     if (thread_idx < a_size) {
         var sum_a: f32 = 0.0;
         for (var i: u32 = 0u; i < out_size; i = i + 1u) {
@@ -594,15 +594,13 @@ fn max_broadcast_pass2(
             if (target_a == thread_idx) {
                 let a_val = ld_temp_buffer(temp_idx + 3u);
                 let b_val = ld_temp_buffer(temp_idx + 4u);
-                if (a_val > b_val) {
-                    sum_a = sum_a + ld_temp_buffer(temp_idx + 2u);
-                }
+                sum_a = sum_a + max_grad_a(ld_temp_buffer(temp_idx + 2u), a_val, b_val);
             }
         }
         st_result_grad(thread_idx, sum_a);
     }
 
-    // grad_b = out_grad if b >= a else 0
+    // grad_b: likewise with max_grad_b
     if (thread_idx < b_size) {
         var sum_b: f32 = 0.0;
         for (var i: u32 = 0u; i < out_size; i = i + 1u) {
@@ -611,9 +609,7 @@ fn max_broadcast_pass2(
             if (target_b == thread_idx) {
                 let a_val = ld_temp_buffer(temp_idx + 3u);
                 let b_val = ld_temp_buffer(temp_idx + 4u);
-                if (b_val >= a_val) {
-                    sum_b = sum_b + ld_temp_buffer(temp_idx + 2u);
-                }
+                sum_b = sum_b + max_grad_b(ld_temp_buffer(temp_idx + 2u), a_val, b_val);
             }
         }
         st_result_grad(a_size + thread_idx, sum_b);

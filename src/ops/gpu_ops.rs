@@ -7,7 +7,7 @@ use crate::device::Device;
 #[cfg(feature = "gpu")]
 use crate::device_policy::kernel_failed;
 #[cfg(feature = "gpu")]
-use crate::gpu::GpuKernels;
+use crate::gpu::{GpuKernels, MaxResult as GpuMaxResult};
 use crate::ops::BinaryOp;
 use crate::ops::UnaryOp;
 use crate::shape::Shape;
@@ -15,17 +15,26 @@ use crate::spec::PadValue;
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
 
-/// Where a GPU max reduction found its maximum, kept on the device: a one-element buffer of
-/// `u32` bits that only `gpu_max_backward` reads. Shared, so the gradient function that
-/// holds it stays `Clone`.
+/// What a GPU max reduction found, kept on the device: the maximum in f32 and the number of
+/// elements equal to it, one element each, which only `gpu_max_backward` reads. Shared, so
+/// the gradient function that holds it stays `Clone`.
 #[cfg(feature = "gpu")]
-pub(crate) type DeviceIndex = std::sync::Arc<crate::gpu::GpuBuffer>;
+pub(crate) type DeviceMax = std::sync::Arc<DeviceMaxBuffers>;
 
-/// Without the `gpu` feature there is no device index: a placeholder so the signatures
+/// The buffers behind [`DeviceMax`].
+#[cfg(feature = "gpu")]
+pub(crate) struct DeviceMaxBuffers {
+    /// The maximum, one f32.
+    value: crate::gpu::GpuBuffer,
+    /// How many elements equal it, one `u32`.
+    count: crate::gpu::GpuBuffer,
+}
+
+/// Without the `gpu` feature there is no device max: a placeholder so the signatures
 /// match, never built because every GPU kernel stub returns `None`.
 #[cfg(not(feature = "gpu"))]
 #[derive(Clone)]
-pub(crate) struct DeviceIndex;
+pub(crate) struct DeviceMax;
 
 /// What a Muon step needs besides its three storages. The optimizer owns the values, so
 /// the CPU and GPU paths read the same ones.
@@ -166,12 +175,16 @@ impl RawTensor {
         )?))
     }
 
-    /// GPU max reduction: the maximum as a one-element GPU storage, and the index it was
-    /// found at (the highest, on a tie), found on the device by the same kernel.
+    /// GPU max reduction: the maximum as a one-element GPU storage (NaN if any element is
+    /// NaN), and what backward needs to split the gradient over the ties, found on the
+    /// device by the same kernel.
     #[cfg(feature = "gpu")]
-    pub(crate) fn gpu_max_reduce(data: &Storage) -> Option<(Storage, DeviceIndex)> {
-        let (max, index) = GpuKernels::max(data.gpu_buffer()?)?;
-        Some((Storage::from_gpu_buffer(max), std::sync::Arc::new(index)))
+    pub(crate) fn gpu_max_reduce(data: &Storage) -> Option<(Storage, DeviceMax)> {
+        let GpuMaxResult { max, value, count } = GpuKernels::max(data.gpu_buffer()?)?;
+        Some((
+            Storage::from_gpu_buffer(max),
+            std::sync::Arc::new(DeviceMaxBuffers { value, count }),
+        ))
     }
 
     /// GPU mean reduction: a one-element GPU storage in the input's dtype.
@@ -611,14 +624,22 @@ impl RawTensor {
 
     /// GPU-accelerated max backward operation
     ///
-    /// Sparse gradient - only the element at `max_index` receives the gradient
+    /// The gradient is split evenly over the elements of `input` equal to the maximum; the
+    /// rest get zero.
     #[cfg(feature = "gpu")]
     pub(crate) fn gpu_max_backward(
         out_grad: &Storage,
+        input: &Storage,
         input_size: usize,
-        max_index: &DeviceIndex,
+        max: &DeviceMax,
     ) -> Option<Storage> {
-        let result = GpuKernels::max_backward(out_grad.gpu_buffer()?, input_size, max_index)?;
+        let result = GpuKernels::max_backward(
+            out_grad.gpu_buffer()?,
+            input_size,
+            input.gpu_buffer()?,
+            &max.value,
+            &max.count,
+        )?;
         Some(Storage::from_gpu_buffer(result))
     }
 
@@ -922,7 +943,7 @@ impl RawTensor {
 
     /// Not-gpu stub for `gpu_max_reduce`.
     #[cfg(not(feature = "gpu"))]
-    pub(crate) fn gpu_max_reduce(_data: &Storage) -> Option<(Storage, DeviceIndex)> {
+    pub(crate) fn gpu_max_reduce(_data: &Storage) -> Option<(Storage, DeviceMax)> {
         None
     }
 
@@ -994,8 +1015,9 @@ impl RawTensor {
     #[cfg(not(feature = "gpu"))]
     pub(crate) fn gpu_max_backward(
         _out_grad: &Storage,
+        _input: &Storage,
         _input_size: usize,
-        _max_index: &DeviceIndex,
+        _max: &DeviceMax,
     ) -> Option<Storage> {
         None
     }

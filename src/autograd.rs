@@ -200,6 +200,8 @@ impl GradFn {
         match self {
             Self::Unary(g) => g.saves_input(),
             Self::Binary(g) => g.saves_input(),
+            // The winners are the input's elements equal to the maximum.
+            Self::MaxReduce(_) => true,
             // The first two operands (x and y; input and weight). `MulAcc`'s addend and a
             // conv's bias (parent 2) are not read.
             Self::MulAcc(_)
@@ -210,7 +212,6 @@ impl GradFn {
             | Self::ConvTranspose2d(_) => i < 2,
             Self::Transpose(_)
             | Self::Sum(_)
-            | Self::MaxReduce(_)
             | Self::Mean(_)
             | Self::SumDim(_)
             | Self::MaxDim(_)

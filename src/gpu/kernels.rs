@@ -38,13 +38,23 @@ pub struct ReduceParams {
     pub _padding: [u32; 2],
 }
 
+/// What [`GpuKernels::max`] leaves on the device.
+pub struct MaxResult {
+    /// The maximum, one element in the input's dtype.
+    pub max: GpuBuffer,
+    /// The maximum again, one f32 (NaN if the input held a NaN), for `max_backward`.
+    pub value: GpuBuffer,
+    /// How many elements equal the maximum (every NaN, for a NaN maximum), one `u32`.
+    pub count: GpuBuffer,
+}
+
 /// Parameters for reduction backward operations
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ReduceBackwardParams {
     /// Number of elements in the reduction input, which is the size of the gradient produced.
     pub input_size: u32,
-    /// Reduction being differentiated: 0 = sum, 1 = mean, 2 = max.
+    /// Reduction being differentiated: 0 = sum, 1 = mean (a max has its own entry point).
     pub op: u32,
     /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
     pub _padding: [u32; 2],
@@ -411,7 +421,7 @@ enum Reduction {
     Mean,
     /// Sum of the squares of the elements.
     SumSquares,
-    /// Maximum, with the index it was found at.
+    /// Maximum, with the number of elements equal to it.
     Max,
 }
 
@@ -421,9 +431,10 @@ const REDUCE_PER_GROUP: usize = 1024;
 /// Reduce `input` to one f32 on the device, in as many passes as it takes
 /// (`ceil(n / 1024)` partials per pass, until one is left), all in one command buffer.
 ///
-/// Returns the f32 result as a one-element buffer, and for [`Reduction::Max`] the index of
-/// the maximum as a one-element buffer of `u32` bits (typed Bool, one word per element,
-/// like the `found` flag of `amp_unscale`). Nothing is read back.
+/// Returns the f32 result as a one-element buffer, and for [`Reduction::Max`] the number of
+/// elements equal to the maximum (every NaN, when it is NaN) as a one-element buffer of
+/// `u32` bits (typed Bool, one word per element, like the `found` flag of `amp_unscale`).
+/// Nothing is read back.
 ///
 /// # Panics
 /// If `input` is empty, or has too many elements for a pass's offsets to fit in a `u32`.
@@ -446,12 +457,12 @@ fn reduce_to_scalar(input: &GpuBuffer, kind: Reduction) -> Option<(GpuBuffer, Op
             label: Some("Reduce Encoder"),
         });
     let mut n = total;
-    // The previous pass's partial values and (for max) indices; `None` on the first pass.
+    // The previous pass's partial values and (for max) counts; `None` on the first pass.
     let mut previous: Option<(GpuBuffer, Option<GpuBuffer>)> = None;
     loop {
         let groups = n.div_ceil(REDUCE_PER_GROUP);
         let out = GpuBuffer::zeros(groups)?;
-        let out_index = match kind {
+        let out_count = match kind {
             Reduction::Max => Some(GpuBuffer::zeros_of(DType::Bool, groups)?),
             Reduction::Sum | Reduction::Mean | Reduction::SumSquares => None,
         };
@@ -478,16 +489,16 @@ fn reduce_to_scalar(input: &GpuBuffer, kind: Reduction) -> Option<(GpuBuffer, Op
         let mut bindings: Vec<(u32, &wgpu::Buffer)> = Vec::with_capacity(5);
         match &previous {
             None => bindings.push((0, input.buffer())),
-            Some((values, indices)) => {
+            Some((values, counts)) => {
                 bindings.push((1, values.buffer()));
-                if let Some(indices) = indices {
-                    bindings.push((3, indices.buffer()));
+                if let Some(counts) = counts {
+                    bindings.push((3, counts.buffer()));
                 }
             }
         }
         bindings.push((2, out.buffer()));
-        if let Some(index) = &out_index {
-            bindings.push((4, index.buffer()));
+        if let Some(count) = &out_count {
+            bindings.push((4, count.buffer()));
         }
         bindings.push((5, &params_buffer));
         let entries: Vec<wgpu::BindGroupEntry> = bindings
@@ -512,7 +523,7 @@ fn reduce_to_scalar(input: &GpuBuffer, kind: Reduction) -> Option<(GpuBuffer, Op
             dispatch_flat(&mut pass, pack_u32(groups));
         }
 
-        previous = Some((out, out_index));
+        previous = Some((out, out_count));
         if groups == 1 {
             break;
         }
@@ -525,8 +536,20 @@ fn reduce_to_scalar(input: &GpuBuffer, kind: Reduction) -> Option<(GpuBuffer, Op
     previous
 }
 
+/// What `max_backward` reads beside the upstream gradient: the saved input, and the
+/// maximum with the number of elements equal to it, both from [`GpuKernels::max`].
+struct MaxSaved<'a> {
+    /// The reduced input, in the gradient's dtype.
+    input: &'a GpuBuffer,
+    /// The maximum, one f32 (NaN if the input held a NaN).
+    value: &'a GpuBuffer,
+    /// How many elements are a maximum, one `u32`.
+    count: &'a GpuBuffer,
+}
+
 /// Broadcast a scalar gradient back to `input_size` elements: `op` 0 = sum, 1 = mean
-/// (divided by the count), 2 = max (only the element at `index[0]` gets it, the rest zero).
+/// (divided by the count), or, with `max` given, the max rule (the gradient divided by the
+/// number of maximum elements, and the others zero).
 ///
 /// The gradient is read on the device (`out_grad` at binding 0), never fetched to the host.
 /// The result has `out_grad`'s dtype.
@@ -534,19 +557,11 @@ fn reduce_backward(
     op: u32,
     out_grad: &GpuBuffer,
     input_size: usize,
-    index: Option<&GpuBuffer>,
+    max: Option<&MaxSaved>,
 ) -> Option<GpuBuffer> {
     let ctx = get_gpu_context()?;
     let dtype = out_grad.dtype();
     let result = GpuBuffer::zeros_of(dtype, input_size)?;
-    // Bound even when unused, so every op shares one layout.
-    let dummy_index;
-    let index = if let Some(index) = index {
-        index
-    } else {
-        dummy_index = GpuBuffer::zeros_of(DType::Bool, 1)?;
-        &dummy_index
-    };
     let params = ReduceBackwardParams {
         input_size: pack_u32(input_size),
         op,
@@ -560,32 +575,34 @@ fn reduce_backward(
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
     let pipelines = ctx.pipelines_for(dtype);
-    let pipeline = match op {
-        0 => &pipelines.sum_backward,
-        1 => &pipelines.mean_backward,
-        _ => &pipelines.max_backward,
+    let pipeline = match (op, max) {
+        (_, Some(_)) => &pipelines.max_backward,
+        (0, None) => &pipelines.sum_backward,
+        (_, None) => &pipelines.mean_backward,
     };
+    // Exactly the bindings the entry point uses (the pipelines use an auto layout).
+    let mut bindings: Vec<(u32, &wgpu::Buffer)> = vec![
+        (0, out_grad.buffer()),
+        (2, result.buffer()),
+        (3, &params_buffer),
+    ];
+    if let Some(saved) = max {
+        assert_same_dtype("max_backward", &[out_grad, saved.input]);
+        bindings.push((1, saved.count.buffer()));
+        bindings.push((4, saved.input.buffer()));
+        bindings.push((5, saved.value.buffer()));
+    }
+    let entries: Vec<wgpu::BindGroupEntry> = bindings
+        .iter()
+        .map(|&(binding, buffer)| wgpu::BindGroupEntry {
+            binding,
+            resource: buffer.as_entire_binding(),
+        })
+        .collect();
     let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("Reduce Backward Bind Group"),
         layout: &pipeline.get_bind_group_layout(0),
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: out_grad.buffer().as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: index.buffer().as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: result.buffer().as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 3,
-                resource: params_buffer.as_entire_binding(),
-            },
-        ],
+        entries: &entries,
     });
     let mut encoder = ctx
         .device()
@@ -1710,14 +1727,21 @@ impl GpuKernels {
         Self::round_to(value, input.dtype())
     }
 
-    /// The maximum of a buffer and the index it was found at: a one-element buffer of the
-    /// input's dtype, and a one-element buffer holding the index as a `u32` (not a tensor;
-    /// it is only ever bound to `reduce_backward`). Ties go to the higher index (the CPU's
-    /// rule; the tie rule is the single `better` function in `reduce.wgsl`).
+    /// The maximum of a buffer, as `torch.max()` (NaN if any element is NaN), with what
+    /// backward needs: a one-element buffer of the input's dtype, a copy of the maximum in
+    /// f32, and the number of elements equal to it (every NaN, for a NaN maximum) as a
+    /// one-element `u32` buffer. The last two are not tensors; they are only ever bound to
+    /// `max_backward`. The rule is the single `combine` function in `reduce.wgsl`.
     #[must_use]
-    pub fn max(input: &GpuBuffer) -> Option<(GpuBuffer, GpuBuffer)> {
-        let (value, index) = reduce_to_scalar(input, Reduction::Max)?;
-        Some((Self::round_to(value, input.dtype())?, index?))
+    pub fn max(input: &GpuBuffer) -> Option<MaxResult> {
+        let (value, count) = reduce_to_scalar(input, Reduction::Max)?;
+        // `round_to` hands an f32 result on as it is, so backward keeps its own copy.
+        let kept = value.copy_region(0, 1)?;
+        Some(MaxResult {
+            max: Self::round_to(value, input.dtype())?,
+            value: kept,
+            count: count?,
+        })
     }
 
     /// The mean of all elements of a buffer, as a one-element buffer of the input's dtype.
@@ -1760,15 +1784,27 @@ impl GpuKernels {
         reduce_backward(1, out_grad, input_size, None)
     }
 
-    /// Max backward: sparse gradient; only the element at `max_index` (the index buffer
-    /// from [`Self::max`]) receives the scalar gradient `out_grad`.
+    /// Max backward: the scalar gradient `out_grad`, split evenly over the elements of
+    /// `input` equal to the maximum (`value` and `count` from [`Self::max`]); the rest get
+    /// zero.
     #[must_use]
     pub fn max_backward(
         out_grad: &GpuBuffer,
         input_size: usize,
-        max_index: &GpuBuffer,
+        input: &GpuBuffer,
+        value: &GpuBuffer,
+        count: &GpuBuffer,
     ) -> Option<GpuBuffer> {
-        reduce_backward(2, out_grad, input_size, Some(max_index))
+        reduce_backward(
+            2,
+            out_grad,
+            input_size,
+            Some(&MaxSaved {
+                input,
+                value,
+                count,
+            }),
+        )
     }
 
     /// Permute tensor axes

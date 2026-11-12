@@ -141,25 +141,96 @@ fn gpu_sum_and_mean_backward_use_the_upstream_gradient() {
 }
 
 #[test]
-fn gpu_and_cpu_agree_on_an_exact_tie() {
-    if skip_or_mark("gpu_and_cpu_agree_on_an_exact_tie") {
+fn gpu_and_cpu_split_the_gradient_of_an_exact_tie_evenly() {
+    if skip_or_mark("gpu_and_cpu_split_the_gradient_of_an_exact_tie_evenly") {
         return;
     }
-    // Which of the tied elements gets the gradient is #40's rule (torch splits it evenly);
-    // until then the CPU and the GPU must at least pick the same one, including when the
-    // tie straddles two workgroups and two passes.
+    // `torch.max()` splits the gradient over every tied element (S4). Include a tie that
+    // straddles two workgroups and two passes, and an upstream gradient other than 1.
     let mut long = vec![0.0; 1_100_000];
     long[7] = 9.0;
     long[1_050_000] = 9.0;
     let mut mid = vec![0.0; 3000];
     mid[5] = 4.0;
     mid[2000] = 4.0;
-    for data in [vec![2.0, 5.0, 5.0, 1.0], mid, long] {
+    let ties = [
+        (vec![2.0, 5.0, 5.0, 1.0], [1, 2]),
+        (mid, [5, 2000]),
+        (long, [7, 1_050_000]),
+    ];
+    for (data, winners) in ties {
         let n = data.len();
         let (cpu, gpu) = leaves(data);
-        cpu.max_reduce().into_loss().expect("scalar").backward();
-        gpu.max_reduce().into_loss().expect("scalar").backward();
-        assert_eq!(cpu.grad().expect("cpu"), gpu.grad().expect("gpu"), "n={n}");
+        for t in [&cpu, &gpu] {
+            let max = t.max_reduce();
+            max.elem_mul(&scalar_like(&max, 3.0))
+                .into_loss()
+                .expect("scalar")
+                .backward();
+        }
+        let (cpu_grad, gpu_grad) = (cpu.grad().expect("cpu"), gpu.grad().expect("gpu"));
+        assert_eq!(cpu_grad, gpu_grad, "n={n}");
+        for (i, g) in gpu_grad.iter().enumerate() {
+            let want = if winners.contains(&i) { 1.5 } else { 0.0 };
+            assert_eq!(*g, want, "n={n}, element {i}");
+        }
+    }
+}
+
+#[test]
+fn gpu_max_propagates_nan_and_splits_the_gradient_over_the_nans() {
+    if skip_or_mark("gpu_max_propagates_nan_and_splits_the_gradient_over_the_nans") {
+        return;
+    }
+    // A NaN anywhere makes the maximum NaN (torch.max), including a NaN in a later pass,
+    // and the gradient goes evenly to every NaN, not to the numbers.
+    let mut long = values(1_100_000, 3);
+    long[7] = f32::NAN;
+    long[1_050_000] = f32::NAN;
+    let mut mid = values(3000, 4);
+    mid[2000] = f32::NAN;
+    for (data, nans) in [
+        (vec![1.0, f32::NAN, 3.0, f32::NAN, 2.0], vec![1, 3]),
+        (mid, vec![2000]),
+        (long, vec![7, 1_050_000]),
+    ] {
+        let n = data.len();
+        let (cpu, gpu) = leaves(data);
+        for t in [&cpu, &gpu] {
+            let max = t.max_reduce();
+            assert!(max.item().is_nan(), "n={n}: the maximum is NaN");
+            max.into_loss().expect("scalar").backward();
+        }
+        let gpu_grad = gpu.grad().expect("gpu");
+        assert_eq!(cpu.grad().expect("cpu"), gpu_grad, "n={n}");
+        let want = 1.0 / nans.len() as f32;
+        for (i, g) in gpu_grad.iter().enumerate() {
+            assert_eq!(
+                *g,
+                if nans.contains(&i) { want } else { 0.0 },
+                "n={n}, element {i}"
+            );
+        }
+    }
+}
+
+#[test]
+fn gpu_max_of_all_neg_inf_splits_over_every_element() {
+    if skip_or_mark("gpu_max_of_all_neg_inf_splits_over_every_element") {
+        return;
+    }
+    // Every element is the maximum, as torch: a `-inf` that equals the maximum is a tie.
+    for n in [3, 3000] {
+        let (_, gpu) = leaves(vec![f32::NEG_INFINITY; n]);
+        let max = gpu.max_reduce();
+        assert_eq!(max.item(), f32::NEG_INFINITY, "n={n}");
+        max.into_loss().expect("scalar").backward();
+        let want = 1.0 / n as f32;
+        let grad = gpu.grad().expect("grad");
+        assert!(
+            grad.iter().all(|&g| g == want),
+            "n={n}: every element gets {want}"
+        );
     }
 }
 

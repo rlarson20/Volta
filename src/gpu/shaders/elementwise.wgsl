@@ -63,7 +63,10 @@ fn max_elem(
     let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_a()) {
-        st_result(idx, max(ld_a(idx), ld_b(idx)));
+        // torch.maximum: NaN if either operand is NaN (WGSL's max may return the other).
+        let a = ld_a(idx);
+        let b = ld_b(idx);
+        st_result(idx, select(select(max(a, b), b, is_nan(b)), a, is_nan(a)));
     }
 }
 

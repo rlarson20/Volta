@@ -263,8 +263,30 @@ fn bf16_bits_to_f32(b: u32) -> f32 {
 // would turn a NaN into -1, so a NaN is detected from its bits (fast math may fold
 // x != x away) and passed through.
 fn tanh_sat(x: f32) -> f32 {
-    let is_nan = (bitcast<u32>(x) & 0x7fffffffu) > 0x7f800000u;
-    return select(tanh(clamp(x, -15.0, 15.0)), x, is_nan);
+    return select(tanh(clamp(x, -15.0, 15.0)), x, is_nan(x));
+}
+
+// Whether `x` is NaN, read from its bits: WGSL lets an implementation assume a float
+// comparison never sees NaN, so `x != x` may be folded away.
+fn is_nan(x: f32) -> bool {
+    return (bitcast<u32>(x) & 0x7fffffffu) > 0x7f800000u;
+}
+
+// `torch.maximum`'s gradient for each side (S4; `ops::max_rule::maximum_backward` on the
+// CPU): the larger operand gets all of `g`, a tie splits it in half, and a NaN operand
+// gives both sides all of it.
+fn max_grad_a(g: f32, a: f32, b: f32) -> f32 {
+    if (is_nan(a) || is_nan(b)) { return g; }
+    if (a < b) { return 0.0; }
+    if (a == b) { return g * 0.5; }
+    return g;
+}
+
+fn max_grad_b(g: f32, a: f32, b: f32) -> f32 {
+    if (is_nan(a) || is_nan(b)) { return g; }
+    if (a > b) { return 0.0; }
+    if (a == b) { return g * 0.5; }
+    return g;
 }
 ";
 

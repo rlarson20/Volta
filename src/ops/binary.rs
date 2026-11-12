@@ -35,9 +35,11 @@ define_ops! {
             Div => |a, b| a / b,
                 |g, a, b| (g / b, -g * a / (b * b)),
                 gpu(div, div_backward_a, div_backward_b, div_broadcast_pass1, div_broadcast_pass2);
-            /// max(x, y) (element-wise): the gradient goes to the larger input, and to `x` on ties
-            Max => |a, b| a.max(b),
-                |g, a, b| (if a >= b { g } else { 0.0 }, if b > a { g } else { 0.0 }),
+            /// max(x, y) (element-wise), as `torch.maximum`: NaN if either input is NaN. The
+            /// gradient goes to the larger input, a tie splits it in half, and a NaN input
+            /// gives both sides all of it (S4, `ops::max_rule`).
+            Max => |a, b| crate::ops::max_rule::maximum(a, b),
+                |g, a, b| crate::ops::max_rule::maximum_backward(g, a, b),
                 gpu(max, max_backward_a, max_backward_b, max_broadcast_pass1, max_broadcast_pass2);
             /// x mod y, floored like `torch.remainder` (the result takes y's sign):
             /// ∂/∂x = 1, ∂/∂y = -floor(x/y)
@@ -520,8 +522,9 @@ mod tests {
     }
 
     #[test]
-    fn max_tie_sends_gradient_to_first_operand() {
-        // Pins the documented tie rule (x on ties), so a table edit can't change it silently.
-        assert_eq!(BinaryOp::Max.backward(1.0, 3.0, 3.0), (1.0, 0.0));
+    fn max_tie_splits_gradient_between_operands() {
+        // Pins the documented tie rule (torch.maximum halves it), so a table edit can't
+        // change it silently.
+        assert_eq!(BinaryOp::Max.backward(1.0, 3.0, 3.0), (0.5, 0.5));
     }
 }
