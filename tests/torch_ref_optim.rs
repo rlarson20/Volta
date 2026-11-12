@@ -36,7 +36,6 @@ fn adam_with_weight_decay_matches_torch() {
 }
 
 #[test]
-#[ignore = "S17: Adam keeps one global step count, so a parameter whose first gradient arrives at step 3 is bias-corrected with t=3; torch uses t=1"]
 fn adam_counts_steps_per_parameter_like_torch() {
     let f = Fixture::load("optim");
     let ps = vec![

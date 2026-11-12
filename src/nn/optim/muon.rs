@@ -43,8 +43,10 @@ pub struct Muon {
     nesterov: bool,
     /// Newton-Schulz iterations per step.
     ns_steps: usize,
-    /// Momentum buffer per parameter, on that parameter's device.
-    velocity: Vec<Storage>,
+    /// Momentum buffer per parameter, allocated on the parameter's first step (`None` until
+    /// then), so a model converted with `to_device` or `to_dtype` before that step is
+    /// stepped in its new device and dtype. A conversion after the first step panics instead.
+    velocity: Vec<Option<Storage>>,
 }
 
 impl Muon {
@@ -86,15 +88,7 @@ impl Muon {
     ) -> crate::Result<Self> {
         super::check_non_negative("learning rate", lr)?;
         super::check_non_negative("momentum", momentum)?;
-        // Velocity lives where its parameter does.
-        let velocity = params
-            .iter()
-            .map(|p| {
-                let p = p.borrow();
-                // In the parameter's dtype on its device (a no-op cast for f32).
-                Storage::new_zeros(p.data.len(), &p.device).cast(p.data.dtype())
-            })
-            .collect();
+        let velocity = params.iter().map(|_| None).collect();
         Ok(Self {
             params,
             lr,
@@ -197,6 +191,8 @@ impl Muon {
             let Some(grad) = p.grad.clone() else {
                 continue;
             };
+            // Allocated on the parameter's first step, on its current device and dtype.
+            let velocity = velocity.get_or_insert_with(|| super::zeros_like(&p));
 
             // The matrix view: [dim0, everything else]. A vector is (n, 1) and a scalar
             // is (1, 1).
@@ -244,7 +240,7 @@ impl Muon {
             assert_eq!(
                 velocity.dtype(),
                 p.data.dtype(),
-                "Muon velocity dtype; build the optimizer after Module::to_dtype"
+                "Muon velocity dtype; convert the model before the optimizer's first step"
             );
             let mut velocity = velocity.host_mut::<T>();
 

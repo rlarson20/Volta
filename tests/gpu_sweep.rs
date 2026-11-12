@@ -10,7 +10,7 @@
 #![cfg(feature = "gpu")]
 
 use volta::gpu::is_gpu_available;
-use volta::{Device, Linear, Module, RawTensor, SGD, Storage, Tensor};
+use volta::{Adam, Device, Linear, Module, Muon, Optimizer, RawTensor, SGD, Storage, Tensor};
 
 /// Skip (returning `true`) when there is no GPU; otherwise print the marker for `name`.
 fn skip_or_mark(name: &str) -> bool {
@@ -187,7 +187,6 @@ fn gpu_sum_of_2_pow_25_ones_is_exact() {
 }
 
 #[test]
-#[ignore = "S17: SGD allocates its velocity on the parameter's device in new(), so moving the model to the GPU afterwards makes step() panic"]
 fn optimizer_built_before_to_device_still_steps() {
     if skip_or_mark("optimizer_built_before_to_device_still_steps") {
         return;
@@ -200,4 +199,40 @@ fn optimizer_built_before_to_device_still_steps() {
         p.set_grad(Storage::cpu(vec![1.0; 4]));
     }
     opt.step();
+}
+
+/// Builds a `Linear` and an optimizer for it, moves the layer to the GPU, steps once, and
+/// checks the weights changed (so the step ran on the GPU rather than being skipped).
+fn assert_steps_after_to_device(name: &str, build: impl FnOnce(Vec<Tensor>) -> Box<dyn Optimizer>) {
+    if skip_or_mark(name) {
+        return;
+    }
+    let mut layer = Linear::new(2, 2, false);
+    let params = layer.parameters();
+    let mut opt = build(params.clone());
+    layer.to_device(Device::gpu().expect("gpu"));
+    let before = layer.weight.data();
+    for p in &params {
+        p.set_grad(Storage::cpu(vec![1.0, -2.0, 3.0, 0.5]));
+    }
+    opt.step();
+    assert_ne!(
+        layer.weight.data(),
+        before,
+        "{name}: the weights did not change"
+    );
+}
+
+#[test]
+fn adam_built_before_to_device_still_steps() {
+    assert_steps_after_to_device("adam_built_before_to_device_still_steps", |p| {
+        Box::new(Adam::new(p, 0.01, (0.9, 0.999), 1e-8, 0.0))
+    });
+}
+
+#[test]
+fn muon_built_before_to_device_still_steps() {
+    assert_steps_after_to_device("muon_built_before_to_device_still_steps", |p| {
+        Box::new(Muon::new(p, 0.02, 0.95, true, 5))
+    });
 }

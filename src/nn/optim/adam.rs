@@ -15,16 +15,35 @@ pub struct Adam {
     eps: f32,
     /// L2 penalty, added to the gradient before the moment updates.
     weight_decay: f32,
-    /// First-moment estimate per parameter, on that parameter's device.
-    m: Vec<Storage>,
-    /// Second-moment estimate per parameter, on that parameter's device.
-    v: Vec<Storage>,
-    /// Number of steps taken, for bias correction.
-    t: usize,
+    /// Per-parameter state, allocated on the parameter's first step (`None` until then), so
+    /// a model converted with `to_device` or `to_dtype` before that step is stepped in its
+    /// new device and dtype. A conversion after the first step panics instead.
+    state: Vec<Option<AdamState>>,
+}
+
+/// One parameter's moment estimates and step count.
+struct AdamState {
+    /// First-moment estimate, on the parameter's device.
+    m: Storage,
+    /// Second-moment estimate, on the parameter's device.
+    v: Storage,
+    /// Steps taken with a gradient, for bias correction (torch counts per parameter).
+    step: usize,
+}
+
+impl AdamState {
+    /// Zeroed state in `p`'s current dtype and device.
+    fn new(p: &crate::RawTensor) -> Self {
+        Self {
+            m: super::zeros_like(p),
+            v: super::zeros_like(p),
+            step: 0,
+        }
+    }
 }
 
 impl Adam {
-    /// Optimizer over `params` with zeroed moment estimates on each parameter's device.
+    /// Optimizer over `params`. Moment estimates are allocated on each parameter's first step.
     ///
     /// # Panics
     /// If a hyperparameter is invalid; see [`Self::try_new`].
@@ -57,32 +76,7 @@ impl Adam {
         super::check_beta(0, betas.0)?;
         super::check_beta(1, betas.1)?;
         super::check_non_negative("weight_decay", weight_decay)?;
-        // Create state matching the device of each parameter
-        let m: Vec<Storage> = params
-            .iter()
-            .map(|p| {
-                let param = p.borrow();
-                let len = param.data.len();
-                let device = param.device.clone();
-                let dtype = param.data.dtype();
-                drop(param);
-                // Zero state in the parameter's dtype on its device (a no-op cast for f32).
-                Storage::new_zeros(len, &device).cast(dtype)
-            })
-            .collect();
-
-        let v: Vec<Storage> = params
-            .iter()
-            .map(|p| {
-                let param = p.borrow();
-                let len = param.data.len();
-                let device = param.device.clone();
-                let dtype = param.data.dtype();
-                drop(param);
-                // Zero state in the parameter's dtype on its device (a no-op cast for f32).
-                Storage::new_zeros(len, &device).cast(dtype)
-            })
-            .collect();
+        let state = params.iter().map(|_| None).collect();
 
         Ok(Self {
             params,
@@ -90,9 +84,7 @@ impl Adam {
             betas,
             eps,
             weight_decay,
-            m,
-            v,
-            t: 0,
+            state,
         })
     }
 
@@ -111,7 +103,6 @@ impl Adam {
         for param in &self.params {
             crate::real::compute_dtype(|| "Adam step".to_string(), &[param.dtype()]);
         }
-        self.t += 1;
 
         // Process each parameter based on its device
         for i in 0..self.params.len() {
@@ -154,15 +145,14 @@ impl Adam {
             None => return,
         };
 
-        // State is already on GPU (stored as Storage)
-        let m_state = self
-            .m
+        // Allocated here on the parameter's first step, on its current device.
+        let state = self
+            .state
             .get_mut(i)
-            .expect("Adam: first-moment state per parameter");
-        let v_state = self
-            .v
-            .get_mut(i)
-            .expect("Adam: second-moment state per parameter");
+            .expect("Adam: state slot per parameter")
+            .get_or_insert_with(|| AdamState::new(&p));
+        state.step += 1;
+        let (m_state, v_state) = (&mut state.m, &mut state.v);
 
         // Setup optimizer parameters
         let opt_params = OptimizerStepParams {
@@ -170,7 +160,7 @@ impl Adam {
             lr: self.lr,
             beta1: self.betas.0,
             beta2: self.betas.1,
-            t: self.t as f32,
+            t: state.step as f32,
             eps: self.eps,
             weight_decay: self.weight_decay,
             padding: 0.0,
@@ -213,22 +203,22 @@ impl Adam {
             }
         }
 
-        // Get mutable access to CPU state
-        // SAFETY: Optimizer state is created as CPU storage for CPU parameters
-        debug_assert!(self.m.len() == self.params.len(), "State length mismatch");
-        debug_assert!(self.v.len() == self.params.len(), "State length mismatch");
-        let (m, v) = (
-            self.m.get_mut(i).expect("Adam: state per parameter"),
-            self.v.get_mut(i).expect("Adam: state per parameter"),
-        );
-        for s in [&*m, &*v] {
+        // Allocated here on the parameter's first step, in its current dtype.
+        let state = self
+            .state
+            .get_mut(i)
+            .expect("Adam: state slot per parameter")
+            .get_or_insert_with(|| AdamState::new(&p));
+        state.step += 1;
+        let step = state.step;
+        for s in [&state.m, &state.v] {
             assert_eq!(
                 s.dtype(),
                 dtype,
-                "Adam state dtype; build the optimizer after Module::to_dtype"
+                "Adam state dtype; convert the model before the optimizer's first step"
             );
         }
-        let (mut m_guard, mut v_guard) = (m.host_mut::<T>(), v.host_mut::<T>());
+        let (mut m_guard, mut v_guard) = (state.m.host_mut::<T>(), state.v.host_mut::<T>());
         let (m_slice, v_slice) = (&mut *m_guard, &mut *v_guard);
 
         // Update biased moments
@@ -243,7 +233,7 @@ impl Adam {
         }
 
         // Bias correction
-        let t = i32::try_from(self.t).expect("Adam step count fits i32");
+        let t = i32::try_from(step).expect("Adam step count fits i32");
         let m_hat_scale = 1.0 / (1.0 - beta1.powi(t));
         let v_hat_scale = 1.0 / (1.0 - beta2.powi(t));
 
