@@ -1,11 +1,16 @@
 use crate::io::StateDict;
-use crate::nn::{GELU, Layer, Linear, Module};
+use crate::nn::{Dropout, GELU, Layer, Linear, Module};
 use crate::tensor::Tensor;
 
 /// Feed-Forward Network (FFN) layer for transformer blocks
 ///
 /// The FFN consists of two linear transformations with a GELU activation in between:
 /// Linear → GELU → Dropout → Linear → Dropout
+///
+/// This is the feed-forward half of torch's `TransformerEncoderLayer`
+/// (`dropout2(linear2(dropout(activation(linear1(x)))))`), with one probability for
+/// both dropouts. Dropout is active only in training mode, the default as for every
+/// torch module; call `Module::train(false)` for inference.
 ///
 /// The first layer typically expands the dimension by a factor (default 4x),
 /// and the second layer projects it back to the original dimension.
@@ -27,9 +32,11 @@ pub struct FeedForward {
     contract: Linear,
     /// Nonlinearity between the projections.
     activation: GELU,
-    /// Dropout probability. Stored but not applied: dropout is not implemented here yet.
-    #[allow(dead_code)]
-    dropout: f32,
+    /// Dropout applied after the activation and again after `contract`. `Dropout` keeps
+    /// no state beyond `p` and the mode, so one instance serves both places.
+    dropout: Dropout,
+    /// Input and output width.
+    embed_dim: usize,
     /// Hidden width as a multiple of `embed_dim`.
     expansion_factor: usize,
 }
@@ -41,6 +48,8 @@ impl FeedForward {
     /// * `embed_dim` - Input/output dimension
     /// * `expansion_factor` - Factor by which to expand the intermediate dimension (default 4)
     /// * `dropout` - Dropout probability (default 0.1)
+    /// # Panics
+    /// `dropout` must be in `[0, 1]`
     #[must_use]
     pub fn new(embed_dim: usize, expansion_factor: usize, dropout: f32) -> Self {
         let intermediate_dim = embed_dim * expansion_factor;
@@ -49,7 +58,8 @@ impl FeedForward {
             expand: Linear::new(embed_dim, intermediate_dim, true),
             contract: Linear::new(intermediate_dim, embed_dim, true),
             activation: GELU::new(),
-            dropout,
+            dropout: Dropout::new(dropout),
+            embed_dim,
             expansion_factor,
         }
     }
@@ -85,20 +95,22 @@ impl FeedForward {
         // Expand: [batch * seq_len, embed_dim] -> [batch * seq_len, intermediate_dim]
         let x = self.expand.forward(&x_2d);
 
-        // Apply GELU activation
+        // Apply GELU activation, then dropout (identity in eval mode)
         let x = self.activation.forward(&x);
+        let x = self.dropout.forward(&x);
 
         // Contract: [batch * seq_len, intermediate_dim] -> [batch * seq_len, embed_dim]
         let x = self.contract.forward(&x);
+        let x = self.dropout.forward(&x);
 
         // Reshape back to 3D: [batch * seq_len, embed_dim] -> [batch, seq_len, embed_dim]
         x.reshape(&[batch_size, seq_len, embed_dim])
     }
 
-    /// Get the intermediate dimension
+    /// Get the intermediate (hidden) dimension, `embed_dim * expansion_factor`
     #[must_use]
     pub const fn intermediate_dim(&self) -> usize {
-        self.expansion_factor
+        self.embed_dim * self.expansion_factor
     }
 }
 
@@ -157,9 +169,8 @@ impl Module for FeedForward {
         Ok(())
     }
 
-    fn train(&mut self, _mode: bool) {
-        // FFN has different behavior in train/eval mode (dropout)
-        // For now, this is a no-op since dropout is not fully implemented
+    fn train(&mut self, mode: bool) {
+        self.dropout.train(mode);
     }
 }
 
@@ -224,6 +235,46 @@ mod tests {
 
         // Should have expand.weight, expand.bias, contract.weight, contract.bias
         assert_eq!(state.len(), 4);
+    }
+
+    #[test]
+    fn test_ffn_intermediate_dim() {
+        assert_eq!(FeedForward::new(16, 4, 0.0).intermediate_dim(), 64);
+        assert_eq!(FeedForward::new(6, 3, 0.0).intermediate_dim(), 18);
+    }
+
+    #[test]
+    fn test_ffn_dropout_identity_in_eval_active_in_training() {
+        crate::tensor::manual_seed(21);
+        let mut ffn = FeedForward::new(8, 4, 0.5);
+        // Same weights, no dropout: what the layer must compute in eval mode.
+        let mut reference = FeedForward::new(8, 4, 0.0);
+        reference
+            .load_state_dict(&ffn.state_dict())
+            .expect("same architecture");
+        let x = crate::tensor::randn(&[2, 3, 8]);
+        let expected = reference.forward(&x).data();
+
+        ffn.train(false);
+        assert_eq!(ffn.forward(&x).data(), expected, "eval mode must not drop");
+
+        ffn.train(true);
+        let trained = ffn.forward(&x).data();
+        assert_eq!(trained.len(), expected.len());
+        assert!(
+            trained
+                .iter()
+                .zip(expected.iter())
+                .any(|(a, e)| (a - e).abs() > 1e-6),
+            "training mode at p=0.5 left the output unchanged"
+        );
+        // The second dropout acts on the output itself: about half of it is zeroed.
+        let zeros = trained.iter().filter(|&&v| v == 0.0).count();
+        assert!(zeros > 0, "no output element was dropped: {trained:?}");
+
+        // Back in eval mode the layer is deterministic again.
+        ffn.train(false);
+        assert_eq!(ffn.forward(&x).data(), expected);
     }
 
     #[test]

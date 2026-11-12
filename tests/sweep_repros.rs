@@ -90,7 +90,6 @@ fn mha_adds_no_residual() {
 }
 
 #[test]
-#[ignore = "S15: intermediate_dim() returns the expansion factor (4), not embed_dim * factor (64)"]
 fn feed_forward_intermediate_dim_is_the_hidden_width() {
     assert_eq!(FeedForward::new(16, 4, 0.0).intermediate_dim(), 64);
 }
@@ -191,7 +190,6 @@ fn batchnorm_with_one_sample_per_channel_never_poisons_running_stats() {
 }
 
 #[test]
-#[ignore = "S14: FeedForward stores `dropout` but never applies it; in training mode torch applies dropout, so two forwards at p=0.9 differ"]
 fn feed_forward_dropout_is_applied_in_training_mode() {
     volta::manual_seed(11);
     let mut ffn = FeedForward::new(8, 4, 0.9);
@@ -201,7 +199,6 @@ fn feed_forward_dropout_is_applied_in_training_mode() {
 }
 
 #[test]
-#[ignore = "S14: MultiHeadAttention stores `dropout` but never applies it"]
 fn mha_dropout_is_applied_in_training_mode() {
     volta::manual_seed(12);
     let mut mha = MultiHeadAttention::new(8, 2, 0.9);
@@ -214,7 +211,6 @@ fn mha_dropout_is_applied_in_training_mode() {
 }
 
 #[test]
-#[ignore = "S16: ScaledDotProductAttention asserts key length == query length; cross-attention (L=2 queries, S=3 keys) works in torch"]
 fn attention_supports_cross_attention_lengths() {
     let q = volta::randn(&[1, 2, 4]);
     let k = volta::randn(&[1, 3, 4]);
