@@ -86,7 +86,6 @@ fn log_softmax_matches_torch() {
 }
 
 #[test]
-#[ignore = "S6: sum() adds f32 values in sequence, so a sum of ones stalls at 2^24; torch uses pairwise summation"]
 fn sum_of_2_pow_25_ones_is_exact_like_torch() {
     // torch.ones(2**25).sum() == 33554432.0 (pairwise/cascade summation).
     let n = 1usize << 25;
@@ -95,7 +94,6 @@ fn sum_of_2_pow_25_ones_is_exact_like_torch() {
 }
 
 #[test]
-#[ignore = "S6: mean() shares the sequential f32 sum; torch.ones(2**25).mean() is exactly 1.0"]
 fn mean_of_2_pow_25_ones_is_one_like_torch() {
     let n = 1usize << 25;
     let x = RawTensor::new(vec![1.0; n], &[n], false);

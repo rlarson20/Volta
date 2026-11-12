@@ -176,7 +176,6 @@ fn gpu_sigmoid_saturates_without_nan() {
 }
 
 #[test]
-#[ignore = "S6: the single-thread GPU sum_reduce accumulates sequentially in f32, so the sum of 2^25 ones stalls at 2^24"]
 fn gpu_sum_of_2_pow_25_ones_is_exact() {
     if skip_or_mark("gpu_sum_of_2_pow_25_ones_is_exact") {
         return;

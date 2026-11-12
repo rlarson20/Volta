@@ -172,6 +172,36 @@ impl MeanGradFn {
     }
 }
 
+// ===== PAIRWISE SUMMATION =====
+
+/// Values [`pairwise_sum_by`] adds in sequence before it stops splitting.
+const PAIRWISE_BLOCK: usize = 128;
+
+/// The sum of the `n` values `get(0)..get(n)`, added as a balanced tree whose leaves are
+/// sequential runs of up to [`PAIRWISE_BLOCK`] values (numpy's pairwise summation).
+///
+/// The rounding error grows as `eps * (PAIRWISE_BLOCK + log2 n)` instead of `eps * n`, and a
+/// sum of 2^25 ones is exact, where a sequential f32 chain stalls at 2^24 (S6). The first
+/// value starts each run (no `0 + x`), so a sum of one `-0.0` stays `-0.0`. An empty sum is
+/// zero. `get` reads one element, so a strided reduction passes its own index arithmetic.
+pub(crate) fn pairwise_sum_by<T: Real>(n: usize, get: impl Fn(usize) -> T) -> T {
+    /// The sum of `get(lo)..get(hi)`, for `lo < hi`.
+    fn range<T: Real>(lo: usize, hi: usize, get: &impl Fn(usize) -> T) -> T {
+        if hi - lo <= PAIRWISE_BLOCK {
+            ((lo + 1)..hi).fold(get(lo), |acc, i| acc + get(i))
+        } else {
+            let mid = lo + (hi - lo) / 2;
+            range(lo, mid, get) + range(mid, hi, get)
+        }
+    }
+    if n == 0 { T::ZERO } else { range(0, n, &get) }
+}
+
+/// The pairwise sum of a slice ([`pairwise_sum_by`]).
+pub(crate) fn pairwise_sum<T: Real>(xs: &[T]) -> T {
+    pairwise_sum_by(xs.len(), |i| fetch(xs, i))
+}
+
 // ===== REDUCE OPERATIONS =====
 
 impl RawTensor {
@@ -197,7 +227,7 @@ impl RawTensor {
                     Self::gpu_sum_reduce(&data).unwrap_or_else(|| kernel_failed("Sum"))
                 } else {
                     dispatch_real!(dtype, T => {
-                        Storage::from_compute(dtype, vec![data.host::<T>().iter().copied().sum::<T>()])
+                        Storage::from_compute(dtype, vec![pairwise_sum(&data.host::<T>())])
                     })
                 };
                 (sum, GradFn::Sum(SumGradFn { input_shape: shape }))
@@ -231,7 +261,7 @@ impl RawTensor {
                     Self::gpu_mean_reduce(&data).unwrap_or_else(|| kernel_failed("Mean"))
                 } else {
                     dispatch_real!(dtype, T => {
-                        let sum: T = data.host::<T>().iter().copied().sum();
+                        let sum: T = pairwise_sum(&data.host::<T>());
                         Storage::from_compute(dtype, vec![sum / T::from_usize(data.len())])
                     })
                 };
@@ -246,5 +276,62 @@ impl RawTensor {
             device,
             grad_fn,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::index::fetch;
+
+    /// Lengths either side of every point where the tree splits.
+    const LENGTHS: [usize; 9] = [0, 1, 2, 127, 128, 129, 255, 256, 257];
+
+    #[test]
+    fn pairwise_sum_of_ones_is_the_count_at_every_split_point() {
+        for n in LENGTHS {
+            assert_eq!(pairwise_sum(&vec![1.0f32; n]), n as f32, "n={n}");
+            assert_eq!(pairwise_sum(&vec![1.0f64; n]), n as f64, "n={n}");
+        }
+    }
+
+    #[test]
+    fn pairwise_sum_of_2_pow_25_ones_is_exact_in_f32() {
+        // A sequential f32 chain stalls at 2^24 (S6).
+        let ones = vec![1.0f32; 1 << 25];
+        assert_eq!(pairwise_sum(&ones), 33_554_432.0);
+    }
+
+    #[test]
+    fn pairwise_sum_keeps_terms_a_running_sum_loses() {
+        // 1.0, then 100000 terms each below half an ulp of 1.0: a running sum stays 1.0.
+        let mut xs = vec![3.0e-8f32; 100_001];
+        *crate::index::slot(&mut xs, 0) = 1.0;
+        let sequential = xs.iter().fold(0.0f32, |a, &b| a + b);
+        assert_eq!(sequential, 1.0);
+        let want = 1.0 + 100_000.0 * 3.0e-8_f64;
+        let got = f64::from(pairwise_sum(&xs));
+        // The first leaf run (128 values) still adds onto the 1.0 in sequence and drops its
+        // 127 terms, about 4e-6: the error is bounded by the block, not by n (3e-3 above).
+        assert!((got - want).abs() < 1e-5, "pairwise {got}, exact {want}");
+    }
+
+    #[test]
+    fn pairwise_sum_by_reads_each_index_once_in_range() {
+        let seen = std::cell::RefCell::new(vec![0u32; 1000]);
+        let total: f32 = pairwise_sum_by(1000, |i| {
+            *crate::index::slot(&mut seen.borrow_mut(), i) += 1;
+            1.0
+        });
+        assert_eq!(total, 1000.0);
+        assert!(seen.borrow().iter().all(|&c| c == 1));
+    }
+
+    #[test]
+    fn pairwise_sum_of_empty_is_zero_and_of_one_negative_zero_is_negative_zero() {
+        assert_eq!(pairwise_sum::<f32>(&[]), 0.0);
+        let z = pairwise_sum(&[-0.0f32]);
+        assert!(z == 0.0 && z.is_sign_negative());
+        assert_eq!(fetch(&[2.5f32], 0), pairwise_sum(&[2.5f32]));
     }
 }

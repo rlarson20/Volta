@@ -6,7 +6,7 @@ use crate::dtype::DType;
 use crate::index::{fetch, slot, span};
 use crate::ops::binary::BinaryOp;
 use crate::ops::compare::CmpOp;
-use crate::ops::reduce::ReduceOp;
+use crate::ops::reduce::{ReduceOp, pairwise_sum_by};
 use crate::ops::ternary::TernaryOp;
 use crate::ops::unary::UnaryOp;
 use crate::real::{Real, compute_dtype, dispatch_real};
@@ -1273,11 +1273,10 @@ impl RawTensor {
             for outer in 0..outer_size {
                 for inner in 0..inner_size {
                     let out_idx = outer * inner_size + inner;
-                    let mut sum = T::ZERO;
-                    for k in 0..dim_size {
-                        let in_idx = outer * dim_size * inner_size + k * inner_size + inner;
-                        sum += fetch(&data, in_idx);
-                    }
+                    // Pairwise, not a running sum: a long axis would stall (S6).
+                    let sum = pairwise_sum_by(dim_size, |k| {
+                        fetch(&data, outer * dim_size * inner_size + k * inner_size + inner)
+                    });
                     *slot(&mut result, out_idx) = sum;
                 }
             }
