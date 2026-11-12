@@ -14,16 +14,24 @@ pub(crate) fn dim_scan_replaces<T: Real>(cand: T, best: T) -> bool {
     cand > best || (cand.is_nan() && !best.is_nan())
 }
 
+/// `max_pool2d`'s scan: whether `cand` replaces the running best. A larger value does, and
+/// so does every NaN, so the last NaN of a window wins; ties keep the earlier element.
+pub(crate) fn pool_scan_replaces<T: Real>(cand: T, best: T) -> bool {
+    cand > best || cand.is_nan()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::dim_scan_replaces;
+    use super::{dim_scan_replaces, pool_scan_replaces};
 
     #[test]
     fn scan_rules_differ_in_which_nan_wins() {
-        // max(dim): ties and the first NaN stay.
+        // max(dim): the first NaN stays. max_pool2d: a later NaN replaces it.
         assert!(!dim_scan_replaces(f32::NAN, f32::NAN));
+        assert!(pool_scan_replaces(f32::NAN, f32::NAN));
         assert!(dim_scan_replaces(f32::NAN, 1.0));
         assert!(!dim_scan_replaces(1.0, f32::NAN));
         assert!(!dim_scan_replaces(2.0, 2.0));
+        assert!(!pool_scan_replaces(2.0, 2.0));
     }
 }

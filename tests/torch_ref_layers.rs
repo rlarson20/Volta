@@ -145,7 +145,6 @@ fn maxpool_matches_torch() {
 }
 
 #[test]
-#[ignore = "S3: a window with no winner (all -inf) keeps flat index 0 of the padded tensor, so its gradient lands in another channel"]
 fn maxpool_all_neg_inf_channel_keeps_gradient_in_its_channel() {
     let f = Fixture::load("layers");
     let x = f.tensor("maxpool_neginf.x", true);
@@ -154,7 +153,6 @@ fn maxpool_all_neg_inf_channel_keeps_gradient_in_its_channel() {
 }
 
 #[test]
-#[ignore = "S3: the window scan uses >, which skips NaN; torch.max_pool2d propagates it"]
 fn maxpool_propagates_nan_like_torch() {
     let f = Fixture::load("layers");
     let x = f.tensor("maxpool_nan.x", false);
@@ -165,6 +163,31 @@ fn maxpool_propagates_nan_like_torch() {
         &f.values("maxpool_nan.out"),
         FWD,
     );
+}
+
+#[test]
+fn maxpool_tie_sends_the_whole_gradient_to_the_first_element() {
+    let f = Fixture::load("layers");
+    let x = f.tensor("maxpool_tie.x", true);
+    let out = MaxPool2d::new(2, 2, 0).forward(&x);
+    check_case(&f, "maxpool_tie", &out, &[("x", &x, None)], FWD, BWD);
+}
+
+#[test]
+fn maxpool_with_two_nans_sends_the_gradient_to_the_last() {
+    let f = Fixture::load("layers");
+    let x = f.tensor("maxpool_nan2.x", true);
+    let out = MaxPool2d::new(2, 2, 0).forward(&x);
+    check_case(&f, "maxpool_nan2", &out, &[("x", &x, None)], FWD, BWD);
+}
+
+#[test]
+fn maxpool_all_neg_inf_window_with_padding_keeps_its_first_real_element() {
+    // S3: windows that mix padding and real -inf send the gradient to the first real one.
+    let f = Fixture::load("layers");
+    let x = f.tensor("maxpool_neginf_pad.x", true);
+    let out = MaxPool2d::new(2, 2, 1).forward(&x);
+    check_case(&f, "maxpool_neginf_pad", &out, &[("x", &x, None)], FWD, BWD);
 }
 
 #[test]

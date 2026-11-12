@@ -3,6 +3,7 @@ use crate::device::Device;
 use crate::index::{fetch, slot};
 use crate::io::StateDict;
 use crate::nn::{Layer, Module};
+use crate::ops::max_rule::pool_scan_replaces;
 use crate::real::{Real, compute_dtype, dispatch_real};
 use crate::shape::Shape;
 use crate::spec::{PadValue, Window2dSpec};
@@ -12,7 +13,9 @@ use crate::tensor::{RawTensor, Tensor};
 /// 2D max pooling layer
 ///
 /// Accepts tensors shaped (batch, channels, height, width) and downsamples each
-/// spatial window to its maximum value, similar to PyTorch's `nn.MaxPool2d`.
+/// spatial window to its maximum value, similar to PyTorch's `nn.MaxPool2d`. As in torch, a
+/// NaN in a window makes the output NaN (the last NaN gets the gradient), a tie goes to
+/// the first element in scan order, and all of the gradient goes to that one element.
 pub struct MaxPool2d {
     /// `(height, width)` of the pooling window.
     kernel: (usize, usize),
@@ -72,9 +75,8 @@ impl MaxPool2d {
             out_w: w_out,
             ..
         } = spec;
-        // A window made only of -inf padding would output -inf and route its
-        // gradient to index 0, so padding may cover at most half the kernel
-        // (PyTorch's rule). Conv shares `Window2dSpec` and allows more.
+        // Padding may cover at most half the kernel (PyTorch's rule), so every window holds
+        // a real element. Conv shares `Window2dSpec` and allows more.
         assert!(
             pad_h <= kernel_h / 2 && pad_w <= kernel_w / 2,
             "MaxPool2d padding must be at most half the kernel: padding {:?} with kernel {:?}",
@@ -107,25 +109,36 @@ impl MaxPool2d {
                         let h_start = oh * stride_h;
                         let w_start = ow * stride_w;
 
+                        // Like torch, the window starts at -inf and its first real (not
+                        // padding) element, so an all -inf window sends its gradient there
+                        // and never to another channel (S3).
                         let mut max_val = T::NEG_INFINITY;
-                        let mut max_idx = 0usize;
+                        let mut max_idx = None;
 
                         for kh in 0..kernel_h {
                             for kw in 0..kernel_w {
                                 let h_in = h_start + kh;
                                 let w_in = w_start + kw;
+                                if h_in < pad_h
+                                    || h_in >= pad_h + spec.in_h
+                                    || w_in < pad_w
+                                    || w_in >= pad_w + spec.in_w
+                                {
+                                    continue; // padding is -inf and never wins
+                                }
                                 let in_idx =
                                     (((b * channels + c) * padded_h) + h_in) * padded_w + w_in;
                                 let val = fetch(&data, in_idx);
-                                if val > max_val {
+                                if max_idx.is_none() || pool_scan_replaces(val, max_val) {
                                     max_val = val;
-                                    max_idx = in_idx;
+                                    max_idx = Some(in_idx);
                                 }
                             }
                         }
 
                         *slot(&mut out_data, out_idx) = max_val;
-                        *slot(&mut max_indices, out_idx) = max_idx;
+                        *slot(&mut max_indices, out_idx) = max_idx
+                            .expect("MaxPool2d: every window holds a real element (padding <= kernel / 2)");
                     }
                 }
             }
