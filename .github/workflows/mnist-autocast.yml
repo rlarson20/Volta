@@ -5,7 +5,7 @@ on:
   # accuracies differ by more than 0.2 points. Too slow and data-heavy for every PR, so it runs
   # nightly and by hand. Not a required check (.github/rulesets/ name only ci.yml's jobs).
   schedule:
-    - cron: "0 5 * * *" # Nightly
+    - cron: "15 5 * * *" # Nightly
   workflow_dispatch:
 
 permissions:
