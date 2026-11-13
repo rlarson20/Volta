@@ -570,7 +570,8 @@ pub fn save_safetensors_typed<P: AsRef<Path>>(
 /// # Ok::<(), std::io::Error>(())
 /// ```
 /// # Errors
-/// returns result state dict or IO error
+/// returns result state dict or IO error; `InvalidData` wrapping the
+/// [`VoltaError`](crate::VoltaError) if the mapper fails ([`mapping::StateDictMapper::try_map`]).
 pub fn load_state_dict_with_mapping<P: AsRef<Path>>(
     path: P,
     mapper: &mapping::StateDictMapper,
@@ -582,7 +583,9 @@ pub fn load_state_dict_with_mapping<P: AsRef<Path>>(
         )
     })?;
     let state = load_state_dict(path_str)?;
-    Ok(mapper.map(state))
+    mapper
+        .try_map(state)
+        .map_err(|e| Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
 /// Load a safetensors file and apply transformations
@@ -602,13 +605,16 @@ pub fn load_state_dict_with_mapping<P: AsRef<Path>>(
 /// # Ok::<(), std::io::Error>(())
 /// ```
 /// # Errors
-/// Same as [`load_safetensors`].
+/// Same as [`load_safetensors`], and `InvalidData` wrapping the
+/// [`VoltaError`](crate::VoltaError) if the mapper fails ([`mapping::StateDictMapper::try_map`]).
 pub fn load_safetensors_with_mapping<P: AsRef<Path>>(
     path: P,
     mapper: &mapping::StateDictMapper,
 ) -> Result<StateDict> {
     let state = load_safetensors(path)?;
-    Ok(mapper.map(state))
+    mapper
+        .try_map(state)
+        .map_err(|e| Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
 #[cfg(test)]

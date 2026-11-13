@@ -960,6 +960,28 @@ fn test_dataloader_iteration() {
     assert_eq!(x.borrow().shape, vec![3, 2]);
 }
 
+/// S20: `try_new` rejects a target buffer that is not exactly one target per sample, in
+/// either direction, and names both counts; a matching one (2-value targets) is accepted.
+#[test]
+fn test_dataloader_try_new_checks_target_count() {
+    for n_targets in [2, 7, 9] {
+        let err = DataLoader::try_new(vec![0.0; 8], vec![0.0; n_targets], &[2], &[2], 2, false)
+            .err()
+            .unwrap_or_else(|| panic!("{n_targets} target values for 4 samples accepted"));
+        let msg = err.to_string();
+        assert!(
+            matches!(err, VoltaError::InvalidParameter(_))
+                && msg.contains("4 samples")
+                && msg.contains("need 8 target values")
+                && msg.contains(&format!("got {n_targets}")),
+            "{msg}"
+        );
+    }
+    let loader = DataLoader::try_new(vec![0.0; 8], vec![0.0; 8], &[2], &[2], 2, false)
+        .expect("one 2-value target per sample");
+    assert_eq!(loader.count(), 2);
+}
+
 #[test]
 fn test_dataloader_in_training_loop() {
     let data = vec![0.0; 40]; // 10 samples, 4 features

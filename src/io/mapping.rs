@@ -1,9 +1,11 @@
+use crate::error::{Result, VoltaError};
 use crate::index::span;
 use crate::io::{StateDict, TensorData};
 use crate::shape::fixed_dims;
+use std::collections::BTreeMap;
 
-/// One queued edit of a [`StateDict`], applied by [`StateDictMapper::map`].
-pub type TransformationBox = Box<dyn Fn(&mut StateDict)>;
+/// One queued edit of a [`StateDict`], applied by [`StateDictMapper::try_map`].
+pub type TransformationBox = Box<dyn Fn(&mut StateDict) -> Result<()>>;
 /// Builder for composable state dict transformations
 ///
 /// `StateDictMapper` allows you to transform state dicts when loading external models.
@@ -37,7 +39,7 @@ pub type TransformationBox = Box<dyn Fn(&mut StateDict)>;
 ///     .transpose("encoder.weight")  // PyTorch stores [out, in], Volta uses [in, out]
 ///     .strip_prefix("model.");
 ///
-/// let volta_state = mapper.map(pytorch_state);
+/// let volta_state = mapper.try_map(pytorch_state)?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[must_use]
@@ -56,23 +58,24 @@ impl StateDictMapper {
 
     /// Rename a single key
     ///
-    /// If the key doesn't exist, this operation is a no-op.
+    /// If the key doesn't exist, this operation is a no-op. If `to` already names another
+    /// entry, [`StateDictMapper::try_map`] returns [`VoltaError::StateKeyCollision`]
+    /// rather than overwrite it.
     pub fn rename(mut self, from: impl Into<String>, to: impl Into<String>) -> Self {
         let from = from.into();
         let to = to.into();
 
         self.transformations
             .push(Box::new(move |state: &mut StateDict| {
-                if let Some(value) = state.remove(&from) {
-                    state.insert(to.clone(), value);
-                }
+                rekey(state, |key| (key == from).then(|| to.clone()))
             }));
         self
     }
 
     /// Rename all keys with a given prefix
     ///
-    /// Example: `rename_prefix("old.", "new.")` changes "old.weight" to "new.weight"
+    /// Example: `rename_prefix("old.", "new.")` changes "old.weight" to "new.weight".
+    /// Two keys that end up with the same name are a [`VoltaError::StateKeyCollision`].
     pub fn rename_prefix(
         mut self,
         old_prefix: impl Into<String>,
@@ -83,60 +86,39 @@ impl StateDictMapper {
 
         self.transformations
             .push(Box::new(move |state: &mut StateDict| {
-                let mut updates = Vec::new();
-                for (key, value) in state.iter() {
-                    if key.starts_with(&old_prefix) {
-                        let suffix = &key[old_prefix.len()..];
-                        updates.push((key.clone(), format!("{new_prefix}{suffix}"), value.clone()));
-                    }
-                }
-                for (old_key, new_key, value) in updates {
-                    state.remove(&old_key);
-                    state.insert(new_key, value);
-                }
+                rekey(state, |key| {
+                    key.strip_prefix(&old_prefix)
+                        .map(|suffix| format!("{new_prefix}{suffix}"))
+                })
             }));
         self
     }
 
     /// Strip a prefix from all keys
     ///
-    /// Example: `strip_prefix("model.")` changes "model.encoder.weight" to "encoder.weight"
+    /// Example: `strip_prefix("model.")` changes "model.encoder.weight" to "encoder.weight".
+    /// A stripped key that equals another key (`model.w` next to `w`) is a
+    /// [`VoltaError::StateKeyCollision`].
     pub fn strip_prefix(mut self, prefix: impl Into<String>) -> Self {
         let prefix = prefix.into();
 
         self.transformations
             .push(Box::new(move |state: &mut StateDict| {
-                let mut updates = Vec::new();
-                for (key, value) in state.iter() {
-                    if let Some(stripped) = key.strip_prefix(&prefix) {
-                        updates.push((key.clone(), stripped.to_string(), value.clone()));
-                    }
-                }
-                for (old_key, new_key, value) in updates {
-                    state.remove(&old_key);
-                    state.insert(new_key, value);
-                }
+                rekey(state, |key| key.strip_prefix(&prefix).map(str::to_string))
             }));
         self
     }
 
     /// Add a prefix to all keys
     ///
-    /// Example: `add_prefix("encoder.")` changes "weight" to "encoder.weight"
+    /// Example: `add_prefix("encoder.")` changes "weight" to "encoder.weight". Every key is
+    /// renamed from the original map, so `{w, xw}` with prefix `x` becomes `{xw, xxw}`.
     pub fn add_prefix(mut self, prefix: impl Into<String>) -> Self {
         let prefix = prefix.into();
 
         self.transformations
             .push(Box::new(move |state: &mut StateDict| {
-                let mut updates = Vec::new();
-                for (key, value) in state.iter() {
-                    let new_key = format!("{prefix}{key}");
-                    updates.push((key.clone(), new_key, value.clone()));
-                }
-                for (old_key, new_key, value) in updates {
-                    state.remove(&old_key);
-                    state.insert(new_key, value);
-                }
+                rekey(state, |key| Some(format!("{prefix}{key}")))
             }));
         self
     }
@@ -157,6 +139,7 @@ impl StateDictMapper {
                 {
                     transpose_2d(tensor_data);
                 }
+                Ok(())
             }));
         self
     }
@@ -189,6 +172,7 @@ impl StateDictMapper {
                     tensor_data.shape
                 );
                 transpose_2d(tensor_data);
+                Ok(())
             }));
         self
     }
@@ -217,6 +201,7 @@ impl StateDictMapper {
                         transpose_2d(tensor_data);
                     }
                 }
+                Ok(())
             }));
         self
     }
@@ -228,6 +213,7 @@ impl StateDictMapper {
         self.transformations
             .push(Box::new(move |state: &mut StateDict| {
                 state.retain(|k, _| keys.contains(k));
+                Ok(())
             }));
         self
     }
@@ -239,6 +225,7 @@ impl StateDictMapper {
         self.transformations
             .push(Box::new(move |state: &mut StateDict| {
                 state.retain(|k, _| !keys.contains(k));
+                Ok(())
             }));
         self
     }
@@ -250,23 +237,93 @@ impl StateDictMapper {
     where
         F: Fn(&mut StateDict) + 'static,
     {
-        self.transformations.push(Box::new(f));
+        self.transformations
+            .push(Box::new(move |state: &mut StateDict| {
+                f(state);
+                Ok(())
+            }));
         self
     }
 
-    /// Apply all transformations to a state dict (in-place)
-    pub fn apply(&self, state: &mut StateDict) {
+    /// Apply all transformations to a state dict (in-place), stopping at the first error.
+    ///
+    /// # Errors
+    /// [`VoltaError::StateKeyCollision`] if a renaming step would give two entries the
+    /// same name. That step leaves `state` as it was, but the steps before it have
+    /// already been applied.
+    pub fn try_apply(&self, state: &mut StateDict) -> Result<()> {
         for transform in &self.transformations {
-            transform(state);
+            transform(state)?;
+        }
+        Ok(())
+    }
+
+    /// Apply all transformations to a state dict (in-place)
+    ///
+    /// # Panics
+    /// Wherever [`StateDictMapper::try_apply`] returns an error.
+    pub fn apply(&self, state: &mut StateDict) {
+        if let Err(e) = self.try_apply(state) {
+            panic!("StateDictMapper::apply: {e}");
         }
     }
 
-    /// Apply transformations and return new state dict
-    #[must_use]
-    pub fn map(&self, mut state: StateDict) -> StateDict {
-        self.apply(&mut state);
-        state
+    /// Apply transformations and return the new state dict.
+    ///
+    /// # Errors
+    /// As [`StateDictMapper::try_apply`].
+    pub fn try_map(&self, mut state: StateDict) -> Result<StateDict> {
+        self.try_apply(&mut state)?;
+        Ok(state)
     }
+
+    /// Apply transformations and return new state dict
+    ///
+    /// # Panics
+    /// Wherever [`StateDictMapper::try_map`] returns an error.
+    #[must_use]
+    pub fn map(&self, state: StateDict) -> StateDict {
+        self.try_map(state)
+            .unwrap_or_else(|e| panic!("StateDictMapper::map: {e}"))
+    }
+}
+
+/// Renames the keys of `state` all at once: `new_name(key)` gives a key's new name, or
+/// `None` to keep it. Every new name is computed from the original keys, so a key that
+/// is another key's new name is renamed too, not overwritten.
+///
+/// # Errors
+/// [`VoltaError::StateKeyCollision`] if two entries would end up with the same name;
+/// `state` is then unchanged.
+fn rekey(state: &mut StateDict, new_name: impl Fn(&str) -> Option<String>) -> Result<()> {
+    // Final name -> the original key that ends up under it.
+    let mut claimed: BTreeMap<String, &String> = BTreeMap::new();
+    for old in state.keys() {
+        let target = new_name(old).unwrap_or_else(|| old.clone());
+        if let Some(first) = claimed.insert(target.clone(), old) {
+            return Err(VoltaError::StateKeyCollision {
+                key: target,
+                first: first.clone(),
+                second: old.clone(),
+            });
+        }
+    }
+    let renames: Vec<(String, String)> = claimed
+        .into_iter()
+        .filter(|(new, old)| new != *old)
+        .map(|(new, old)| (old.clone(), new))
+        .collect();
+
+    // No collisions, so every new name is free once the renamed entries are taken out.
+    let mut moved = Vec::with_capacity(renames.len());
+    for (old, new) in renames {
+        let value = state
+            .remove(&old)
+            .unwrap_or_else(|| unreachable!("{old:?} was read from the map's own keys"));
+        moved.push((new, value));
+    }
+    state.extend(moved);
+    Ok(())
 }
 
 /// Transpose a row-major 2-D tensor in place: `[R, C]` -> `[C, R]`. Moves whole
@@ -377,6 +434,7 @@ pub fn load_partial(state: StateDict, prefix: &str) -> StateDict {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::fetch;
     use crate::io::TensorData;
     use std::collections::BTreeMap;
 
@@ -701,5 +759,134 @@ mod tests {
             TensorData::from_f32(vec![0.0; 8], vec![2, 1, 2, 2]),
         );
         let _ = load_pytorch_linear_weights(state, &["conv"]);
+    }
+
+    /// A one-element entry holding `v`.
+    fn entry(v: f32) -> TensorData {
+        TensorData::from_f32(vec![v], vec![1])
+    }
+
+    /// A state dict with one-element entries `keys[i] = i`.
+    fn state_of(keys: &[&str]) -> StateDict {
+        keys.iter()
+            .zip(0u8..)
+            .map(|(k, i)| ((*k).to_string(), entry(f32::from(i))))
+            .collect()
+    }
+
+    /// The `(key, value)` pairs of a state dict of one-element entries.
+    fn pairs(state: &StateDict) -> Vec<(String, f32)> {
+        state
+            .iter()
+            .map(|(k, v)| {
+                let values = v.to_vec_as::<f32>().expect("test entries are valid f32");
+                (k.clone(), fetch(&values, 0))
+            })
+            .collect()
+    }
+
+    /// `add_prefix` renames from the original keys: `w`'s new name `xw` is itself an old
+    /// key, which moves on to `xxw` instead of being overwritten.
+    #[test]
+    fn test_add_prefix_onto_an_existing_key_keeps_both() {
+        let mapped = StateDictMapper::new()
+            .add_prefix("x")
+            .try_map(state_of(&["w", "xw"]))
+            .expect("add_prefix is injective");
+        assert_eq!(
+            pairs(&mapped),
+            vec![("xw".to_string(), 0.0), ("xxw".to_string(), 1.0)]
+        );
+    }
+
+    /// Stripping `m.` from `m.w` collides with the unprefixed `w`: an error naming both,
+    /// and the input is not consumed piecemeal.
+    #[test]
+    fn test_strip_prefix_collision_is_an_error() {
+        let mut state = state_of(&["m.w", "w"]);
+        let err = StateDictMapper::new()
+            .strip_prefix("m.")
+            .try_apply(&mut state)
+            .unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                VoltaError::StateKeyCollision { key, first, second }
+                    if key == "w" && first == "m.w" && second == "w"
+            ),
+            "{err:?}"
+        );
+        assert_eq!(
+            pairs(&state),
+            vec![("m.w".to_string(), 0.0), ("w".to_string(), 1.0)]
+        );
+    }
+
+    /// Stripping a prefix whose stripped names are another key's original name, while
+    /// that key moves too, is not a collision.
+    #[test]
+    fn test_strip_prefix_chain_keeps_every_entry() {
+        let mapped = StateDictMapper::new()
+            .strip_prefix("m.")
+            .try_map(state_of(&["m.m.w", "m.w"]))
+            .expect("m.m.w -> m.w and m.w -> w are distinct");
+        assert_eq!(
+            pairs(&mapped),
+            vec![("m.w".to_string(), 0.0), ("w".to_string(), 1.0)]
+        );
+    }
+
+    /// Renaming onto a key that stays would overwrite it: an error, input unchanged.
+    #[test]
+    fn test_rename_onto_existing_key_is_an_error() {
+        let mut state = state_of(&["a", "b"]);
+        let err = StateDictMapper::new()
+            .rename("a", "b")
+            .try_apply(&mut state)
+            .unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                VoltaError::StateKeyCollision { key, first, second }
+                    if key == "b" && first == "a" && second == "b"
+            ),
+            "{err:?}"
+        );
+        assert_eq!(
+            pairs(&state),
+            vec![("a".to_string(), 0.0), ("b".to_string(), 1.0)]
+        );
+    }
+
+    /// Renaming a key to itself is a no-op, not a collision with itself.
+    #[test]
+    fn test_rename_to_itself_is_a_noop() {
+        let mapped = StateDictMapper::new()
+            .rename("a", "a")
+            .try_map(state_of(&["a"]))
+            .expect("no collision");
+        assert_eq!(pairs(&mapped), vec![("a".to_string(), 0.0)]);
+    }
+
+    /// `rename_prefix` shares the bug class: `old.w -> new.w` next to an existing `new.w`.
+    #[test]
+    fn test_rename_prefix_collision_is_an_error() {
+        let err = StateDictMapper::new()
+            .rename_prefix("old.", "new.")
+            .try_map(state_of(&["new.w", "old.w"]))
+            .expect_err("old.w -> new.w collides with new.w");
+        assert!(
+            matches!(&err, VoltaError::StateKeyCollision { key, .. } if key == "new.w"),
+            "{err:?}"
+        );
+    }
+
+    /// The panicking `map` reports the collision rather than dropping an entry.
+    #[test]
+    #[should_panic(expected = "both map to")]
+    fn test_map_panics_on_collision() {
+        let _ = StateDictMapper::new()
+            .rename("a", "b")
+            .map(state_of(&["a", "b"]));
     }
 }
