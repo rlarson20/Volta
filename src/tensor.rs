@@ -1557,9 +1557,18 @@ impl RawTensor {
     /// with batch statistics; put the layer in eval mode, or rebuild it, if the
     /// statistics matter afterwards.
     ///
+    /// # Non-finite gradients
+    /// A NaN or infinite relative error at any element (from a NaN or infinite
+    /// analytic or numerical gradient, as when `loss_fn` evaluates an op outside its
+    /// domain) fails the check: `passed` is `false` and `max_error` is that NaN or
+    /// infinity, not the largest finite error.
+    ///
     /// # Panics
-    /// If `loss_fn` doesn't return a scalar that requires grad, or `tensor` ends up
-    /// without a gradient
+    /// If `tensor` is f16 or bf16: a finite-difference step can't be resolved at half
+    /// precision, so the check would fail correct gradients. Cast the inputs to f32 or
+    /// f64 first (torch's `gradcheck` warns about non-double inputs; Volta refuses).
+    /// Also if `loss_fn` doesn't return a scalar that requires grad, or `tensor` ends
+    /// up without a gradient.
     pub fn check_gradients<F>(
         tensor: &Tensor,
         loss_fn: F,
@@ -1569,6 +1578,14 @@ impl RawTensor {
     where
         F: Fn(&Tensor) -> Tensor,
     {
+        let input_dtype = tensor.dtype();
+        assert!(
+            !matches!(input_dtype, DType::F16 | DType::BF16),
+            "check_gradients: input is {input_dtype:?}, where a finite difference is \
+             meaningless (the step can't be resolved at half precision); cast the inputs \
+             to f32 or f64 first"
+        );
+
         // Compute analytical gradient. The backward pass adds into every tensor the loss
         // reaches (a layer's parameters among them), so save theirs first and put them
         // back; only `tensor` keeps the result.
@@ -1643,9 +1660,12 @@ impl RawTensor {
             });
         }
 
-        // Compute errors (in f64; reported as f32, the signature's type)
+        // Compute errors (in f64; reported as f32, the signature's type). `f64::max`
+        // drops a NaN operand, so a non-finite error is tracked on its own: it fails the
+        // check and is what `max_error` reports.
         let mut max_error: f64 = 0.0;
         let mut total_error: f64 = 0.0;
+        let mut non_finite: Option<f64> = None;
 
         for (i, (&analytical, &numerical)) in
             analytical_grad.iter().zip(&numerical_grad).enumerate()
@@ -1657,10 +1677,15 @@ impl RawTensor {
             let scale = analytical.abs().max(numerical.abs());
             let relative_error = if scale > 1e-3 { error / scale } else { error };
 
-            max_error = max_error.max(relative_error);
+            if relative_error.is_finite() {
+                max_error = max_error.max(relative_error);
+            } else if !non_finite.is_some_and(f64::is_nan) {
+                // Keep the first NaN; otherwise the infinity.
+                non_finite = Some(relative_error);
+            }
             total_error += relative_error;
 
-            if relative_error > f64::from(tolerance) {
+            if !relative_error.is_finite() || relative_error > f64::from(tolerance) {
                 log::debug!(
                     "Gradient mismatch at index {i}: analytical={analytical:.6e}, numerical={numerical:.6e}, error={relative_error:.6e}",
                 );
@@ -1668,7 +1693,8 @@ impl RawTensor {
         }
 
         let mean_error = total_error / analytical_grad.len() as f64;
-        let passed = max_error < f64::from(tolerance);
+        let max_error = non_finite.unwrap_or(max_error);
+        let passed = non_finite.is_none() && max_error < f64::from(tolerance);
 
         #[expect(
             clippy::cast_possible_truncation,
@@ -1679,7 +1705,11 @@ impl RawTensor {
 
     /// Simplified gradient checker with default parameters
     ///
-    /// Uses epsilon=1e-2 and tolerance=1e-3, which work well for most cases.
+    /// Uses epsilon=1e-2 and tolerance=1e-3, which work well for most cases. A NaN or
+    /// infinite gradient fails it, as in [`RawTensor::check_gradients`].
+    ///
+    /// # Panics
+    /// As [`RawTensor::check_gradients`], including on an f16 or bf16 `tensor`.
     pub fn check_gradients_simple<F>(tensor: &Tensor, loss_fn: F) -> bool
     where
         F: Fn(&Tensor) -> Tensor,
@@ -2530,6 +2560,61 @@ mod tensor_tests {
         let (second_err, _, second_passed) = RawTensor::check_gradients(&x, loss_fn, 1e-2, 1e-3);
         assert!(first_passed, "first check failed: max_err={first_err}");
         assert!(second_passed, "repeat check failed: max_err={second_err}");
+    }
+
+    /// sqrt of negatives: both gradients are NaN. `f64::max` used to drop the NaN, so the
+    /// check reported `(0.0, NaN, true)` (#90).
+    #[test]
+    fn check_gradients_fails_when_both_gradients_are_nan() {
+        let x = RawTensor::new(vec![-1.0, -2.0], &[2], true);
+        let (max_err, _, passed) = RawTensor::check_gradients(&x, |t| t.sqrt().sum(), 1e-3, 1e-3);
+        assert!(!passed, "a NaN gradient passed");
+        assert!(max_err.is_nan(), "max_error should be NaN, got {max_err}");
+        assert!(!RawTensor::check_gradients_simple(&x, |t| t.sqrt().sum()));
+    }
+
+    /// log of negatives: the analytic gradient `1/(x-5)` is finite, the numerical one is
+    /// NaN (#90).
+    #[test]
+    fn check_gradients_fails_when_numerical_gradient_is_nan() {
+        let x = RawTensor::new(vec![1.0, 2.0], &[2], true);
+        let c = RawTensor::new(vec![5.0, 5.0], &[2], false);
+        let loss_fn = |t: &Tensor| t.sub(&c).log().sum();
+        let (max_err, _, passed) = RawTensor::check_gradients(&x, loss_fn, 1e-3, 1e-3);
+        assert!(!passed, "a NaN numerical gradient passed");
+        assert!(max_err.is_nan(), "max_error should be NaN, got {max_err}");
+        assert!(!RawTensor::check_gradients_simple(&x, loss_fn));
+    }
+
+    /// An infinite analytic gradient fails too: `sqrt` at 0 has gradient `+inf` (and the
+    /// numerical one steps to a negative input), so the error is non-finite (#90).
+    #[test]
+    fn check_gradients_fails_on_infinite_gradient() {
+        let x = RawTensor::new(vec![0.0, 1.0], &[2], true);
+        let (max_err, _, passed) = RawTensor::check_gradients(&x, |t| t.sqrt().sum(), 1e-3, 1e-3);
+        assert!(!passed, "an infinite gradient passed");
+        assert!(
+            !max_err.is_finite(),
+            "max_error should be non-finite, got {max_err}"
+        );
+    }
+
+    /// f16 input: refused, since a finite difference can't resolve at half precision (A6).
+    #[test]
+    #[should_panic(expected = "cast the inputs to f32 or f64 first")]
+    fn check_gradients_refuses_f16_input() {
+        let x = RawTensor::new(vec![0.5, 1.5], &[2], false).to_dtype(DType::F16);
+        x.set_requires_grad(true);
+        let _ = RawTensor::check_gradients(&x, |t| t.elem_mul(t).sum(), 1e-2, 1e-2);
+    }
+
+    /// bf16 input: refused, as for f16 (A6).
+    #[test]
+    #[should_panic(expected = "cast the inputs to f32 or f64 first")]
+    fn check_gradients_refuses_bf16_input() {
+        let x = RawTensor::new(vec![0.5, 1.5], &[2], false).to_dtype(DType::BF16);
+        x.set_requires_grad(true);
+        let _ = RawTensor::check_gradients(&x, |t| t.elem_mul(t).sum(), 1e-2, 1e-2);
     }
 
     /// The analytic pass of `check_gradients` used to add its gradient into every other
