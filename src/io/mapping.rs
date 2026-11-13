@@ -1,5 +1,5 @@
 use crate::error::{Result, VoltaError};
-use crate::index::{fetch, slot, span};
+use crate::index::span;
 use crate::io::{StateDict, TensorData};
 use crate::shape::fixed_dims;
 use std::collections::BTreeMap;
@@ -434,6 +434,7 @@ pub fn load_partial(state: StateDict, prefix: &str) -> StateDict {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::fetch;
     use crate::io::TensorData;
     use std::collections::BTreeMap;
 
@@ -762,10 +763,7 @@ mod tests {
 
     /// A one-element entry holding `v`.
     fn entry(v: f32) -> TensorData {
-        TensorData {
-            data: vec![v],
-            shape: vec![1],
-        }
+        TensorData::from_f32(vec![v], vec![1])
     }
 
     /// A state dict with one-element entries `keys[i] = i`.
@@ -780,7 +778,10 @@ mod tests {
     fn pairs(state: &StateDict) -> Vec<(String, f32)> {
         state
             .iter()
-            .map(|(k, v)| (k.clone(), fetch(&v.data, 0)))
+            .map(|(k, v)| {
+                let values = v.to_vec_as::<f32>().expect("test entries are valid f32");
+                (k.clone(), fetch(&values, 0))
+            })
             .collect()
     }
 
@@ -873,8 +874,7 @@ mod tests {
         let err = StateDictMapper::new()
             .rename_prefix("old.", "new.")
             .try_map(state_of(&["new.w", "old.w"]))
-            .err()
-            .expect("old.w -> new.w collides with new.w");
+            .expect_err("old.w -> new.w collides with new.w");
         assert!(
             matches!(&err, VoltaError::StateKeyCollision { key, .. } if key == "new.w"),
             "{err:?}"
