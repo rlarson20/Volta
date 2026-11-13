@@ -81,16 +81,16 @@ pub enum VoltaError {
         actual: Vec<usize>,
     },
 
-    /// A state-dict entry holds a different number of values than its own shape
-    /// needs (a truncated or corrupt checkpoint). `key` is spelled as in
+    /// A state-dict entry holds a different number of bytes than its own shape and
+    /// dtype need (a truncated or corrupt checkpoint). `key` is spelled as in
     /// [`VoltaError::StateShapeMismatch`].
-    #[error("State dict entry '{key}' has {len} values but its shape needs {expected}")]
+    #[error("State dict entry '{key}' has {len} bytes but its shape and dtype need {expected}")]
     StateDataLength {
         /// Entry name, spelled as in [`VoltaError::StateShapeMismatch`].
         key: String,
-        /// Number of values the entry's own shape needs.
+        /// Bytes the entry's own shape and dtype need (`usize::MAX` if that overflows).
         expected: usize,
-        /// Number of values the entry holds.
+        /// Bytes the entry holds.
         len: usize,
     },
 

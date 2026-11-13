@@ -179,10 +179,7 @@ fn embedding_with_2d_indices_matches_torch() {
     e.load_state_dict(
         &[(
             "weight".to_string(),
-            volta::io::TensorData {
-                data: w,
-                shape: vec![6, 3],
-            },
+            volta::io::TensorData::from_f32(w, vec![6, 3]),
         )]
         .into_iter()
         .collect(),

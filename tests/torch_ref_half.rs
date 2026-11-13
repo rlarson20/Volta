@@ -159,10 +159,7 @@ fn state(entries: &[(&str, Vec<f32>, Vec<usize>)]) -> StateDict {
         .map(|(k, data, shape)| {
             (
                 (*k).to_string(),
-                TensorData {
-                    data: data.clone(),
-                    shape: shape.clone(),
-                },
+                TensorData::from_f32(data.clone(), shape.clone()),
             )
         })
         .collect()

@@ -18,10 +18,7 @@ impl Module for CountingModule {
         let mut state = StateDict::new();
         state.insert(
             "dummy".to_string(),
-            TensorData {
-                data: vec![1.0],
-                shape: vec![1],
-            },
+            TensorData::from_f32(vec![1.0], vec![1]),
         );
         state
     }
@@ -134,14 +131,11 @@ fn test_load_state_dict_checked_reports_differences() {
     corrupted_state.remove("0.bias");
     corrupted_state.insert(
         "unexpected".to_string(),
-        TensorData {
-            data: vec![0.0],
-            shape: vec![1],
-        },
+        TensorData::from_f32(vec![0.0], vec![1]),
     );
     if let Some(weight) = corrupted_state.get_mut("0.weight") {
-        weight.shape = vec![3, 2]; // shape mismatch while keeping data length = 6
-        weight.data = vec![0.0; 6];
+        // shape mismatch while keeping data length = 6
+        *weight = TensorData::from_f32(vec![0.0; 6], vec![3, 2]);
     }
 
     let diff = load_state_dict_checked(&mut model, &corrupted_state)

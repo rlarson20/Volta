@@ -16,7 +16,8 @@ fn zero_matching(m: &mut impl Module, needles: &[&str]) {
     let mut state = m.state_dict();
     for (key, value) in &mut state {
         if needles.iter().any(|n| key.contains(n)) {
-            value.data.iter_mut().for_each(|v| *v = 0.0);
+            // All-zero bytes are 0.0 in every float dtype.
+            value.data.fill(0);
         }
     }
     m.load_state_dict(&state).expect("load zeroed weights");
@@ -97,10 +98,7 @@ fn feed_forward_intermediate_dim_is_the_hidden_width() {
 
 #[test]
 fn add_prefix_keeps_every_tensor() {
-    let td = |v: f32| TensorData {
-        data: vec![v],
-        shape: vec![1],
-    };
+    let td = |v: f32| TensorData::from_f32(vec![v], vec![1]);
     let mut state = BTreeMap::new();
     state.insert("w".to_string(), td(1.0));
     state.insert("xw".to_string(), td(2.0));
@@ -111,8 +109,8 @@ fn add_prefix_keeps_every_tensor() {
         "keys after add_prefix: {:?}",
         out.keys().collect::<Vec<_>>()
     );
-    assert_eq!(out["xw"].data, vec![1.0]);
-    assert_eq!(out["xxw"].data, vec![2.0]);
+    assert_eq!(out["xw"].to_vec_as::<f32>().expect("f32"), vec![1.0]);
+    assert_eq!(out["xxw"].to_vec_as::<f32>().expect("f32"), vec![2.0]);
 }
 
 /// Write a one-tensor safetensors file with the given dtype, shape, and raw bytes.

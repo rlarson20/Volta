@@ -38,10 +38,8 @@ fn test_linear_load_state_dict_rejects_transposed_shape() {
     let mut state = StateDict::new();
     state.insert(
         "weight".to_string(),
-        TensorData {
-            data: vec![0.5; 12],
-            shape: vec![3, 4], // same numel, wrong layout
-        },
+        // same numel, wrong layout
+        TensorData::from_f32(vec![0.5; 12], vec![3, 4]),
     );
     match layer.load_state_dict(&state) {
         Err(VoltaError::StateShapeMismatch {
@@ -66,15 +64,12 @@ fn test_linear_load_state_dict_rejects_short_data() {
     let mut state = StateDict::new();
     state.insert(
         "weight".to_string(),
-        TensorData {
-            data: vec![0.5; 6],
-            shape: vec![4, 3],
-        },
+        TensorData::from_f32(vec![0.5; 6], vec![4, 3]),
     );
     match layer.load_state_dict(&state) {
         Err(VoltaError::StateDataLength { key, expected, len }) => {
             assert_eq!(key, "weight");
-            assert_eq!((expected, len), (12, 6));
+            assert_eq!((expected, len), (12 * 4, 6 * 4), "counted in bytes");
         }
         other => panic!("expected StateDataLength, got {other:?}"),
     }
@@ -87,10 +82,7 @@ fn test_embedding_load_state_dict_rejects_wrong_shape() {
     let mut state = StateDict::new();
     state.insert(
         "weight".to_string(),
-        TensorData {
-            data: vec![0.5; 6],
-            shape: vec![2, 3],
-        },
+        TensorData::from_f32(vec![0.5; 6], vec![2, 3]),
     );
     assert!(matches!(
         layer.load_state_dict(&state),
@@ -110,10 +102,8 @@ fn test_sequential_load_state_dict_names_the_prefixed_key() {
     let mut state = model.state_dict();
     state.insert(
         "2.weight".to_string(),
-        TensorData {
-            data: vec![0.5; 6],
-            shape: vec![1, 3], // layer 2 expects [3, 1]
-        },
+        // layer 2 expects [3, 1]
+        TensorData::from_f32(vec![0.5; 6], vec![1, 3]),
     );
     match model.load_state_dict(&state) {
         Err(VoltaError::StateShapeMismatch { key, .. }) => assert_eq!(key, "2.weight"),

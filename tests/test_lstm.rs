@@ -75,34 +75,22 @@ fn test_lstm_gate_math_known_weights() {
     // weight_ih: [4*1, 1] = [4, 1], all ones
     state.insert(
         "weight_ih".to_string(),
-        TensorData {
-            data: vec![1.0; 4],
-            shape: vec![4, 1],
-        },
+        TensorData::from_f32(vec![1.0; 4], vec![4, 1]),
     );
     // weight_hh: [4*1, 1] = [4, 1], all ones
     state.insert(
         "weight_hh".to_string(),
-        TensorData {
-            data: vec![1.0; 4],
-            shape: vec![4, 1],
-        },
+        TensorData::from_f32(vec![1.0; 4], vec![4, 1]),
     );
     // bias_ih: [4], all zeros
     state.insert(
         "bias_ih".to_string(),
-        TensorData {
-            data: vec![0.0; 4],
-            shape: vec![4],
-        },
+        TensorData::from_f32(vec![0.0; 4], vec![4]),
     );
     // bias_hh: [4], all zeros
     state.insert(
         "bias_hh".to_string(),
-        TensorData {
-            data: vec![0.0; 4],
-            shape: vec![4],
-        },
+        TensorData::from_f32(vec![0.0; 4], vec![4]),
     );
 
     lstm.load_state_dict(&state).expect("state loads");
@@ -218,31 +206,22 @@ fn test_lstm_forget_gate_dominance() {
     // Set weights to small values so bias dominates
     state.insert(
         "weight_ih".to_string(),
-        TensorData {
-            data: vec![0.0; 4 * hidden * input_size],
-            shape: vec![4 * hidden, input_size],
-        },
+        TensorData::from_f32(
+            vec![0.0; 4 * hidden * input_size],
+            vec![4 * hidden, input_size],
+        ),
     );
     state.insert(
         "weight_hh".to_string(),
-        TensorData {
-            data: vec![0.0; 4 * hidden * hidden],
-            shape: vec![4 * hidden, hidden],
-        },
+        TensorData::from_f32(vec![0.0; 4 * hidden * hidden], vec![4 * hidden, hidden]),
     );
     state.insert(
         "bias_ih".to_string(),
-        TensorData {
-            data: bias_data.clone(),
-            shape: vec![4 * hidden],
-        },
+        TensorData::from_f32(bias_data.clone(), vec![4 * hidden]),
     );
     state.insert(
         "bias_hh".to_string(),
-        TensorData {
-            data: vec![0.0; 4 * hidden],
-            shape: vec![4 * hidden],
-        },
+        TensorData::from_f32(vec![0.0; 4 * hidden], vec![4 * hidden]),
     );
 
     lstm.load_state_dict(&state).expect("state loads");

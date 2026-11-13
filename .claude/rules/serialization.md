@@ -8,7 +8,7 @@ paths:
 
 # Serialization (state dicts)
 
-- `StateDict` is a `BTreeMap<String, TensorData>`. `TensorData` holds `data: Vec<f32>` and `shape: Vec<usize>`. `StateDictDiff` compares expected and loaded dicts when debugging.
+- `StateDict` is a `BTreeMap<String, TensorData>`. `TensorData` holds `data: Vec<u8>` (the elements' bytes), `shape: Vec<usize>` and `dtype: DType`, so every dtype saves losslessly; build one with `from_f32`/`from_typed`/`from_tensor`, read it with `to_vec_as::<T>()`, and check external ones with `validate` (DECISIONS.md, "`TensorData` stores bytes and a dtype"). Loading casts each entry to its parameter's dtype. `StateDictDiff` compares expected and loaded dicts when debugging.
 - Formats: bincode (Volta-native: `save_state_dict` / `load_state_dict`) and SafeTensors (`save_safetensors` / `load_safetensors`, plus `load_safetensors_with_mapping` for key and weight transforms via `StateDictMapper`).
 - `Sequential` supports named layers. `examples/load_external_mnist.rs` is the end-to-end PyTorch → Volta reference.
 - Loading must preserve the destination's device and validate numel (H7).

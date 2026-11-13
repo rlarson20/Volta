@@ -141,7 +141,7 @@ fn transpose(values: &[f32], rows: usize, cols: usize) -> Vec<f32> {
 fn state(entries: Vec<(&str, Vec<f32>, Vec<usize>)>) -> StateDict {
     entries
         .into_iter()
-        .map(|(k, data, shape)| (k.to_string(), TensorData { data, shape }))
+        .map(|(k, data, shape)| (k.to_string(), TensorData::from_f32(data, shape)))
         .collect()
 }
 
