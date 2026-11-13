@@ -7,8 +7,7 @@ on:
 permissions:
   contents: read
 
-# A superseded push to a PR branch is cancelled (it would otherwise hold a scarce macOS
-# runner); runs on main and improvements always finish.
+# A superseded push to a PR branch is cancelled; runs on main and improvements always finish.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -107,7 +106,7 @@ jobs:
   # Default features (gpu) on Linux, with Mesa's lavapipe as the adapter: a software
   # Vulkan device (shaderFloat16), so the gpu-gated tests run on every PR, including the
   # f16/bf16 GPU tests and the naga validation of every shader expansion. Not Metal: the
-  # macOS lane stays the Apple-GPU check. VOLTA_REQUIRE_GPU makes a missing adapter fail
+  # `macos` job (macos.yml) stays the Apple-GPU check. VOLTA_REQUIRE_GPU makes a missing adapter fail
   # the run instead of letting every GPU test skip.
   linux-lavapipe:
     runs-on: ubuntu-latest
@@ -128,43 +127,32 @@ jobs:
           VOLTA_REQUIRE_GPU: "1"
         run: cargo test
 
-  # Full build with gpu + accelerate. GitHub's macos-latest is Apple Silicon
-  # with a working Metal GPU; GPU tests self-skip at runtime when no adapter
-  # is available (src/gpu/mod.rs). Stable only: GitHub's macOS runners are scarce, and
-  # the MSRV (1.89) is checked by the `cpu-only` lane. The one-entry matrix keeps the
-  # check name `macos (stable)` that the rulesets require.
-  macos:
-    runs-on: macos-latest
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        rust: [stable]
+  # The macOS build, type-checked from Linux: clippy (all features, then none), rustdoc and the
+  # feature powerset for aarch64-apple-darwin, which covers the Accelerate matmul path, the Metal
+  # backend's dependencies and the macos cfgs. Required on every PR, in place of a macOS runner
+  # (scarce, slow to queue). Running Metal and Accelerate is the `macos` job in macos.yml:
+  # required into main, post-merge on improvements (DECISIONS.md, "macOS checks move off the PR
+  # gate"). ubuntu-latest ships clang, which compiles the one C build script (see the justfile).
+  macos-cross:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
-          toolchain: ${{ matrix.rust }}
-          components: rustfmt, clippy, rust-src
+          toolchain: stable
+          targets: aarch64-apple-darwin
+          components: clippy, rust-src
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
         with:
           tool: cargo-hack,just
-
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
-      # `just lint` runs default features (gpu + accelerate, i.e. all features) and then
-      # no default features.
-      - name: Clippy
-        run: just lint
+      - name: Clippy (aarch64-apple-darwin)
+        run: just lint-macos-cross
 
-      - name: Test (all features)
-        env:
-          # The runner has a Metal GPU; a missing adapter fails instead of skipping.
-          VOLTA_REQUIRE_GPU: "1"
-        run: cargo test --all-features
+      - name: Build docs (aarch64-apple-darwin)
+        run: just doc-macos-cross
 
-      - name: Build docs (all features)
-        run: just doc
-
-      - name: cargo-hack feature powerset
-        run: just hack
+      - name: cargo-hack feature powerset (aarch64-apple-darwin)
+        run: just hack-macos-cross

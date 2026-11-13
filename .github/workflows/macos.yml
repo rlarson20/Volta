@@ -1,0 +1,141 @@
+name: macOS
+# What only a Mac can check: the test suite with Metal as the GPU adapter and Accelerate's
+# `cblas_sgemm` as the f32 matmul. Compiling, linting and documenting the macOS build happen
+# on Linux, on every PR, in ci.yml's `macos-cross` job. GitHub's macOS runners are scarce, so
+# this job is not on every PR's critical path (DECISIONS.md, "macOS checks move off the PR gate"):
+#
+# - push to improvements or main: always. A failure on improvements opens (or comments on)
+#   one `merge-gate` issue, which blocks the next phase merge into main.
+# - PR into main: always. `macos (stable)` is a required check there (.github/rulesets/main.json).
+# - PR into improvements: advisory, not required. Runs when the PR touches Mac-relevant paths
+#   (the `changes` job) or carries the `macos-ci` label.
+# - workflow_dispatch: on demand (`gh workflow run macos.yml --ref <branch>`).
+on:
+  push:
+    branches: [main, improvements]
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a PR cancels its older run. Pushes to improvements/main are never cancelled
+# mid-run, but GitHub keeps only the newest pending run per group, so merges that land while a
+# run is in progress are batched into the next one (the failure issue names the whole range).
+# A PR's `labeled` event for any other label, on a PR into improvements, gets a group of its
+# own, so it cannot cancel a run in progress; its `macos` job then skips.
+concurrency:
+  group: >-
+    ${{ github.workflow }}-${{ github.ref }}${{
+    (github.event.action == 'labeled' && github.event.label.name != 'macos-ci' && github.base_ref != 'main')
+    && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Decides whether the macOS job runs. Never skip on a PR into main: a skipped job counts as
+  # passing a required check, so any skip there would let an untested PR through the gate.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'pull_request' && github.base_ref != 'main'
+        with:
+          fetch-depth: 0
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          LABEL: ${{ github.event.label.name }}
+          BASE_REF: ${{ github.base_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'macos-ci') }}
+        run: |
+          set -euo pipefail
+          decide() { echo "run=$1" >> "$GITHUB_OUTPUT"; echo "macOS job: run=$1 ($2)"; }
+          if [[ "$EVENT" != pull_request ]]; then decide true "$EVENT"; exit 0; fi
+          if [[ "$BASE_REF" == main ]]; then decide true "PR into main"; exit 0; fi
+          if [[ "$ACTION" == labeled ]]; then
+            if [[ "$LABEL" == macos-ci ]]; then decide true "macos-ci label added"; else decide false "other label added"; fi
+            exit 0
+          fi
+          if [[ "$HAS_LABEL" == true ]]; then decide true "macos-ci label"; exit 0; fi
+          # Mac-relevant paths: the GPU backend and its shaders, GPU tests, the Accelerate
+          # matmul, dependencies, and this workflow.
+          pattern='^(src/gpu/|src/ops/gpu_ops\.rs$|src/ops/matmul\.rs$|src/lib_tests/gpu_|tests/gpu_|Cargo\.(toml|lock)$|\.github/workflows/macos\.yml$)|\.wgsl$'
+          hits=$(git diff --name-only "$BASE_SHA...$HEAD_SHA" | grep -E "$pattern" || true)
+          if [[ -n "$hits" ]]; then
+            decide true "touches Mac-relevant paths"
+            printf '%s\n' "$hits"
+          else
+            decide false "no Mac-relevant paths"
+          fi
+
+  # GitHub's macos-latest is Apple Silicon with a working Metal GPU. Stable only (#121); the
+  # one-entry matrix keeps the check name `macos (stable)` that main's ruleset requires.
+  macos:
+    needs: changes
+    # Fail open: if `changes` itself fails, run anyway rather than skip (and so pass).
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run == 'true') }}
+    runs-on: macos-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        rust: [stable]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rust-src
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      - name: Test (all features)
+        env:
+          # The runner has a Metal GPU; a missing adapter fails instead of skipping.
+          VOLTA_REQUIRE_GPU: "1"
+        run: cargo test --all-features
+
+  # A post-merge failure is open work, so it becomes an issue (CLAUDE.md: open work lives in
+  # issues). `merge-gate` keeps improvements out of main until it is fixed. One open issue per
+  # branch: later failures comment on it instead of opening another.
+  report-failure:
+    needs: macos
+    if: always() && needs.macos.result == 'failure' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="macOS post-merge failure on $BRANCH"
+          # Batched runs: the range starts at the last commit this workflow passed on the branch.
+          good=$(gh run list --workflow macos.yml --branch "$BRANCH" --event push --status success \
+            --limit 1 --json headSha --jq '.[0].headSha // empty')
+          if [[ -n "$good" ]]; then
+            range="https://github.com/$GH_REPO/compare/$good...$SHA"
+          else
+            range="(no earlier passing run on $BRANCH) up to $SHA"
+          fi
+          body=$(printf '`macos (stable)` failed on `%s` at %s.\n\nRun: %s\nCommits since the last passing run: %s\n\nThis runs only after merge (DECISIONS.md, "macOS checks move off the PR gate"), so one of these commits broke Metal or Accelerate at run time. Reproduce on a Mac with `cargo test --all-features`.' \
+            "$BRANCH" "$SHA" "$RUN_URL" "$range")
+          existing=$(gh issue list --state open --search "in:title \"$title\"" --json number,title \
+            --jq "map(select(.title == \"$title\")) | .[0].number // empty")
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body" --label kind:bug,area:ci,P1,merge-gate
+          fi

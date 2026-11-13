@@ -58,6 +58,10 @@
           {
             "context": "macos (stable)",
             "integration_id": 15368
+          },
+          {
+            "context": "macos-cross",
+            "integration_id": 15368
           }
         ]
       }

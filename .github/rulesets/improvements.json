@@ -56,7 +56,7 @@
             "integration_id": 15368
           },
           {
-            "context": "macos (stable)",
+            "context": "macos-cross",
             "integration_id": 15368
           }
         ]

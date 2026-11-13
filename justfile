@@ -152,6 +152,43 @@ hack-if-installed:
 		echo "skipped: cargo-hack not installed (cargo +stable install cargo-hack --locked)"
 	fi
 
+# ----- macOS code checked from Linux (the `macos-cross` CI job) -----
+# Type-checks, lints and documents the macOS build (Accelerate, Metal, the macos cfgs in
+# gpu/monitor.rs) for aarch64-apple-darwin without a Mac. Nothing links, so no SDK is needed.
+# The one C build script (criterion's `alloca`, a dev-dependency) is compiled by clang with
+# its freestanding builtin headers. Needs `rustup target add aarch64-apple-darwin` and clang.
+# What only a Mac can check (Metal and Accelerate at run time) is the `macos` job (macos.yml).
+macos_cross_env := "CC_aarch64_apple_darwin=clang CFLAGS_aarch64_apple_darwin=-ffreestanding"
+
+# Clippy for aarch64-apple-darwin, all features then none
+lint-macos-cross:
+	{{macos_cross_env}} cargo clippy --target aarch64-apple-darwin --all-targets --all-features -- -D warnings
+	{{macos_cross_env}} cargo clippy --target aarch64-apple-darwin --all-targets --no-default-features -- -D warnings
+
+# Rustdoc for aarch64-apple-darwin with warnings denied, default features
+doc-macos-cross:
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --target aarch64-apple-darwin
+
+# Feature powerset for aarch64-apple-darwin; needs cargo-hack
+hack-macos-cross:
+	cargo hack check --feature-powerset --no-dev-deps --target aarch64-apple-darwin
+
+# The three above (what the `macos-cross` CI job runs)
+macos-cross: lint-macos-cross doc-macos-cross hack-macos-cross
+
+# `macos-cross` on a non-macOS host, skipped with a notice when the target, clang or cargo-hack
+# is missing (on a Mac, `just lint`/`doc`/`hack` already check this code natively)
+macos-cross-if-available:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	if [[ "$(uname -s)" == Darwin ]]; then
+		echo "skipped: macos-cross (native macOS; just lint/doc/hack cover it)"
+	elif rustup target list --installed | grep -qx aarch64-apple-darwin && command -v clang >/dev/null && command -v cargo-hack >/dev/null; then
+		just macos-cross
+	else
+		echo "skipped: macos-cross (needs: rustup target add aarch64-apple-darwin, clang, cargo-hack)"
+	fi
+
 # Fail on silent numeric fallbacks (`unwrap_or(0.0)`, `if let Some(slot) = v.get_mut(i)`)
 check-fallbacks:
 	./scripts/check-fallbacks.sh
@@ -167,7 +204,8 @@ test-check-ignores:
 
 # CI-like pipeline (fmt -> fallbacks -> ignores -> lint, both feature sets -> tests, both feature
 # sets -> docs with -D warnings, both feature sets -> examples, built then the smoke set run ->
-# feature powerset when cargo-hack is installed)
+# feature powerset when cargo-hack is installed -> macOS cross-check on a non-Mac host when its
+# tools are installed)
 ci:
 	cargo fmt --check
 	just check-fallbacks
@@ -181,6 +219,7 @@ ci:
 	cargo build --examples
 	just examples-smoke
 	just hack-if-installed
+	just macos-cross-if-available
 	@echo "CI check passed!"
 
 # Apply .github/rulesets/*.json to GitHub (create or update by name; needs admin `gh` auth)

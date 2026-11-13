@@ -766,7 +766,7 @@ Autograd is a sequential graph walk over `Rc<RefCell<_>>`, and nothing in it is 
 
 ### Rulesets enforce the merge gate (#149)
 
-**Decision:** `improvements` and `main` each have a ruleset, kept in `.github/rulesets/*.json` and applied with `just rulesets`. Both require a pull request and the four `ci.yml` checks (`cpu-only` on 1.89 and stable, `linux-lavapipe`, `macos` on stable), and block deletion and force pushes. `improvements` allows only squash merges; `main` allows only merge commits, so a phase landing keeps its history.
+**Decision:** `improvements` and `main` each have a ruleset, kept in `.github/rulesets/*.json` and applied with `just rulesets`. Both require a pull request and the four `ci.yml` checks (`cpu-only` on 1.89 and stable, `linux-lavapipe`, `macos` on stable; see the revision below), and block deletion and force pushes. `improvements` allows only squash merges; `main` allows only merge commits, so a phase landing keeps its history.
 
 **Why:** until then the merge gate was convention. The only rule was "no force push", so a red CI run did not block a merge, and #148 reached `improvements` as a merge commit instead of a squash.
 
@@ -777,6 +777,28 @@ Autograd is a sequential graph walk over `Rc<RefCell<_>>`, and nothing in it is 
 - The checks are listed by name, so a renamed job or a change to the toolchain matrix in `ci.yml` (see #121) blocks every merge until the JSON is updated. Change both in the same PR.
 - The JSON is the source of truth, but nothing applies it automatically: after editing a file, run `just rulesets`. The recipe creates or updates by `name`, so it is safe to repeat.
 - *The `macos` job runs stable only.* GitHub's macOS runners are intermittently unavailable (a run failed because `macos (stable)` got no runner), and each extra macOS job is another chance to hit that. The MSRV is checked by `cpu-only (1.89)`. What this gives up: `accelerate` (and the macOS-only code paths) are no longer compiled with 1.89, so an MSRV break in that code is not caught by CI. Revisit if one slips through.
+
+**Revision (2026-11-13):** `improvements` now requires `macos-cross` in place of `macos (stable)`; `main` requires both. See "macOS checks move off the PR gate (#233)".
+
+### macOS checks move off the PR gate (#233)
+
+**Context:** every PR waited on the one `macos (stable)` job. GitHub's free macOS runners are scarce: PRs queued for one, the job was the slowest lane (both clippy passes, docs, the whole feature powerset and the tests), and some runs got no runner at all (#121). With several agent PRs open at once, that serialized all of them.
+
+**Decision:** split what needs a Mac from what needs only the macOS *target*.
+- *`macos-cross` (ci.yml, ubuntu, required on both branches)* runs clippy (all features, then none), rustdoc and the cargo-hack powerset with `--target aarch64-apple-darwin` (`just macos-cross`). Nothing links, so no SDK is needed. The one C build script (criterion's `alloca`, a dev-dependency) compiles with clang and `-ffreestanding`, because its file includes only `stddef.h` and `stdint.h`, which clang ships. Evidence: a type error injected into the `cfg(all(feature = "accelerate", target_os = "macos"))` block in `src/ops/matmul.rs` fails `just lint-macos-cross` and passes `just lint` on Linux.
+- *`macos (stable)` (macos.yml)* runs only `cargo test --all-features` with `VOLTA_REQUIRE_GPU=1`, which is the only step that needs Apple hardware (Metal, Accelerate at run time). It runs on every push to `improvements` and `main` and on every PR into `main`, where it stays required. On PRs into `improvements` it is advisory: it runs when the PR touches GPU, shader, matmul, dependency or workflow paths, or carries the `macos-ci` label.
+- *A post-merge failure on `improvements`* opens one issue labeled `merge-gate` (later failures comment on it), naming the commits since the last passing run. So a Metal or Accelerate break blocks the next phase merge into `main` and is tracked like any other open work.
+
+**What this gives up:** a change that compiles everywhere and passes lavapipe but fails on Metal or Accelerate at run time can now land on `improvements`. It is found after merge, at the latest when the phase PR into `main` runs, not before. Lavapipe already runs every shader expansion, so the remaining gap is Metal-specific behaviour and Accelerate numerics. Pushes to `improvements` are batched (GitHub keeps only the newest pending run per concurrency group), so one failure can cover several commits.
+
+**Two traps the workflow avoids:**
+- A skipped job counts as passing a required check. So the `changes` job never skips the Mac job on a PR into `main`, and the Mac job runs if `changes` itself fails.
+- A PR's `labeled` event for an unrelated label must not cancel a run in progress, so it gets a concurrency group of its own.
+
+**Rejected:**
+- *A self-hosted runner on the maintainer's M2:* the laptop is not always on, and it would run CI code on a personal machine.
+- *Paid runners (GitHub's larger M-series, Namespace, WarpBuild, Cirrus):* free runners only.
+- *A path-filtered required check on every PR:* it keeps the queue on every GPU-touching PR, which is most of them in a GPU phase, and a workflow-level `paths:` filter leaves a required check pending forever on the PRs it skips.
 
 ### `unused_self` and `needless_pass_by_value` are denied; exceptions are per-site `#[expect]` (#171)
 
