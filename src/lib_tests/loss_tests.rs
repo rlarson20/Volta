@@ -1,5 +1,6 @@
 //! Fused binary cross entropy (`GradFn::Bce`): its gradient against finite differences,
-//! and the panics it shares with PyTorch's `binary_cross_entropy`.
+//! and the panics it shares with PyTorch's `binary_cross_entropy`. Cross entropy and NLL:
+//! the index-target gradient, and the target shapes they reject (#94).
 
 use super::*;
 use crate::autograd::no_grad;
@@ -115,5 +116,89 @@ fn cross_entropy_index_targets_gradient_matches_finite_differences() {
     assert!(
         passed,
         "cross_entropy_loss gradient check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "cross_entropy_loss: float targets must match the logits' shape [3, 3], got [3] (class indices must be an I64/I32 tensor)"
+)]
+fn cross_entropy_rejects_float_class_indices_when_n_equals_c() {
+    // #94: float [N] indices broadcast against [N, C] when N == C and gave 10.04 here,
+    // where the same indices as I64 give 0.0134.
+    let logits = RawTensor::new(
+        vec![5.0, 0.0, 0.0, 0.0, 5.0, 0.0, 0.0, 0.0, 5.0],
+        &[3, 3],
+        true,
+    );
+    let float_idx = RawTensor::new(vec![0.0, 1.0, 2.0], &[3], false);
+    let _ = RawTensor::cross_entropy_loss(&logits, &float_idx);
+}
+
+#[test]
+#[should_panic(
+    expected = "nll_loss: float targets must match the logits' shape [1, 4], got [1] (class indices must be an I64/I32 tensor)"
+)]
+fn nll_rejects_float_class_index_for_a_batch_of_one() {
+    let log_probs = RawTensor::log_softmax(&RawTensor::randn(&[1, 4]), Axis(1));
+    let float_idx = RawTensor::new(vec![2.0], &[1], false);
+    let _ = RawTensor::nll_loss(&log_probs, &float_idx);
+}
+
+#[test]
+#[should_panic(expected = "cross_entropy_loss: float targets must match the logits' shape")]
+fn cross_entropy_rejects_broadcast_probability_targets() {
+    // A [1, C] probability row would broadcast over the batch; PyTorch rejects it too.
+    let logits = RawTensor::randn(&[2, 3]);
+    let probs = RawTensor::new(vec![0.2, 0.3, 0.5], &[1, 3], false);
+    let _ = RawTensor::cross_entropy_loss(&logits, &probs);
+}
+
+#[test]
+fn cross_entropy_same_shape_probabilities_match_i64_indices() {
+    // One-hot float targets of the logits' shape still work, and agree with the same
+    // classes as I64 and I32 indices.
+    manual_seed(0x94);
+    let logits = RawTensor::randn(&[3, 3]);
+    let one_hot = RawTensor::new(
+        vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+        &[3, 3],
+        false,
+    );
+    let i64_idx = RawTensor::from_typed(vec![0i64, 1, 2], &[3]);
+    let i32_idx = RawTensor::from_typed(vec![0i32, 1, 2], &[3]);
+    let from_probs = RawTensor::cross_entropy_loss(&logits, &one_hot).item();
+    let from_i64 = RawTensor::cross_entropy_loss(&logits, &i64_idx).item();
+    let from_i32 = RawTensor::cross_entropy_loss(&logits, &i32_idx).item();
+    assert!(
+        (from_probs - from_i64).abs() < 1e-6,
+        "one-hot {from_probs} vs I64 {from_i64}"
+    );
+    assert!(
+        (from_i32 - from_i64).abs() < 1e-6,
+        "I32 {from_i32} vs I64 {from_i64}"
+    );
+    // Non-degenerate: -mean(log_softmax picked) on random logits is positive and finite.
+    assert!(from_i64.is_finite() && from_i64 > 0.0, "loss {from_i64}");
+}
+
+#[test]
+fn cross_entropy_soft_targets_gradient_matches_finite_differences() {
+    // In f64: in f32 a 1e-3 central difference of a loss near 1 is mostly rounding.
+    manual_seed(0x95);
+    let logits = RawTensor::randn(&[3, 4]).to_dtype(DType::F64);
+    logits.set_requires_grad(true);
+    let soft = RawTensor::softmax(&RawTensor::randn(&[3, 4]), Axis(1))
+        .detach()
+        .to_dtype(DType::F64);
+    let (max_err, mean_err, passed) = RawTensor::check_gradients(
+        &logits,
+        |t| RawTensor::cross_entropy_loss(t, &soft),
+        1e-3,
+        1e-4,
+    );
+    assert!(
+        passed,
+        "soft-target cross_entropy_loss gradient check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
     );
 }
