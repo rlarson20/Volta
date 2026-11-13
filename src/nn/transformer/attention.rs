@@ -5,17 +5,19 @@ use crate::tensor::Tensor;
 ///
 /// Computes attention as: softmax(QK^T / √`d_k`) V
 ///
-/// This is the core attention mechanism used in transformer models.
+/// This is the core attention mechanism used in transformer models. As in
+/// `torch.nn.functional.scaled_dot_product_attention`, the key/value length `S` may
+/// differ from the query length `L` (cross-attention).
 ///
 /// # Arguments
-/// * `query` - Query tensor of shape [batch, `seq_len`, `d_k`]
-/// * `key` - Key tensor of shape [batch, `seq_len`, `d_k`]
-/// * `value` - Value tensor of shape [batch, `seq_len`, `d_v`]
+/// * `query` - Query tensor of shape [batch, `L`, `d_k`]
+/// * `key` - Key tensor of shape [batch, `S`, `d_k`]
+/// * `value` - Value tensor of shape [batch, `S`, `d_v`]
 /// * `causal` - Whether to apply causal masking (for autoregressive models)
-/// * `attention_mask` - Optional additional mask (e.g., padding mask) of shape [batch, `seq_len`, `seq_len`]
+/// * `attention_mask` - Optional additive mask (e.g., padding mask) that broadcasts to [batch, `L`, `S`]
 ///
 /// # Returns
-/// Output tensor of shape [batch, `seq_len`, `d_v`]
+/// Output tensor of shape [batch, `L`, `d_v`]
 ///
 /// # Example
 /// ```no_run
@@ -24,9 +26,9 @@ use crate::tensor::Tensor;
 /// # use volta::Device;
 /// let attention = ScaledDotProductAttention::new();
 /// let query = RawTensor::new(vec![0.0; 128], &[2, 4, 16], false);
-/// let key = RawTensor::new(vec![0.0; 128], &[2, 4, 16], false);
-/// let value = RawTensor::new(vec![0.0; 64], &[2, 4, 8], false);
-/// let output = attention.forward(&query, &key, &value, false, None);
+/// let key = RawTensor::new(vec![0.0; 192], &[2, 6, 16], false);
+/// let value = RawTensor::new(vec![0.0; 96], &[2, 6, 8], false);
+/// let output = attention.forward(&query, &key, &value, false, None); // [2, 4, 8]
 /// ```
 #[derive(Clone, Debug)]
 pub struct ScaledDotProductAttention;
@@ -49,16 +51,18 @@ impl ScaledDotProductAttention {
     /// Forward pass for scaled dot-product attention
     ///
     /// # Arguments
-    /// * `query` - Query tensor of shape [batch, `seq_len`, `d_k`]
-    /// * `key` - Key tensor of shape [batch, `seq_len`, `d_k`]
-    /// * `value` - Value tensor of shape [batch, `seq_len`, `d_v`]
-    /// * `causal` - Whether to apply causal masking
-    /// * `attention_mask` - Optional additional mask for padding, etc.
+    /// * `query` - Query tensor of shape [batch, `L`, `d_k`]
+    /// * `key` - Key tensor of shape [batch, `S`, `d_k`]
+    /// * `value` - Value tensor of shape [batch, `S`, `d_v`]
+    /// * `causal` - Whether to apply causal masking. With `L != S` the mask is top-left
+    ///   aligned, as torch's `is_causal`: query `i` sees keys `j <= i`.
+    /// * `attention_mask` - Optional additive mask that broadcasts to [batch, `L`, `S`]
     ///
     /// # Returns
-    /// Output tensor of shape [batch, `seq_len`, `d_v`]
+    /// Output tensor of shape [batch, `L`, `d_v`]
     /// # Panics
-    /// Wrong tensor shape
+    /// If a tensor is not 3D, the batch sizes differ, query and key differ in `d_k`, or
+    /// key and value differ in length.
     #[must_use]
     pub fn forward(
         &self,
@@ -88,29 +92,28 @@ impl ScaledDotProductAttention {
             "Value must be 3D tensor [batch, seq_len, d_v]"
         );
 
-        let (_batch, seq_len, d_k) = (q_shape.dim_at(0), q_shape.dim_at(1), q_shape.dim_at(2));
-        let _d_v = v_shape.dim_at(2);
+        let (batch, q_len, d_k) = (q_shape.dim_at(0), q_shape.dim_at(1), q_shape.dim_at(2));
+        let kv_len = k_shape.dim_at(1);
 
+        assert!(
+            batch == k_shape.dim_at(0) && batch == v_shape.dim_at(0),
+            "Query, key and value must have the same batch size: {q_shape:?}, {k_shape:?}, {v_shape:?}"
+        );
         assert_eq!(
             d_k,
             k_shape.dim_at(2),
             "Query and key must have same dimension d_k"
         );
         assert_eq!(
-            seq_len,
-            k_shape.dim_at(1),
-            "Query and key must have same sequence length"
-        );
-        assert_eq!(
-            seq_len,
+            kv_len,
             v_shape.dim_at(1),
-            "Query and value must have same sequence length"
+            "Key and value must have same sequence length"
         );
 
-        // Compute QK^T: [batch, seq_len, d_k] @ [batch, d_k, seq_len] = [batch, seq_len, seq_len]
+        // Compute QK^T: [batch, L, d_k] @ [batch, d_k, S] = [batch, L, S]
         // For 3D tensors, we need to permute to swap the last two dimensions
-        let key_t = key.permute(&[Axis(0), Axis(2), Axis(1)]); // [batch, d_k, seq_len]
-        let scores = query.matmul(&key_t); // [batch, seq_len, seq_len]
+        let key_t = key.permute(&[Axis(0), Axis(2), Axis(1)]); // [batch, d_k, S]
+        let scores = query.matmul(&key_t); // [batch, L, S]
 
         // Scale by sqrt(d_k)
         let scale = query.constant_like(vec![(d_k as f32).sqrt()], &[1]);
@@ -118,7 +121,7 @@ impl ScaledDotProductAttention {
 
         // Apply causal mask if requested
         let scores = if causal {
-            let causal = Self::create_causal_mask(seq_len, query);
+            let causal = Self::create_causal_mask(q_len, kv_len, query);
             scores.add(&causal)
         } else {
             scores
@@ -132,18 +135,19 @@ impl ScaledDotProductAttention {
         };
 
         // Apply softmax over the last dimension (key sequence length)
-        let attention_weights = scores.softmax(Axis(2)); // [batch, seq_len, seq_len]
+        let attention_weights = scores.softmax(Axis(2)); // [batch, L, S]
 
-        // Apply attention weights to values: [batch, seq_len, seq_len] @ [batch, seq_len, d_v] = [batch, seq_len, d_v]
+        // Apply attention weights to values: [batch, L, S] @ [batch, S, d_v] = [batch, L, d_v]
         attention_weights.matmul(value)
     }
 
-    /// Additive mask `[seq_len, seq_len]`: `-inf` above the diagonal, 0 elsewhere, on
-    /// `like`'s device and in its dtype.
-    fn create_causal_mask(seq_len: usize, like: &Tensor) -> Tensor {
-        let mut mask_data = Vec::with_capacity(seq_len * seq_len);
-        for i in 0..seq_len {
-            for j in 0..seq_len {
+    /// Additive mask `[q_len, kv_len]`: `-inf` where `j > i`, 0 elsewhere, on `like`'s
+    /// device and in its dtype. This is torch's top-left aligned `is_causal` mask
+    /// (`ones(L, S).tril()`); it broadcasts against any `[.., L, S]` score tensor.
+    pub(super) fn create_causal_mask(q_len: usize, kv_len: usize, like: &Tensor) -> Tensor {
+        let mut mask_data = Vec::with_capacity(q_len * kv_len);
+        for i in 0..q_len {
+            for j in 0..kv_len {
                 // Upper triangle (j > i) gets -inf, lower triangle and diagonal get 0
                 if j > i {
                     mask_data.push(f32::NEG_INFINITY);
@@ -152,7 +156,7 @@ impl ScaledDotProductAttention {
                 }
             }
         }
-        like.constant_like(mask_data, &[seq_len, seq_len])
+        like.constant_like(mask_data, &[q_len, kv_len])
     }
 }
 
@@ -224,5 +228,94 @@ mod tests {
 
         let output = attention.forward(&query, &key, &value, false, None);
         assert_eq!(output.borrow().shape, vec![2, 3, 2]);
+    }
+
+    /// One gradient check: the input's name, the input, and the loss as a function of it.
+    type Check<'a> = (
+        &'static str,
+        &'a Tensor,
+        Box<dyn Fn(&Tensor) -> Tensor + 'a>,
+    );
+
+    /// Seeded normal values as an f64 tensor, a leaf that requires grad when `grad`.
+    /// The checks run in f64 so that finite-difference rounding (about 1e-7 relative
+    /// in f32) can't mask or fake a mismatch.
+    fn operand(dims: &[usize], grad: bool) -> Tensor {
+        let vals: Vec<f64> = crate::tensor::randn(dims)
+            .data()
+            .iter()
+            .map(|&v| f64::from(v))
+            .collect();
+        let t = RawTensor::from_typed(vals, dims);
+        t.set_requires_grad(grad);
+        t
+    }
+
+    /// Finite-difference check of query, key and value under a randomly weighted sum,
+    /// with `L = 2` queries attending over `S = 3` keys (cross-attention).
+    fn assert_cross_attention_gradients(causal: bool) {
+        crate::tensor::manual_seed(0x5EED);
+        let q = operand(&[2, 2, 4], true);
+        let k = operand(&[2, 3, 4], true);
+        let v = operand(&[2, 3, 5], true);
+        let w = operand(&[2, 2, 5], false);
+        let attn = ScaledDotProductAttention::new();
+
+        let checks: [Check<'_>; 3] = [
+            (
+                "query",
+                &q,
+                Box::new(|t| attn.forward(t, &k, &v, causal, None).elem_mul(&w).sum()),
+            ),
+            (
+                "key",
+                &k,
+                Box::new(|t| attn.forward(&q, t, &v, causal, None).elem_mul(&w).sum()),
+            ),
+            (
+                "value",
+                &v,
+                Box::new(|t| attn.forward(&q, &k, t, causal, None).elem_mul(&w).sum()),
+            ),
+        ];
+        for (name, input, loss_fn) in checks {
+            let (max, mean, ok) = RawTensor::check_gradients(input, loss_fn, 1e-6, 1e-6);
+            assert!(
+                ok,
+                "cross-attention grad wrt {name} (causal={causal}) failed: max={max:.3e} mean={mean:.3e}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_attention_cross_attention_gradients() {
+        assert_cross_attention_gradients(false);
+    }
+
+    #[test]
+    fn test_attention_cross_attention_causal_gradients() {
+        assert_cross_attention_gradients(true);
+    }
+
+    #[test]
+    fn test_attention_cross_attention_causal_mask_is_top_left_aligned() {
+        // L = 2 queries over S = 3 keys. Query 0 may see key 0 only, so its output is
+        // value row 0 exactly; query 1 sees keys 0 and 1, never key 2.
+        crate::tensor::manual_seed(7);
+        let q = crate::tensor::randn(&[1, 2, 4]);
+        let k = crate::tensor::randn(&[1, 3, 4]);
+        let v = RawTensor::new(vec![1.0, 2.0, 10.0, 20.0, 100.0, 200.0], &[1, 3, 2], false);
+        let out = ScaledDotProductAttention::new()
+            .forward(&q, &k, &v, true, None)
+            .data();
+        assert_eq!(out.len(), 4);
+        let at = |i| crate::index::fetch(&out, i);
+        assert!(
+            (at(0) - 1.0).abs() < 1e-5 && (at(1) - 2.0).abs() < 1e-5,
+            "{out:?}"
+        );
+        // A convex mix of value rows 0 and 1: strictly inside [1, 10] and [2, 20].
+        assert!(at(2) > 1.0 && at(2) < 10.0, "{out:?}");
+        assert!(at(3) > 2.0 && at(3) < 20.0, "{out:?}");
     }
 }
