@@ -1,0 +1,39 @@
+name: MNIST Autocast
+on:
+  # P7's done-criterion (`just mnist-autocast`, examples/mnist_autocast.rs): 5 seeds of an MNIST
+  # MLP trained in f32 and under bf16 autocast; the example exits 1 when the mean test
+  # accuracies differ by more than 0.2 points. Too slow and data-heavy for every PR, so it runs
+  # nightly and by hand. Not a required check (.github/rulesets/ name only ci.yml's jobs).
+  schedule:
+    - cron: "15 5 * * *" # Nightly
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mnist-autocast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
+        with:
+          tool: just
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      # The four decompressed IDX files (about 55 MB). MNIST never changes, so the key is fixed
+      # and a nightly run keeps the entry from being evicted. `just mnist-data` skips files that
+      # exist and checks every file's SHA-256 either way; the cache is saved only when the job
+      # succeeds, so a bad download is never stored. Bump the suffix to force a fresh download.
+      - name: Cache MNIST
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: data/mnist
+          key: mnist-idx-v1
+
+      - name: MNIST, f32 vs bf16 autocast (5 seeds)
+        run: just mnist-autocast
