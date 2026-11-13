@@ -311,7 +311,7 @@ fn main() {
 
 The library is designed around a few core concepts:
 
-- **`Tensor`**: The central data structure, a handle to a shared, reference-counted `RawTensor` (data, shape, dtype, gradient, and device). Its fields are private; read them with methods such as `data()`, `item()`, `shape()`, `grad()` and `dtype()`. The Dtypes note under Outstanding Issues says which dtypes compute.
+- **`Tensor`**: The central data structure, a handle to a shared, reference-counted `RawTensor` (data, shape, dtype, gradient, and device). A `Tensor` exposes no fields, only a private handle, and downstream code cannot borrow the `RawTensor` inside it; read through methods such as `data()`, `item()`, `shape()`, `grad()` and `dtype()`. The Dtypes note under Outstanding Issues says which dtypes compute.
 - **Tensor methods**: `Tensor` has inherent methods for all operations (e.g., `tensor.add(&other)`, `tensor.matmul(&weights)`); there is no trait to import.
 - **`nn::Module`**: The base trait for anything with learnable parameters. Provides `parameters()`, `state_dict()`, `load_state_dict()`, `zero_grad()`, `to_device()`, and `train()`/`eval()`.
 - **`nn::Layer`**: A `Module` that maps one tensor to one tensor with `forward()`. Only `Layer`s can go in a `Sequential`. Implement it to write your own layer.
