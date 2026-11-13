@@ -19,6 +19,8 @@ The cloud is not a restricted scope. The limits below come from the hardware, no
 
 A cloud run is the GitHub `cpu-only` lane in `.github/workflows/ci.yml`, not the `macos` lane. "Tests pass" there means CPU-verified only.
 
+The macOS build still *compiles* here: `rustup target add aarch64-apple-darwin`, then `just macos-cross` (clippy, rustdoc and the feature powerset for that target; needs clang and cargo-hack). That is CI's required `macos-cross` job. It checks the macOS-only code type-checks and lints, not that it runs; `just ci` runs it when the target is installed.
+
 ## Valid cloud work
 
 Work that a Linux CPU can verify, and that reviews as a PR. Candidates are open issues without the `needs-mac` label; check the issue for live status. Typical shapes:
