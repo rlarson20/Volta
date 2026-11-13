@@ -27,12 +27,15 @@ fn assert_state_dicts_equal(
             orig.shape, loaded_val.shape,
             "{label}: shape mismatch for key '{key}'"
         );
-        for (i, (a, b)) in orig.data.iter().zip(loaded_val.data.iter()).enumerate() {
-            assert!(
-                (a - b).abs() < 1e-6,
-                "{label}: value mismatch for key '{key}' at index {i}: {a} vs {b}"
-            );
-        }
+        assert_eq!(
+            orig.dtype, loaded_val.dtype,
+            "{label}: dtype mismatch for key '{key}'"
+        );
+        // Both formats store each entry in its own dtype, so the round trip is bit-exact.
+        assert_eq!(
+            orig.data, loaded_val.data,
+            "{label}: value mismatch for key '{key}'"
+        );
     }
 }
 
@@ -64,7 +67,11 @@ fn test_batchnorm2d_roundtrip_bincode() {
 
     // Also verify running stats are non-trivial (not all zeros / all ones)
     let rm = loaded.get("running_mean").unwrap();
-    let has_nonzero_mean = rm.data.iter().any(|v| v.abs() > 1e-8);
+    let has_nonzero_mean = rm
+        .to_vec_as::<f32>()
+        .expect("f32")
+        .iter()
+        .any(|v| v.abs() > 1e-8);
     assert!(
         has_nonzero_mean,
         "running_mean should have non-zero values after forward pass"

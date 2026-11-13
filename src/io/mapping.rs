@@ -1,4 +1,4 @@
-use crate::index::{fetch, slot};
+use crate::index::span;
 use crate::io::{StateDict, TensorData};
 use crate::shape::fixed_dims;
 
@@ -269,13 +269,24 @@ impl StateDictMapper {
     }
 }
 
-/// Transpose a row-major 2-D tensor in place: `[R, C]` -> `[C, R]`.
+/// Transpose a row-major 2-D tensor in place: `[R, C]` -> `[C, R]`. Moves whole
+/// elements (`dtype.size_of()` bytes each), so it works for every dtype.
+///
+/// # Panics
+/// If the entry's byte count does not match its shape and dtype (the loaders check
+/// that, so this is a caller-built entry).
 fn transpose_2d(tensor_data: &mut TensorData) {
     let [rows, cols] = fixed_dims::<2>(&tensor_data.shape);
-    let mut transposed = vec![0.0; rows * cols];
-    for i in 0..rows {
-        for j in 0..cols {
-            *slot(&mut transposed, j * rows + i) = fetch(&tensor_data.data, i * cols + j);
+    if let Err(e) = tensor_data.validate("transpose") {
+        panic!("transpose_2d: {e}");
+    }
+    let size = tensor_data.dtype.size_of();
+    // Output row `j` is input column `j`: append its elements in order.
+    let mut transposed = Vec::with_capacity(tensor_data.data.len());
+    for j in 0..cols {
+        for i in 0..rows {
+            let at = (i * cols + j) * size;
+            transposed.extend_from_slice(span(&tensor_data.data, at..at + size));
         }
     }
     tensor_data.data = transposed;
@@ -373,10 +384,7 @@ mod tests {
         let mut state = BTreeMap::new();
         state.insert(
             "weight".to_string(),
-            TensorData {
-                data: vec![1.0, 2.0, 3.0, 4.0],
-                shape: vec![2, 2],
-            },
+            TensorData::from_f32(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]),
         );
         state
     }
@@ -407,10 +415,8 @@ mod tests {
         let mut state = BTreeMap::new();
         state.insert(
             "fc.weight".to_string(),
-            TensorData {
-                data: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-                shape: vec![2, 3], // [2 rows, 3 cols]
-            },
+            // [2 rows, 3 cols]
+            TensorData::from_f32(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]),
         );
 
         let mapper = StateDictMapper::new().transpose("fc.weight");
@@ -420,7 +426,10 @@ mod tests {
         assert_eq!(weight.shape, vec![3, 2]); // Transposed
         // Original: [1,2,3, 4,5,6] (row-major)
         // Transposed: [1,4, 2,5, 3,6] (row-major)
-        assert_eq!(weight.data, vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+        assert_eq!(
+            weight.to_vec_as::<f32>().unwrap(),
+            vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
+        );
     }
 
     #[test]
@@ -428,10 +437,8 @@ mod tests {
         let mut state = BTreeMap::new();
         state.insert(
             "bias".to_string(),
-            TensorData {
-                data: vec![1.0, 2.0, 3.0],
-                shape: vec![3], // 1D tensor
-            },
+            // 1D tensor
+            TensorData::from_f32(vec![1.0, 2.0, 3.0], vec![3]),
         );
 
         let mapper = StateDictMapper::new().transpose("bias");
@@ -439,7 +446,7 @@ mod tests {
 
         let bias = mapped.get("bias").unwrap();
         assert_eq!(bias.shape, vec![3]); // Unchanged
-        assert_eq!(bias.data, vec![1.0, 2.0, 3.0]); // Unchanged
+        assert_eq!(bias.to_vec_as::<f32>().unwrap(), vec![1.0, 2.0, 3.0]); // Unchanged
     }
 
     #[test]
@@ -447,17 +454,11 @@ mod tests {
         let mut state = BTreeMap::new();
         state.insert(
             "model.fc1.weight".to_string(),
-            TensorData {
-                data: vec![1.0],
-                shape: vec![1],
-            },
+            TensorData::from_f32(vec![1.0], vec![1]),
         );
         state.insert(
             "model.fc2.weight".to_string(),
-            TensorData {
-                data: vec![2.0],
-                shape: vec![1],
-            },
+            TensorData::from_f32(vec![2.0], vec![1]),
         );
 
         let mapper = StateDictMapper::new().strip_prefix("model.");
@@ -483,24 +484,15 @@ mod tests {
         let mut state = BTreeMap::new();
         state.insert(
             "weight1".to_string(),
-            TensorData {
-                data: vec![1.0],
-                shape: vec![1],
-            },
+            TensorData::from_f32(vec![1.0], vec![1]),
         );
         state.insert(
             "weight2".to_string(),
-            TensorData {
-                data: vec![2.0],
-                shape: vec![1],
-            },
+            TensorData::from_f32(vec![2.0], vec![1]),
         );
         state.insert(
             "weight3".to_string(),
-            TensorData {
-                data: vec![3.0],
-                shape: vec![1],
-            },
+            TensorData::from_f32(vec![3.0], vec![1]),
         );
 
         let mapper =
@@ -518,17 +510,11 @@ mod tests {
         let mut state = BTreeMap::new();
         state.insert(
             "weight1".to_string(),
-            TensorData {
-                data: vec![1.0],
-                shape: vec![1],
-            },
+            TensorData::from_f32(vec![1.0], vec![1]),
         );
         state.insert(
             "weight2".to_string(),
-            TensorData {
-                data: vec![2.0],
-                shape: vec![1],
-            },
+            TensorData::from_f32(vec![2.0], vec![1]),
         );
 
         let mapper = StateDictMapper::new().exclude_keys(vec!["weight2".to_string()]);
@@ -544,10 +530,7 @@ mod tests {
         let mut state = BTreeMap::new();
         state.insert(
             "model.encoder.fc.weight".to_string(),
-            TensorData {
-                data: vec![1.0, 2.0, 3.0, 4.0],
-                shape: vec![2, 2],
-            },
+            TensorData::from_f32(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]),
         );
 
         let mapper = StateDictMapper::new()
@@ -561,7 +544,7 @@ mod tests {
         let weight = mapped.get("enc.fc.weight").unwrap();
         // The shape alone can't show a transpose of a square matrix; the data can.
         assert_eq!(weight.shape, vec![2, 2]);
-        assert_eq!(weight.data, vec![1.0, 3.0, 2.0, 4.0]);
+        assert_eq!(weight.to_vec_as::<f32>().unwrap(), vec![1.0, 3.0, 2.0, 4.0]);
     }
 
     #[test]
@@ -569,24 +552,15 @@ mod tests {
         let mut state = BTreeMap::new();
         state.insert(
             "fc1.weight".to_string(),
-            TensorData {
-                data: vec![1.0, 2.0, 3.0, 4.0],
-                shape: vec![2, 2],
-            },
+            TensorData::from_f32(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]),
         );
         state.insert(
             "fc1.bias".to_string(),
-            TensorData {
-                data: vec![1.0, 2.0],
-                shape: vec![2],
-            },
+            TensorData::from_f32(vec![1.0, 2.0], vec![2]),
         );
         state.insert(
             "fc2.weight".to_string(),
-            TensorData {
-                data: vec![5.0, 6.0, 7.0, 8.0],
-                shape: vec![2, 2],
-            },
+            TensorData::from_f32(vec![5.0, 6.0, 7.0, 8.0], vec![2, 2]),
         );
 
         let mapper = StateDictMapper::new().transpose_pattern("weight");
@@ -594,14 +568,25 @@ mod tests {
 
         // Both "weight" keys are transposed (square, so only the data shows it); bias is not
         assert_eq!(
-            mapped.get("fc1.weight").unwrap().data,
+            mapped
+                .get("fc1.weight")
+                .unwrap()
+                .to_vec_as::<f32>()
+                .unwrap(),
             vec![1.0, 3.0, 2.0, 4.0]
         );
         assert_eq!(
-            mapped.get("fc2.weight").unwrap().data,
+            mapped
+                .get("fc2.weight")
+                .unwrap()
+                .to_vec_as::<f32>()
+                .unwrap(),
             vec![5.0, 7.0, 6.0, 8.0]
         );
-        assert_eq!(mapped.get("fc1.bias").unwrap().data, vec![1.0, 2.0]); // Unchanged
+        assert_eq!(
+            mapped.get("fc1.bias").unwrap().to_vec_as::<f32>().unwrap(),
+            vec![1.0, 2.0]
+        ); // Unchanged
     }
 
     #[test]
@@ -609,17 +594,18 @@ mod tests {
         let mut state = BTreeMap::new();
         state.insert(
             "linear.weight".to_string(),
-            TensorData {
-                data: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-                shape: vec![2, 3], // PyTorch: [out=2, in=3]
-            },
+            // PyTorch: [out=2, in=3]
+            TensorData::from_f32(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]),
         );
 
         let mapped = load_pytorch_linear_weights(state, &["linear"]);
 
         let weight = mapped.get("linear.weight").unwrap();
         assert_eq!(weight.shape, vec![3, 2]); // Volta: [in=3, out=2]
-        assert_eq!(weight.data, vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+        assert_eq!(
+            weight.to_vec_as::<f32>().unwrap(),
+            vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
+        );
     }
 
     /// A PyTorch state with a square, asymmetric `Linear` and a square `Embedding`: only the
@@ -635,30 +621,25 @@ mod tests {
         // PyTorch nn.Linear(2, 2): W = [[1, 2], [3, 4]] as [out, in], b = [0.5, -0.5].
         state.insert(
             "fc.weight".to_string(),
-            TensorData {
-                data: vec![1.0, 2.0, 3.0, 4.0],
-                shape: vec![2, 2],
-            },
+            TensorData::from_f32(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]),
         );
         state.insert(
             "fc.bias".to_string(),
-            TensorData {
-                data: vec![0.5, -0.5],
-                shape: vec![2],
-            },
+            TensorData::from_f32(vec![0.5, -0.5], vec![2]),
         );
         // An Embedding weight, [vocab, dim] in both PyTorch and Volta: must not move.
         state.insert(
             "emb.weight".to_string(),
-            TensorData {
-                data: vec![1.0, 2.0, 3.0, 4.0],
-                shape: vec![2, 2],
-            },
+            TensorData::from_f32(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]),
         );
 
         let mapped = load_pytorch_linear_weights(state, &["fc"]);
         assert_eq!(
-            mapped.get("emb.weight").unwrap().data,
+            mapped
+                .get("emb.weight")
+                .unwrap()
+                .to_vec_as::<f32>()
+                .unwrap(),
             vec![1.0, 2.0, 3.0, 4.0]
         );
 
@@ -678,27 +659,29 @@ mod tests {
         let mut state = BTreeMap::new();
         state.insert(
             "bert.proj.weight".to_string(),
-            TensorData {
-                data: vec![1.0, 2.0, 3.0, 4.0],
-                shape: vec![2, 2],
-            },
+            TensorData::from_f32(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]),
         );
         state.insert(
             "bert.embeddings.weight".to_string(),
-            TensorData {
-                data: vec![1.0, 2.0, 3.0, 4.0],
-                shape: vec![2, 2],
-            },
+            TensorData::from_f32(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]),
         );
 
         let mapped = load_huggingface_weights(state, "bert", &["proj"]);
 
         assert_eq!(
-            mapped.get("proj.weight").unwrap().data,
+            mapped
+                .get("proj.weight")
+                .unwrap()
+                .to_vec_as::<f32>()
+                .unwrap(),
             vec![1.0, 3.0, 2.0, 4.0]
         );
         assert_eq!(
-            mapped.get("embeddings.weight").unwrap().data,
+            mapped
+                .get("embeddings.weight")
+                .unwrap()
+                .to_vec_as::<f32>()
+                .unwrap(),
             vec![1.0, 2.0, 3.0, 4.0]
         );
     }
@@ -715,10 +698,7 @@ mod tests {
         let mut state = BTreeMap::new();
         state.insert(
             "conv.weight".to_string(),
-            TensorData {
-                data: vec![0.0; 8],
-                shape: vec![2, 1, 2, 2],
-            },
+            TensorData::from_f32(vec![0.0; 8], vec![2, 1, 2, 2]),
         );
         let _ = load_pytorch_linear_weights(state, &["conv"]);
     }

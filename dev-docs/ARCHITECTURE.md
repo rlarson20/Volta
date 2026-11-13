@@ -100,7 +100,7 @@ Adding an op, step by step: `dev-docs/DEVELOPMENT.md`.
 
 ## Serialization (`src/io.rs`)
 
-A `StateDict` is a `BTreeMap<String, TensorData>`. It saves and loads as bincode or SafeTensors; the eight dtypes map one-to-one to SafeTensors dtypes, and any other is a load error. `StateDictMapper` renames, filters and transposes keys for PyTorch and Hugging Face checkpoints, and `load_state_dict_checked` reports missing and unexpected keys. Why: "Linear weights are transposed by name, not by key pattern".
+A `StateDict` is a `BTreeMap<String, TensorData>`, each entry the bytes of one tensor in its own dtype. It saves and loads as bincode or SafeTensors; the eight dtypes map one-to-one to SafeTensors dtypes, and any other is a load error. `StateDictMapper` renames, filters and transposes keys for PyTorch and Hugging Face checkpoints, and `load_state_dict_checked` reports missing and unexpected keys. Why: "Linear weights are transposed by name, not by key pattern".
 
 ## GPU backend (`src/gpu/`, feature `gpu`)
 

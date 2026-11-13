@@ -110,14 +110,17 @@ impl Tensor {
     /// # Errors
     ///
     /// `VoltaError::StateShapeMismatch` if `src.shape` differs from this tensor's shape,
-    /// `VoltaError::StateDataLength` if `src.data.len()` does not match it, and
-    /// `VoltaError::DTypeMismatch` if this tensor is not a float dtype. The f32 values are
-    /// cast to this tensor's dtype (exact for f64), as PyTorch's `load_state_dict` does.
+    /// `VoltaError::StateDataLength` if `src.data` does not hold the bytes `src.shape` and
+    /// `src.dtype` need (`InvalidParameter` for a bool byte that is not 0 or 1), and
+    /// `VoltaError::DTypeMismatch` if this tensor is not a float dtype. The entry's values
+    /// are cast from `src.dtype` to this tensor's dtype (following [`Storage::cast`]), as
+    /// PyTorch's `load_state_dict` does.
     /// `name` is the state-dict key, reported in the error. Nothing is written on error.
     pub(crate) fn load_weight(&self, name: &str, src: &crate::io::TensorData) -> Result<()> {
         let mut t = self.inner.borrow_mut();
-        // `TensorData` is f32 and is cast to the destination's dtype below, as PyTorch's
-        // `load_state_dict` (`copy_`) does. Only a float destination can be a parameter.
+        // The entry keeps the dtype it was saved in and is cast to the destination's dtype
+        // below, as PyTorch's `load_state_dict` (`copy_`) does. Only a float destination
+        // can be a parameter.
         if !t.data.dtype().is_float() {
             return Err(VoltaError::DTypeMismatch {
                 expected: DType::F32,
@@ -132,15 +135,10 @@ impl Tensor {
                 actual: src.shape.clone(),
             });
         }
-        let numel = t.shape.numel();
-        if src.data.len() != numel {
-            return Err(VoltaError::StateDataLength {
-                key: name.to_string(),
-                expected: numel,
-                len: src.data.len(),
-            });
-        }
-        let cpu = Storage::cpu(src.data.clone()).cast(t.data.dtype());
+        // Checks the byte count against `src`'s own shape and dtype before decoding.
+        let saved = src.to_storage(name)?;
+        // The explicit cast: the entry's dtype need not be the parameter's.
+        let cpu = saved.cast(t.data.dtype());
         t.data = cpu.to_device(&t.device);
         t.bump_version();
         Ok(())
@@ -2614,14 +2612,8 @@ mod load_weight_tests {
         assert!(t.borrow().data.is_gpu(), "precondition: tensor on GPU");
 
         let vals = vec![1.5, -2.0, 3.25, 0.5, -0.75, 4.0];
-        t.load_weight(
-            "w",
-            &TensorData {
-                data: vals.clone(),
-                shape: vec![2, 3],
-            },
-        )
-        .expect("matching entry loads");
+        t.load_weight("w", &TensorData::from_f32(vals.clone(), vec![2, 3]))
+            .expect("matching entry loads");
 
         assert!(t.borrow().data.is_gpu(), "load_weight demoted GPU to CPU");
         assert_eq!(t.borrow().device, dev);
@@ -2635,15 +2627,12 @@ mod load_weight_dtype_tests {
     use super::*;
     use crate::io::TensorData;
 
-    /// `TensorData` is f32: loading it into an f64 tensor casts the values (exactly), as
+    /// An f32 entry loaded into an f64 tensor is cast (exactly), as
     /// PyTorch's `load_state_dict` does, and keeps the tensor f64.
     #[test]
     fn load_weight_casts_to_the_destination_dtype() {
         let t = RawTensor::from_typed(vec![1.0f64, 2.0], &[2]);
-        let src = TensorData {
-            data: vec![0.1, 6.0],
-            shape: vec![2],
-        };
+        let src = TensorData::from_f32(vec![0.1, 6.0], vec![2]);
         t.load_weight("w", &src).expect("f64 destination");
         assert_eq!(t.dtype(), DType::F64);
         assert_eq!(
@@ -2656,10 +2645,7 @@ mod load_weight_dtype_tests {
     #[test]
     fn load_weight_refuses_an_integer_tensor() {
         let t = RawTensor::from_typed(vec![1i64, 2], &[2]);
-        let src = TensorData {
-            data: vec![5.0, 6.0],
-            shape: vec![2],
-        };
+        let src = TensorData::from_f32(vec![5.0, 6.0], vec![2]);
         let err = t.load_weight("w", &src).expect_err("i64 destination");
         assert!(matches!(err, VoltaError::DTypeMismatch { .. }), "{err}");
         assert_eq!(t.to_vec_as::<i64>().expect("i64"), vec![1, 2]);
