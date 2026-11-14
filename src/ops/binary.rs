@@ -2,6 +2,7 @@ use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::index::{fetch, slot};
 use crate::macros::define_ops;
+use crate::ops::reduce::pairwise_sum_by;
 use crate::real::{Real, compute_dtype, dispatch_real, promote_operands};
 use crate::shape::{Shape, Strides};
 use crate::storage::Storage;
@@ -294,33 +295,41 @@ impl RawTensor {
         if sum_axes.is_empty() {
             return grad.to_vec();
         }
-        let mut result = vec![T::ZERO; target_shape.iter().product()];
-        let target_strides = Strides::from_shape(target_shape);
-        let target_strides = target_strides.truncate_rank();
         let grad_strides = Strides::from_shape(grad_shape);
         let grad_strides = grad_strides.truncate_rank();
-
-        // For each gradient element, sum into appropriate result position
-        for (i, &grad_val) in grad.iter().enumerate() {
-            let mut target_idx = 0;
-            let mut remainder = i;
-
-            // convert lin index i in grad_shape to coords and map to target
-            for dim in 0..grad_shape.len() {
-                let grad_stride = fetch(grad_strides, dim);
-                let coord = remainder / grad_stride;
-                remainder %= grad_stride;
-
-                // Map to target coordinate (skip if was broadcast)
-                if dim >= offset && fetch(&padded_target, dim) != 1 {
-                    let target_dim_idx = dim - offset;
-                    let target_stride = fetch(target_strides, target_dim_idx);
-                    target_idx += coord * target_stride;
-                }
+        // Kept axes (in order) index the result; summed axes are added up per result
+        // element. Each axis is `(extent, stride in grad)`.
+        let mut kept = Vec::new();
+        let mut summed = Vec::new();
+        for (dim, &g) in grad_shape.iter().enumerate() {
+            let axis = (g, fetch(grad_strides, dim));
+            if sum_axes.contains(&dim) {
+                summed.push(axis);
+            } else {
+                kept.push((fetch(&padded_target, dim), axis.1));
             }
-            *slot(&mut result, target_idx) += grad_val;
         }
-        result
+        let n_summed: usize = summed.iter().map(|&(g, _)| g).product();
+        let target_numel: usize = target_shape.iter().product();
+
+        // The offset in `grad` of row-major index `i` over `axes`.
+        let offset_of = |axes: &[(usize, usize)], mut i: usize| -> usize {
+            let mut offset = 0;
+            for &(extent, stride) in axes.iter().rev() {
+                offset += (i % extent) * stride;
+                i /= extent;
+            }
+            offset
+        };
+
+        // Each result element is a pairwise sum over its broadcast axes (S6 class, #212): a
+        // running f32 total rounds away small terms once it is large next to them.
+        (0..target_numel)
+            .map(|t| {
+                let base = offset_of(&kept, t);
+                pairwise_sum_by(n_summed, |j| fetch(grad, base + offset_of(&summed, j)))
+            })
+            .collect()
     }
 
     /// Apply a binary operation with broadcasting
@@ -406,6 +415,57 @@ impl RawTensor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #212: a broadcast operand's gradient sums over the broadcast axis pairwise. With a
+    /// sequential f32 sum, 100,000 terms of 3e-8 after a 1.0 round away and `b.grad` stays 1.
+    #[test]
+    fn broadcast_backward_sums_pairwise() {
+        let n = 100_001;
+        let mut w = vec![3.0e-8f32; n * 2];
+        *crate::index::slot(&mut w, 0) = 1.0;
+        *crate::index::slot(&mut w, 1) = 1.0;
+        let a = RawTensor::new(vec![0.0; n * 2], &[n, 2], false);
+        let b = RawTensor::new(vec![0.0; 2], &[2], true);
+        let w = RawTensor::new(w, &[n, 2], false);
+        a.add(&b)
+            .elem_mul(&w)
+            .sum()
+            .into_loss()
+            .expect("scalar")
+            .backward();
+        let g = b.grad().expect("b has a gradient");
+        assert_eq!(g.len(), 2);
+        for v in g {
+            assert!((v - 1.003).abs() < 1e-5, "b.grad = {v}, expected 1.003");
+        }
+    }
+
+    /// Broadcast backward over a middle axis and a leading (rank-padding) axis together,
+    /// against the explicit sum.
+    #[test]
+    fn sum_over_broadcast_dims_middle_and_leading_axes() {
+        // Target [3, 1] pads to [1, 3, 1]: sums axes 0 and 2. Target [1, 4] pads to
+        // [1, 1, 4]: sums axes 0 and 1.
+        let grad: Vec<f32> = (0..24).map(|v| v as f32).collect();
+        let got = RawTensor::sum_over_broadcast_dims(&grad, &[2, 3, 4], &[3, 1]);
+        let want: Vec<f32> = (0..3)
+            .map(|j| {
+                (0..2)
+                    .flat_map(|i| (0..4).map(move |k| (i * 12 + j * 4 + k) as f32))
+                    .sum()
+            })
+            .collect();
+        assert_eq!(got, want);
+        let got = RawTensor::sum_over_broadcast_dims(&grad, &[2, 3, 4], &[1, 4]);
+        let want: Vec<f32> = (0..4)
+            .map(|k| {
+                (0..2)
+                    .flat_map(|i| (0..3).map(move |j| (i * 12 + j * 4 + k) as f32))
+                    .sum()
+            })
+            .collect();
+        assert_eq!(got, want);
+    }
     use crate::tensor::{check_gradients, manual_seed, randn};
 
     /// Differentiable ops only: the gradcheck below needs a backward to check.
