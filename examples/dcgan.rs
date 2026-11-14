@@ -6,6 +6,8 @@
 //!
 //! Each epoch prints the mean D/G losses and the generator's output statistics on a fixed noise batch.
 //! The number of epochs is the optional first argument (default 5): `cargo run --release --example dcgan -- 1`.
+#[path = "common/mnist.rs"]
+mod mnist;
 use volta::{
     Adam, Conv2d, ConvTranspose2d, Flatten, Layer, Linear, Module, ProgressBar, RawTensor, Tanh,
     Tensor, bce_with_logits_loss, load_mnist_images, normalize, randn,
@@ -149,8 +151,7 @@ fn main() {
         Ok(images) => images,
         Err(err) => {
             eprintln!("Could not load MNIST images from {train_images_path}: {err}");
-            eprintln!("\nTo download MNIST data:");
-            eprintln!("  just mnist-data");
+            mnist::print_download_hint();
             std::process::exit(1);
         }
     };

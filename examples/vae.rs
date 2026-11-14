@@ -1,6 +1,8 @@
 //! Variational autoencoder on MNIST: a `Linear` encoder producing `mu` and `logvar`, reparameterized sampling, and a `Linear` decoder, trained with `SGD` on reconstruction (MSE) plus KL divergence.
 //!
 //! Needs the MNIST training images in `data/mnist/`; it exits with download instructions if they are missing, rather than train on made-up data.
+#[path = "common/mnist.rs"]
+mod mnist;
 use volta::{
     Linear, Module, ProgressBar, RawTensor, SGD, kl_divergence_gaussian, load_mnist_images,
     mse_loss, randn_like,
@@ -23,10 +25,7 @@ fn main() {
         Ok(images) => images,
         Err(err) => {
             eprintln!("Could not load MNIST images from {train_images_path}: {err}");
-            eprintln!("\nTo download MNIST data:");
-            eprintln!("  mkdir -p data/mnist && cd data/mnist");
-            eprintln!("  curl -O http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz");
-            eprintln!("  gunzip *.gz");
+            mnist::print_download_hint();
             std::process::exit(1);
         }
     };

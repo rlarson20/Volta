@@ -6,6 +6,8 @@
 //! state is used for classification.
 //!
 //! Needs the MNIST files under `data/mnist`; if they are missing it prints how to download them and exits, rather than train on made-up data.
+#[path = "common/mnist.rs"]
+mod mnist;
 use std::path::Path;
 use volta::{
     Adam, BatchNorm1d, DataLoader, LSTMCell, Layer, Linear, Module, ProgressBar, RawTensor,
@@ -66,12 +68,7 @@ fn main() {
         (images, label_data, num_samples)
     } else {
         eprintln!("MNIST data not found in {mnist_dir}.");
-        eprintln!("\nTo download MNIST data:");
-        eprintln!("  mkdir -p data/mnist");
-        eprintln!("  cd data/mnist");
-        eprintln!("  curl -O http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz");
-        eprintln!("  curl -O http://yann.lecun.com/exdb/mnist/train-labels-idx1-ubyte.gz");
-        eprintln!("  gunzip *.gz");
+        mnist::print_download_hint();
         std::process::exit(1);
     };
 
@@ -121,12 +118,13 @@ fn main() {
     println!("  Linear({hidden_size} → {num_classes})");
     println!(
         "\nTraining with {} batches per epoch...\n",
-        num_samples / batch_size
+        num_samples.div_ceil(batch_size)
     );
 
     // Training
     let num_epochs = 10;
-    let total_batches = num_samples / batch_size;
+    // The loader yields the last, partial batch too.
+    let total_batches = num_samples.div_ceil(batch_size);
     let seq_len = 28;
 
     for epoch in 0..num_epochs {
