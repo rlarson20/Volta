@@ -740,6 +740,10 @@ Seeds spread about 0.25 points, so a 5-seed mean has a standard error near 0.05;
 
 ## Layers
 
+### Losses never broadcast pred against target (#95)
+
+`mse_loss`, `bce_with_logits_loss` and `kl_divergence_gaussian` panic when the two shapes differ, as `bce_loss` already did. A `Linear(.., 1)` output `[N, 1]` against a flat label vector `[N]` broadcast to `[N, N]`, and the mean of that matrix came back as the loss, with no error. PyTorch raises for the BCE losses but only warns for `mse_loss`; Volta is stricter on purpose (fail loudly, invariant 5). Rejected: a `log::warn!` and carry on, because a log line is easy to miss and the number is wrong.
+
 ### Attention owns no residual (#39, S10/S11)
 
 **Decision:** `MultiHeadAttention::forward` returns `out_proj(Attn(x))`, as `torch.nn.MultiheadAttention` does. The residual and the layer norm belong to the block: `TransformerBlock` is Pre-LN, `x + Attn(LN1(x))` then `+ FFN(LN2(.))`, which is `torch.nn.TransformerEncoderLayer(norm_first=True)`. `new_with_norm` and the optional `norm` field are removed.
