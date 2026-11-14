@@ -79,9 +79,20 @@ impl GpuBuffer {
 
     /// A buffer of `len` `dtype` elements holding `bytes` (already in the GPU layout,
     /// `gpu_bytes(dtype, len)` long).
+    ///
+    /// # Panics
+    /// If `bytes` is not `gpu_bytes(dtype, len)` long, in every build profile and before a
+    /// GPU is looked up: a short upload would leave the tail of the buffer as whatever the
+    /// pool held, and a long one would be cut off (#173).
+    #[track_caller]
     fn upload(dtype: DType, len: usize, bytes: &[u8], label: &str) -> Option<Self> {
+        assert_eq!(
+            bytes.len(),
+            gpu_bytes(dtype, len),
+            "GPU upload of {len} {dtype} elements: got {} bytes",
+            bytes.len()
+        );
         let ctx = get_gpu_context()?;
-        debug_assert_eq!(bytes.len(), gpu_bytes(dtype, len));
         let buffer = Self::allocate(bytes.len(), label)?;
         ctx.queue().write_buffer(&buffer, 0, bytes);
         ctx.increment_pending();
@@ -354,5 +365,18 @@ impl Drop for GpuBuffer {
             // Try to return to pool; if pool is full, buffer is dropped normally
             pool.release(buffer, gpu_bytes(self.dtype, self.len));
         }
+    }
+}
+
+#[cfg(test)]
+mod upload_tests {
+    use super::*;
+
+    /// #173: a byte length that disagrees with `len` panics in release builds too, and
+    /// with or without a GPU (the check runs before the context is looked up).
+    #[test]
+    #[should_panic(expected = "GPU upload of 3 f32 elements: got 8 bytes")]
+    fn upload_rejects_a_wrong_byte_length() {
+        let _ = GpuBuffer::upload(DType::F32, 3, &[0u8; 8], "test");
     }
 }
