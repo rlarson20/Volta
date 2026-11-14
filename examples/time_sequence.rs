@@ -43,13 +43,19 @@ fn main() {
     let num_epochs = 50;
     let mut progress = ProgressBar::new(num_epochs, "Training");
 
+    // One optimizer step per sequence, on the mean of its per-timestep losses. Summing
+    // the gradients of all 10,000 timestep losses into one step per epoch (what this
+    // example used to do) makes the step about 10,000 times too large, and training
+    // diverges to inf and then NaN within a few epochs (#88).
+    let mut first_loss = None;
+    let mut last_loss = f32::NAN;
     for epoch in 0..num_epochs {
-        optimizer.zero_grad();
         let mut total_loss = 0.0;
 
-        // Process each sequence
         for seq_idx in 0..num_sequences {
+            optimizer.zero_grad();
             let mut state = lstm.initial_state(1);
+            let mut seq_loss: Option<volta::Tensor> = None;
 
             // Process each timestep in the sequence
             for t in 0..sequence_length {
@@ -60,29 +66,44 @@ fn main() {
                 // Create input tensor [1, 1] (batch=1, features=1)
                 let input = RawTensor::new(vec![input_val], &[1, 1], false);
 
-                // LSTM forward
+                // LSTM forward, then the output layer
                 let h_new = lstm.step(&input, &mut state);
-
-                // Output layer
                 let pred = output_layer.forward(&h_new);
 
-                // Loss
                 let target = RawTensor::new(vec![target_val], &[1, 1], false);
                 let loss = RawTensor::mse_loss(&pred, &target);
-
-                total_loss += loss.item();
-                loss.into_loss().expect("scalar loss").backward();
+                seq_loss = Some(match seq_loss {
+                    Some(acc) => acc.add(&loss),
+                    None => loss,
+                });
             }
+
+            // Backpropagate through the whole sequence once, on the mean step loss.
+            let mean = RawTensor::new(vec![1.0 / sequence_length as f32], &[1], false);
+            let seq_loss = seq_loss.expect("sequence_length > 0").elem_mul(&mean);
+            total_loss += seq_loss.item();
+            seq_loss.into_loss().expect("scalar loss").backward();
+            optimizer.step();
         }
 
-        optimizer.step();
         progress.update(epoch + 1);
 
+        let avg_loss = total_loss / num_sequences as f32;
+        assert!(
+            avg_loss.is_finite(),
+            "epoch {epoch}: loss diverged to {avg_loss}"
+        );
+        first_loss.get_or_insert(avg_loss);
+        last_loss = avg_loss;
         if epoch % 10 == 9 {
-            let avg_loss = total_loss / (num_sequences * sequence_length) as f32;
             println!(" Loss = {avg_loss:.6}");
         }
     }
+    let first_loss = first_loss.expect("num_epochs > 0");
+    assert!(
+        last_loss < first_loss,
+        "final loss {last_loss} is not below the first epoch's {first_loss}"
+    );
 
     println!("\n=== Training Complete ===");
 

@@ -61,10 +61,10 @@ Decide by where an argument comes from (DECISIONS.md, "Panic inside the program,
 | `readme1`, `readme2`, `showcase`, `regression`, `layernorm_demo`, `gpu_training` (its CPU path), `load_external_mnist` (its demo path, #143) | < 1 s each |
 | `char_transformer_model`, `char_language_model` | 1 s, 3 s |
 | `super_resolution` | 9 s |
+| `time_sequence` | 30 s |
 
 | Left out | Why |
 | --- | --- |
-| `time_sequence` | Trains to NaN and runs past 4 minutes (#88). Add it back with the fix. |
 | `mnist_cnn`, `mnist_rnn`, `mnist_autocast`, `vae`, `dcgan` | Need MNIST in `data/mnist`, and run for minutes (#59 is the MNIST lane). One `dcgan` epoch takes hours on the CPU, almost all of it in convolution backward passes (#230, #231). |
 | `gpu` | Does nothing without the `gpu` feature. |
 
