@@ -864,8 +864,10 @@ impl RawTensor {
     ///
     /// # Arguments
     /// * `axes` - New ordering of axes (must be a valid permutation of 0..rank)
+    ///
     /// # Panics
-    /// invalid permutation axes
+    /// If `axes` is not a permutation of `0..rank`: a repeated or out-of-range axis, or a
+    /// length other than the tensor's rank.
     #[must_use]
     pub fn permute(self_t: &Tensor, axes: &[Axis]) -> Tensor {
         let old_shape = self_t.borrow().shape.clone();
@@ -1080,11 +1082,6 @@ impl RawTensor {
         ))
     }
 
-    /// Extract a sub-region of the tensor
-    ///
-    /// # Arguments
-    /// * `ranges` - For each dimension, (start, end) indices
-    /// # Panics
     /// Validate shrink ranges for bounds checking
     ///
     /// Ensures that:
@@ -1231,8 +1228,9 @@ impl RawTensor {
     /// Subsample tensor with specified strides
     ///
     /// Similar to slicing with step: array\[`::2`\] takes every other element
+    ///
     /// # Panics
-    /// Strides length must match rank
+    /// If `strides.len()` differs from the tensor's rank, or a stride is zero.
     #[must_use]
     pub fn stride_op(self_t: &Tensor, strides: &[usize]) -> Tensor {
         let dtype = self_t.dtype();

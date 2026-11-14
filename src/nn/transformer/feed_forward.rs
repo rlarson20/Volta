@@ -17,8 +17,8 @@ use crate::tensor::Tensor;
 ///
 /// # Arguments
 /// * `embed_dim` - Input/output dimension
-/// * `expansion_factor` - Factor by which to expand the intermediate dimension (default 4)
-/// * `dropout` - Dropout probability (default 0.1)
+/// * `expansion_factor` - Factor by which to expand the intermediate dimension
+/// * `dropout` - Dropout probability
 ///
 /// # Example
 /// ```no_run
@@ -46,10 +46,11 @@ impl FeedForward {
     ///
     /// # Arguments
     /// * `embed_dim` - Input/output dimension
-    /// * `expansion_factor` - Factor by which to expand the intermediate dimension (default 4)
-    /// * `dropout` - Dropout probability (default 0.1)
+    /// * `expansion_factor` - Factor by which to expand the intermediate dimension
+    /// * `dropout` - Dropout probability
+    ///
     /// # Panics
-    /// `dropout` must be in `[0, 1]`
+    /// If `dropout` is not in `[0, 1]`.
     #[must_use]
     pub fn new(embed_dim: usize, expansion_factor: usize, dropout: f32) -> Self {
         let intermediate_dim = embed_dim * expansion_factor;
@@ -79,8 +80,9 @@ impl FeedForward {
     ///
     /// # Returns
     /// Output tensor of shape [batch, `seq_len`, `embed_dim`]
+    ///
     /// # Panics
-    /// reshape can panic
+    /// If `x` is not 3D, or its last dimension is not `embed_dim`.
     #[must_use]
     pub fn forward(&self, x: &Tensor) -> Tensor {
         let input_shape = x.borrow().shape.clone();

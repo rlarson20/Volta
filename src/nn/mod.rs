@@ -136,7 +136,7 @@ pub trait Module {
     ///
     /// # Panics
     /// If `dtype` is not a float dtype (parameters need gradients), or a parameter is on
-    /// the GPU and `dtype` is not F32.
+    /// the GPU and `dtype` is F64 (GPU tensors hold F32, F16, BF16 and Bool).
     fn to_dtype(&mut self, dtype: DType) {
         cast_parameters(self, dtype);
     }

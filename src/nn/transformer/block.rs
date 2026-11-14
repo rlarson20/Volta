@@ -18,8 +18,8 @@ use crate::tensor::Tensor;
 /// # Arguments
 /// * `embed_dim` - Embedding dimension
 /// * `num_heads` - Number of attention heads
-/// * `expansion_factor` - FFN expansion factor (default 4)
-/// * `dropout` - Dropout probability (default 0.1)
+/// * `expansion_factor` - FFN expansion factor
+/// * `dropout` - Dropout probability
 ///
 /// # Example
 /// ```no_run
@@ -55,8 +55,8 @@ impl TransformerBlock {
     /// # Arguments
     /// * `embed_dim` - Embedding dimension
     /// * `num_heads` - Number of attention heads
-    /// * `expansion_factor` - FFN expansion factor (default 4)
-    /// * `dropout` - Dropout probability (default 0.1)
+    /// * `expansion_factor` - FFN expansion factor
+    /// * `dropout` - Dropout probability
     #[must_use]
     pub fn new(embed_dim: usize, num_heads: usize, expansion_factor: usize, dropout: f32) -> Self {
         Self {

@@ -37,7 +37,7 @@ impl PixelShuffle {
     /// * `upscale_factor` - Factor to increase spatial resolution by (must be > 0)
     ///
     /// # Panics
-    /// Panics if `upscale_factor` is 0
+    /// If `upscale_factor` is 0.
     #[must_use]
     pub fn new(upscale_factor: usize) -> Self {
         assert!(

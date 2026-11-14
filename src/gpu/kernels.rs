@@ -863,8 +863,9 @@ impl GpuKernels {
     ///
     /// # Returns
     /// A new buffer containing the result
+    ///
     /// # Panics
-    /// Mismatched buffer sizes
+    /// If `a` and `b` differ in dtype or length.
     #[must_use]
     pub fn binary_op(a: &GpuBuffer, b: &GpuBuffer, op: BinaryOp) -> Option<GpuBuffer> {
         assert_same_dtype("binary_op", &[a, b]);
@@ -990,8 +991,9 @@ impl GpuKernels {
     /// # Returns
     /// A new buffer containing the gradient with respect to x, or `None` if the op is
     /// `cpu_only` or no GPU is available.
+    ///
     /// # Panics
-    /// `out_grad` and `x` size mismatch
+    /// If `out_grad` and `x` differ in dtype or length.
     #[must_use]
     pub fn unary_backward(out_grad: &GpuBuffer, x: &GpuBuffer, op: UnaryOp) -> Option<GpuBuffer> {
         assert_same_dtype("unary_backward", &[out_grad, x]);
@@ -1061,8 +1063,9 @@ impl GpuKernels {
     ///
     /// # Returns
     /// A new buffer containing the gradient with respect to a
+    ///
     /// # Panics
-    /// `out_grad` and `a` shape mismatch
+    /// If `out_grad`, `a` and `b` differ in dtype or length.
     #[must_use]
     pub fn binary_backward_a(
         out_grad: &GpuBuffer,
@@ -1147,8 +1150,9 @@ impl GpuKernels {
     ///
     /// # Returns
     /// A new buffer containing the gradient with respect to b
+    ///
     /// # Panics
-    /// `out_grad` and `b` must have same shape
+    /// If `out_grad`, `a` and `b` differ in dtype or length.
     #[must_use]
     pub fn binary_backward_b(
         out_grad: &GpuBuffer,
@@ -1529,8 +1533,10 @@ impl GpuKernels {
     /// * `grad` - Output gradient with shape (m, n)
     /// * `b` - Matrix B from forward pass with shape (k, n)
     /// * `spec` - Validated `m x k @ k x n` geometry; must not be batched
+    ///
     /// # Panics
-    /// Grad buffer size doesn't match dimensions
+    /// If `grad` and `b` differ in dtype, `spec` is batched, `grad.len()` is not `m * n`, or
+    /// `b.len()` is not `k * n`.
     #[must_use]
     pub(crate) fn matmul_backward_a(
         grad: &GpuBuffer,
@@ -1631,8 +1637,10 @@ impl GpuKernels {
     /// * `a` - Matrix A from forward pass with shape (m, k)
     /// * `grad` - Output gradient with shape (m, n)
     /// * `spec` - Validated `m x k @ k x n` geometry; must not be batched
+    ///
     /// # Panics
-    /// `A` buffer size doesn't match dimensions
+    /// If `a` and `grad` differ in dtype, `spec` is batched, `a.len()` is not `m * k`, or
+    /// `grad.len()` is not `m * n`.
     #[must_use]
     pub(crate) fn matmul_backward_b(
         a: &GpuBuffer,

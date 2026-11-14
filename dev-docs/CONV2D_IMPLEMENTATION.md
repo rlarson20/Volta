@@ -29,52 +29,56 @@ The Conv2d implementation uses algorithm selection in `src/nn/layers/conv.rs` wi
 - **Best for**: Medium-to-large inputs where memory is a concern
 - **Approach**: Tiled computation for cache efficiency
 - **✅ Full gradient support**: Tiled gradient computation matches forward pass
-- **🔧 Extensible**: Architecture supports future variants (Winograd, FFT, Direct-to-GEMM)
 
 ## Algorithm Selection
 
 ```rust
-// Auto-select based on input characteristics
 let conv = Conv2d::new(3, 16, 3, 1, 1, true);
-conv.set_algo(ConvAlgo::Auto); // Default behavior
 
-// Force specific algorithm
-conv.set_algo(ConvAlgo::Direct);  // Memory efficient
-conv.set_algo(ConvAlgo::Im2col);  // Faster but uses more memory
-conv.set_algo(ConvAlgo::IGEMM);   // Balanced approach
+// Auto is the default. To force one algorithm, set it (these are alternatives):
+conv.set_algo(ConvAlgo::Auto);
+conv.set_algo(ConvAlgo::Direct);  // least memory
+conv.set_algo(ConvAlgo::Im2col);  // materializes the im2col matrix
+conv.set_algo(ConvAlgo::IGEMM);   // GEMM without the im2col matrix
 ```
 
 ### Auto-selection Logic
 
-- **GPU**: Always uses im2col (GPU-accelerated)
-- **CPU small inputs**: Uses direct for small kernels (≤3x3) and small batches (≤4)
-- **CPU large inputs (>5M im2col elements)**: Uses direct to save memory
-- **CPU medium inputs**: Uses iGEMM for balanced performance/memory
-- **All algorithms support training** with full gradient computation
+`ConvAlgo::auto_select` (`src/nn/layers/conv.rs`) is the source; its rustdoc has the same
+table, and `auto_select_follows_documented_rule` checks both sides of each threshold. It
+estimates the im2col matrix as
 
-## iGEMM Architecture
+```text
+im2col_elements = batch * (H - k + 1) * (W - k + 1) * channels * k * k
+```
 
-The iGEMM implementation is designed with extensibility for future optimizations.
+with `H` and `W` the padded input extents and `k = kernel_size`. The first rule that
+matches wins:
 
-### Available Variants
+| Device | Condition | Result |
+| --- | --- | --- |
+| GPU | `im2col_elements > 1_000_000` | `IGEMM` |
+| GPU | otherwise | `Im2col` |
+| CPU | `im2col_elements > 5_000_000` | `Direct` (saves memory) |
+| CPU | `kernel_size <= 3 && batch <= 4` | `Direct` |
+| CPU | `im2col_elements > 1_000_000` | `IGEMM` |
+| CPU | otherwise | `Im2col` |
 
-- **Tiled (current)**: Cache-friendly blocking with configurable tile sizes
-- **Winograd (future)**: Transform-domain convolution for 3x3 kernels
-- **FFT (future)**: Frequency-domain convolution for large kernels (audio)
-- **Direct-to-GEMM (future)**: Hand-tuned micro-kernels for maximum performance
+Two things to know about the heuristic:
 
-### Adding a New iGEMM Variant
+- The small-kernel rule looks only at the kernel and the batch, not the input size. A
+  `4 x 64 x 32 x 32` input with a 3x3 kernel (about 2.07M elements) runs `Direct`; the same
+  input with batch 5 runs `IGEMM`.
+- It assumes stride 1 and a square kernel (`Conv2d::forward` passes `kernel_h` only), so a
+  strided or non-square convolution is sized as if it were stride 1 and square. A stride-2
+  convolution produces about a quarter of the estimated matrix, so the 1M and 5M
+  thresholds trip earlier than the real memory use warrants.
 
-To add a new iGEMM variant:
+All three algorithms support training with full gradients.
 
-1. Add variant to `IGEMMVariant` enum in `src/nn/layers/conv.rs`
-2. Implement forward/backward in `Conv2d::igemm_forward`
-3. Update `Conv2d::igemm_backward` to handle the variant
-4. Add tests and benchmarks
+## iGEMM
 
-## Recent Improvements
-
-- ✅ Direct convolution now supports full gradient computation
-- ✅ iGEMM implementation with tiled forward and backward passes
-- ✅ Extensible architecture for future convolution algorithms
-- ✅ Memory-efficient training enabled for large inputs
+`IGEMMVariant` (private) has one variant, `Tiled`, and the grad fn stores it in an unused
+field (`_variant`, #118). The backward is `igemm_backward_input` and
+`igemm_backward_weight` on the grad fn. There is no extension point beyond that: a second
+variant would need a dispatch added to the forward and both backward functions.

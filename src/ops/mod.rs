@@ -14,7 +14,7 @@ pub(crate) mod max_rule;
 pub mod movement;
 /// Reductions (sum, max, mean, and per-axis forms).
 pub mod reduce;
-/// Ternary ops (`mul_add`, `where_cond`).
+/// Ternary ops (`mulacc`, `where_op`).
 pub mod ternary;
 /// Elementwise unary ops.
 pub mod unary;
@@ -26,11 +26,6 @@ pub use movement::MovementOp;
 pub use reduce::ReduceOp;
 pub use ternary::TernaryOp;
 pub use unary::UnaryOp;
-
-// ===== LOAD OPERATIONS =====
-// DONT KNOW WHERE LOADS GO
-//other methods to add:
-//to_device LoadOp?
 
 impl RawTensor {
     /// Create empty (zero-filled) tensor (fallible)
@@ -102,7 +97,7 @@ impl RawTensor {
     /// Rust, so a generic `from_vec(vec![1.0])` would build an f64 tensor unasked.
     ///
     /// Every op, layer, and optimizer computes in f32, f64, f16 or bf16 on the CPU (the GPU
-    /// in f32 only); half types compute in f32 and round each output. Other dtypes can be
+    /// in f32, f16 or bf16); half types compute in f32 and round each output. Other dtypes can be
     /// built, inspected, saved, and cast. An integer or bool tensor cannot require
     /// gradients (`set_requires_grad(true)` panics).
     ///

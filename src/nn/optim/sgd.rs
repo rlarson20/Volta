@@ -81,8 +81,10 @@ impl SGD {
     /// Perform one optimization step
     ///
     /// Updates all parameters using their accumulated gradients.
+    ///
     /// # Panics
-    /// unwrap params
+    /// If a parameter's dtype is not a float. This is checked for every parameter before
+    /// any is updated.
     pub fn step(&mut self) {
         // Each parameter steps in its own dtype (a mixed list is fine, as in PyTorch);
         // each must have a kernel. Checked for all before any is updated.

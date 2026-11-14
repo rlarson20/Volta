@@ -153,8 +153,10 @@ impl RawTensor {
     /// Examples:
     /// - (3, 1) + (1, 4) -> (3, 4)
     /// - (5, 3, 1) + (1, 4) -> (5, 3, 4)
+    ///
     /// # Panics
-    /// broadcast failures
+    /// If the shapes cannot be broadcast (a dimension differs and neither is 1), or either
+    /// is not a valid [`Shape`] (a zero dimension, or more than `MAX_NUMEL` elements).
     #[must_use]
     pub fn broadcast_shape(shape_a: &[usize], shape_b: &[usize]) -> Vec<usize> {
         match Self::try_broadcast_shape(shape_a, shape_b) {
@@ -328,8 +330,11 @@ impl RawTensor {
     /// 2. Broadcast both inputs to that shape
     /// 3. Apply operation element-wise
     /// 4. Set up gradient tracking
+    ///
     /// # Panics
-    /// broadcast failure
+    /// If the shapes cannot be broadcast, the operands are on different devices, or the
+    /// promoted dtype is not a float (integer and bool tensors have no arithmetic kernel).
+    /// Under [`DTypePolicy::Strict`](crate::DTypePolicy::Strict), also if the dtypes differ.
     #[must_use]
     pub fn binary_op(self_t: &Tensor, other: &Tensor, op: BinaryOp) -> Tensor {
         // Mixed operands are cast to one dtype first (`DTypePolicy`); `Div` is true
@@ -344,7 +349,7 @@ impl RawTensor {
         };
         let dtype = compute_dtype(|| format!("Binary({op:?})"), &[promoted]);
         // If both operands are on the same GPU with equal shapes, run the kernel there;
-        // otherwise (or if it fails) fall through to the CPU path.
+        // otherwise take the CPU path. A kernel that covers the case and fails panics.
         if let Some((shape, storage, device)) = Self::gpu_binary_forward(self_t, other, op) {
             return edge(
                 [self_t.clone(), other.clone()],

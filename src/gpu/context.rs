@@ -670,8 +670,11 @@ impl GpuContext {
     ///
     /// Use this instead of `sync()` in critical paths where you need
     /// error handling for GPU failures.
+    ///
     /// # Errors
-    /// Whatever errors come from async
+    /// [`GpuSyncError::Timeout`] if the wait for pending submissions times out, and
+    /// [`GpuSyncError::GpuLost`] once timeouts reach `MAX_CONSECUTIVE_TIMEOUTS` in a row
+    /// (checked before the wait, too, so a lost GPU is not polled again).
     pub fn sync_checked(&self) -> Result<(), GpuSyncError> {
         let timeout_count = self.consecutive_timeouts.load(Ordering::Relaxed);
 

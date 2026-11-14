@@ -271,8 +271,10 @@ impl GpuBuffer {
     }
 
     /// Get the underlying wgpu buffer (for use in compute passes)
+    ///
     /// # Panics
-    /// Panics if buffer is taken
+    /// If the wgpu buffer was taken out of this `GpuBuffer`. Only `Drop` does that, so a live
+    /// buffer never panics here.
     #[must_use]
     pub fn buffer(&self) -> &wgpu::Buffer {
         debug_assert!(self.buffer.is_some(), "Buffer should not be taken");
