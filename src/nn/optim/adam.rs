@@ -1,3 +1,4 @@
+use crate::error::OrPanic;
 use crate::index::{fetch, slot};
 use crate::real::{Real, dispatch_real};
 use crate::storage::Storage;
@@ -56,7 +57,7 @@ impl Adam {
         eps: f32,
         weight_decay: f32,
     ) -> Self {
-        Self::try_new(params, lr, betas, eps, weight_decay).unwrap_or_else(|e| panic!("Adam: {e}"))
+        Self::try_new(params, lr, betas, eps, weight_decay).or_panic("Adam")
     }
 
     /// [`Self::new`], checking the hyperparameters first, as PyTorch does.
@@ -104,6 +105,7 @@ impl Adam {
     /// # Panics
     /// If a parameter's dtype is not a float. This is checked for every parameter before
     /// any is updated.
+    #[track_caller]
     pub fn step(&mut self) {
         // Each parameter steps in its own dtype (a mixed list is fine, as in PyTorch);
         // each must have a kernel. Checked for all before any is updated.

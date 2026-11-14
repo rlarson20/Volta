@@ -76,8 +76,10 @@ pub(crate) fn span<T>(s: &[T], r: Range<usize>) -> &[T] {
 #[inline]
 #[track_caller]
 pub(crate) fn signed(v: usize) -> isize {
-    isize::try_from(v)
-        .unwrap_or_else(|_| panic!("index {v} does not fit isize (index-mapping bug)"))
+    let Ok(i) = isize::try_from(v) else {
+        panic!("index {v} does not fit isize (index-mapping bug)")
+    };
+    i
 }
 
 /// Converts a signed coordinate to an index, panicking if it is negative instead of wrapping.
@@ -89,7 +91,10 @@ pub(crate) fn signed(v: usize) -> isize {
 #[inline]
 #[track_caller]
 pub(crate) fn unsigned(v: isize) -> usize {
-    usize::try_from(v).unwrap_or_else(|_| panic!("coordinate {v} is negative (index-mapping bug)"))
+    let Ok(i) = usize::try_from(v) else {
+        panic!("coordinate {v} is negative (index-mapping bug)")
+    };
+    i
 }
 
 #[cfg(test)]

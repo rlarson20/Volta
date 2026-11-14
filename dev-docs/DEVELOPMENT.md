@@ -39,9 +39,9 @@ Every op ends in `edge()`, the only function that attaches `parents` and `grad_f
 
 Decide by where an argument comes from (DECISIONS.md, "Panic inside the program, `Result` where data comes from outside").
 
-- **Panic** when the calling program's own code decides every argument: a shape mismatch between two tensors it built, a wrong rank passed to a layer. Document it under `# Panics`, and put `#[track_caller]` on the public panicking function so the message points at the caller.
+- **Panic** when the calling program's own code decides every argument: a shape mismatch between two tensors it built, a wrong rank passed to a layer. Document it under `# Panics`, and put `#[track_caller]` on the public panicking function so the message points at the caller. The attribute only helps if every frame between the user and the `panic!` carries it, and it does not reach into a closure: panic in the function body (`match`, `let .. else`, `assert!`, `.expect(..)`), never inside `unwrap_or_else(|e| panic!(..))`.
 - **`Result<_, VoltaError>`** when an argument can come from a file, a checkpoint, a dataset, JSON, or a UI: shapes and data for a new tensor, a state dict, labels, bytes, axes and ranges a user picks. Document it under `# Errors`.
-- **Both forms** only for those boundary arguments. Write the `try_` form, and make the panicking form `try_x(..).unwrap_or_else(|e| panic!("x: {e}"))`. Do not add a `try_` twin to an op just for symmetry.
+- **Both forms** only for those boundary arguments. Write the `try_` form, and make the panicking form `#[track_caller]` plus `try_x(..).or_panic("x")` (`crate::error::OrPanic`). Do not add a `try_` twin to an op just for symmetry.
 - **Validate before you allocate.** Run `Shape::from_dims` (or `RawTensor::checked_numel`) on a caller's shape before `product()`, `vec![..; n]`, or any buffer: an overflowing product or an oversized allocation is not an error you can catch afterwards.
 - A new error that names a state-dict entry carries its `key`; a container puts its prefix back with `VoltaError::with_key_prefix`.
 
