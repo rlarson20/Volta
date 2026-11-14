@@ -21,6 +21,7 @@ smoke=(
     char_transformer_model
     gpu_training
     load_external_mnist
+    time_sequence
 )
 
 args=()
