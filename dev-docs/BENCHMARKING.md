@@ -74,7 +74,7 @@ just bench-report
 
 ## Convolution Algorithm Benchmarks
 
-The `conv_algorithms` benchmark compares Direct vs im2col+GEMM convolution algorithms.
+The `conv_algorithms` benchmark compares the three convolution algorithms (Direct, im2col+GEMM, iGEMM); every group except `conv_auto_mode` runs all three on each input.
 
 ### Benchmark Groups
 
@@ -95,8 +95,9 @@ The `conv_algorithms` benchmark compares Direct vs im2col+GEMM convolution algor
    - MNIST (28x28), CIFAR (32x32)
    - ImageNet variants (56x56, 112x112, 224x224)
 
-5. **`conv_auto_mode`**: Tests automatic algorithm selection
-   - Verifies Auto mode chooses correctly
+5. **`conv_auto_mode`**: Times `ConvAlgo::Auto` on inputs either side of its thresholds
+   - Scenarios are named by their inputs; which algorithm Auto picks is pinned by
+     `auto_select_follows_documented_rule` in `src/nn/layers/conv.rs`, not by the bench
 
 6. **`conv_memory_scaling`**: Shows memory usage patterns
    - Scales channels, spatial dimensions, and batch size
@@ -104,17 +105,17 @@ The `conv_algorithms` benchmark compares Direct vs im2col+GEMM convolution algor
 
 ### Memory Safety
 
-- All scenarios calculate im2col memory usage beforehand
-- Maximum memory used: ~1GB (very_large scenario)
-- Prints memory usage for each benchmark
-- Asserts <16GB limit before running
+- Every scenario computes its im2col buffer size from its shape (`im2col_memory_mb`) and
+  asserts it is under 16 GB before it runs
+- The largest buffer is about 220 MB (`very_large`, and `spatial imagenet_full` at batch 2)
+- Prints the computed size for each scenario
 
 ### Example Output
 
 ```
-tiny: B=1, C=3→16, H=W=16, K=3x3, im2col memory: 0.02 MB
-small: B=4, C=3→16, H=W=32, K=3x3, im2col memory: 0.41 MB
-medium: B=8, C=64→128, H=W=28, K=3x3, im2col memory: 67.5 MB
+tiny: B=1, C=3→16, H=W=16, K=3x3, im2col memory: 0.0 MB
+small: B=4, C=3→16, H=W=32, K=3x3, im2col memory: 0.4 MB
+medium: B=8, C=64→128, H=W=28, K=3x3, im2col memory: 13.8 MB
 ```
 
 ## Benchmarking Guidelines
