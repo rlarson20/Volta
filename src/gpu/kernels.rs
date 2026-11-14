@@ -3229,7 +3229,10 @@ fn pad_to_u32_4(values: &[usize]) -> [u32; 4] {
     );
     let mut result = [0u32; 4];
     for (out, &v) in result.iter_mut().zip(values) {
-        *out = u32::try_from(v).unwrap_or_else(|_| panic!("GPU movement param {v} exceeds u32"));
+        let Ok(packed) = u32::try_from(v) else {
+            panic!("GPU movement param {v} exceeds u32")
+        };
+        *out = packed;
     }
     result
 }
@@ -3343,8 +3346,10 @@ fn movement_op(
 /// If `v > u32::MAX`.
 #[track_caller]
 fn pack_u32(v: usize) -> u32 {
-    u32::try_from(v)
-        .unwrap_or_else(|_| panic!("kernel parameter {v} does not fit u32 (index-mapping bug)"))
+    let Ok(packed) = u32::try_from(v) else {
+        panic!("kernel parameter {v} does not fit u32 (index-mapping bug)")
+    };
+    packed
 }
 
 /// Workgroups (256 threads each) that cover `len` elements; `dispatch_flat` spreads more

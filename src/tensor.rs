@@ -3,6 +3,7 @@ use crate::autograd::{CastGradFn, GradFn, ToDeviceGradFn, edge};
 use crate::device::Device;
 use crate::device_policy::{Pass, on_gap};
 use crate::dtype::DType;
+use crate::error::OrPanic;
 use crate::index::{fetch, slot, span};
 use crate::ops::binary::BinaryOp;
 use crate::ops::compare::CmpOp;
@@ -574,7 +575,7 @@ impl RawTensor {
     #[must_use]
     #[track_caller]
     pub fn new(data: Vec<f32>, shape: &[usize], requires_grad: bool) -> Tensor {
-        Self::try_new(data, shape, requires_grad).unwrap_or_else(|e| panic!("new: {e}"))
+        Self::try_new(data, shape, requires_grad).or_panic("new")
     }
 
     /// Create a new tensor from Storage and shape (internal use for GPU ops, fallible)
@@ -683,7 +684,7 @@ impl RawTensor {
     #[must_use]
     #[track_caller]
     pub fn zeros(shape: &[usize]) -> Tensor {
-        Self::try_zeros(shape).unwrap_or_else(|e| panic!("zeros: {e}"))
+        Self::try_zeros(shape).or_panic("zeros")
     }
 
     /// Create a tensor filled with ones (fallible)
@@ -703,7 +704,7 @@ impl RawTensor {
     #[must_use]
     #[track_caller]
     pub fn ones(shape: &[usize]) -> Tensor {
-        Self::try_ones(shape).unwrap_or_else(|e| panic!("ones: {e}"))
+        Self::try_ones(shape).or_panic("ones")
     }
 
     /// Create a tensor with random values uniformly distributed in [0, 1) (fallible)
@@ -725,7 +726,7 @@ impl RawTensor {
     #[must_use]
     #[track_caller]
     pub fn rand(shape: &[usize]) -> Tensor {
-        Self::try_rand(shape).unwrap_or_else(|e| panic!("rand: {e}"))
+        Self::try_rand(shape).or_panic("rand")
     }
 
     /// Create a tensor with values from standard normal distribution N(0, 1) (fallible)
@@ -751,7 +752,7 @@ impl RawTensor {
     #[must_use]
     #[track_caller]
     pub fn randn(shape: &[usize]) -> Tensor {
-        Self::try_randn(shape).unwrap_or_else(|e| panic!("randn: {e}"))
+        Self::try_randn(shape).or_panic("randn")
     }
 
     /// Create a tensor filled with random values from N(0, 1) with the same shape as the input
@@ -806,7 +807,7 @@ impl RawTensor {
     #[must_use]
     #[track_caller]
     pub fn xavier_uniform(shape: &[usize]) -> Tensor {
-        Self::try_xavier_uniform(shape).unwrap_or_else(|e| panic!("xavier_uniform: {e}"))
+        Self::try_xavier_uniform(shape).or_panic("xavier_uniform")
     }
 
     /// He (Kaiming) normal initialization suited for `ReLU` networks. (fallible)
@@ -853,7 +854,7 @@ impl RawTensor {
     #[must_use]
     #[track_caller]
     pub fn he_initialization(shape: &[usize]) -> Tensor {
-        Self::try_he_initialization(shape).unwrap_or_else(|e| panic!("he_initialization: {e}"))
+        Self::try_he_initialization(shape).or_panic("he_initialization")
     }
 }
 
@@ -1015,10 +1016,9 @@ impl RawTensor {
             };
             let mut one_hot = vec![0.0f32; n * c];
             for (i, &t) in classes.iter().enumerate() {
-                let class = usize::try_from(t)
-                    .ok()
-                    .filter(|&k| k < c)
-                    .unwrap_or_else(|| panic!("{op}: target {t} out of range for {c} classes"));
+                let Some(class) = usize::try_from(t).ok().filter(|&k| k < c) else {
+                    panic!("{op}: target {t} out of range for {c} classes")
+                };
                 *slot(&mut one_hot, i * c + class) = 1.0;
             }
             // A no-grad Bool constant on the log-probs' device; the zeros come from the
@@ -1372,6 +1372,7 @@ impl RawTensor {
     /// # Panics
     /// If `dim` is not less than the tensor's rank.
     #[must_use]
+    #[track_caller]
     pub fn sum_dim(self_t: &Tensor, dim: Axis, keepdim: bool) -> Tensor {
         Self::try_sum_dim(self_t, dim, keepdim).expect("Dimension out of bounds")
     }
@@ -1391,6 +1392,7 @@ impl RawTensor {
     /// If `device` is a GPU and no GPU is available, or it names a GPU other than this
     /// machine's adapter (`Device::gpu()`).
     #[must_use]
+    #[track_caller]
     pub fn to_device(self_t: &Tensor, device: Device) -> Tensor {
         // Fast path: already on requested device
         {
@@ -1465,6 +1467,7 @@ impl RawTensor {
     /// # Panics
     /// If `dim` is not less than the tensor's rank, or the dtype is not a float.
     #[must_use]
+    #[track_caller]
     pub fn max_dim(self_t: &Tensor, dim: Axis, keepdim: bool) -> Tensor {
         let dtype = compute_dtype(|| "MaxDim".to_string(), &[self_t.dtype()]);
         let (data, shape) = {
@@ -1472,7 +1475,7 @@ impl RawTensor {
             (s.data.clone(), s.shape.clone())
         };
 
-        let dim_size = shape.dim(dim).unwrap_or_else(|e| panic!("max_dim: {e}"));
+        let dim_size = shape.dim(dim).or_panic("max_dim");
         let dim = dim.0;
         let out_shape = shape.with_dim(dim, 1);
         let out_size = out_shape.numel();
@@ -1560,10 +1563,11 @@ impl RawTensor {
     /// # Panics
     /// If `dim` is not less than the tensor's rank, or the dtype is not a float.
     #[must_use]
+    #[track_caller]
     pub fn mean_dim(self_t: &Tensor, dim: Axis, keepdim: bool) -> Tensor {
         let shape = self_t.borrow().shape.clone();
 
-        let n = shape.dim(dim).unwrap_or_else(|e| panic!("mean_dim: {e}")) as f32;
+        let n = shape.dim(dim).or_panic("mean_dim") as f32;
         let sum = Self::sum_dim(self_t, dim, keepdim);
         sum.div(&self_t.constant_like(vec![n], &[1]))
     }
@@ -1974,6 +1978,7 @@ impl Tensor {
     /// If the condition is not Bool, the inputs are on different devices, or the
     /// branches' dtypes differ under `DTypePolicy::Strict`.
     #[must_use]
+    #[track_caller]
     pub fn where_op(&self, x: &Self, y: &Self) -> Self {
         RawTensor::ternary_op(self, x, y, TernaryOp::Where)
     }
@@ -2002,6 +2007,7 @@ impl Tensor {
 
     /// Permutes the dimensions by `axes`.
     #[must_use]
+    #[track_caller]
     pub fn permute(&self, axes: &[Axis]) -> Self {
         RawTensor::permute(self, axes)
     }
@@ -2030,18 +2036,21 @@ impl Tensor {
 
     /// Pads each dimension by `(before, after)`, filling the border with `value`.
     #[must_use]
+    #[track_caller]
     pub fn pad_with(&self, padding: &[(usize, usize)], value: PadValue) -> Self {
         RawTensor::pad_with(self, padding, value)
     }
 
     /// Slices each dimension to the half-open `(start, end)` range.
     #[must_use]
+    #[track_caller]
     pub fn shrink(&self, ranges: &[(usize, usize)]) -> Self {
         RawTensor::shrink(self, ranges)
     }
 
     /// Takes every `strides[i]`-th element along each dimension.
     #[must_use]
+    #[track_caller]
     pub fn stride_op(&self, strides: &[usize]) -> Self {
         RawTensor::stride_op(self, strides)
     }
@@ -2064,18 +2073,21 @@ impl Tensor {
     /// If `device` is a GPU and no GPU is available, or it names a GPU other than this
     /// machine's adapter (`Device::gpu()`).
     #[must_use]
+    #[track_caller]
     pub fn to_device(&self, device: Device) -> Self {
         RawTensor::to_device(self, device)
     }
 
     /// Matrix product.
     #[must_use]
+    #[track_caller]
     pub fn matmul(&self, other: &Self) -> Self {
         RawTensor::matmul(self, other)
     }
 
     /// Transposes a 2-D tensor.
     #[must_use]
+    #[track_caller]
     pub fn transpose(&self) -> Self {
         RawTensor::transpose(self)
     }
@@ -2097,6 +2109,7 @@ impl Tensor {
 
     /// Sum along `dim`.
     #[must_use]
+    #[track_caller]
     pub fn sum_dim(&self, dim: Axis, keepdim: bool) -> Self {
         RawTensor::sum_dim(self, dim, keepdim)
     }
@@ -2104,12 +2117,14 @@ impl Tensor {
     /// Maximum along `dim`, as `torch.max(x, dim)`: a NaN in a lane makes it NaN, and the
     /// whole gradient goes to one element per lane (the first on a tie, the first NaN).
     #[must_use]
+    #[track_caller]
     pub fn max_dim(&self, dim: Axis, keepdim: bool) -> Self {
         RawTensor::max_dim(self, dim, keepdim)
     }
 
     /// Mean along `dim`.
     #[must_use]
+    #[track_caller]
     pub fn mean_dim(&self, dim: Axis, keepdim: bool) -> Self {
         RawTensor::mean_dim(self, dim, keepdim)
     }
@@ -2157,6 +2172,7 @@ impl DataLoader {
     /// # Panics
     /// Wherever [`DataLoader::try_new`] returns an error.
     #[must_use]
+    #[track_caller]
     pub fn new(
         data: Vec<f32>,
         targets: Vec<f32>,
@@ -2166,7 +2182,7 @@ impl DataLoader {
         shuffle: bool,
     ) -> Self {
         Self::try_new(data, targets, data_shape, target_shape, batch_size, shuffle)
-            .unwrap_or_else(|e| panic!("DataLoader::new: {e}"))
+            .or_panic("DataLoader::new")
     }
 
     /// As [`DataLoader::new`], returning an error instead of panicking.

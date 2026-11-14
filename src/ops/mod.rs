@@ -45,7 +45,7 @@ impl RawTensor {
     #[must_use]
     #[track_caller]
     pub fn empty(shape: &[usize]) -> Tensor {
-        Self::try_empty(shape).unwrap_or_else(|e| panic!("empty: {e}"))
+        Self::try_empty(shape).or_panic("empty")
     }
 
     /// Create tensor filled with constant value (fallible)
@@ -66,7 +66,7 @@ impl RawTensor {
     #[must_use]
     #[track_caller]
     pub fn constant(value: f32, shape: &[usize]) -> Tensor {
-        Self::try_constant(value, shape).unwrap_or_else(|e| panic!("constant: {e}"))
+        Self::try_constant(value, shape).or_panic("constant")
     }
 
     /// Create tensor from existing Vec (fallible)
@@ -87,7 +87,7 @@ impl RawTensor {
     #[must_use]
     #[track_caller]
     pub fn from_vec(data: Vec<f32>, shape: &[usize]) -> Tensor {
-        Self::try_from_vec(data, shape).unwrap_or_else(|e| panic!("from_vec: {e}"))
+        Self::try_from_vec(data, shape).or_panic("from_vec")
     }
 
     /// A CPU leaf tensor (no grad) of any [`Element`](crate::storage::Element) type; its
@@ -119,7 +119,7 @@ impl RawTensor {
     #[must_use]
     #[track_caller]
     pub fn from_typed<T: crate::storage::Element>(data: Vec<T>, shape: &[usize]) -> Tensor {
-        Self::try_from_typed(data, shape).unwrap_or_else(|e| panic!("from_typed: {e}"))
+        Self::try_from_typed(data, shape).or_panic("from_typed")
     }
 
     /// Ensure tensor is contiguous in memory.
@@ -142,4 +142,5 @@ impl RawTensor {
 }
 
 // Import core types for operation implementations
+use crate::error::OrPanic;
 use crate::{RawTensor, Tensor};

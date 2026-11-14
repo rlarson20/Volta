@@ -1,5 +1,6 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
+use crate::error::OrPanic;
 use crate::index::{fetch, slot};
 use crate::io::StateDict;
 use crate::nn::{Layer, Module};
@@ -60,8 +61,8 @@ impl MaxPool2d {
     /// Computes the pooled output and attaches the backward edge.
     fn pool_forward(&self, x: &Tensor) -> Tensor {
         let dtype = compute_dtype(|| "MaxPool2d".to_string(), &[x.dtype()]);
-        let spec = Window2dSpec::new(&x.shape(), self.kernel, self.stride, self.padding)
-            .unwrap_or_else(|e| panic!("{e}"));
+        let spec =
+            Window2dSpec::new(&x.shape(), self.kernel, self.stride, self.padding).or_panic("");
         let Window2dSpec {
             batch,
             channels,
