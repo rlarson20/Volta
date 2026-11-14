@@ -1,0 +1,72 @@
+name: Report failure
+# Reusable job (#258): turns a failed run into open work, as CLAUDE.md requires (open work
+# lives in issues). One open issue per title: a later failure comments on it instead of
+# opening another, so a weekly job that stays red produces one issue with a comment per run.
+#
+# Callers run it as a job that `needs` the jobs it watches, with
+# `if: always() && <a needed job's result> == 'failure' && <the events that should report>`,
+# and grant `actions: read` and `issues: write` on that job.
+on:
+  workflow_call:
+    inputs:
+      title:
+        description: Issue title; also the key for "one open issue per failure".
+        required: true
+        type: string
+      labels:
+        description: Comma-separated labels for a new issue.
+        required: true
+        type: string
+      workflow:
+        description: >-
+          This workflow's file name (e.g. `audit.yml`). The report links the commits since
+          its last passing run of the same event on this branch.
+        required: true
+        type: string
+      details:
+        description: What the failure means and how to reproduce it, appended to the report.
+        required: false
+        type: string
+        default: ""
+
+permissions: {}
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TITLE: ${{ inputs.title }}
+          LABELS: ${{ inputs.labels }}
+          WORKFLOW: ${{ inputs.workflow }}
+          DETAILS: ${{ inputs.details }}
+          EVENT: ${{ github.event_name }}
+          BRANCH: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # Batched or scheduled runs: the range starts at the last commit this workflow passed
+          # on the branch for the same event.
+          good=$(gh run list --workflow "$WORKFLOW" --branch "$BRANCH" --event "$EVENT" --status success \
+            --limit 1 --json headSha --jq '.[0].headSha // empty')
+          if [[ -n "$good" ]]; then
+            range="https://github.com/$GH_REPO/compare/$good...$SHA"
+          else
+            range="(no earlier passing $EVENT run on $BRANCH) up to $SHA"
+          fi
+          body=$(printf '`%s` (%s) failed on `%s` at %s.\n\nRun: %s\nCommits since the last passing %s run: %s\n\n%s' \
+            "$WORKFLOW" "$EVENT" "$BRANCH" "$SHA" "$RUN_URL" "$EVENT" "$range" "$DETAILS")
+          existing=$(gh issue list --state open --search "in:title \"$TITLE\"" --json number,title \
+            --jq "map(select(.title == \"$TITLE\")) | .[0].number // empty")
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$TITLE" --body "$body" --label "$LABELS"
+          fi

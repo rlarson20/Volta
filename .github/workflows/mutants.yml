@@ -62,3 +62,19 @@ jobs:
               fi
             done
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # A scheduled failure is open work, so it becomes an issue (#258); without this a weekly or
+  # nightly job just goes red where nobody looks. Not `merge-gate`: only macOS gates main.
+  report-failure:
+    needs: mutants
+    if: always() && needs.mutants.result == 'failure' && github.event_name == 'schedule'
+    permissions:
+      actions: read
+      issues: write
+    uses: ./.github/workflows/report-failure.yml
+    with:
+      title: "Mutants scheduled failure on ${{ github.ref_name }}"
+      labels: kind:bug,area:ci,P1
+      workflow: mutants.yml
+      details: >-
+        A shard failed with a real error (exit 1 or 4: bad usage, or the unmutated tests fail); surviving mutants alone do not fail it. Reproduce with `just mutants-core`.

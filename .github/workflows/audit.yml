@@ -20,3 +20,19 @@ jobs:
         with:
           tool: cargo-deny
       - run: cargo deny check
+
+  # A scheduled failure is open work, so it becomes an issue (#258); without this a weekly or
+  # nightly job just goes red where nobody looks. Not `merge-gate`: only macOS gates main.
+  report-failure:
+    needs: audit
+    if: always() && needs.audit.result == 'failure' && github.event_name == 'schedule'
+    permissions:
+      actions: read
+      issues: write
+    uses: ./.github/workflows/report-failure.yml
+    with:
+      title: "Dependency Audit scheduled failure on ${{ github.ref_name }}"
+      labels: kind:bug,area:ci,P1
+      workflow: audit.yml
+      details: >-
+        `cargo deny check` failed: a new advisory, a yanked crate or a license change in the locked dependencies. Reproduce with `cargo deny check`.
