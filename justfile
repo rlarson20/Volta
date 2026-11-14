@@ -8,12 +8,27 @@ test-all:
 # `filters` is one nextest filter or several separated by spaces (quote them):
 #   just test-repeat my_test
 #   just test-repeat "conv2d matmul" 25
+# Each test runs in its own process here; for a race between tests use test-repeat-threads.
 test-repeat filters n="10":
 	#!/usr/bin/env bash
 	set -euo pipefail
 	for i in $(seq 1 {{n}}); do
 		echo "run $i/{{n}}"
 		cargo nextest run --no-fail-fast {{filters}} || { echo "FAILED on run $i/{{n}}"; exit 1; }
+	done
+	echo "all {{n}} runs passed"
+
+# Like test-repeat, but under `cargo test`: one process per test binary, so its tests run as
+# threads sharing one GPU context and buffer pool (what CI runs). nextest gives each test its
+# own process, so it cannot reproduce a race between tests (#244). `args` goes to `cargo test`
+# verbatim:
+#   just test-repeat-threads "--test gpu_reduce" 30
+test-repeat-threads args="" n="10":
+	#!/usr/bin/env bash
+	set -euo pipefail
+	for i in $(seq 1 {{n}}); do
+		echo "run $i/{{n}}"
+		cargo test {{args}} || { echo "FAILED on run $i/{{n}}"; exit 1; }
 	done
 	echo "all {{n}} runs passed"
 
