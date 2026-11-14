@@ -246,13 +246,80 @@ fn grad_scaler_grows_after_the_interval_and_a_skip_resets_it() {
 
 /// Unscaling twice would divide twice: refused.
 #[test]
-#[should_panic(expected = "GradScaler::unscale: already unscaled since the last update()")]
+#[should_panic(
+    expected = "GradScaler::unscale: already unscaled this optimizer since the last update()"
+)]
 fn grad_scaler_refuses_a_second_unscale() {
     let p = RawTensor::new(vec![0.0], &[1], true);
     let opt = SGD::new(vec![p], 0.1, 0.0, 0.0);
     let mut scaler = GradScaler::new();
     scaler.unscale(&opt);
     scaler.unscale(&opt);
+}
+
+/// #112: one scaler serves two optimizers in an iteration (torch's per-optimizer stage),
+/// as in a GAN loop: both step, each unscaled once.
+#[test]
+fn grad_scaler_steps_two_optimizers_per_iteration() {
+    let a = RawTensor::new(vec![1.0], &[1], true);
+    let b = RawTensor::new(vec![1.0], &[1], true);
+    let mut o1 = SGD::new(vec![a.clone()], 0.1, 0.0, 0.0);
+    let mut o2 = SGD::new(vec![b.clone()], 0.1, 0.0, 0.0);
+    let mut scaler = GradScaler::with_params(4.0, 2.0, 0.5, 2000);
+    scaler
+        .scale(&a.elem_mul(&b).sum())
+        .into_loss()
+        .expect("scalar")
+        .backward();
+    assert!(scaler.step(&mut o1));
+    assert!(scaler.step(&mut o2));
+    scaler.update();
+    // Each gradient is 1 * 4 (the scale), unscaled once to 1: 1 - 0.1 * 1.
+    assert_eq!(a.data(), vec![0.9]);
+    assert_eq!(b.data(), vec![0.9]);
+    assert_eq!(scaler.get_scale(), 4.0);
+
+    // The next iteration starts both afresh.
+    o1.zero_grad();
+    o2.zero_grad();
+    a.set_grad(Storage::cpu(vec![4.0]));
+    b.set_grad(Storage::cpu(vec![4.0]));
+    assert!(scaler.step(&mut o1));
+    assert!(scaler.step(&mut o2));
+    scaler.update();
+}
+
+/// An inf in either optimizer's gradients skips only that optimizer's step, and `update`
+/// backs off once.
+#[test]
+fn grad_scaler_backs_off_when_any_optimizer_found_an_inf() {
+    let a = RawTensor::new(vec![1.0], &[1], true);
+    let b = RawTensor::new(vec![1.0], &[1], true);
+    let mut o1 = SGD::new(vec![a.clone()], 0.1, 0.0, 0.0);
+    let mut o2 = SGD::new(vec![b.clone()], 0.1, 0.0, 0.0);
+    let mut scaler = GradScaler::with_params(4.0, 2.0, 0.5, 2000);
+    a.set_grad(Storage::cpu(vec![4.0]));
+    b.set_grad(Storage::cpu(vec![f32::INFINITY]));
+    assert!(scaler.step(&mut o1), "o1's gradients are finite");
+    assert!(!scaler.step(&mut o2), "o2's step is skipped");
+    scaler.update();
+    assert_eq!(a.data(), vec![0.9]);
+    assert_eq!(b.data(), vec![1.0]);
+    assert_eq!(scaler.get_scale(), 2.0);
+}
+
+/// Stepping the same optimizer twice in one iteration is still refused.
+#[test]
+#[should_panic(
+    expected = "GradScaler::step: already stepped this optimizer since the last update()"
+)]
+fn grad_scaler_refuses_a_second_step_of_one_optimizer() {
+    let p = RawTensor::new(vec![0.0], &[1], true);
+    let mut opt = SGD::new(vec![p.clone()], 0.1, 0.0, 0.0);
+    let mut scaler = GradScaler::new();
+    p.set_grad(Storage::cpu(vec![1.0]));
+    let _ = scaler.step(&mut opt);
+    let _ = scaler.step(&mut opt);
 }
 
 /// `update` needs a `step` first.
