@@ -4,6 +4,19 @@ md:
 test-all:
 	cargo nextest run --no-fail-fast
 
+# Run tests n times (default 10) to catch flakes; stops at the first failing run.
+# `filters` is one nextest filter or several separated by spaces (quote them):
+#   just test-repeat my_test
+#   just test-repeat "conv2d matmul" 25
+test-repeat filters n="10":
+	#!/usr/bin/env bash
+	set -euo pipefail
+	for i in $(seq 1 {{n}}); do
+		echo "run $i/{{n}}"
+		cargo nextest run --no-fail-fast {{filters}} || { echo "FAILED on run $i/{{n}}"; exit 1; }
+	done
+	echo "all {{n}} runs passed"
+
 # ===== CODE HEALTH & ANALYSIS =====
 
 # Run coverage with llvm-cov and open HTML report
