@@ -21,6 +21,7 @@
 //! PyTorch's defaults. BF16 has f32's exponent range and does not need it.
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use crate::dtype::DType;
@@ -108,7 +109,8 @@ pub(crate) fn lower_layer(
     (lower(x), lower(weight), bias.map(lower))
 }
 
-/// Where a [`GradScaler`] is in its step: torch's per-optimizer stage.
+/// Where one optimizer is in a [`GradScaler`] iteration: torch's per-optimizer stage
+/// (`_per_optimizer_states`). An optimizer with no entry is `Ready`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Stage {
     /// No gradients unscaled since the last `update`.
@@ -129,7 +131,10 @@ enum Stage {
 ///
 /// Each iteration: `scaler.scale(&loss)` before `backward()`, then `scaler.step(&mut opt)`
 /// (which unscales the gradients and skips the step if any is inf or NaN), then
-/// `scaler.update()`. A skipped step multiplies the scale by `backoff_factor`;
+/// `scaler.update()`. As in PyTorch, one scaler serves several optimizers: each has its own
+/// unscale/step stage, so `step(&mut opt_g); step(&mut opt_d); update()` works (a GAN loop),
+/// and `update` backs off if any of them found an inf or NaN. An optimizer is identified by
+/// its parameter list (the same tensors, in the same order). A skipped step multiplies the scale by `backoff_factor`;
 /// `growth_interval` clean steps in a row multiply it by `growth_factor`. Call
 /// [`Self::unscale`] first to read or clip the true gradients before `step`.
 ///
@@ -171,8 +176,8 @@ pub struct GradScaler {
     growth_interval: u32,
     /// Clean steps since the last growth or skip.
     growth_tracker: u32,
-    /// Where this iteration is.
-    stage: Stage,
+    /// Where each optimizer is in this iteration, keyed by [`optimizer_key`].
+    stages: HashMap<Vec<usize>, Stage>,
 }
 
 impl Default for GradScaler {
@@ -217,7 +222,7 @@ impl GradScaler {
             backoff_factor,
             growth_interval,
             growth_tracker: 0,
-            stage: Stage::Ready,
+            stages: HashMap::new(),
         }
     }
 
@@ -243,13 +248,15 @@ impl GradScaler {
     /// read the true gradients); `step` unscales if it hasn't been done.
     ///
     /// # Panics
-    /// If called twice before `update` (torch refuses too: the gradients would be divided
-    /// twice), or a gradient is f16 (torch refuses those: loss scaling is for f32
-    /// parameters under autocast; bf16 gradients are accepted, as in torch).
+    /// If called twice for the same optimizer before `update` (torch refuses too: the
+    /// gradients would be divided twice), or a gradient is f16 (torch refuses those: loss
+    /// scaling is for f32 parameters under autocast; bf16 gradients are accepted, as in
+    /// torch).
     pub fn unscale(&mut self, opt: &impl Optimizer) {
+        let key = optimizer_key(opt);
         assert!(
-            self.stage == Stage::Ready,
-            "GradScaler::unscale: already unscaled since the last update()"
+            self.stage_of(&key) == Stage::Ready,
+            "GradScaler::unscale: already unscaled this optimizer since the last update()"
         );
         let inv = 1.0 / self.scale;
         let mut found_inf = false;
@@ -266,37 +273,57 @@ impl GradScaler {
             found_inf |= bad;
             p.set_grad(unscaled);
         }
-        self.stage = Stage::Unscaled { found_inf };
+        self.stages.insert(key, Stage::Unscaled { found_inf });
+    }
+
+    /// The stage of the optimizer with key `key` (`Ready` if it has none yet).
+    fn stage_of(&self, key: &[usize]) -> Stage {
+        // No entry means this optimizer has not unscaled or stepped since the last update().
+        match self.stages.get(key) {
+            Some(&stage) => stage,
+            None => Stage::Ready,
+        }
     }
 
     /// Unscale (if not done yet) and run `opt.step()` unless a gradient is inf or NaN.
     /// Returns whether the step ran. Then call [`Self::update`].
     ///
     /// # Panics
-    /// If called twice before `update`.
+    /// If called twice for the same optimizer before `update`.
     pub fn step(&mut self, opt: &mut impl Optimizer) -> bool {
-        if self.stage == Stage::Ready {
+        let key = optimizer_key(opt);
+        if self.stage_of(&key) == Stage::Ready {
             self.unscale(opt);
         }
-        let Stage::Unscaled { found_inf } = self.stage else {
-            panic!("GradScaler::step: already stepped since the last update()")
+        let Stage::Unscaled { found_inf } = self.stage_of(&key) else {
+            panic!("GradScaler::step: already stepped this optimizer since the last update()")
         };
         if !found_inf {
             opt.step();
         }
-        self.stage = Stage::Stepped { found_inf };
+        self.stages.insert(key, Stage::Stepped { found_inf });
         !found_inf
     }
 
-    /// Adapt the scale after a step: back off after a skipped step, grow after
-    /// `growth_interval` clean ones. Starts the next iteration.
+    /// Adapt the scale after a step: back off if any optimizer unscaled since the last
+    /// `update` found an inf or NaN, grow after `growth_interval` clean iterations. Starts
+    /// the next iteration for every optimizer.
     ///
     /// # Panics
-    /// If `step` has not run since the last `update`.
+    /// If `step` has not run for any optimizer since the last `update`.
     pub fn update(&mut self) {
-        let Stage::Stepped { found_inf } = self.stage else {
-            panic!("GradScaler::update: call step() first")
-        };
+        assert!(
+            self.stages
+                .values()
+                .any(|s| matches!(s, Stage::Stepped { .. })),
+            "GradScaler::update: call step() first"
+        );
+        let found_inf = self.stages.values().any(|s| {
+            matches!(
+                s,
+                Stage::Unscaled { found_inf: true } | Stage::Stepped { found_inf: true }
+            )
+        });
         if found_inf {
             self.scale *= self.backoff_factor;
             self.growth_tracker = 0;
@@ -307,8 +334,15 @@ impl GradScaler {
                 self.growth_tracker = 0;
             }
         }
-        self.stage = Stage::Ready;
+        self.stages.clear();
     }
+}
+
+/// The key a [`GradScaler`] files an optimizer's stage under: the addresses of its
+/// parameters, in order. The optimizer holds its parameters, so the addresses stay
+/// unique while it lives.
+fn optimizer_key(opt: &impl Optimizer) -> Vec<usize> {
+    opt.parameters().iter().map(|p| p.as_ptr().addr()).collect()
 }
 
 /// `g * inv` in `g`'s dtype (computed in f32 for half gradients, rounded once), and
