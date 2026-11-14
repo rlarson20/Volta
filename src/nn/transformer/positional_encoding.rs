@@ -48,27 +48,30 @@ impl PositionalEncoding {
     /// Create a new positional encoding layer
     ///
     /// # Arguments
-    /// * `embed_dim` - Embedding dimension (must be even)
+    /// * `embed_dim` - Embedding dimension (must be even for `Sinusoidal`; any width for
+    ///   `Learned`)
     /// * `max_len` - Maximum sequence length
     /// * `encoding_type` - Type of positional encoding
     /// # Panics
-    /// `embed_dim` must be even for sinusoidal positional encoding
+    /// If `encoding_type` is `Sinusoidal` and `embed_dim` is odd: the table is sin/cos pairs.
     #[must_use]
+    #[track_caller]
     pub fn new(embed_dim: usize, max_len: usize, encoding_type: PositionalEncodingType) -> Self {
-        assert!(
-            embed_dim.is_multiple_of(2),
-            "embed_dim must be even for sinusoidal positional encoding"
-        );
-
         let (encoding, learned_embedding) = match encoding_type {
-            PositionalEncodingType::Sinusoidal => (
-                Some(Self::create_sinusoidal_encoding(
-                    embed_dim,
-                    max_len,
-                    Device::CPU,
-                )),
-                None,
-            ),
+            PositionalEncodingType::Sinusoidal => {
+                assert!(
+                    embed_dim.is_multiple_of(2),
+                    "embed_dim must be even for sinusoidal positional encoding, got {embed_dim}"
+                );
+                (
+                    Some(Self::create_sinusoidal_encoding(
+                        embed_dim,
+                        max_len,
+                        Device::CPU,
+                    )),
+                    None,
+                )
+            }
             PositionalEncodingType::Learned => (None, Some(Embedding::new(max_len, embed_dim))),
         };
 
@@ -329,6 +332,16 @@ mod tests {
         let output = pos_enc.forward(&x);
 
         assert_eq!(output.borrow().shape, vec![2, 10, 64]);
+    }
+
+    /// #107: only the sinusoidal table needs an even width; a learned encoding takes any.
+    #[test]
+    fn test_learned_encoding_odd_embed_dim() {
+        let pos_enc = PositionalEncoding::new(5, 4, PositionalEncodingType::Learned);
+        assert_eq!(pos_enc.embed_dim(), 5);
+        let x = RawTensor::new(vec![0.5; 2 * 3 * 5], &[2, 3, 5], false);
+        let output = pos_enc.forward(&x);
+        assert_eq!(output.borrow().shape, vec![2, 3, 5]);
     }
 
     #[test]
