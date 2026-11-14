@@ -77,6 +77,14 @@ impl Tensor {
         self.inner.as_ptr()
     }
 
+    /// Whether `self` and `other` are handles to the same tensor (a `clone()` of a
+    /// `Tensor` shares it), not merely equal values. A weight tied between two layers
+    /// is the same tensor in both.
+    #[must_use]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        std::rc::Rc::ptr_eq(&self.inner, &other.inner)
+    }
+
     /// Wrap an already-built `RawTensor` value into a `Tensor` handle.
     ///
     /// For the rare case where code outside this module needs a `Tensor` around a
@@ -905,11 +913,33 @@ impl RawTensor {
 
 // ===== LOSS FUNCTIONS =====
 impl RawTensor {
+    /// Panics unless `a` and `b` have the same shape. The elementwise losses never
+    /// broadcast: `[N, 1]` against `[N]` would give an `[N, N]` matrix whose mean is
+    /// returned as the loss (#95).
+    #[track_caller]
+    fn assert_same_shape(op: &str, a: (&str, &Tensor), b: (&str, &Tensor)) {
+        let (sa, sb) = (a.1.shape(), b.1.shape());
+        assert!(
+            sa == sb,
+            "{op}: {} and {} must have the same shape (no broadcasting), got {:?} and {:?}",
+            a.0,
+            b.0,
+            sa.truncate_rank(),
+            sb.truncate_rank()
+        );
+    }
+
     /// Mean squared error: `mean((pred - target)^2)`.
+    ///
+    /// # Panics
+    /// If `pred` and `target` differ in shape. They are never broadcast; PyTorch only
+    /// warns, and a silent `[N, N]` mean is the wrong number (#95).
     #[must_use]
+    #[track_caller]
     pub fn mse_loss(pred: &Tensor, target: &Tensor) -> Tensor {
         // An f32 op under `amp::autocast` (PyTorch's losses): half inputs are cast up.
         let (pred, target) = (&crate::amp::to_f32(pred), &crate::amp::to_f32(target));
+        Self::assert_same_shape("mse_loss", ("pred", pred), ("target", target));
         let diff = pred.sub(target);
         let squared = diff.elem_mul(&diff);
         squared.mean()
@@ -1027,10 +1057,15 @@ impl RawTensor {
     /// # Arguments
     /// * `mu` - Mean of learned distribution
     /// * `logvar` - Log variance of learned distribution
+    ///
+    /// # Panics
+    /// If `mu` and `logvar` differ in shape (they are never broadcast).
     #[must_use]
+    #[track_caller]
     pub fn kl_divergence_gaussian(mu: &Tensor, logvar: &Tensor) -> Tensor {
         // An f32 op under `amp::autocast` (PyTorch's losses): half inputs are cast up.
         let (mu, logvar) = (&crate::amp::to_f32(mu), &crate::amp::to_f32(logvar));
+        Self::assert_same_shape("kl_divergence_gaussian", ("mu", mu), ("logvar", logvar));
         // 1 + logvar
         let mu_shape = mu.borrow().shape.clone();
         let one = mu.constant_like(vec![1.0; mu_shape.numel()], mu_shape.truncate_rank());
@@ -1081,10 +1116,19 @@ impl RawTensor {
     /// # Arguments
     /// * `logits` - Raw network outputs (before sigmoid)
     /// * `target` - Target labels (0 or 1)
+    ///
+    /// # Panics
+    /// If `logits` and `target` differ in shape, as in PyTorch (no broadcasting).
     #[must_use]
+    #[track_caller]
     pub fn bce_with_logits_loss(logits: &Tensor, target: &Tensor) -> Tensor {
         // An f32 op under `amp::autocast` (PyTorch's losses): half inputs are cast up.
         let (logits, target) = (&crate::amp::to_f32(logits), &crate::amp::to_f32(target));
+        Self::assert_same_shape(
+            "bce_with_logits_loss",
+            ("logits", logits),
+            ("target", target),
+        );
         let shape = logits.borrow().shape.clone();
         let zeros = logits.constant_like(vec![0.0; shape.numel()], shape.truncate_rank());
         let one = logits.constant_like(vec![1.0; shape.numel()], shape.truncate_rank());
@@ -2295,7 +2339,11 @@ pub fn randn_like(tensor: &Tensor) -> Tensor {
 
 // Loss functions
 /// Free-function form of [`RawTensor::mse_loss`].
+///
+/// # Panics
+/// As [`RawTensor::mse_loss`].
 #[must_use]
+#[track_caller]
 pub fn mse_loss(pred: &Tensor, target: &Tensor) -> Tensor {
     RawTensor::mse_loss(pred, target)
 }
@@ -2321,7 +2369,11 @@ pub fn nll_loss(log_probs: &Tensor, targets: &Tensor) -> Tensor {
 }
 
 /// Free-function form of [`RawTensor::kl_divergence_gaussian`].
+///
+/// # Panics
+/// As [`RawTensor::kl_divergence_gaussian`].
 #[must_use]
+#[track_caller]
 pub fn kl_divergence_gaussian(mu: &Tensor, logvar: &Tensor) -> Tensor {
     RawTensor::kl_divergence_gaussian(mu, logvar)
 }
@@ -2334,7 +2386,11 @@ pub fn bce_loss(pred: &Tensor, target: &Tensor) -> Tensor {
 }
 
 /// Free-function form of [`RawTensor::bce_with_logits_loss`].
+///
+/// # Panics
+/// As [`RawTensor::bce_with_logits_loss`].
 #[must_use]
+#[track_caller]
 pub fn bce_with_logits_loss(logits: &Tensor, target: &Tensor) -> Tensor {
     RawTensor::bce_with_logits_loss(logits, target)
 }

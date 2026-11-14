@@ -46,14 +46,15 @@ impl SGD {
     ///
     /// # Errors
     /// `VoltaError::InvalidParameter` if `lr`, `momentum` or `weight_decay` is negative
-    /// or NaN. A negative momentum used to be ignored on the CPU and to panic on the GPU
-    /// (audit A3).
+    /// or NaN, or if the same tensor is listed twice in `params` (#101). A negative
+    /// momentum used to be ignored on the CPU and to panic on the GPU (audit A3).
     pub fn try_new(
         params: Vec<Tensor>,
         lr: f32,
         momentum: f32,
         weight_decay: f32,
     ) -> crate::Result<Self> {
+        super::check_unique(&params)?;
         super::check_non_negative("learning rate", lr)?;
         super::check_non_negative("momentum", momentum)?;
         super::check_non_negative("weight_decay", weight_decay)?;

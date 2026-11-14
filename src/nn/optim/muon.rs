@@ -78,7 +78,8 @@ impl Muon {
     /// [`Self::new`], checking the hyperparameters first.
     ///
     /// # Errors
-    /// `VoltaError::InvalidParameter` if `lr` or `momentum` is negative or NaN.
+    /// `VoltaError::InvalidParameter` if `lr` or `momentum` is negative or NaN, or if the
+    /// same tensor is listed twice in `params` (#101).
     pub fn try_new(
         params: Vec<Tensor>,
         lr: f32,
@@ -86,6 +87,7 @@ impl Muon {
         nesterov: bool,
         ns_steps: usize,
     ) -> crate::Result<Self> {
+        super::check_unique(&params)?;
         super::check_non_negative("learning rate", lr)?;
         super::check_non_negative("momentum", momentum)?;
         let velocity = params.iter().map(|_| None).collect();

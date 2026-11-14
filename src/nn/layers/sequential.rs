@@ -36,10 +36,7 @@ impl Module for Sequential {
     }
 
     fn parameters(&self) -> Vec<Tensor> {
-        self.layers
-            .iter()
-            .flat_map(|e| e.layer.parameters())
-            .collect()
+        crate::nn::unique_parameters(self.layers.iter().flat_map(|e| e.layer.parameters()))
     }
 
     fn state_dict(&self) -> StateDict {

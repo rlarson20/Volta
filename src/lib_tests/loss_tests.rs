@@ -202,3 +202,36 @@ fn cross_entropy_soft_targets_gradient_matches_finite_differences() {
         "soft-target cross_entropy_loss gradient check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
     );
 }
+
+/// #95: `[N, 1]` against `[N]` used to broadcast to an `[N, N]` matrix and return its mean.
+#[test]
+#[should_panic(expected = "mse_loss: pred and target must have the same shape")]
+fn mse_loss_rejects_mismatched_shapes() {
+    let p = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4, 1], true);
+    let y = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4], false);
+    let _ = RawTensor::mse_loss(&p, &y);
+}
+
+#[test]
+#[should_panic(expected = "bce_with_logits_loss: logits and target must have the same shape")]
+fn bce_with_logits_loss_rejects_mismatched_shapes() {
+    let p = RawTensor::new(vec![0.5; 4], &[4, 1], true);
+    let y = RawTensor::new(vec![1.0, 0.0, 1.0, 0.0], &[4], false);
+    let _ = RawTensor::bce_with_logits_loss(&p, &y);
+}
+
+#[test]
+#[should_panic(expected = "kl_divergence_gaussian: mu and logvar must have the same shape")]
+fn kl_divergence_gaussian_rejects_mismatched_shapes() {
+    let mu = RawTensor::new(vec![0.0; 4], &[2, 2], true);
+    let logvar = RawTensor::new(vec![0.0; 2], &[2], true);
+    let _ = RawTensor::kl_divergence_gaussian(&mu, &logvar);
+}
+
+/// Equal shapes still work: identical tensors give an MSE of exactly 0.
+#[test]
+fn mse_loss_of_identical_tensors_is_zero() {
+    let p = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4, 1], true);
+    let y = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[4, 1], false);
+    assert_eq!(RawTensor::mse_loss(&p, &y).item(), 0.0);
+}

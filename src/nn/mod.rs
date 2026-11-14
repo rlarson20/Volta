@@ -39,6 +39,17 @@ pub(crate) fn norm_mixed(
     }
 }
 
+/// `params` with each tensor once, first occurrence kept, by identity ([`Tensor::ptr_eq`]).
+/// A container's `parameters()` goes through this so a weight tied between two layers is
+/// listed (and so stepped, saved and zeroed) once, as in PyTorch's `Module.parameters()` (#101).
+pub(crate) fn unique_parameters(params: impl IntoIterator<Item = Tensor>) -> Vec<Tensor> {
+    let mut seen = std::collections::HashSet::new();
+    params
+        .into_iter()
+        .filter(|p| seen.insert(p.as_ptr()))
+        .collect()
+}
+
 /// Private supertrait that keeps [`RecurrentLayer`] implementable only inside
 /// this crate. `Module` and [`Layer`] stay open so users can write custom layers.
 mod sealed {
@@ -54,7 +65,8 @@ pub(crate) use sealed::SealedLayer;
 /// by kind of layer: see [`Layer`] (one tensor in, one out; [`Embedding`] takes an integer index
 /// tensor) and [`RecurrentLayer`] (input plus carried state).
 pub trait Module {
-    /// Every learnable tensor of the module, in a stable order.
+    /// Every learnable tensor of the module, in a stable order. A tensor shared between
+    /// layers (a tied weight) is listed once.
     fn parameters(&self) -> Vec<Tensor>;
 
     // State dict methods

@@ -118,10 +118,12 @@ impl FeedForward {
 
 impl Module for FeedForward {
     fn parameters(&self) -> Vec<Tensor> {
-        let mut params = vec![];
-        params.extend(self.expand.parameters());
-        params.extend(self.contract.parameters());
-        params
+        crate::nn::unique_parameters(
+            self.expand
+                .parameters()
+                .into_iter()
+                .chain(self.contract.parameters()),
+        )
     }
 
     fn state_dict(&self) -> StateDict {

@@ -102,19 +102,15 @@ impl TransformerBlock {
 
 impl Module for TransformerBlock {
     fn parameters(&self) -> Vec<Tensor> {
-        let mut params = vec![];
-
-        // Layer norm parameters
-        params.extend(self.norm1.parameters());
-        params.extend(self.norm2.parameters());
-
-        // FFN parameters
-        params.extend(self.ffn.parameters());
-
-        // Attention parameters
-        params.extend(self.attention.parameters());
-
-        params
+        // Layer norms, FFN, then attention; a tensor tied across them is listed once.
+        crate::nn::unique_parameters(
+            self.norm1
+                .parameters()
+                .into_iter()
+                .chain(self.norm2.parameters())
+                .chain(self.ffn.parameters())
+                .chain(self.attention.parameters()),
+        )
     }
 
     fn state_dict(&self) -> StateDict {
