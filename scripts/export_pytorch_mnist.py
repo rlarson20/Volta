@@ -1,4 +1,17 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["torch==2.15.0", "safetensors", "numpy"]
+#
+# # Same pins and index as scripts/torch_ref/gen_fixtures.py.
+# [[tool.uv.index]]
+# name = "pytorch-cpu"
+# url = "https://download.pytorch.org/whl/cpu"
+# explicit = true
+#
+# [tool.uv.sources]
+# torch = { index = "pytorch-cpu" }
+# ///
 """
 Export a simple PyTorch MLP to SafeTensors format for loading in Volta.
 
@@ -7,15 +20,18 @@ This script demonstrates the external model loading workflow:
 2. Export weights to SafeTensors format
 3. Generate test data for validation
 
-Requirements:
-    pip install torch safetensors
+Usage (from the repository root; uv reads the pinned dependencies above):
+    uv run scripts/export_pytorch_mnist.py
+    cargo run --example load_external_mnist
 
-Usage:
-    python scripts/export_pytorch_mnist.py
+Both write and read `models/` relative to the current directory, so run them from the
+same one. The weights and test inputs are seeded, so every run writes the same files.
 """
 
 import os
 import json
+import sys
+
 import torch
 import torch.nn as nn
 
@@ -23,8 +39,8 @@ try:
     from safetensors.torch import save_file
 except ImportError:
     print("Error: safetensors package not found")
-    print("Please install it with: pip install safetensors")
-    exit(1)
+    print("Run this script with `uv run scripts/export_pytorch_mnist.py`, which installs it")
+    sys.exit(1)
 
 
 class SimpleMLP(nn.Module):
@@ -54,13 +70,17 @@ def print_weight_info(model):
     """Print information about model weights for debugging."""
     print("\n=== Model Weight Information ===")
     for name, param in model.state_dict().items():
-        print(f"{name:20s} shape: {list(param.shape):20s} dtype: {param.dtype}")
+        print(f"{name:20s} shape: {str(list(param.shape)):20s} dtype: {param.dtype}")
     print()
 
 
 def export_model():
     """Export PyTorch model to SafeTensors format."""
     print("=== PyTorch Model Export ===\n")
+
+    # Seed before building the model, so its initial weights (not only the test inputs)
+    # are the same on every run.
+    torch.manual_seed(42)
 
     # Create model
     print("Creating SimpleMLP model...")
@@ -89,7 +109,6 @@ def export_model():
     # Generate test data for validation
     print("\nGenerating test data...")
     num_test_samples = 5
-    torch.manual_seed(42)  # For reproducibility
     test_inputs = torch.randn(num_test_samples, 784)
 
     with torch.no_grad():
@@ -116,12 +135,12 @@ def export_model():
     # Print summary
     print("\n=== Export Summary ===")
     print(f"Model architecture: Linear(784→128) → ReLU → Linear(128→10)")
-    print(f"Weights file: {output_path}")
-    print(f"Test data file: {test_data_path}")
+    print(f"Weights file: {os.path.abspath(output_path)}")
+    print(f"Test data file: {os.path.abspath(test_data_path)}")
     print("\nNote: PyTorch Linear weights are stored as [out_features, in_features]")
     print("      Volta expects [in_features, out_features], so transposition is needed")
     print("\nNext steps:")
-    print("  1. Run the Rust example: cargo run --example load_external_mnist")
+    print("  1. From this directory, run: cargo run --example load_external_mnist")
     print("  2. The example will load these weights and validate outputs")
 
 
