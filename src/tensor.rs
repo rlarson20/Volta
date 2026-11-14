@@ -77,6 +77,14 @@ impl Tensor {
         self.inner.as_ptr()
     }
 
+    /// Whether `self` and `other` are handles to the same tensor (a `clone()` of a
+    /// `Tensor` shares it), not merely equal values. A weight tied between two layers
+    /// is the same tensor in both.
+    #[must_use]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        std::rc::Rc::ptr_eq(&self.inner, &other.inner)
+    }
+
     /// Wrap an already-built `RawTensor` value into a `Tensor` handle.
     ///
     /// For the rare case where code outside this module needs a `Tensor` around a

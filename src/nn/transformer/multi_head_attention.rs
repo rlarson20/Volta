@@ -244,15 +244,12 @@ impl MultiHeadAttention {
 
 impl Module for MultiHeadAttention {
     fn parameters(&self) -> Vec<Tensor> {
-        let mut params = vec![];
-
-        // Get parameters from each Linear layer
-        params.extend(self.q_proj.parameters());
-        params.extend(self.k_proj.parameters());
-        params.extend(self.v_proj.parameters());
-        params.extend(self.out_proj.parameters());
-
-        params
+        // Each Linear's parameters; a projection tied to another is listed once.
+        crate::nn::unique_parameters(
+            [&self.q_proj, &self.k_proj, &self.v_proj, &self.out_proj]
+                .into_iter()
+                .flat_map(Module::parameters),
+        )
     }
 
     fn state_dict(&self) -> StateDict {

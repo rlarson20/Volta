@@ -756,6 +756,10 @@ Seeds spread about 0.25 points, so a 5-seed mean has a standard error near 0.05;
 
 ## Optimizers
 
+### Tied weights: containers deduplicate, optimizers reject duplicates (#101)
+
+A weight shared between layers (`l2.weight = l1.weight.clone()`) is one tensor. `Sequential`, `MultiHeadAttention`, `FeedForward` and `TransformerBlock` list it once in `parameters()`, by identity, as PyTorch's `Module.parameters()` does. `SGD`, `Adam` and `Muon` return `InvalidParameter` from `try_new` when the list they are given holds the same tensor twice, because the accumulated gradient is applied once per occurrence (`2 * lr * grad`, state kept twice). PyTorch's optimizers only warn; a wrong update is not something to continue past (invariant 5). Identity is the new public `Tensor::ptr_eq`. Rejected: silently deduplicating in the optimizer, which hides a caller mistake.
+
 ### Muon follows the reference iteration, on the CPU and the GPU
 
 **Decision:** `Muon` orthogonalizes with the reference quintic Newton-Schulz (`a, b, c = 3.4445, -4.7750, 2.0315`), scales the step by `sqrt(max(1, rows / cols))`, and runs on a GPU parameter with its state on the device. It is exported from the crate root with `Adam` and `SGD`.

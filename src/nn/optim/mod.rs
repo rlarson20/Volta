@@ -32,6 +32,22 @@ pub(crate) fn check_non_negative(name: &str, value: f32) -> crate::Result<()> {
     }
 }
 
+/// `Ok` if no tensor appears twice in `params` (by identity, [`Tensor::ptr_eq`]). A tied
+/// weight listed twice would be stepped twice, moving by `2 * lr * grad`, with its momentum
+/// or moment state kept twice (#101). PyTorch only warns; a duplicate is the caller's mistake
+/// and a wrong update, so it is an error here. `Module::parameters()` already lists a tied
+/// weight once.
+pub(crate) fn check_unique(params: &[Tensor]) -> crate::Result<()> {
+    for (j, p) in params.iter().enumerate() {
+        if let Some(i) = params.iter().take(j).position(|q| q.ptr_eq(p)) {
+            return Err(crate::VoltaError::InvalidParameter(format!(
+                "parameter {j} is the same tensor as parameter {i} (a tied weight listed twice)"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// `Ok` if `0 <= value < 1`, else PyTorch's `Invalid beta parameter at index <i>`.
 pub(crate) fn check_beta(index: usize, value: f32) -> crate::Result<()> {
     if (0.0..1.0).contains(&value) {

@@ -63,7 +63,8 @@ impl Adam {
     ///
     /// # Errors
     /// `VoltaError::InvalidParameter` if `lr`, `eps` or `weight_decay` is negative or NaN,
-    /// or a beta is outside `[0, 1)` (a beta of 1 makes the bias correction divide by 0).
+    /// or a beta is outside `[0, 1)` (a beta of 1 makes the bias correction divide by 0),
+    /// or if the same tensor is listed twice in `params` (#101).
     pub fn try_new(
         params: Vec<Tensor>,
         lr: f32,
@@ -71,6 +72,7 @@ impl Adam {
         eps: f32,
         weight_decay: f32,
     ) -> crate::Result<Self> {
+        super::check_unique(&params)?;
         super::check_non_negative("learning rate", lr)?;
         super::check_non_negative("epsilon", eps)?;
         super::check_beta(0, betas.0)?;
