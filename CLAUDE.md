@@ -68,7 +68,7 @@ Read these when the need comes up; don't preload them.
 
 When you're corrected or discover something non-obvious, file it in exactly one place:
 
-- **A defect, task, or idea** goes in a GitHub issue (one per defect ID, with labels `kind:`, `area:`, `P0`–`P3`, `size:`), never in a file. Search open issues first.
+- **A defect, task, or idea** goes in a GitHub issue (one per defect ID, with labels `kind:`, `area:`, `P0`–`P3`, `size:`), never in a file. Before filing, run `just issues "<two or three key terms>"` (an op name, a file, the symptom; it searches closed issues too). If something matches, comment on it or add a `Related: #N` line instead of filing a second one.
 - **A correction to an audit** is appended under that file's `## Corrections` with an inline pointer, never made by editing the original text, and you tell the user (`.claude/rules/audits.md`).
 - **A rule for one area** goes in the matching `.claude/rules/*.md`.
 - **A repo-wide rule** goes under Invariants above. Keep that list at 10 or fewer and merge items rather than append.

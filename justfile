@@ -264,6 +264,10 @@ prs:
 		gh pr checks "$b" || true
 	fi
 
+# Search issues, open and closed, by title and body: run it before filing (`just issues "sum sequential"`)
+issues +terms:
+	gh issue list --state all --limit 30 --search "{{terms}} in:title,body"
+
 # Licenses, RustSec advisories, duplicate versions, and sources (needs network for the advisory db)
 deny:
 	cargo deny check
