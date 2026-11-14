@@ -6,9 +6,38 @@ use crate::shape::MAX_NUMEL;
 ///
 /// `load_mnist_images` output is already in `[0, 1]`, so `mean = 0.5, std = 0.5` maps it
 /// to `[-1, 1]`; a `255`-based `mean`/`std` would rescale it a second time.
-pub fn normalize(data: &mut [f32], mean: f32, std: f32) {
+///
+/// # Errors
+///
+/// `VoltaError::InvalidParameter` if `mean` is not finite, or `std` is not finite and
+/// greater than zero. Both are dataset statistics a user supplies, and either would
+/// otherwise write NaN or infinity into every element. `data` is unchanged on an error.
+pub fn try_normalize(data: &mut [f32], mean: f32, std: f32) -> Result<()> {
+    if !mean.is_finite() {
+        return Err(VoltaError::InvalidParameter(format!(
+            "normalize: mean must be finite, got {mean}"
+        )));
+    }
+    if !(std.is_finite() && std > 0.0) {
+        return Err(VoltaError::InvalidParameter(format!(
+            "normalize: std must be finite and > 0, got {std}"
+        )));
+    }
     for x in data.iter_mut() {
         *x = (*x - mean) / std;
+    }
+    Ok(())
+}
+
+/// Panicking form of [`try_normalize`].
+///
+/// # Panics
+///
+/// If `mean` is not finite, or `std` is not finite and greater than zero.
+#[track_caller]
+pub fn normalize(data: &mut [f32], mean: f32, std: f32) {
+    if let Err(e) = try_normalize(data, mean, std) {
+        panic!("{e}");
     }
 }
 
@@ -62,6 +91,37 @@ mod tests {
         normalize(&mut data, 0.5, 0.5);
 
         assert_eq!(data, vec![-1.0, 0.0, 1.0]);
+    }
+
+    /// #135: a zero, negative, NaN or infinite `std`, or a non-finite `mean`, is an error
+    /// and leaves the data untouched (it used to write NaN/inf into every element).
+    #[test]
+    fn try_normalize_rejects_bad_statistics() {
+        for (mean, std) in [
+            (1.0, 0.0),
+            (1.0, -0.0),
+            (0.0, -1.0),
+            (0.0, f32::NAN),
+            (0.0, f32::INFINITY),
+            (f32::NAN, 1.0),
+            (f32::INFINITY, 1.0),
+            (f32::NAN, -1.0),
+        ] {
+            let mut data = vec![1.0f32, 2.0];
+            let err = try_normalize(&mut data, mean, std);
+            assert!(
+                matches!(err, Err(VoltaError::InvalidParameter(_))),
+                "mean {mean}, std {std}: {err:?}"
+            );
+            assert_eq!(data, vec![1.0, 2.0], "mean {mean}, std {std}: data changed");
+        }
+    }
+
+    /// The panicking form panics on the same input.
+    #[test]
+    #[should_panic(expected = "std must be finite and > 0")]
+    fn normalize_panics_on_zero_std() {
+        normalize(&mut [1.0, 2.0], 1.0, 0.0);
     }
 
     #[test]
