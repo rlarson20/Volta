@@ -1,6 +1,8 @@
 //! MNIST CNN training: two `Conv2d` + `ReLU` layers, `MaxPool2d`, dropout, and two `Linear` layers, fed by a shuffling `DataLoader` and trained with `SGD`.
 //!
 //! Needs the MNIST files under `data/mnist`; if they are missing it prints how to download them and exits, rather than train on made-up data.
+#[path = "common/mnist.rs"]
+mod mnist;
 use std::path::Path;
 use volta::{
     Conv2d, DataLoader, Dropout, Flatten, Layer, Linear, MaxPool2d, Module, ProgressBar, RawTensor,
@@ -30,12 +32,7 @@ fn main() {
         (images, label_data, num_samples)
     } else {
         eprintln!("MNIST data not found in {mnist_dir}.");
-        eprintln!("\nTo download MNIST data:");
-        eprintln!("  mkdir -p data/mnist");
-        eprintln!("  cd data/mnist");
-        eprintln!("  curl -O http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz");
-        eprintln!("  curl -O http://yann.lecun.com/exdb/mnist/train-labels-idx1-ubyte.gz");
-        eprintln!("  gunzip *.gz");
+        mnist::print_download_hint();
         std::process::exit(1);
     };
 
@@ -89,13 +86,14 @@ fn main() {
     println!("  Linear(9216→128) → ReLU → Dropout(0.5) → Linear(128→10)");
     println!(
         "\nTraining with {} batches per epoch...\n",
-        num_samples / batch_size
+        num_samples.div_ceil(batch_size)
     );
 
     // Training
     model.train(true);
     let num_epochs = 10;
-    let total_batches = num_samples / batch_size;
+    // The loader yields the last, partial batch too.
+    let total_batches = num_samples.div_ceil(batch_size);
 
     for epoch in 0..num_epochs {
         dataloader.reset();
