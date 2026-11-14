@@ -21,7 +21,7 @@ use std::marker::PhantomData;
 ///
 /// The float dtypes go through ops; the others are data (see the module docs).
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, bincode::Encode, bincode::Decode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum DType {
     /// 16-bit floating point (IEEE 754 half precision)

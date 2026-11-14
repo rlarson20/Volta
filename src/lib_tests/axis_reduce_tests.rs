@@ -212,7 +212,7 @@ fn test_mean_dim() {
 /// 5. Verifying the model works correctly
 #[test]
 fn test_external_model_loading_integration() {
-    use crate::io::{TensorData, load_state_dict, mapping::StateDictMapper, save_state_dict};
+    use crate::io::{TensorData, load_safetensors, mapping::StateDictMapper, save_safetensors};
     use crate::nn::{Layer, Linear, Module, ReLU, Sequential};
     use std::collections::BTreeMap;
 
@@ -242,11 +242,15 @@ fn test_external_model_loading_integration() {
     );
 
     // Save the "PyTorch" state dict
-    let temp_path = std::env::temp_dir().join("test_pytorch_model.bin");
-    save_state_dict(&pytorch_state, temp_path.to_str().unwrap()).unwrap();
+    let temp_path = std::env::temp_dir().join(format!(
+        "volta_{}_test_pytorch_model.safetensors",
+        std::process::id()
+    ));
+    save_safetensors(&pytorch_state, &temp_path).unwrap();
 
     // Load with weight mapping
-    let loaded = load_state_dict(temp_path.to_str().unwrap()).unwrap();
+    let loaded = load_safetensors(&temp_path).unwrap();
+    std::fs::remove_file(&temp_path).ok();
 
     // Create mapper: rename keys and transpose weights
     let mapper = StateDictMapper::new()

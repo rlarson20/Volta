@@ -68,8 +68,8 @@ fn test_shrink_start_exceeds_end() {
 
 #[test]
 fn test_io_error() {
-    // load_state_dict returns std::io::Result, so we check for io::Error
-    let result = volta::io::load_state_dict("nonexistent_path_xyz123.bin");
+    // load_safetensors returns std::io::Result, so we check for io::Error
+    let result = volta::io::load_safetensors("nonexistent_path_xyz123.safetensors");
     assert!(result.is_err());
     let err = result.err().unwrap();
     assert_eq!(err.kind(), std::io::ErrorKind::NotFound);

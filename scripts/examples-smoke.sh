@@ -28,7 +28,7 @@ for e in "${smoke[@]}"; do args+=(--example "$e"); done
 cargo build --release --no-default-features "${args[@]}"
 
 bin=$PWD/target/release/examples
-# Each example runs in an empty directory, so files it writes (readme1's model.bin) stay out
+# Each example runs in an empty directory, so files it writes (readme1's model.safetensors) stay out
 # of the tree and an example that reads optional files (load_external_mnist) takes the same
 # path everywhere.
 work=$(mktemp -d)

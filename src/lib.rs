@@ -97,7 +97,7 @@ pub use tensor::{
 pub use data::{load_mnist_images, load_mnist_labels, normalize, to_one_hot};
 pub use io::{
     TypedTensorData, load_safetensors, load_safetensors_raw, load_safetensors_with_mapping,
-    load_state_dict_with_mapping, mapping, save_safetensors, save_safetensors_typed,
+    mapping, save_safetensors, save_safetensors_typed,
 };
 pub use utils::ProgressBar;
 

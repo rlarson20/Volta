@@ -28,7 +28,7 @@ This project is an educational endeavor to demystify the inner workings of moder
 - **External Model Loading:** Load weights from PyTorch, HuggingFace, and other frameworks via `StateDictMapper` with automatic weight transposition and key remapping. Supports SafeTensors format.
 - **Named Layers:** Human-readable state dict keys with `Sequential::builder()` pattern for robust serialization.
 - **SafeTensors dtypes:** f16, bf16, f64, i32, i64, u8, and bool files load (converted to f32); every op, layer, and optimizer computes in f32, f64, f16 or bf16 on the CPU and in f32, f16 or bf16 on the GPU (`Module::to_dtype` converts a model); `amp::autocast` and `GradScaler` give mixed precision (`docs/plans/ADDENDUM.md` §11).
-- **IO System:** Save and load model weights (state dicts) via `bincode` or SafeTensors format.
+- **IO System:** Save and load model weights (state dicts) in SafeTensors format.
 - **BLAS Acceleration (macOS):** Optional acceleration for matrix multiplication via Apple's Accelerate framework.
 - **GPU Acceleration:** Experimental WGPU-based GPU support for core tensor operations (elementwise, matmul, reductions, movement ops) with automatic backward pass on GPU.
 - **Validation-Focused:** Includes a robust numerical gradient checker to ensure the correctness of all implemented operations.
@@ -115,7 +115,7 @@ The core of the autograd engine is the `GradFn` enum (`src/autograd.rs`). The ou
 
 ### Serialization: Why SafeTensors?
 
-Volta saves and loads state dicts in two formats: `bincode` (`io::save_state_dict` / `io::load_state_dict`, used by the MLP example below) and HuggingFace's SafeTensors (`io::save_safetensors` / `io::load_safetensors`). SafeTensors is the interchange format, for these reasons:
+Volta saves and loads state dicts in one format, HuggingFace's SafeTensors (`io::save_safetensors` / `io::load_safetensors`, used by the MLP example below), for these reasons:
 
 - **Simple, checked layout**: a JSON header followed by raw tensor bytes. The format allows memory-mapping, but Volta does not use it: `load_safetensors` reads the whole file into memory and copies each tensor out of it.
 - **Safety**: Unlike Pickle, SafeTensors cannot execute arbitrary code.
@@ -182,7 +182,7 @@ fn main() {
 
     // 5. Save and Load State Dict (human-readable keys: "fc1.weight", "fc1.bias", etc.)
     let state = model.state_dict();
-    io::save_state_dict(&state, "model.bin").expect("Failed to save");
+    io::save_safetensors(&state, "model.safetensors").expect("Failed to save");
 
     // Verify loading
     let mut new_model = Sequential::builder()
@@ -190,7 +190,7 @@ fn main() {
         .add_unnamed(Box::new(ReLU))
         .add_named("fc2", Box::new(Linear::new(8, 1, true)))
         .build();
-    let loaded_state = io::load_state_dict("model.bin").expect("Failed to load");
+    let loaded_state = io::load_safetensors("model.safetensors").expect("Failed to load");
     new_model.load_state_dict(&loaded_state).expect("Failed to load state");
 }
 ```

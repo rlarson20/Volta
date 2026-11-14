@@ -15,7 +15,7 @@ A map of where things live and how they fit together, as of Phases 0–3 and 5 (
 | `device.rs`, `device_policy.rs` | `Device`; `DevicePolicy` and the fallback log |
 | `error.rs` | `VoltaError` and the `Result` alias |
 | `nn/` | `Module`/`Layer`/`RecurrentLayer`, `layers/`, `optim/`, `transformer/` |
-| `io.rs`, `io/mapping.rs` | State dicts, bincode and SafeTensors load/save, `StateDictMapper` |
+| `io.rs`, `io/mapping.rs` | State dicts, SafeTensors load/save, `StateDictMapper` |
 | `data/` | MNIST IDX loaders, `normalize`, `to_one_hot` |
 | `gpu/` | wgpu backend (feature `gpu`): context, buffers, pools, monitors, kernels, WGSL shaders |
 | `macros/` | `define_ops!`, `assert_trainable!`, `param_test!`, gradcheck and `assert_close` helpers |
@@ -100,7 +100,7 @@ Adding an op, step by step: `dev-docs/DEVELOPMENT.md`.
 
 ## Serialization (`src/io.rs`)
 
-A `StateDict` is a `BTreeMap<String, TensorData>`, each entry the bytes of one tensor in its own dtype. It saves and loads as bincode or SafeTensors; the eight dtypes map one-to-one to SafeTensors dtypes, and any other is a load error. `StateDictMapper` renames, filters and transposes keys for PyTorch and Hugging Face checkpoints, and `load_state_dict_checked` reports missing and unexpected keys. Why: "Linear weights are transposed by name, not by key pattern".
+A `StateDict` is a `BTreeMap<String, TensorData>`, each entry the bytes of one tensor in its own dtype. It saves and loads as SafeTensors; the eight dtypes map one-to-one to SafeTensors dtypes, and any other is a load error. `StateDictMapper` renames, filters and transposes keys for PyTorch and Hugging Face checkpoints, and `load_state_dict_checked` reports missing and unexpected keys. Why: "Linear weights are transposed by name, not by key pattern".
 
 ## GPU backend (`src/gpu/`, feature `gpu`)
 
