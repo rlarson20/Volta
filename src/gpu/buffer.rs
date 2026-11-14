@@ -203,7 +203,9 @@ impl GpuBuffer {
             .expect("map_async result channel closed")
             .expect("Failed to map buffer");
 
-        let data = buffer_slice.get_mapped_range();
+        let data = buffer_slice
+            .get_mapped_range()
+            .expect("Failed to get mapped range");
         let bytes = data.to_vec();
         drop(data);
         staging_buffer.unmap();

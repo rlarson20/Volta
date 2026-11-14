@@ -371,9 +371,9 @@ impl GpuContext {
     async fn new_async() -> Result<Self, String> {
         // Step 1: Create a wgpu instance
         // This is the entry point to wgpu
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(), // Try all available backends (Vulkan, Metal, DX12, etc.)
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()  // headless compute
         });
 
         // Step 2: Request an adapter (represents a physical GPU)
@@ -382,6 +382,7 @@ impl GpuContext {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: None, // We don't need a surface for compute
                 force_fallback_adapter: false,
+                apply_limit_buckets: false, // bucketing coarsens limits; we want the adapter's real ones
             })
             .await
             .map_err(|e| format!("No suitable GPU adapter found: {e}"))?;
