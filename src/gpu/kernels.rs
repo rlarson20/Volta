@@ -459,6 +459,10 @@ fn reduce_to_scalar(input: &GpuBuffer, kind: Reduction) -> Option<(GpuBuffer, Op
     let mut n = total;
     // The previous pass's partial values and (for max) counts; `None` on the first pass.
     let mut previous: Option<(GpuBuffer, Option<GpuBuffer>)> = None;
+    // Earlier passes' partials. Dropping a `GpuBuffer` returns it to the shared pool at once,
+    // where another thread can take it and write to it before this encoder is submitted, so
+    // they are held until after the submit (#244).
+    let mut retired: Vec<(GpuBuffer, Option<GpuBuffer>)> = Vec::new();
     loop {
         let groups = n.div_ceil(REDUCE_PER_GROUP);
         let out = GpuBuffer::zeros(groups)?;
@@ -523,7 +527,7 @@ fn reduce_to_scalar(input: &GpuBuffer, kind: Reduction) -> Option<(GpuBuffer, Op
             dispatch_flat(&mut pass, pack_u32(groups));
         }
 
-        previous = Some((out, out_count));
+        retired.extend(previous.replace((out, out_count)));
         if groups == 1 {
             break;
         }
@@ -531,6 +535,7 @@ fn reduce_to_scalar(input: &GpuBuffer, kind: Reduction) -> Option<(GpuBuffer, Op
     }
 
     ctx.queue().submit(Some(encoder.finish()));
+    drop(retired);
     ctx.increment_pending();
     ctx.maybe_sync();
     previous

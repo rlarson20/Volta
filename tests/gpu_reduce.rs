@@ -87,6 +87,38 @@ fn gpu_sum_and_mean_match_f64_at_every_pass_boundary() {
     }
 }
 
+/// Reductions on several threads at once give the same sums as one thread (#244): every
+/// thread shares one device and one buffer pool, so a pass's partials must stay out of the
+/// pool until the command buffer that reads them has been submitted.
+#[test]
+fn gpu_concurrent_sums_match_f64() {
+    if skip_or_mark("gpu_concurrent_sums_match_f64") {
+        return;
+    }
+    // Two sizes whose passes leave 8-byte and 4100-byte partials, and a three-pass size
+    // that drops both while its own encoder is still open.
+    let sizes = [2usize, 1025, 1_048_577];
+    std::thread::scope(|scope| {
+        for t in 0..6u64 {
+            scope.spawn(move || {
+                for round in 0..20u64 {
+                    for (k, &n) in sizes.iter().enumerate() {
+                        let data = values(n, 0xA5A5_0000 + t * 1000 + round * 10 + k as u64);
+                        let exact: f64 = data.iter().map(|&v| f64::from(v)).sum();
+                        let magnitude: f64 = data.iter().map(|&v| f64::from(v).abs()).sum();
+                        let (_, gpu) = leaves(data);
+                        let sum = f64::from(gpu.sum().item());
+                        assert!(
+                            (sum - exact).abs() <= 1e-5 * magnitude.max(1.0),
+                            "thread {t} round {round} sum n={n}: gpu {sum} f64 {exact}"
+                        );
+                    }
+                }
+            });
+        }
+    });
+}
+
 #[test]
 fn gpu_max_and_its_gradient_match_cpu_at_every_pass_boundary() {
     if skip_or_mark("gpu_max_and_its_gradient_match_cpu_at_every_pass_boundary") {
