@@ -10,6 +10,7 @@
 data/*
 node_modules/
 #model artifacts
+/model.safetensors
 models/
 #hiding this for now
 minigrad-react/

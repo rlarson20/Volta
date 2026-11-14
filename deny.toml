@@ -11,10 +11,6 @@ unmaintained = "all"
 yanked = "deny"
 # Each ignore needs a reason and a way out.
 ignore = [
-    # `bincode` 2.x is unmaintained upstream (no safe upgrade). Volta's own model-file
-    # format (`src/io.rs`) uses it, so replacing it is a file-format decision, not a
-    # lint fix. Revisit if a maintained fork or an alternative codec is chosen.
-    { id = "RUSTSEC-2025-0141", reason = "bincode is unmaintained; used by the io.rs model format" },
     # `paste` comes in through wgpu-hal -> metal, so only a wgpu upgrade removes it.
     { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained; transitive via wgpu-hal -> metal" },
 ]

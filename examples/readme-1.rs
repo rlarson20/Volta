@@ -54,7 +54,7 @@ fn main() {
 
     // 5. Save and Load State Dict (human-readable keys: "fc1.weight", "fc1.bias", etc.)
     let state = model.state_dict();
-    io::save_state_dict(&state, "model.bin").expect("Failed to save");
+    io::save_safetensors(&state, "model.safetensors").expect("Failed to save");
 
     // Verify loading
     let mut new_model = Sequential::builder()
@@ -62,7 +62,7 @@ fn main() {
         .add_unnamed(Box::new(ReLU))
         .add_named("fc2", Box::new(Linear::new(8, 1, true)))
         .build();
-    let loaded_state = io::load_state_dict("model.bin").expect("Failed to load");
+    let loaded_state = io::load_safetensors("model.safetensors").expect("Failed to load");
     new_model
         .load_state_dict(&loaded_state)
         .expect("Failed to load state");

@@ -2,7 +2,6 @@ use crate::dtype::DType;
 use crate::nn::Module;
 use crate::storage::{Element, Storage};
 use crate::tensor::Tensor;
-use bincode::{Decode, Encode, config};
 use safetensors::SafeTensors;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -24,7 +23,7 @@ pub type StateDict = BTreeMap<String, TensorData>;
 /// are public, so nothing stops a caller from building an entry whose byte count does not
 /// match `shape` and `dtype`; [`TensorData::to_storage`] checks that before decoding, and
 /// the loaders check every entry they read.
-#[derive(Encode, Decode, Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TensorData {
     /// Row-major element bytes: `shape.iter().product::<usize>() * dtype.size_of()` of them.
     pub data: Vec<u8>,
@@ -289,34 +288,6 @@ pub fn load_state_dict_checked<M: Module + ?Sized>(
     Ok(diff)
 }
 
-/// Saves a state dict in Volta's bincode format. Every entry keeps its own dtype, so
-/// the round trip through [`load_state_dict`] is bit-exact.
-///
-/// # Errors
-/// If the file can't be created or written, or the state dict can't be encoded.
-pub fn save_state_dict(state: &StateDict, path: &str) -> Result<()> {
-    let mut file = File::create(path)?;
-    let encoded = bincode::encode_to_vec(state, config::standard()).map_err(Error::other)?;
-    file.write_all(&encoded)?;
-    Ok(())
-}
-/// Loads a state dict saved by [`save_state_dict`]. Entries keep the dtype they were
-/// saved in; [`Module::load_state_dict`] casts each one to its parameter's dtype.
-///
-/// # Errors
-/// The file can't be read or decoded, or (`InvalidData`, wrapping the
-/// [`crate::VoltaError`] from [`TensorData::validate`]) an entry's byte count does not
-/// match its shape and dtype.
-pub fn load_state_dict(path: &str) -> Result<StateDict> {
-    let mut file = File::open(path)?;
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer)?;
-    let (state, _): (StateDict, _) =
-        bincode::decode_from_slice(&buffer, config::standard()).map_err(Error::other)?;
-    validate_state(&state)?;
-    Ok(state)
-}
-
 // ========== SafeTensors Support ==========
 
 /// Convert a `SafeTensors` dtype to Volta's, or `None` if Volta has no such dtype.
@@ -554,44 +525,6 @@ pub fn save_safetensors_typed<P: AsRef<Path>>(
     Ok(())
 }
 
-/// Load a state dict from a file and apply transformations
-///
-/// This is a convenience wrapper around `load_state_dict` that applies
-/// a `StateDictMapper` transformation before returning the result.
-///
-/// # Example
-/// ```no_run
-/// use volta::io::{load_state_dict_with_mapping, mapping::StateDictMapper};
-///
-/// let mapper = StateDictMapper::new()
-///     .strip_prefix("model.")
-///     .transpose_linear("fc1")
-///     .transpose_linear("fc2");
-///
-/// let state = load_state_dict_with_mapping("model.bin", &mapper)?;
-/// # Ok::<(), std::io::Error>(())
-/// ```
-///
-/// # Errors
-/// If the path is not valid UTF-8 or the file can't be read or decoded (as
-/// [`load_state_dict`]), or `InvalidData` wrapping the [`VoltaError`](crate::VoltaError)
-/// if the mapper fails ([`mapping::StateDictMapper::try_map`]).
-pub fn load_state_dict_with_mapping<P: AsRef<Path>>(
-    path: P,
-    mapper: &mapping::StateDictMapper,
-) -> Result<StateDict> {
-    let path_str = path.as_ref().to_str().ok_or_else(|| {
-        Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Path contains invalid UTF-8 characters",
-        )
-    })?;
-    let state = load_state_dict(path_str)?;
-    mapper
-        .try_map(state)
-        .map_err(|e| Error::new(std::io::ErrorKind::InvalidData, e))
-}
-
 /// Load a safetensors file and apply transformations
 ///
 /// This is a convenience wrapper around `load_safetensors` that applies
@@ -656,12 +589,11 @@ mod io_tests {
             Box::new(Linear::new(3, 1, true)),
         ]);
 
-        let tmp = TempFile::new("test_seq.bin");
-        let path_str = tmp.path().to_str().unwrap();
+        let tmp = TempFile::new("test_seq.safetensors");
 
         // Save
         let state = model.state_dict();
-        save_state_dict(&state, path_str).unwrap();
+        save_safetensors(&state, tmp.path()).unwrap();
 
         // Load new model
         let mut model2 = Sequential::new(vec![
@@ -679,7 +611,7 @@ mod io_tests {
         );
 
         // Load
-        let loaded_state = load_state_dict(path_str).unwrap();
+        let loaded_state = load_safetensors(tmp.path()).unwrap();
         model2
             .load_state_dict(&loaded_state)
             .expect("saved state loads");
@@ -819,16 +751,6 @@ mod io_tests {
         }
     }
 
-    /// The bincode pair as `assert_round_trip` takes it.
-    fn bincode_save(state: &StateDict, path: &std::path::Path) {
-        save_state_dict(state, path.to_str().expect("utf-8 temp path")).expect("save");
-    }
-
-    /// The bincode loader as `assert_round_trip` takes it.
-    fn bincode_load(path: &std::path::Path) -> StateDict {
-        load_state_dict(path.to_str().expect("utf-8 temp path")).expect("load")
-    }
-
     /// The safetensors saver as `assert_round_trip` takes it.
     fn safetensors_save(state: &StateDict, path: &std::path::Path) {
         save_safetensors(state, path).expect("save");
@@ -837,21 +759,6 @@ mod io_tests {
     /// The safetensors loader as `assert_round_trip` takes it.
     fn safetensors_load(path: &std::path::Path) -> StateDict {
         load_safetensors(path).expect("load")
-    }
-
-    #[test]
-    fn f64_state_dict_round_trips_through_bincode() {
-        assert_round_trip(DType::F64, "f64.bin", bincode_save, bincode_load);
-    }
-
-    #[test]
-    fn f16_state_dict_round_trips_through_bincode() {
-        assert_round_trip(DType::F16, "f16.bin", bincode_save, bincode_load);
-    }
-
-    #[test]
-    fn bf16_state_dict_round_trips_through_bincode() {
-        assert_round_trip(DType::BF16, "bf16.bin", bincode_save, bincode_load);
     }
 
     #[test]
@@ -893,9 +800,9 @@ mod io_tests {
         let td = TensorData::from_tensor(&t);
         let mut state = StateDict::new();
         state.insert("w".to_string(), td);
-        let tmp = TempFile::new("f64_precision.bin");
-        bincode_save(&state, tmp.path());
-        let back = bincode_load(tmp.path());
+        let tmp = TempFile::new("f64_precision.safetensors");
+        safetensors_save(&state, tmp.path());
+        let back = safetensors_load(tmp.path());
         assert_eq!(back["w"].to_vec_as::<f64>().expect("f64 entry"), vals);
     }
 
@@ -923,31 +830,21 @@ mod io_tests {
         }
     }
 
-    /// A bincode file whose entry holds fewer bytes than its shape and dtype need is
-    /// rejected on load with the `VoltaError`, not returned to panic later.
+    /// A safetensors file whose entry holds fewer bytes than its shape and dtype need is
+    /// rejected on load, not returned to panic later. `save_safetensors` refuses to write
+    /// such an entry, so the file is built by hand: an 8-byte little-endian header length,
+    /// the JSON header, then 31 data bytes for an f64 `[2, 2]` entry that needs 32.
     #[test]
-    fn bincode_load_rejects_a_corrupted_length() {
-        let mut td = TensorData::from_typed(vec![1.0f64, 2.0, 3.0, 4.0], vec![2, 2]);
-        td.data.truncate(31);
-        let mut state = StateDict::new();
-        state.insert("w".to_string(), td);
-        let tmp = TempFile::new("corrupt.bin");
-        bincode_save(&state, tmp.path());
+    fn safetensors_load_rejects_a_corrupted_length() {
+        let header = br#"{"w":{"dtype":"F64","shape":[2,2],"data_offsets":[0,31]}}"#;
+        let mut bytes = (header.len() as u64).to_le_bytes().to_vec();
+        bytes.extend_from_slice(header);
+        bytes.extend_from_slice(&[0u8; 31]);
+        let tmp = TempFile::new("corrupt.safetensors");
+        std::fs::write(tmp.path(), &bytes).expect("write");
 
-        let err = load_state_dict(tmp.path().to_str().expect("utf-8 temp path"))
-            .expect_err("a short entry is an error");
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-        let inner = err
-            .get_ref()
-            .and_then(|e| e.downcast_ref::<crate::VoltaError>())
-            .expect("wraps a VoltaError");
-        assert!(
-            matches!(
-                inner,
-                crate::VoltaError::StateDataLength { key, expected: 32, len: 31 } if key == "w"
-            ),
-            "{inner:?}"
-        );
+        let err = load_safetensors(tmp.path()).expect_err("a short entry is an error");
+        assert!(err.to_string().contains("SafeTensors parse error"), "{err}");
     }
 
     /// A program-built entry with the wrong byte count is an `Err` from
@@ -1109,43 +1006,6 @@ mod io_tests {
             .to_f32_vec();
         for (a, b) in f16_loaded.iter().zip([1.0f32, 2.0, 3.0, 4.0].iter()) {
             assert!((a - b).abs() < 0.01, "F16 conversion mismatch");
-        }
-    }
-
-    #[test]
-    fn test_non_utf8_path_handling() {
-        use std::path::PathBuf;
-
-        // Test that load_state_dict_with_mapping handles non-UTF8 paths gracefully
-        // This simulates what can happen on Windows with certain paths
-        #[cfg(unix)]
-        {
-            use std::os::unix::ffi::OsStrExt;
-            // Create a path with invalid UTF-8 sequence
-            let os_str = std::ffi::OsStr::from_bytes(b"\xff\xfe\xfd");
-            let path = PathBuf::from(os_str);
-
-            let mapper = mapping::StateDictMapper::new();
-            let result = load_state_dict_with_mapping(&path, &mapper);
-
-            // Should return an error, not panic
-            assert!(result.is_err());
-        }
-
-        // On Windows, test with invalid UTF-16
-        #[cfg(windows)]
-        {
-            use std::os::windows::ffi::OsStringExt;
-            // Create an OsString from invalid UTF-16
-            let wide_str: Vec<u16> = vec![0xD800, 0xD800]; // Surrogate pair
-            let os_string = OsString::from_wide(&wide_str);
-            let path = PathBuf::from(os_string);
-
-            let mapper = mapping::StateDictMapper::new();
-            let result = load_state_dict_with_mapping(&path, &mapper);
-
-            // Should return an error, not panic
-            assert!(result.is_err());
         }
     }
 }

@@ -700,9 +700,17 @@ Seeds spread about 0.25 points, so a 5-seed mean has a standard error near 0.05;
 
 **Validation:** the fields are public, so an entry can claim a shape its bytes don't fill. `TensorData::validate` checks the byte count against shape and dtype (with overflow checks) and every `Bool` byte, allocating nothing; `load_state_dict`, `load_safetensors`, `save_safetensors` and `load_weight` run it, and a failure is `VoltaError::StateDataLength` (now counted in bytes) or `InvalidParameter`, wrapped in an `InvalidData` `io::Error` by the file functions.
 
-**The bincode format changed on purpose:** an old `.bin` file (f32 values, no dtype) does not decode. There is no version tag, migration or shim; bincode is slated to be dropped (separate issue), so a compatibility layer would be dead weight. `load_safetensors` now returns entries in their stored dtype instead of decoding them to f32.
+**The bincode format changed on purpose:** an old `.bin` file (f32 values, no dtype) does not decode. There is no version tag, migration or shim; bincode is slated to be dropped (separate issue), so a compatibility layer would be dead weight. `load_safetensors` now returns entries in their stored dtype instead of decoding them to f32. *(bincode was then removed by #222; see "SafeTensors is the only state-dict format".)*
 
 **Not done here:** `TypedTensorData` is now the same data without `Encode`; merging the two is a follow-up issue.
+
+### SafeTensors is the only state-dict format (#222)
+
+**Decision:** the bincode format is gone, with no wrapper: `io::save_state_dict`, `io::load_state_dict`, `io::load_state_dict_with_mapping` and the `bincode` dependency are removed, along with the `Encode`/`Decode` derives on `TensorData` and `DType`. A state dict saves with `save_safetensors` and loads with `load_safetensors` (or `load_safetensors_with_mapping`).
+
+**Why:** bincode is unmaintained, permanently, with no patched version ([RUSTSEC-2025-0141](https://rustsec.org/advisories/RUSTSEC-2025-0141.html), 2025-12-16, "the bincode team has taken the decision to cease development permanently"); `deny.toml` carried an ignore for it. SafeTensors already stores every `TensorData` field (bytes, shape, dtype), round-trips every dtype bit-exact, is what PyTorch and Hugging Face read, and its loader already checks lengths. The bincode loader had its own defects: an unbounded length prefix aborted the process (#109), trailing bytes loaded silently, and its `&str` path forced `load_state_dict_with_mapping` to reject non-UTF-8 paths (#136).
+
+**Rejected: keeping the names as safetensors wrappers.** It would leave two names per operation, a free `io::load_state_dict` next to `Module::load_state_dict`, and `.bin` paths that hold safetensors. The crate is pre-1.0, so the break is cheap. Existing `.bin` checkpoints don't load; #53 had already broken them without a migration.
 
 ## Errors
 
