@@ -448,6 +448,49 @@ def group_transformer():
     save("transformer", t)
 
 
+def group_lstm():
+    """#55: torch.nn.LSTMCell with its weights loaded into Volta's `LSTMCell`, run for
+    several steps from a non-zero state.
+
+    Both libraries store `weight_ih` as `[4H, in]`, `weight_hh` as `[4H, H]` and the two
+    biases as `[4H]`, with the gates in the order i, f, g, o, so the weights load as they
+    are. The loss is `sum_t sum(h_t * w_t) + sum(c_T * w_c)`, so the gradients reach every
+    step's input, the initial state and every parameter through the carried state.
+    """
+    torch.manual_seed(SEED)
+    t = {}
+    B, I, H, T = 2, 3, 4, 3
+    cell = torch.nn.LSTMCell(I, H, bias=True)
+    params = list(cell.named_parameters())
+    for n, p in params:
+        t[f"lstm.{n}"] = p
+    xs = [torch.randn(B, I).requires_grad_(True) for _ in range(T)]
+    h0 = torch.randn(B, H).requires_grad_(True)
+    c0 = torch.randn(B, H).requires_grad_(True)
+    h, c = h0, c0
+    loss = torch.zeros(())
+    for k, x in enumerate(xs):
+        h, c = cell(x, (h, c))
+        w = torch.randn_like(h)
+        t[f"lstm.x{k}"] = x
+        t[f"lstm.out{k}"] = h
+        t[f"lstm.w{k}"] = w
+        loss = loss + (h * w).sum()
+    wc = torch.randn_like(c)
+    t["lstm.c_last"] = c
+    t["lstm.w_c"] = wc
+    loss = loss + (c * wc).sum()
+    t["lstm.h_init"], t["lstm.c_init"] = h0, c0
+    leaves = xs + [h0, c0] + [p for _, p in params]
+    grads = torch.autograd.grad(loss, leaves)
+    for k in range(T):
+        t[f"lstm.grad_x{k}"] = grads[k]
+    t["lstm.grad_h_init"], t["lstm.grad_c_init"] = grads[T], grads[T + 1]
+    for (n, _), g in zip(params, grads[T + 2:]):
+        t[f"lstm.grad_{n}"] = g
+    save("lstm", t)
+
+
 def group_f64():
     """Forward and backward in float64 for ops, every layer kind, and Adam (Volta P3b).
 
@@ -875,7 +918,7 @@ def group_casts():
     print(f"wrote casts: {len(out)} tensors")
 
 
-GROUPS = {"ops": group_ops, "reductions": group_reductions, "optim": group_optim, "layers": group_layers, "transformer": group_transformer, "dtypes": group_dtypes, "casts": group_casts, "f64": group_f64, "half": group_half, "intbool": group_intbool, "promotion": group_promotion, "autocast": group_autocast}
+GROUPS = {"ops": group_ops, "reductions": group_reductions, "optim": group_optim, "layers": group_layers, "transformer": group_transformer, "lstm": group_lstm, "dtypes": group_dtypes, "casts": group_casts, "f64": group_f64, "half": group_half, "intbool": group_intbool, "promotion": group_promotion, "autocast": group_autocast}
 
 if __name__ == "__main__":
     wanted = sys.argv[1:] or list(GROUPS)
