@@ -103,39 +103,19 @@ jobs:
 
   # A post-merge failure is open work, so it becomes an issue (CLAUDE.md: open work lives in
   # issues). `merge-gate` keeps improvements out of main until it is fixed. One open issue per
-  # branch: later failures comment on it instead of opening another.
+  # branch: later failures comment on it instead of opening another (report-failure.yml).
   report-failure:
     needs: macos
     if: always() && needs.macos.result == 'failure' && github.event_name == 'push'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
     permissions:
       actions: read
       issues: write
-    steps:
-      - env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          BRANCH: ${{ github.ref_name }}
-          SHA: ${{ github.sha }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          title="macOS post-merge failure on $BRANCH"
-          # Batched runs: the range starts at the last commit this workflow passed on the branch.
-          good=$(gh run list --workflow macos.yml --branch "$BRANCH" --event push --status success \
-            --limit 1 --json headSha --jq '.[0].headSha // empty')
-          if [[ -n "$good" ]]; then
-            range="https://github.com/$GH_REPO/compare/$good...$SHA"
-          else
-            range="(no earlier passing run on $BRANCH) up to $SHA"
-          fi
-          body=$(printf '`macos (stable)` failed on `%s` at %s.\n\nRun: %s\nCommits since the last passing run: %s\n\nThis runs only after merge (DECISIONS.md, "macOS checks move off the PR gate"), so one of these commits broke Metal or Accelerate at run time. Reproduce on a Mac with `cargo test --all-features`.' \
-            "$BRANCH" "$SHA" "$RUN_URL" "$range")
-          existing=$(gh issue list --state open --search "in:title \"$title\"" --json number,title \
-            --jq "map(select(.title == \"$title\")) | .[0].number // empty")
-          if [[ -n "$existing" ]]; then
-            gh issue comment "$existing" --body "$body"
-          else
-            gh issue create --title "$title" --body "$body" --label kind:bug,area:ci,P1,merge-gate
-          fi
+    uses: ./.github/workflows/report-failure.yml
+    with:
+      title: "macOS post-merge failure on ${{ github.ref_name }}"
+      labels: kind:bug,area:ci,P1,merge-gate
+      workflow: macos.yml
+      details: >-
+        This runs only after merge (DECISIONS.md, "macOS checks move off the PR gate"), so one
+        of these commits broke Metal or Accelerate at run time. Reproduce on a Mac with
+        `cargo test --all-features`.

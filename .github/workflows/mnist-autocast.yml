@@ -37,3 +37,19 @@ jobs:
 
       - name: MNIST, f32 vs bf16 autocast (5 seeds)
         run: just mnist-autocast
+
+  # A scheduled failure is open work, so it becomes an issue (#258); without this a weekly or
+  # nightly job just goes red where nobody looks. Not `merge-gate`: only macOS gates main.
+  report-failure:
+    needs: mnist-autocast
+    if: always() && needs.mnist-autocast.result == 'failure' && github.event_name == 'schedule'
+    permissions:
+      actions: read
+      issues: write
+    uses: ./.github/workflows/report-failure.yml
+    with:
+      title: "MNIST Autocast scheduled failure on ${{ github.ref_name }}"
+      labels: kind:bug,area:ci,P1
+      workflow: mnist-autocast.yml
+      details: >-
+        The f32 and bf16-autocast MNIST accuracies differ by more than 0.2 points, or the run failed. Reproduce with `just mnist-autocast`.

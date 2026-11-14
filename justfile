@@ -112,6 +112,11 @@ mnist-autocast: mnist-data
 test-cpu:
 	cargo test --no-default-features
 
+# Run all tests with default features (GPU tests run only when an adapter is present; ci.yml's
+# linux-lavapipe job sets VOLTA_REQUIRE_GPU=1 so a missing one fails)
+test-default:
+	cargo test
+
 # ===== EXAMPLE & INTEGRATION QUALITY =====
 
 # Compile-check every example (catches API drift)
@@ -149,9 +154,12 @@ clean:
 
 # ===== AGGREGATE WORKFLOWS =====
 
-# Clippy over every target with default features, then without; the single definition of the
-# lint gate (ci.yml and pre-commit call this too)
-lint: lint-cpu
+# Clippy over every target with no default features, then with them; the single definition of
+# the lint gate (ci.yml and pre-commit call this too)
+lint: lint-cpu lint-default
+
+# Clippy over every target with default features (ci.yml's linux-lavapipe job)
+lint-default:
 	cargo clippy --all-targets -- -D warnings
 
 # Clippy over every target with no default features (the CPU-only lane)
@@ -240,7 +248,7 @@ ci:
 	just test-check-ignores
 	just check-ignores
 	just lint
-	cargo test
+	just test-default
 	just test-cpu
 	just doc
 	just doc-cpu
