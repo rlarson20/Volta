@@ -9,8 +9,8 @@
 //! from a small text corpus.
 use std::collections::HashMap;
 use volta::{
-    Adam, Dropout, Embedding, LSTMCell, Layer, Linear, Module, RawTensor, RecurrentLayer,
-    manual_seed,
+    Adam, Axis, Dropout, Embedding, LSTMCell, Layer, Linear, Module, RawTensor, RecurrentLayer,
+    manual_seed, rand,
 };
 
 /// Vocabulary for character-level language modeling
@@ -156,7 +156,7 @@ fn forward_and_compute_loss(
     loss.div(&seq_len_tensor)
 }
 
-/// Generate text from the model
+/// Generate `length` characters after `seed`, each sampled from the softmax of the logits divided by `temperature`.
 fn generate(
     model: &mut CharRNN,
     vocab: &CharVocab,
@@ -171,10 +171,10 @@ fn generate(
 
     // Prime with seed text
     for c in seed.chars() {
-        if let Some(&idx) = vocab.char_to_idx.get(&c) {
-            let emb = model.embedding.forward(&index_tensor(&[idx]));
-            let _ = model.lstm.step(&emb, &mut state);
-        }
+        let emb = model
+            .embedding
+            .forward(&index_tensor(&[vocab.encode_char(c)]));
+        let _ = model.lstm.step(&emb, &mut state);
     }
 
     // Generate new characters
@@ -189,21 +189,22 @@ fn generate(
         let h_new = model.lstm.step(&emb, &mut state);
         let logits = model.decoder.forward(&h_new);
 
-        // Apply temperature and sample
-        let logits_data = logits.data();
-        let scaled: Vec<f32> = logits_data.iter().map(|&x| x / temperature).collect();
-
-        // Simple argmax for deterministic generation
-        let mut max_idx = 0;
-        let mut max_val = *scaled.first().expect("the decoder produced logits");
-        for (i, &val) in scaled.iter().enumerate().skip(1) {
-            if val > max_val {
-                max_val = val;
-                max_idx = i;
+        // Sample from softmax(logits / temperature): a lower temperature sharpens the
+        // distribution toward the most likely character, a higher one flattens it.
+        let temperature = RawTensor::new(vec![temperature], &[1], false);
+        let probs = logits.div(&temperature).softmax(Axis(1)).data();
+        // Inverse-CDF draw. `rand` uses the generator `manual_seed` seeded, so the text
+        // is reproducible.
+        let u = rand(&[1]).item();
+        let mut cumulative = 0.0;
+        current_idx = probs.len() - 1; // u lands past the last bucket only by rounding
+        for (i, &p) in probs.iter().enumerate() {
+            cumulative += p;
+            if u < cumulative {
+                current_idx = i;
+                break;
             }
         }
-
-        current_idx = max_idx;
         result.push(vocab.decode_char(current_idx));
     }
 

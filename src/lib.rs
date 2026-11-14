@@ -104,6 +104,12 @@ pub use utils::ProgressBar;
 
 pub use ops::{BinaryOp, MovementOp, ReduceOp, TernaryOp, UnaryOp};
 
+/// The README's Rust snippets, compiled as doctests so they keep up with the public API (S23).
+/// Exists only under `cargo test --doc`.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;
+
 // ===== TESTS =====
 //
 // The crate-level test modules live in `src/lib_tests/`, one file each. `#[path]` keeps

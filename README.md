@@ -35,20 +35,20 @@ This project is an educational endeavor to demystify the inner workings of moder
 
 ## Project Status
 
-This library is functional for training MLPs, CNNs, RNNs, GANs, VAEs, and other architectures on CPU. It features a verified autograd engine and correctly implemented `im2col` convolutions.
+This library trains MLPs, CNNs, RNNs, GANs, VAEs, and other architectures on CPU. Known defects are tracked as [GitHub issues](https://github.com/rlarson20/Volta/issues); the `merge-gate` label marks the ones that block a release.
 
 - ✅ **What's Working:**
-  - **Core Autograd:** All operations verified with numerical gradient checking
+  - **Core Autograd:** Operations are tested against numerical gradients, and the core ops and layers against PyTorch reference values (`tests/torch_ref_*.rs`)
   - **Layers:** Linear, Conv2d, ConvTranspose2d, MaxPool2d, Embedding, LSTMCell, PixelShuffle, LayerNorm, BatchNorm1d/2d, Dropout, MultiHeadAttention, TransformerBlock, PositionalEncoding
   - **Optimizers:** SGD (with momentum), Adam, Muon
   - **External Loading:** PyTorch/HuggingFace model weights via SafeTensors with automatic transposition
   - **Named Layers:** Robust serialization with human-readable state dict keys
   - **Loss Functions:** MSE, Cross-Entropy, NLL, BCE, KL Divergence
-  - **Examples:** MNIST, CIFAR, character LM, VAE, DCGAN, super-resolution, LSTM time series
+  - **Examples:** MNIST (CNN, LSTM, bf16 autocast), character LMs (LSTM, Transformer), VAE, DCGAN, super-resolution, LSTM sine-wave prediction, polynomial regression; see [Available Examples](#available-examples)
   - **GPU Training Pipeline:** Fully GPU-accelerated training for Conv2d layers with device-aware constructors and GPU optimizer state storage
-  - **Benchmarking Suite:** Comprehensive Criterion benchmarks with 3 categories (tensor_ops, neural_networks, gpu_comparison) and HTML reports
+  - **Benchmarking Suite:** Criterion benchmarks in 4 targets (tensor_ops, neural_networks, gpu_comparison, conv_algorithms) with HTML reports
   - **Enhanced GPU Safety:** GPU buffer pooling, command queue throttling, CPU cache invalidation, and early warning system
-  - **Code Quality:** All `indexing_slicing` clippy errors resolved; ~400+ pedantic lints reduced to ~223 remaining
+  - **Code Quality:** `cargo clippy --all-targets -- -D warnings` (with the pedantic set configured in `Cargo.toml`) is clean with and without default features, and runs in CI
   - **GPU Convolution:** Fully GPU-accelerated Conv2d with Direct, im2col, and iGEMM algorithms
     - All algorithms support both forward and backward passes on GPU
     - Auto-selection chooses optimal algorithm based on input size and device
@@ -74,30 +74,18 @@ Add Volta to your `Cargo.toml`:
 volta = "0.3.0"
 ```
 
-### Enabling BLAS on macOS
+Both optional backends are default features: `gpu` (experimental WGPU acceleration, which compiles `wgpu`) and `accelerate` (Apple's Accelerate framework for matrix multiplication on macOS; a no-op on other platforms).
 
-For a significant performance boost in matrix multiplication on macOS, enable the `accelerate` feature:
+### CPU-only build
 
-```toml
-[dependencies]
-volta = { version = "0.3.0", features = ["accelerate"] }
-```
-
-### Enabling GPU Support
-
-For experimental GPU acceleration via WGPU, enable the `gpu` feature:
+To build without the GPU backend, turn the default features off:
 
 ```toml
 [dependencies]
-volta = { version = "0.3.0", features = ["gpu"] }
+volta = { version = "0.3.0", default-features = false }
 ```
 
-Or combine both for maximum performance:
-
-```toml
-[dependencies]
-volta = { version = "0.3.0", features = ["accelerate", "gpu"] }
-```
+Add back what you want, for example `features = ["accelerate"]` for BLAS on macOS without the GPU backend.
 
 ## Architecture
 
@@ -112,24 +100,24 @@ When operations are performed on tensors requiring gradients, Volta constructs a
           \                                         /
            \                                       /
             v                                     v
-         [Linear] <--- (GradFn: LinearBackward) --
+         [matmul + add] <--- (GradFn::Matmul, GradFn::Binary) --
                \
                 v
-            [ReLU] <--- (GradFn: ReLUBackward)
+            [ReLU] <--- (GradFn::Unary)
                |
                v
-            [Loss] <--- (GradFn: MSEBackward)
+            [Loss] <--- (the GradFns of the ops the loss is built from)
 ```
 
-### GradFn Trait Dispatch
+### `GradFn` Dispatch
 
-The core of the autograd engine is the `Backward` trait. Each differentiable operation implements this trait. During the backward pass, the topological sort yields a linearized sequence of `Backward` closures. The engine invokes them iteratively, dispatching the gradient of the output to compute the gradients with respect to the inputs. This iterative approach avoids call stack exhaustion on deep, complex graphs.
+The core of the autograd engine is the `GradFn` enum (`src/autograd.rs`). The output of each differentiable operation stores a `GradFn` variant holding what its backward pass needs. During the backward pass, the topological sort yields a linearized sequence of nodes; the engine visits them iteratively and calls each node's `GradFn::backward`, a `match` over the variants, which maps the gradient of the output to the gradients of the inputs. This iterative approach avoids call stack exhaustion on deep, complex graphs.
 
 ### Serialization: Why SafeTensors?
 
-Volta defaults to HuggingFace's SafeTensors format for model weight serialization instead of Pickle or robust generic serializers like `bincode` for several reasons:
+Volta saves and loads state dicts in two formats: `bincode` (`io::save_state_dict` / `io::load_state_dict`, used by the MLP example below) and HuggingFace's SafeTensors (`io::save_safetensors` / `io::load_safetensors`). SafeTensors is the interchange format, for these reasons:
 
-- **Zero-copy loading**: SafeTensors allows memory-mapping (mmap) weights directly from disk, bypassing memory allocations during loading.
+- **Simple, checked layout**: a JSON header followed by raw tensor bytes. The format allows memory-mapping, but Volta does not use it: `load_safetensors` reads the whole file into memory and copies each tensor out of it.
 - **Safety**: Unlike Pickle, SafeTensors cannot execute arbitrary code.
 - **Interoperability**: It enables Volta to natively read weights from models trained in PyTorch or JAX.
 
@@ -137,7 +125,7 @@ Volta defaults to HuggingFace's SafeTensors format for model weight serializatio
 
 Volta provides multiple backends for computation:
 
-- **CPU Backend**: Features matrix multiplication accelerated by Apple's Accelerate framework (via the `accelerate` feature) and multi-threaded CPU matrix operations using `matrixmultiply`.
+- **CPU Backend**: Matrix multiplication uses Apple's Accelerate framework on macOS (the `accelerate` feature) and the single-threaded `matrixmultiply` crate elsewhere. Everything else runs in plain Rust loops on one thread.
 - **GPU Backend (Experimental)**: Uses `wgpu` to dispatch operations to the GPU. Tensors can seamlessly move between devices using `Tensor::to_device()`.
 
 ## Benchmarks
@@ -150,7 +138,7 @@ Criterion benchmarks run through `just bench` (CPU) and `just bench-gpu`. GPU re
 
 Here's how to define a simple Multi-Layer Perceptron (MLP) with named layers, train it on synthetic data, and save the model.
 
-```rust
+```rust,no_run
 use volta::{
     Adam, Sequential, io,
     nn::{Layer, Linear, Module, ReLU},
@@ -185,7 +173,7 @@ fn main() {
         let loss = mse_loss(&pred, &y);
 
         if epoch % 20 == 0 {
-            println!("Epoch {}: loss = {:.6}", epoch, loss.borrow().data.first().copied().unwrap_or(f32::NAN));
+            println!("Epoch {}: loss = {:.6}", epoch, loss.item());
         }
 
         loss.into_loss().expect("loss is scalar").backward();
@@ -237,10 +225,10 @@ fn main() {
     optim.zero_grad();
     let output = model.forward(&input);
     let loss = volta::mse_loss(&output, &target);
-    loss.into_loss().expect("loss is scalar").backward();
+    loss.clone().into_loss().expect("loss is scalar").backward();
     optim.step();
 
-    println!("Loss: {:?}", loss.borrow().data.first().copied().unwrap_or(f32::NAN));
+    println!("Loss: {}", loss.item());
 }
 ```
 
@@ -248,7 +236,7 @@ fn main() {
 
 Volta can load weights from PyTorch, HuggingFace, and other frameworks using SafeTensors format with automatic weight mapping and transposition.
 
-```rust
+```rust,no_run
 use volta::{
     Layer, Linear, Module, ReLU, Sequential,
     io::{load_safetensors, mapping::StateDictMapper},
@@ -279,7 +267,7 @@ fn main() {
     // 4. Run inference
     let input = volta::randn(&[1, 784]);
     let output = model.forward(&input);
-    println!("Output shape: {:?}", output.borrow().shape);
+    println!("Output shape: {:?}", output.shape());
 }
 ```
 
@@ -296,26 +284,26 @@ See `examples/load_external_mnist.rs` for a complete end-to-end example with val
 
 ### GPU Acceleration Example
 
-```rust
+```rust,no_run
 use volta::{Device, randn};
 
 fn main() {
-    // Create tensors on CPU
-    let a = randn(&[1024, 1024]);
-    let b = randn(&[1024, 1024]);
-
-    // Move to GPU
     let device = Device::gpu().expect("GPU required");
-    let a_gpu = a.to_device(device.clone());
-    let b_gpu = b.to_device(device.clone());
+
+    // Create tensors on the CPU and move them to the GPU. `randn` tensors don't require
+    // grad, so mark `a_gpu` (a leaf) as one, or backward has nothing to reach.
+    let a_gpu = randn(&[1024, 1024]).to_device(device.clone());
+    a_gpu.set_requires_grad(true);
+    let b_gpu = randn(&[1024, 1024]).to_device(device);
 
     // Operations execute on GPU automatically
-    let c_gpu = a_gpu.matmul(&b_gpu);  // GPU matmul
-    let sum_gpu = c_gpu.sum();          // GPU reduction
+    let c_gpu = a_gpu.matmul(&b_gpu); // GPU matmul
+    let sum_gpu = c_gpu.sum(); // GPU reduction
 
     // Gradients computed on GPU when possible
     sum_gpu.into_loss().expect("loss is scalar").backward();
-    println!("Gradient shape: {:?}", a_gpu.borrow().grad.as_ref().unwrap().shape());
+    let grad = a_gpu.grad().expect("a_gpu requires grad");
+    println!("Gradient elements: {}", grad.len());
 }
 ```
 
@@ -323,7 +311,7 @@ fn main() {
 
 The library is designed around a few core concepts:
 
-- **`Tensor`**: The central data structure, an `Rc<RefCell<RawTensor>>`, which holds data, shape, gradient information, and device location. Always f32 today.
+- **`Tensor`**: The central data structure, a handle to a shared, reference-counted `RawTensor` (data, shape, dtype, gradient, and device). A `Tensor` exposes no fields, only a private handle, and downstream code cannot borrow the `RawTensor` inside it; read through methods such as `data()`, `item()`, `shape()`, `grad()` and `dtype()`. The Dtypes note under Outstanding Issues says which dtypes compute.
 - **Tensor methods**: `Tensor` has inherent methods for all operations (e.g., `tensor.add(&other)`, `tensor.matmul(&weights)`); there is no trait to import.
 - **`nn::Module`**: The base trait for anything with learnable parameters. Provides `parameters()`, `state_dict()`, `load_state_dict()`, `zero_grad()`, `to_device()`, and `train()`/`eval()`.
 - **`nn::Layer`**: A `Module` that maps one tensor to one tensor with `forward()`. Only `Layer`s can go in a `Sequential`. Implement it to write your own layer.
@@ -343,66 +331,65 @@ Volta has an extensive test suite that validates the correctness of every operat
 cargo test -- --nocapture
 ```
 
-To run tests with BLAS acceleration enabled (on macOS):
+The default features include `gpu` and `accelerate`, so this already builds the GPU backend (GPU tests skip when no adapter is found). For a CPU-only run:
 
 ```bash
-cargo test --features accelerate -- --nocapture
+cargo test --no-default-features
 ```
 
-To run tests with GPU support:
+`cargo test <filter>` runs the tests whose names contain `<filter>`; there are no category modules. To run one test file, name it:
 
 ```bash
-cargo test --features gpu -- --nocapture
+cargo test --no-default-features --test torch_ref_layers   # layers against PyTorch values
+cargo test --no-default-features --lib conv                # library tests with "conv" in the name
 ```
 
-Run specific test categories:
-
-```bash
-cargo test core          # Core tensor tests
-cargo test grad_check    # Numerical gradient validation
-cargo test broadcasting  # Broadcasting rules
-cargo test neural        # Neural network layers
-cargo test optimizer     # Optimizer convergence
-```
+`just ci` runs the full gate (fmt, clippy, tests and docs with and without default features, and the examples).
 
 ## Available Examples
 
-The `examples/` directory contains complete working examples demonstrating various capabilities:
+The `examples/` directory contains complete programs demonstrating various capabilities. Those in `just examples-smoke` run in CI on every change; the list and the reason for each one left out are in `dev-docs/DEVELOPMENT.md` ("Examples smoke run").
+
+The MNIST examples (`mnist_cnn`, `mnist_rnn`, `mnist_autocast`, `vae`, `dcgan`) need the dataset in `data/mnist/`: `just mnist-data` downloads and checks it. Build anything that trains on MNIST with `--release`.
 
 ```bash
 # Basic examples
 cargo run --example readme1                    # Simple MLP training
 cargo run --example readme2                    # LeNet-style CNN
 cargo run --example showcase                   # Feature showcase
+cargo run --example layernorm_demo             # LayerNorm forward and gradients
 
 # Vision tasks
-cargo run --example mnist_cnn                  # MNIST digit classification
+cargo run --release --example mnist_cnn        # MNIST digit classification
+cargo run --release --example mnist_autocast   # MNIST under bf16 autocast vs f32
 cargo run --example super_resolution           # Image upscaling with PixelShuffle
-cargo run --example dcgan                      # Deep Convolutional GAN
+cargo run --release --example dcgan -- 1       # Deep Convolutional GAN (argument: epochs, default 5)
 
 # Generative models
-cargo run --example vae                        # Variational Autoencoder
+cargo run --release --example vae              # Variational Autoencoder
 
 # Sequence models
-cargo run --example char_lm                    # Character-level language model
-cargo run --example lstm_time_series           # Time series prediction
+cargo run --example char_language_model        # Character-level LSTM language model
+cargo run --example char_transformer_model     # Character-level Transformer language model
+cargo run --release --example mnist_rnn        # MNIST rows as a sequence, LSTM classifier
+cargo run --release --example time_sequence    # LSTM sine-wave prediction (trains to NaN today, #88)
 
 # External model loading
 cargo run --example load_external_mnist        # Load PyTorch weights via SafeTensors
 
-# GPU acceleration
-cargo run --example gpu --features gpu         # GPU tensor operations
-cargo run --example gpu_training --features gpu # GPU-accelerated training
+# GPU acceleration (the `gpu` feature is on by default)
+cargo run --example gpu                        # GPU tensor operations
+cargo run --example gpu_training               # GPU-accelerated training
 
 # Regression
-cargo run --example polynomial_regression      # Polynomial curve fitting
+cargo run --example regression                 # Polynomial curve fitting
 ```
 
 ## Roadmap
 
 The next major steps for Volta are focused on expanding its capabilities to handle more complex models and improving performance.
 
-1. **Complete GPU Integration:** Port remaining neural network layers (Linear, Conv2d) to GPU, optimize GEMM kernels with shared memory tiling.
+1. **Complete GPU Integration:** Port the remaining layers to the GPU (`ConvTranspose2d` has no GPU path), optimize GEMM kernels with shared memory tiling.
 2. **Performance Optimization:** Implement SIMD for element-wise operations, optimize broadcasting on GPU, kernel fusion for composite operations.
 3. **Learning Rate Schedulers:** Cosine annealing, step decay, warmup schedules.
 

@@ -242,7 +242,6 @@ fn dataloader_rejects_targets_shorter_than_data_up_front() {
 }
 
 #[test]
-#[ignore = "S23: the README lists example commands (char_lm, lstm_time_series, polynomial_regression) that do not exist"]
 fn readme_example_commands_name_real_examples() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let readme = std::fs::read_to_string(root.join("README.md")).expect("README.md");
