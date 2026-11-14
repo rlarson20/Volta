@@ -143,8 +143,12 @@ impl WhereGradFn {
 
 impl RawTensor {
     /// Apply ternary operations (3 inputs, 1 output)
+    ///
     /// # Panics
-    /// assert shape match for `x`, `y`
+    /// - `MulAcc`: if the shapes of `x`, `y` and `z` differ.
+    /// - `Where`: if the condition `x` is not Bool, or the shapes cannot be broadcast.
+    /// - If the operands are on different devices, or the promoted dtype is not a float
+    ///   (for `Where`, the dtype of the two branches).
     #[must_use]
     pub fn ternary_op(x: &Tensor, y: &Tensor, z: &Tensor, op: TernaryOp) -> Tensor {
         match op {

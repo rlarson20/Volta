@@ -33,8 +33,27 @@ pub enum ConvAlgo {
 impl ConvAlgo {
     /// Auto-select algorithm based on input characteristics
     ///
-    /// `height` and `width` are the *padded* input extents: the heuristic assumes
-    /// stride 1, and `height - kernel_size` underflows if the kernel is larger.
+    /// `height` and `width` are the *padded* input extents. The size estimate is
+    /// `im2col_elements = batch * (height - k + 1) * (width - k + 1) * channels * k * k`
+    /// with `k = kernel_size`; it assumes stride 1 and a square kernel, so a strided
+    /// convolution (about a quarter of the estimate at stride 2) or a non-square kernel is
+    /// sized as if it were stride 1 and square. `height - kernel_size` underflows if the
+    /// kernel is larger than the input.
+    ///
+    /// The first rule that matches wins:
+    ///
+    /// | Device | Condition | Result |
+    /// | --- | --- | --- |
+    /// | GPU | `im2col_elements > 1_000_000` | `IGEMM` |
+    /// | GPU | otherwise | `Im2col` |
+    /// | CPU | `im2col_elements > 5_000_000` | `Direct` |
+    /// | CPU | `kernel_size <= 3 && batch <= 4` | `Direct` |
+    /// | CPU | `im2col_elements > 1_000_000` | `IGEMM` |
+    /// | CPU | otherwise | `Im2col` |
+    ///
+    /// The `kernel_size <= 3 && batch <= 4` rule looks only at the kernel and the batch,
+    /// not at the input size: a `4 x 64 x 32 x 32` input with a 3x3 kernel (about 2.07M
+    /// elements) runs `Direct`, and the same input with batch 5 runs `IGEMM`.
     #[must_use]
     pub fn auto_select(
         batch: usize,
@@ -81,33 +100,16 @@ impl ConvAlgo {
 
 /// Implicit GEMM (iGEMM) variants for convolution
 ///
-/// This enum defines different iGEMM implementations that avoid materializing
-/// the im2col matrix while leveraging GEMM-style computation.
-///
-/// # Extensibility
-///
-/// To add a new iGEMM variant:
-/// 1. Add a new variant to this enum
-/// 2. Implement the forward/backward computation in `Conv2d::igemm_forward`
-/// 3. Update `Conv2d::igemm_backward` to handle the new variant
-/// 4. Add tests and benchmark comparisons
-///
-/// # Variant Selection Guide
-///
-/// - **Tiled**: Good all-rounder, works well for most cases. Cache-friendly blocking.
-/// - **`Winograd`** (future): Fastest for 3x3 kernels with stride 1. Transform-domain approach.
-/// - **`DirectToGEMM`** (future): Best performance with hand-tuned micro-kernels.
-/// - **`FFT`** (future): Best for large kernels (audio processing). O(n log n) complexity.
+/// Only `Tiled` exists. It computes the convolution as a GEMM over cache-sized tiles
+/// without materializing the im2col matrix (`Conv2d::igemm_forward`, and
+/// `igemm_backward_input` / `igemm_backward_weight` on the grad fn). The grad fn stores
+/// the variant in an unused field (`_variant`, #118), so nothing dispatches on it yet.
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
 enum IGEMMVariant {
     /// Tiled iGEMM - blocks computation for cache efficiency
     /// Good balance of performance and memory usage
     #[default]
     Tiled,
-    // Future variants (extension points):
-    // Winograd { transform_size: usize },  // e.g., Winograd(2x2) or Winograd(4x4)
-    // DirectToGEMM,                       // Custom micro-kernel approach
-    // FFT,                                // Frequency-domain convolution
 }
 
 /// Configuration for tiled iGEMM computation
@@ -203,7 +205,8 @@ pub(crate) struct DirectConvGradFn {
 }
 
 impl DirectConvGradFn {
-    /// Gradients for the input, the weight, and (if present) the bias.
+    /// Gradients for the input and the weight, in that order; the bias gradient comes from
+    /// the separate `add` node.
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         // parents: [input, weight]
         let x = parents.first().cloned();
@@ -473,7 +476,8 @@ pub(crate) struct IGEMMGradFn {
 }
 
 impl IGEMMGradFn {
-    /// Gradients for the input, the weight, and (if present) the bias.
+    /// Gradients for the input and the weight, in that order; the bias gradient comes from
+    /// the separate `add` node.
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
         // parents: [input, weight]
         let x = parents.first().cloned();
@@ -867,7 +871,7 @@ impl Conv2d {
     /// Set the convolution algorithm to use
     ///
     /// # Arguments
-    /// * `algo` - Algorithm to use (Direct, Im2col, or Auto)
+    /// * `algo` - Algorithm to use (Direct, Im2col, IGEMM, or Auto)
     ///
     /// # Example
     /// ```no_run
@@ -1280,7 +1284,6 @@ impl Conv2d {
             out_h: h_out,
             out_w: w_out,
         } = *spec;
-        // let _kernel_size = kernel_h * kernel_w; kept for reference
         let spatial_out = h_out * w_out;
 
         // Tile over output channels
@@ -1362,8 +1365,12 @@ impl Conv2d {
         }
     }
 
+    /// Run the convolution on `x`, shaped `[batch, in_channels, height, width]`.
+    ///
     /// # Panics
-    /// Input needs to be 4D
+    /// If `x` is not 4D, its channel count differs from the layer's, the stride is zero, or
+    /// the kernel is larger than the padded input; or if the input and weight dtypes are not
+    /// one float dtype.
     pub fn forward(&self, x: &Tensor) -> Tensor {
         // One low-precision op under `amp::autocast`: input, weight and bias are cast
         // together (PyTorch's convolutions).
@@ -1989,6 +1996,44 @@ mod conv2d_tests {
             assert!(
                 abs_diff < 1e-4,
                 "Padding test mismatch at index {i}: direct={direct_val}, im2col={im2col_val}, diff={abs_diff}"
+            );
+        }
+    }
+
+    /// One row per branch of `ConvAlgo::auto_select`, and both sides of each threshold
+    /// (1M and 5M estimated im2col elements), so its documented table has a check.
+    #[test]
+    fn auto_select_follows_documented_rule() {
+        use ConvAlgo::{Direct, IGEMM, Im2col};
+        // (batch, channels, padded h, padded w, kernel, has_gpu, expected, why)
+        let rows = [
+            (1, 1, 8, 8, 3, true, Im2col, "GPU, 324 elements"),
+            (1, 64, 43, 43, 3, true, Im2col, "GPU, 968_256 <= 1M"),
+            (1, 64, 44, 44, 3, true, IGEMM, "GPU, 1_016_064 > 1M"),
+            (4, 3, 8, 8, 3, false, Direct, "CPU, k <= 3 and batch <= 4"),
+            (
+                4,
+                64,
+                32,
+                32,
+                3,
+                false,
+                Direct,
+                "CPU, 2.07M but k <= 3, batch 4",
+            ),
+            (5, 64, 32, 32, 3, false, IGEMM, "CPU, 2.59M, batch 5"),
+            (5, 3, 8, 8, 3, false, Im2col, "CPU, 4_860, batch 5"),
+            (1, 3, 16, 16, 5, false, Im2col, "CPU, 10_800, k 5"),
+            (1, 32, 64, 64, 5, false, IGEMM, "CPU, 2.88M, k 5"),
+            (9, 64, 32, 32, 3, false, IGEMM, "CPU, 4_665_600 <= 5M"),
+            (10, 64, 32, 32, 3, false, Direct, "CPU, 5_184_000 > 5M"),
+            (1, 64, 64, 64, 5, false, Direct, "CPU, 5_760_000 > 5M"),
+        ];
+        for (batch, channels, h, w, k, gpu, want, why) in rows {
+            assert_eq!(
+                ConvAlgo::auto_select(batch, channels, h, w, k, gpu),
+                want,
+                "{why}: auto_select({batch}, {channels}, {h}, {w}, {k}, gpu={gpu})"
             );
         }
     }

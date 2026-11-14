@@ -17,6 +17,5 @@ pub(crate) fn trainable_input(shape: &[usize]) -> crate::tensor::Tensor {
     x
 }
 
-// Deferred to later phases (ADDENDUM.md §5): assert_close.rs, define_ops.rs,
-// gradcheck.rs, gradgradcheck.rs, param_test.rs, tensor.rs are still empty skeleton
-// files under src/macros/. Not declared as modules here until they have content.
+// assert_close.rs, gradcheck.rs, gradgradcheck.rs, param_test.rs and tensor.rs under
+// src/macros/ are empty and not declared as modules (tracked in #118).

@@ -27,8 +27,7 @@ use std::rc::Rc;
 /// We use `Rc<RefCell<RawTensor>>` to allow multiple references to the same tensor
 /// (needed for computation graphs) while still allowing mutation (for gradient accumulation).
 ///
-/// **Note for production**: This is single-threaded only. For multi-threading,
-/// replace with `Arc<Mutex<RawTensor>>`.
+/// Single-threaded by design (DECISIONS.md, "Stay synchronous").
 #[derive(Clone, Debug)]
 pub struct Tensor {
     /// The shared node; private so downstream code cannot reach `RawTensor`'s fields.
@@ -571,7 +570,6 @@ impl RawTensor {
     }
 
     /// Create a new tensor from Storage and shape (internal use for GPU ops, fallible)
-    #[allow(dead_code)]
     pub(crate) fn try_new_with_storage(
         data: crate::storage::Storage,
         shape: Shape,
@@ -607,7 +605,6 @@ impl RawTensor {
     /// # Panics
     /// If `data.len()` != `shape.numel()`, or if the storage isn't where `device` says
     /// it is (a device label is a promise; see `crate::device_policy`).
-    #[allow(dead_code)]
     pub(crate) fn new_with_storage(
         data: crate::storage::Storage,
         shape: Shape,
@@ -1327,8 +1324,9 @@ impl RawTensor {
     /// assert_eq!(x.sum_dim(Axis(1), false).shape(), vec![2]); // [6, 15]
     /// assert_eq!(x.sum_dim(Axis(1), true).shape(), vec![2, 1]); // [[6], [15]]
     /// ```
+    ///
     /// # Panics
-    /// dim out of bounds
+    /// If `dim` is not less than the tensor's rank.
     #[must_use]
     pub fn sum_dim(self_t: &Tensor, dim: Axis, keepdim: bool) -> Tensor {
         Self::try_sum_dim(self_t, dim, keepdim).expect("Dimension out of bounds")
@@ -1419,8 +1417,9 @@ impl RawTensor {
     /// Returns maximum value along dimension and stores indices for backward pass. Like
     /// `torch.max(x, dim)`, a tie goes to the first index, a NaN in the row makes the result
     /// NaN (the first NaN wins), and all of the gradient goes to that one element.
+    ///
     /// # Panics
-    /// dim out of bounds
+    /// If `dim` is not less than the tensor's rank, or the dtype is not a float.
     #[must_use]
     pub fn max_dim(self_t: &Tensor, dim: Axis, keepdim: bool) -> Tensor {
         let dtype = compute_dtype(|| "MaxDim".to_string(), &[self_t.dtype()]);
@@ -1513,8 +1512,9 @@ impl RawTensor {
     /// Mean along a specific axis
     ///
     /// Implemented as `sum_dim(dim)` / size(dim)
+    ///
     /// # Panics
-    /// dim out of bounds
+    /// If `dim` is not less than the tensor's rank, or the dtype is not a float.
     #[must_use]
     pub fn mean_dim(self_t: &Tensor, dim: Axis, keepdim: bool) -> Tensor {
         let shape = self_t.borrow().shape.clone();

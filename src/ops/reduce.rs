@@ -225,8 +225,10 @@ impl RawTensor {
     /// Apply a reduction operation that collapses tensor to scalar
     ///
     /// All reduction ops produce a shape \[1\] output.
+    ///
     /// # Panics
-    /// unwrap map
+    /// If the input's dtype is not a float (integer and bool tensors have no reduction
+    /// kernel), or a GPU reduction kernel fails.
     #[must_use]
     pub fn reduce_op(self_t: &Tensor, op: ReduceOp) -> Tensor {
         let dtype = compute_dtype(|| format!("{op:?}"), &[self_t.dtype()]);

@@ -293,7 +293,7 @@ pub fn load_state_dict_checked<M: Module + ?Sized>(
 /// the round trip through [`load_state_dict`] is bit-exact.
 ///
 /// # Errors
-/// file opening errors
+/// If the file can't be created or written, or the state dict can't be encoded.
 pub fn save_state_dict(state: &StateDict, path: &str) -> Result<()> {
     let mut file = File::create(path)?;
     let encoded = bincode::encode_to_vec(state, config::standard()).map_err(Error::other)?;
@@ -521,10 +521,12 @@ pub fn save_safetensors<P: AsRef<Path>>(state: &StateDict, path: P) -> Result<()
 }
 
 /// Save typed tensor data to `SafeTensors` format with native dtypes
+///
 /// # Panics
-/// failing to create `TensorView`
+/// If an entry's byte count does not match its shape and dtype (`TensorView::new` fails).
+///
 /// # Errors
-/// returns nothing on success
+/// If the file can't be created or written, or the tensors can't be serialized.
 pub fn save_safetensors_typed<P: AsRef<Path>>(
     tensors: &BTreeMap<String, TypedTensorData>,
     path: P,
@@ -569,9 +571,11 @@ pub fn save_safetensors_typed<P: AsRef<Path>>(
 /// let state = load_state_dict_with_mapping("model.bin", &mapper)?;
 /// # Ok::<(), std::io::Error>(())
 /// ```
+///
 /// # Errors
-/// returns result state dict or IO error; `InvalidData` wrapping the
-/// [`VoltaError`](crate::VoltaError) if the mapper fails ([`mapping::StateDictMapper::try_map`]).
+/// If the path is not valid UTF-8 or the file can't be read or decoded (as
+/// [`load_state_dict`]), or `InvalidData` wrapping the [`VoltaError`](crate::VoltaError)
+/// if the mapper fails ([`mapping::StateDictMapper::try_map`]).
 pub fn load_state_dict_with_mapping<P: AsRef<Path>>(
     path: P,
     mapper: &mapping::StateDictMapper,

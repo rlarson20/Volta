@@ -1,4 +1,4 @@
-//! Tensor storage: a typed host buffer, or an f32 GPU buffer.
+//! Tensor storage: a typed host buffer, or a GPU buffer of F32, F16, BF16 or Bool.
 //!
 //! CPU data is a [`HostBuf`]: one `Arc<[T]>` per dtype, so alignment and element type are
 //! guaranteed by the type rather than by a tag next to a byte buffer. Kernels read their
@@ -907,7 +907,12 @@ impl std::fmt::Debug for Storage {
             Self::Cpu(buf) => write!(f, "Storage::Cpu({} elements, {})", buf.len(), buf.dtype()),
             #[cfg(feature = "gpu")]
             Self::Gpu(shared) => {
-                write!(f, "Storage::Gpu({} elements, f32)", shared.buffer.len())
+                write!(
+                    f,
+                    "Storage::Gpu({} elements, {})",
+                    shared.buffer.len(),
+                    shared.buffer.dtype()
+                )
             }
         }
     }
@@ -1127,6 +1132,22 @@ mod tests {
             Err(VoltaError::DeviceError(_))
         ));
         assert_eq!(s.to_host_f32(), &[1.0, 2.0]);
+    }
+
+    /// `Debug` names the GPU buffer's own dtype, not a fixed `f32`.
+    /// Skips without an adapter, so it is not verified in CPU-only CI.
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn debug_names_gpu_buffer_dtype() {
+        if !crate::gpu::is_gpu_available() {
+            return;
+        }
+        let gpu = Device::gpu().expect("adapter present");
+        let s = Storage::from_typed(vec![f16::from_f32(1.0), f16::from_f32(2.0)]).to_device(&gpu);
+        assert_eq!(
+            format!("{s:?}"),
+            format!("Storage::Gpu(2 elements, {})", DType::F16)
+        );
     }
 
     /// A non-f32 storage is refused at the GPU boundary instead of being upcast.

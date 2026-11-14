@@ -123,8 +123,6 @@ impl BufferPool {
     ///
     /// # Arguments
     /// * `min_size` - Minimum required size in bytes
-    /// # Panics
-    /// Unwrapping bucket mutex
     pub fn acquire(&self, min_size: usize) -> Option<wgpu::Buffer> {
         if min_size > self.config.max_pooled_size {
             return None; // Too large to pool
@@ -160,8 +158,6 @@ impl BufferPool {
     /// # Arguments
     /// * `buffer` - The GPU buffer to return
     /// * `size` - The buffer size in bytes
-    /// # Panics
-    /// Unwrapping bucket mutex
     #[expect(
         clippy::significant_drop_tightening,
         reason = "Attempts to fix by merging the constructon with its single usage leads to other errors, will come back to fix this."
@@ -202,8 +198,6 @@ impl BufferPool {
     ///
     /// This immediately frees all GPU memory held by the pool.
     /// Useful for reducing memory pressure or before shutdown.
-    /// # Panics
-    /// Unwrapping bucket mutex
     pub fn clear(&self) {
         self.buckets
             .lock()
@@ -216,8 +210,6 @@ impl BufferPool {
     }
 
     /// Get statistics about pool usage
-    /// # Panics
-    /// Unwrapping bucket mutex
     #[allow(dead_code)]
     pub fn stats(&self) -> BufferPoolStats {
         let total = *self

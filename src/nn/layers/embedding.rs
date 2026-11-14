@@ -47,8 +47,9 @@ impl Embedding {
     /// Creates a new Embedding layer
     ///
     /// Weights are initialized uniformly in the range [-0.1, 0.1]
+    ///
     /// # Panics
-    /// positive vocab size, embedding dim
+    /// If `vocab_size` or `embedding_dim` is zero.
     #[must_use]
     pub fn new(vocab_size: usize, embedding_dim: usize) -> Self {
         assert!(vocab_size > 0, "vocab_size must be positive");

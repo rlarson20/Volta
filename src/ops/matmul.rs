@@ -376,8 +376,9 @@ impl RawTensor {
     }
 
     /// Transpose a 2D tensor
+    ///
     /// # Panics
-    /// Non-2d tensor
+    /// If the tensor is not 2D.
     #[must_use]
     pub fn transpose(self_t: &Tensor) -> Tensor {
         let (data, shape) = {

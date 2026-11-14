@@ -34,7 +34,6 @@ pub mod shape;
 pub(crate) mod spec;
 pub mod storage;
 
-// Add to re-exports:
 pub use autograd::ScalarLoss;
 pub use dtype::{DType, DTypePolicy, DTypePolicyGuard, dtype_policy, with_dtype_policy};
 pub use error::{Result, VoltaError};

@@ -176,8 +176,9 @@ fn mixed_dtypes(op: &str, expected: DType, actual: DType, input: usize) -> ! {
     )
 }
 
-/// Panics unless every input has one float dtype, naming the op, and returns it. Mixed
-/// dtypes wait for promotion (P6); integers and bool have no kernels.
+/// Panics unless every input has one float dtype, naming the op, and returns it. Ops
+/// that promote (elementwise) do so before this; matmul, convolutions and layers need one
+/// dtype, as in PyTorch. Integers and bool have no kernels.
 ///
 /// # Panics
 /// If the inputs' dtypes differ, or the common dtype is not a float.

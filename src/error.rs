@@ -2,7 +2,8 @@ use crate::dtype::DType;
 use thiserror::Error;
 
 /// Every error Volta's fallible (`try_*`) APIs can return.
-/// \n Marked `#[non_exhaustive]`, so match with a wildcard arm.
+///
+/// Marked `#[non_exhaustive]`, so match with a wildcard arm.
 #[non_exhaustive]
 #[derive(Debug, Error)]
 pub enum VoltaError {
