@@ -269,9 +269,9 @@ rulesets:
 
 # ===== GIT & PR WORKFLOW (dev-docs/WORKFLOW.md) =====
 
-# Turn staged changes and/or commits ahead of origin/improvements into a pull request (e.g. `just pr`, `just pr fix/my-branch`)
-pr name="":
-	./scripts/pr.sh {{name}}
+# Turn staged changes and/or commits ahead of origin/improvements into a pull request (e.g. `just pr`, `just pr fix/my-branch`; non-interactive: `just pr -m "msg" --body-file body.md fix/my-branch`, see `scripts/pr.sh --help`)
+pr *args:
+	./scripts/pr.sh {{args}}
 
 # After merges: fast-forward improvements and delete local branches it already holds, saying why each kept one stays (`just sync dry-run` lists them first)
 sync mode="":

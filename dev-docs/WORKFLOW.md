@@ -40,6 +40,21 @@ gh pr create --base improvements       # fill in the template
 
 The reset is safe only because the branch already holds the commits, and `--keep` (unlike `--hard`) refuses to run if it would discard uncommitted work. The script checks everything first and changes nothing if a check fails. It names the branch from the commit subject (`chore: fix x` becomes `chore/fix-x`); pass a name to choose your own: `just pr fix/my-branch`. `Fixes #N` lines come from `Fixes`/`Closes`/`Resolves #N` in the commit messages. The `<details>` block is for agent write-ups: delete it for a PR you wrote yourself.
 
+### Without an editor
+
+`just pr` opens your editor twice by default: for the commit message of staged changes, and for the PR description. For a script or an agent session, flags replace both (`scripts/pr.sh --help`):
+
+```
+just pr -m "docs: fix x" --body-file /path/body.md docs/fix-x
+```
+
+- `-m, --message MSG`: commit message for staged changes.
+- `--body-file FILE`: use FILE as the PR description, verbatim. The template prefill is skipped, so the file should follow `.github/PULL_REQUEST_TEMPLATE.md` itself.
+- `--no-edit`: keep the prefilled description (opener, `Fixes` lines, template) without opening the editor. Check it first: the checklist boxes are unchecked and the opener is the commit body or subjects.
+- `--title TITLE`: override the PR title (default: the first commit's subject).
+
+All arguments are checked before anything changes, so a missing `--body-file` leaves the branch and `improvements` as they were.
+
 ## Why `just sync` asks GitHub
 
 Squash merging replaces your branch's commits with one new commit, so nothing links your branch to `improvements` and `git branch --merged` reports none of them as merged. `just sync` (`scripts/sync.sh`) deletes a local branch when one of these holds:

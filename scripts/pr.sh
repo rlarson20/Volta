@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # Turn finished work into a pull request against `improvements` (see dev-docs/WORKFLOW.md).
 #
-#   scripts/pr.sh [branch-name]
+#   scripts/pr.sh [options] [branch-name]
+#
+# Options (all optional; with none of them the script opens your editor, as before):
+#   -m, --message MSG   commit message for staged changes (instead of opening the editor)
+#   --title TITLE       PR title (default: the first commit subject)
+#   --body-file FILE    use FILE as the PR body, verbatim; no editor, no template prefill
+#   --no-edit           use the prefilled body as is; no editor
+# Together, `-m`, `--body-file` and a branch name make a run that never prompts.
 #
 # Run it on local `improvements` with commits ahead of origin (the ones the ruleset won't let you
 # push) and/or staged changes: the staged changes are committed, then the commits move to a new
@@ -17,6 +24,24 @@ die() {
 	exit 1
 }
 
+message= title_arg= body_file= no_edit=0 name_arg=
+while (($#)); do
+	case $1 in
+	-m | --message) (($# >= 2)) || die "$1 needs a value"; message=$2; shift 2 ;;
+	--title) (($# >= 2)) || die "$1 needs a value"; title_arg=$2; shift 2 ;;
+	--body-file) (($# >= 2)) || die "$1 needs a value"; body_file=$2; shift 2 ;;
+	--no-edit) no_edit=1; shift ;;
+	-h | --help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+	-*) die "unknown option '$1' (see --help)" ;;
+	*) [[ -z $name_arg ]] || die "more than one branch name given: '$name_arg' and '$1'"; name_arg=$1; shift ;;
+	esac
+done
+if [[ -n $body_file ]]; then
+	[[ -f $body_file ]] || die "--body-file: '$body_file' is not a file"
+	[[ -n $(tr -d '[:space:]' <"$body_file") ]] || die "--body-file: '$body_file' is empty"
+	body_file=$(cd "$(dirname "$body_file")" && pwd)/$(basename "$body_file")
+fi
+
 command -v gh >/dev/null || die "the GitHub CLI (gh) is not installed"
 cd "$(git rev-parse --show-toplevel)"
 
@@ -29,14 +54,14 @@ git diff --quiet || die "unstaged changes to tracked files; stage them (git add)
 
 if ! git diff --cached --quiet; then
 	echo "pr: committing the staged changes"
-	git commit
+	if [[ -n $message ]]; then git commit -m "$message"; else git commit; fi
 fi
 
 if [[ $branch == "$base" ]]; then
 	git merge-base --is-ancestor "$remote" HEAD ||
 		die "local $base has diverged from $remote; rebase onto it first (git rebase $remote)"
 else
-	[[ $# -eq 0 ]] || die "already on branch '$branch'; it is the PR branch, so a name argument makes no sense"
+	[[ -z $name_arg ]] || die "already on branch '$branch'; it is the PR branch, so a name argument makes no sense"
 fi
 
 range=$remote..HEAD
@@ -44,7 +69,7 @@ count=$(git rev-list --count "$range")
 ((count > 0)) || die "nothing to open a PR for: $branch has no commits ahead of $remote"
 
 subjects=$(git log --reverse --format=%s "$range")
-title=${subjects%%$'\n'*}
+title=${title_arg:-${subjects%%$'\n'*}}
 
 slugify() {
 	printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' |
@@ -62,7 +87,7 @@ branch_name_for() {
 }
 
 if [[ $branch == "$base" ]]; then
-	name=${1:-$(branch_name_for "$title")}
+	name=${name_arg:-$(branch_name_for "$title")}
 	git check-ref-format --branch "$name" >/dev/null 2>&1 || die "'$name' is not a valid branch name; pass one: just pr type/short-desc"
 	git show-ref --verify --quiet "refs/heads/$name" && die "branch '$name' already exists locally"
 	git ls-remote --exit-code --heads origin "$name" >/dev/null 2>&1 && die "branch '$name' already exists on origin"
@@ -81,6 +106,12 @@ git push -u origin "$name"
 if existing=$(gh pr view "$name" --json url --jq .url 2>/dev/null); then
 	echo "pr: $name already has a pull request: $existing (pushed the new commits to it)"
 	exit 0
+fi
+
+# A caller-supplied body is used verbatim: no prefill, no editor.
+if [[ -n $body_file ]]; then
+	gh pr create --base "$base" --head "$name" --title "$title" --body-file "$body_file"
+	exit
 fi
 
 # Prefill the template: the commit body (or the subjects) as the opener, a `Fixes #N` line per
@@ -116,7 +147,9 @@ fixes=$(git log --format=%B "$range" | grep -ioE '(fix(es|ed)?|close[sd]?|resolv
 } >"$body"
 
 # Same editor resolution git uses for commit messages.
-sh -c "$(git var GIT_EDITOR) \"\$@\"" _ "$body"
+if ((!no_edit)); then
+	sh -c "$(git var GIT_EDITOR) \"\$@\"" _ "$body"
+fi
 if [[ -z $(tr -d '[:space:]' <"$body") ]]; then
 	echo "pr: empty description, not creating the PR; $name is pushed. Retry with:" >&2
 	echo "    gh pr create --base $base --head $name --fill" >&2
