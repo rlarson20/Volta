@@ -84,13 +84,14 @@ impl MultiHeadAttention {
     /// # Arguments
     /// * `x` - Input tensor of shape [batch, `seq_len`, `embed_dim`]
     /// * `causal` - Whether to apply causal masking
-    /// * `attention_mask` - Optional additive mask, broadcast against the
-    ///   [batch, `num_heads`, `seq_len`, `seq_len`] scores
+    /// * `attention_mask` - Optional additive float mask (`-inf` blocks a position), shaped
+    ///   as in [`MultiHeadAttention::forward_qkv`]
     ///
     /// # Returns
     /// `out_proj(Attn(x))`, of shape [batch, `seq_len`, `embed_dim`], with no residual added.
     /// # Panics
-    /// If `x` is not [batch, `seq_len`, `embed_dim`] (see [`MultiHeadAttention::forward_qkv`]).
+    /// If `x` is not [batch, `seq_len`, `embed_dim`] or `attention_mask` has an unsupported
+    /// shape (see [`MultiHeadAttention::forward_qkv`]).
     #[must_use]
     pub fn forward(&self, x: &Tensor, causal: bool, attention_mask: Option<&Tensor>) -> Tensor {
         self.forward_qkv(x, x, x, causal, attention_mask)
@@ -106,14 +107,17 @@ impl MultiHeadAttention {
     /// * `value` - Tensor of shape [batch, `S`, `embed_dim`]
     /// * `causal` - Whether to apply causal masking, top-left aligned as torch's
     ///   `is_causal`: query `i` sees keys `j <= i`
-    /// * `attention_mask` - Optional additive mask, broadcast against the
-    ///   [batch, `num_heads`, `L`, `S`] scores
+    /// * `attention_mask` - Optional additive float mask (`-inf` blocks a position; boolean
+    ///   masks are not supported). Shaped, as in torch's `attn_mask`, `[L, S]` (shared by
+    ///   every sample and head) or `[batch * num_heads, L, S]` (row `b * num_heads + h` is
+    ///   sample `b`, head `h`). A rank-4 `[batch|1, num_heads|1, L, S]` mask is also accepted.
     ///
     /// # Returns
     /// `out_proj(Attn(query, key, value))`, of shape [batch, `L`, `embed_dim`].
     /// # Panics
-    /// If an input is not 3D with last dimension `embed_dim`, the batch sizes differ, or
-    /// `key` and `value` differ in length.
+    /// If an input is not 3D with last dimension `embed_dim`, the batch sizes differ,
+    /// `key` and `value` differ in length, or `attention_mask` has another shape than the
+    /// ones above. A per-sample `[batch, L, S]` mask is refused rather than guessed at.
     #[must_use]
     pub fn forward_qkv(
         &self,
@@ -191,6 +195,44 @@ impl MultiHeadAttention {
         permuted.reshape(&[batch_size, seq_len, self.embed_dim])
     }
 
+    /// Checks `mask` against torch's `attn_mask` shapes and returns it as something that
+    /// broadcasts against the `[batch, num_heads, L, S]` scores the way it was meant to:
+    /// `[L, S]` unchanged, `[batch * num_heads, L, S]` reshaped to `[batch, num_heads, L, S]`
+    /// (row `b * num_heads + h` is sample `b`, head `h`), and a rank-4 mask unchanged when
+    /// its batch and head dims are each 1 or the full size. A bare broadcast would right-align
+    /// `[batch, L, S]` as `[1, batch, L, S]` and apply sample `i`'s mask to head `i` (#103).
+    #[track_caller]
+    fn mask_for_scores(&self, mask: &Tensor, batch: usize, q_len: usize, kv_len: usize) -> Tensor {
+        let heads = self.num_heads;
+        let shape = mask.shape();
+        let dims = shape.truncate_rank().to_vec();
+        let ok = match dims.as_slice() {
+            [l, s] => (*l, *s) == (q_len, kv_len),
+            [bh, l, s] => *bh == batch * heads && (*l, *s) == (q_len, kv_len),
+            [b, h, l, s] => {
+                (*b == 1 || *b == batch) && (*h == 1 || *h == heads) && (*l, *s) == (q_len, kv_len)
+            }
+            _ => false,
+        };
+        let hint = if dims.len() == 3 && dims.first() == Some(&batch) {
+            " (a per-sample mask [batch, L, S] must be [batch, 1, L, S], or repeated per head)"
+        } else {
+            ""
+        };
+        assert!(
+            ok,
+            "attention_mask must be [L, S] = [{q_len}, {kv_len}], \
+             [batch * num_heads, L, S] = [{}, {q_len}, {kv_len}], or \
+             [batch|1, num_heads|1, L, S] with batch {batch}, num_heads {heads}; got {dims:?}{hint}",
+            batch * heads
+        );
+        if dims.len() == 3 {
+            mask.reshape(&[batch, heads, q_len, kv_len])
+        } else {
+            mask.clone()
+        }
+    }
+
     /// Scaled dot-product attention over `[batch, num_heads, len, head_dim]` tensors
     /// (query length `L`, key/value length `S`), with an optional causal mask, an
     /// optional additive mask, and dropout on the attention weights in training mode.
@@ -226,7 +268,8 @@ impl MultiHeadAttention {
 
         // Apply additional attention mask if provided
         let scores = if let Some(mask) = attention_mask {
-            scores.add(mask)
+            let batch_size = q.borrow().shape.dim_at(0);
+            scores.add(&self.mask_for_scores(mask, batch_size, q_len, kv_len))
         } else {
             scores
         };
@@ -471,5 +514,129 @@ mod tests {
 
         mha.train(false);
         assert_eq!(mha.forward(&x, false, None).data(), expected);
+    }
+
+    /// `[rows, L, S]` additive mask that blocks `key` for every query in rows `blocked`.
+    fn block_key(rows: usize, len: usize, blocked: &[usize], key: usize) -> Tensor {
+        let mut md = vec![0.0f32; rows * len * len];
+        for &r in blocked {
+            for q in 0..len {
+                md[(r * len + q) * len + key] = f32::NEG_INFINITY;
+            }
+        }
+        RawTensor::new(md, &[rows, len, len], false)
+    }
+
+    /// Sum of |difference| of sample `b`'s position-0 output when sample `b`'s token `tok`
+    /// is perturbed.
+    fn leak(m: &MultiHeadAttention, mask: &Tensor, b: usize, tok: usize) -> f32 {
+        let (batch, len, e) = (2, 5, 4);
+        let x = RawTensor::randn(&[batch, len, e]);
+        let y = m.forward(&x, false, Some(mask)).data();
+        let mut xd = x.data();
+        for j in 0..e {
+            xd[(b * len + tok) * e + j] += 1.0;
+        }
+        let y2 = m
+            .forward(
+                &RawTensor::new(xd, &[batch, len, e], false),
+                false,
+                Some(mask),
+            )
+            .data();
+        let at = b * len * e;
+        (0..e).map(|j| (y[at + j] - y2[at + j]).abs()).sum()
+    }
+
+    /// #103: with batch == `num_heads` the old bare add applied sample 1's `[batch, L, L]`
+    /// mask to head 1 of every sample, so the masked key leaked through head 0. The torch
+    /// layout `[batch * num_heads, L, S]` blocks it in every head of that sample.
+    #[test]
+    fn test_mha_mask_per_batch_and_head_blocks_the_key() {
+        crate::tensor::manual_seed(7);
+        let m = MultiHeadAttention::new(4, 2, 0.0); // 2 heads, batch 2
+        // Rows are (b, h) = (0,0) (0,1) (1,0) (1,1): block key 4 in sample 1's two heads.
+        let mask = block_key(4, 5, &[2, 3], 4);
+        assert!(leak(&m, &mask, 1, 4) < 1e-6, "masked key leaked");
+        // Control: with nothing blocked, the same perturbation moves the output.
+        let open = block_key(4, 5, &[], 4);
+        assert!(leak(&m, &open, 1, 4) > 1e-3, "perturbation had no effect");
+    }
+
+    #[test]
+    #[should_panic(expected = "attention_mask must be")]
+    fn test_mha_rejects_per_sample_mask_when_batch_equals_heads() {
+        let m = MultiHeadAttention::new(4, 2, 0.0);
+        let x = RawTensor::randn(&[2, 5, 4]);
+        let _ = m.forward(&x, false, Some(&RawTensor::zeros(&[2, 5, 5])));
+    }
+
+    #[test]
+    #[should_panic(expected = "attention_mask must be")]
+    fn test_mha_rejects_per_sample_mask_when_batch_differs() {
+        let m = MultiHeadAttention::new(4, 2, 0.0);
+        let x = RawTensor::randn(&[3, 5, 4]);
+        let _ = m.forward(&x, false, Some(&RawTensor::zeros(&[3, 5, 5])));
+    }
+
+    #[test]
+    #[should_panic(expected = "attention_mask must be")]
+    fn test_mha_rejects_wrong_key_length() {
+        let m = MultiHeadAttention::new(4, 2, 0.0);
+        let x = RawTensor::randn(&[2, 5, 4]);
+        let _ = m.forward(&x, false, Some(&RawTensor::zeros(&[5, 4])));
+    }
+
+    /// `[L, S]` and `[batch, 1, L, S]` are the same mask as the full `[batch*heads, L, S]`.
+    #[test]
+    fn test_mha_mask_shapes_agree() {
+        crate::tensor::manual_seed(9);
+        let m = MultiHeadAttention::new(4, 2, 0.0);
+        let x = RawTensor::randn(&[2, 5, 4]);
+        let one = block_key(1, 5, &[0], 3); // [1, 5, 5]
+        let two_d = one.reshape(&[5, 5]);
+        let full = block_key(4, 5, &[0, 1, 2, 3], 3);
+        let per_sample = one.reshape(&[1, 1, 5, 5]);
+        let expected = m.forward(&x, false, Some(&full)).data();
+        for (name, mask) in [("[L, S]", &two_d), ("[1, 1, L, S]", &per_sample)] {
+            let got = m.forward(&x, false, Some(mask)).data();
+            assert_eq!(got.len(), expected.len());
+            for (i, (g, e)) in got.iter().zip(&expected).enumerate() {
+                assert!((g - e).abs() < 1e-6, "{name} element {i}: {g} vs {e}");
+            }
+        }
+        // Distinct per-sample masks via rank 4: [batch, 1, L, S] matches the full layout.
+        let sample_masks = block_key(2, 5, &[1], 4).reshape(&[2, 1, 5, 5]);
+        let full2 = block_key(4, 5, &[2, 3], 4);
+        let a = m.forward(&x, false, Some(&sample_masks)).data();
+        let b = m.forward(&x, false, Some(&full2)).data();
+        for (i, (g, e)) in a.iter().zip(&b).enumerate() {
+            assert!(
+                (g - e).abs() < 1e-6,
+                "[batch,1,L,S] element {i}: {g} vs {e}"
+            );
+        }
+    }
+
+    /// Finite-difference check through the `[batch * num_heads, L, S]` reshape path, with a
+    /// finite random mask so every entry reaches the softmax.
+    #[test]
+    fn test_mha_batch_head_mask_gradients() {
+        crate::tensor::manual_seed(0xA11);
+        let mut mha = MultiHeadAttention::new(4, 2, 0.0);
+        mha.to_dtype(crate::DType::F64);
+        let x = operand(&[2, 3, 4], true);
+        let mask = operand(&[4, 3, 3], false);
+        let w = operand(&[2, 3, 4], false);
+        let (max, mean, ok) = RawTensor::check_gradients(
+            &x,
+            |t| mha.forward(t, false, Some(&mask)).elem_mul(&w).sum(),
+            1e-6,
+            1e-6,
+        );
+        assert!(
+            ok,
+            "MHA masked grad wrt x failed: max={max:.3e} mean={mean:.3e}"
+        );
     }
 }
