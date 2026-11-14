@@ -1,0 +1,44 @@
+name: Task
+description: Debt, tests, docs, perf, or a feature. For a wrong result, panic, or NaN, use Defect instead.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is missing or awkward today, and why it matters. Name the files or functions.
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: The check that closes this, e.g. "the ignored test passes un-ignored" or "`just ci` passes and the README lists no example that doesn't exist".
+    validations:
+      required: true
+  - type: textarea
+    id: related
+    attributes:
+      label: Related
+      description: "Issues this overlaps or depends on, one `#N` per line with a few words on how. Run `just issues \"<terms>\"` first; if one already covers this, comment there instead of filing."
+    validations:
+      required: false
+  - type: dropdown
+    id: kind
+    attributes:
+      label: "Kind (copy to a kind: label)"
+      options:
+        - "kind:debt"
+        - "kind:test"
+        - "kind:docs"
+        - "kind:perf"
+        - "kind:feature"
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority (copy to a P0–P3 label)
+      options:
+        - "P1: unverified claim or test gap"
+        - "P2: debt, API, feature"
+        - "P3: perf or later phase"
