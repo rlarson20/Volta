@@ -1,5 +1,6 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
+use crate::error::OrPanic;
 use crate::index::{fetch, signed, slot, unsigned};
 use crate::io::{StateDict, TensorData};
 use crate::nn::{Layer, Module};
@@ -362,7 +363,7 @@ impl Layer for ConvTranspose2d {
             &[x.dtype(), weight.dtype()],
         );
         let spec = ConvTranspose2dSpec::new(&x.shape(), &weight.shape(), self.stride, self.padding)
-            .unwrap_or_else(|e| panic!("{e}"));
+            .or_panic("");
         let ConvTranspose2dSpec {
             batch,
             in_ch: in_channels,

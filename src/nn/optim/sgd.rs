@@ -1,3 +1,4 @@
+use crate::error::OrPanic;
 use crate::real::{Real, dispatch_real};
 use crate::storage::Storage;
 use crate::tensor::Tensor;
@@ -39,7 +40,7 @@ impl SGD {
     #[must_use]
     #[track_caller]
     pub fn new(params: Vec<Tensor>, lr: f32, momentum: f32, weight_decay: f32) -> Self {
-        Self::try_new(params, lr, momentum, weight_decay).unwrap_or_else(|e| panic!("SGD: {e}"))
+        Self::try_new(params, lr, momentum, weight_decay).or_panic("SGD")
     }
 
     /// [`Self::new`], checking the hyperparameters first, as PyTorch does.
@@ -86,6 +87,7 @@ impl SGD {
     /// # Panics
     /// If a parameter's dtype is not a float. This is checked for every parameter before
     /// any is updated.
+    #[track_caller]
     pub fn step(&mut self) {
         // Each parameter steps in its own dtype (a mixed list is fine, as in PyTorch);
         // each must have a kernel. Checked for all before any is updated.

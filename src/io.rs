@@ -1,4 +1,5 @@
 use crate::dtype::DType;
+use crate::error::OrPanic;
 use crate::nn::Module;
 use crate::storage::{Element, Storage};
 use crate::tensor::Tensor;
@@ -126,6 +127,7 @@ impl TensorData {
     /// If the product of `shape` overflows `usize`. [`Self::to_storage`] reports that as
     /// an error instead.
     #[must_use]
+    #[track_caller]
     pub fn numel(&self) -> usize {
         checked_numel(&self.shape).expect("TensorData::numel: shape product overflows usize")
     }
@@ -199,8 +201,7 @@ impl TensorData {
     #[must_use]
     #[track_caller]
     pub fn to_tensor(&self, requires_grad: bool) -> Tensor {
-        self.try_to_tensor(requires_grad)
-            .unwrap_or_else(|e| panic!("to_tensor: {e}"))
+        self.try_to_tensor(requires_grad).or_panic("to_tensor")
     }
 }
 
@@ -498,6 +499,7 @@ pub fn save_safetensors<P: AsRef<Path>>(state: &StateDict, path: P) -> Result<()
 ///
 /// # Errors
 /// If the file can't be created or written, or the tensors can't be serialized.
+#[track_caller]
 pub fn save_safetensors_typed<P: AsRef<Path>>(
     tensors: &BTreeMap<String, TypedTensorData>,
     path: P,

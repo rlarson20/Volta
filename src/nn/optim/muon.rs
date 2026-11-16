@@ -1,3 +1,4 @@
+use crate::error::OrPanic;
 use crate::ops::gpu_ops::MuonStep;
 use crate::real::{Real, dispatch_real};
 use crate::storage::Storage;
@@ -71,8 +72,7 @@ impl Muon {
         nesterov: bool,
         ns_steps: usize,
     ) -> Self {
-        Self::try_new(params, lr, momentum, nesterov, ns_steps)
-            .unwrap_or_else(|e| panic!("Muon: {e}"))
+        Self::try_new(params, lr, momentum, nesterov, ns_steps).or_panic("Muon")
     }
 
     /// [`Self::new`], checking the hyperparameters first.
@@ -182,6 +182,7 @@ impl Muon {
     /// # Panics
     /// If a GPU kernel cannot run: the parameter would otherwise be silently left
     /// untrained, as in `SGD` and `Adam`.
+    #[track_caller]
     pub fn step(&mut self) {
         // Each parameter steps in its own dtype (a mixed list is fine, as in PyTorch);
         // each must have a kernel. Checked for all before any is updated.

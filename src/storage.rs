@@ -9,6 +9,7 @@
 use crate::VoltaError;
 use crate::device::Device;
 use crate::dtype::DType;
+use crate::error::OrPanic;
 #[cfg(feature = "gpu")]
 use crate::gpu::{GpuBuffer, is_gpu_available};
 use bytemuck::cast_slice;
@@ -314,7 +315,7 @@ impl Storage {
     #[must_use]
     #[track_caller]
     pub fn from_bytes(bytes: &[u8], dtype: DType) -> Self {
-        Self::try_from_bytes(bytes, dtype).unwrap_or_else(|e| panic!("from_bytes: {e}"))
+        Self::try_from_bytes(bytes, dtype).or_panic("from_bytes")
     }
 
     /// CPU storage decoded from native-endian bytes, as safetensors stores them on every
@@ -370,8 +371,9 @@ impl Storage {
     )]
     pub fn gpu(data: Vec<f32>) -> Self {
         assert!(is_gpu_available(), "Storage::gpu: no GPU is available");
-        let buffer = GpuBuffer::from_slice(&data)
-            .unwrap_or_else(|| panic!("Storage::gpu: GPU buffer allocation failed"));
+        let Some(buffer) = GpuBuffer::from_slice(&data) else {
+            panic!("Storage::gpu: GPU buffer allocation failed")
+        };
         Self::from_gpu_buffer(buffer)
     }
 
@@ -381,6 +383,7 @@ impl Storage {
     /// Always: there is no GPU without the `gpu` feature.
     #[cfg(not(feature = "gpu"))]
     #[must_use]
+    #[track_caller]
     pub fn gpu(_data: Vec<f32>) -> Self {
         panic!("Storage::gpu: no GPU is available (built without the `gpu` feature)")
     }
@@ -419,6 +422,7 @@ impl Storage {
     /// # Panics
     /// If `device` is a GPU and no GPU is available, or the buffer can't be allocated.
     #[must_use]
+    #[track_caller]
     pub fn new_zeros(len: usize, device: &Device) -> Self {
         match device {
             Device::CPU => Self::cpu(vec![0.0; len]),
@@ -579,7 +583,7 @@ impl Storage {
     #[track_caller]
     pub(crate) fn host_mut<T: crate::real::Real>(&mut self) -> HostMut<'_, T> {
         if self.dtype() == T::DTYPE {
-            HostMut::Native(self.as_host_mut::<T>().unwrap_or_else(|e| panic!("{e}")))
+            HostMut::Native(self.as_host_mut::<T>().or_panic(""))
         } else {
             let wide = self.host::<T>().into_owned();
             HostMut::Wide { wide, dst: self }
@@ -616,7 +620,7 @@ impl Storage {
             dtype.size_of(),
             "from_bits: carrier width differs from {dtype}"
         );
-        Self::try_from_bytes(cast_slice(data), dtype).unwrap_or_else(|e| panic!("from_bits: {e}"))
+        Self::try_from_bytes(cast_slice(data), dtype).or_panic("from_bits")
     }
 
     /// A kernel's output computed in `T`, stored as `dtype`: `T`'s own dtype as is, and
@@ -775,6 +779,7 @@ impl Storage {
     /// BF16 and Bool (PyTorch's MPS refuses f64 too), and converting on the way would
     /// change the dtype silently.
     #[must_use]
+    #[track_caller]
     pub fn to_device(&self, device: &Device) -> Self {
         match device {
             Device::CPU => match self {

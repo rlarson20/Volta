@@ -308,8 +308,10 @@ impl Strides {
 /// If `dims.len() != N`, naming the caller.
 #[track_caller]
 pub(crate) fn fixed_dims<const N: usize>(dims: &[usize]) -> [usize; N] {
-    <[usize; N]>::try_from(dims)
-        .unwrap_or_else(|_| panic!("expected a rank-{N} shape, got {dims:?}"))
+    let Ok(fixed) = <[usize; N]>::try_from(dims) else {
+        panic!("expected a rank-{N} shape, got {dims:?}")
+    };
+    fixed
 }
 
 #[cfg(test)]

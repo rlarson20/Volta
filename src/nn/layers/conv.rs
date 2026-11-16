@@ -3,6 +3,7 @@ use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::device_policy::kernel_failed;
 use crate::dtype::DType;
+use crate::error::OrPanic;
 use crate::index::{fetch, signed, slot, unsigned};
 use crate::io::{StateDict, TensorData};
 use crate::nn::{Layer, Module};
@@ -1371,14 +1372,15 @@ impl Conv2d {
     /// If `x` is not 4D, its channel count differs from the layer's, the stride is zero, or
     /// the kernel is larger than the padded input; or if the input and weight dtypes are not
     /// one float dtype.
+    #[track_caller]
     pub fn forward(&self, x: &Tensor) -> Tensor {
         // One low-precision op under `amp::autocast`: input, weight and bias are cast
         // together (PyTorch's convolutions).
         let (x, weight, bias) = crate::amp::lower_layer(x, &self.weight, self.bias.as_ref());
         let x = &x;
         compute_dtype(|| "Conv2d".to_string(), &[x.dtype(), weight.dtype()]);
-        let spec = Conv2dSpec::new(&x.shape(), &weight.shape(), self.stride, self.padding)
-            .unwrap_or_else(|e| panic!("{e}"));
+        let spec =
+            Conv2dSpec::new(&x.shape(), &weight.shape(), self.stride, self.padding).or_panic("");
 
         // Algorithm selection
         // Note: All algorithms now support gradients!

@@ -1,3 +1,4 @@
+use crate::error::OrPanic;
 use crate::error::{Result, VoltaError};
 use crate::index::span;
 use crate::io::{StateDict, TensorData};
@@ -283,8 +284,7 @@ impl StateDictMapper {
     /// Wherever [`StateDictMapper::try_map`] returns an error.
     #[must_use]
     pub fn map(&self, state: StateDict) -> StateDict {
-        self.try_map(state)
-            .unwrap_or_else(|e| panic!("StateDictMapper::map: {e}"))
+        self.try_map(state).or_panic("StateDictMapper::map")
     }
 }
 

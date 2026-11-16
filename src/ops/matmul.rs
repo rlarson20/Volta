@@ -1,6 +1,7 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::device_policy::kernel_failed;
+use crate::error::OrPanic;
 use crate::index::{fetch, slot};
 use crate::real::{Real, compute_dtype, dispatch_bits, dispatch_real};
 use crate::shape::{Shape, fixed_dims};
@@ -211,6 +212,7 @@ impl RawTensor {
     /// # Panics
     /// Dimension mismatch, or matrix operands of unequal rank (see `MatmulSpec`)
     #[must_use]
+    #[track_caller]
     pub fn matmul(self_t: &Tensor, other: &Tensor) -> Tensor {
         // A low-precision op under `amp::autocast`: f32 and half operands are cast first.
         let (self_t, other) = (&crate::amp::lower(self_t), &crate::amp::lower(other));
@@ -294,7 +296,7 @@ impl RawTensor {
             _ => {
                 // Matrix forms: rank >= 2 on both sides. The spec validates rank, inner dims and
                 // batch broadcasting once; everything below reads m/k/n from it.
-                let spec = MatmulSpec::new(&shape_a, &shape_b).unwrap_or_else(|e| panic!("{e}"));
+                let spec = MatmulSpec::new(&shape_a, &shape_b).or_panic("");
 
                 if !spec.is_batched() {
                     // Standard 2D matmul: (m,k) @ (k,n) -> (m,n)
@@ -380,6 +382,7 @@ impl RawTensor {
     /// # Panics
     /// If the tensor is not 2D.
     #[must_use]
+    #[track_caller]
     pub fn transpose(self_t: &Tensor) -> Tensor {
         let (data, shape) = {
             let s = self_t.borrow();

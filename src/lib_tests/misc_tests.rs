@@ -1402,3 +1402,66 @@ fn test_embedding_gradient_accumulation() {
         );
     }
 }
+
+// ===== #132: PANIC LOCATIONS POINT AT THE CALLER =====
+
+std::thread_local! {
+    /// The file and line of the last panic on this thread, recorded by [`panic_location`]'s hook.
+    static LAST_PANIC: std::cell::RefCell<Option<(String, u32)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f`, which must panic, and return the file and line the panic reported.
+///
+/// Installs (once, for the whole test binary) a hook that records the location on the
+/// panicking thread and then runs the previous hook, so other tests' panics print as usual.
+fn panic_location(f: impl FnOnce()) -> (String, u32) {
+    static HOOK: std::sync::Once = std::sync::Once::new();
+    HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if let Some(l) = info.location() {
+                LAST_PANIC.with(|p| *p.borrow_mut() = Some((l.file().to_string(), l.line())));
+            }
+            previous(info);
+        }));
+    });
+    LAST_PANIC.with(|p| *p.borrow_mut() = None);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    assert!(result.is_err(), "expected a panic");
+    LAST_PANIC
+        .with(|p| p.borrow_mut().take())
+        .expect("the panic hook recorded a location")
+}
+
+/// Assert that `f` panics at `line` of this file, not inside the library.
+fn assert_panics_here(what: &str, line: u32, f: impl FnOnce()) {
+    let (file, got) = panic_location(f);
+    assert!(
+        file.ends_with("misc_tests.rs") && got == line,
+        "{what}: panic reported at {file}:{got}, expected misc_tests.rs:{line}"
+    );
+}
+
+#[test]
+fn panicking_wrappers_report_the_callers_location() {
+    let a = RawTensor::new(vec![1.0; 6], &[2, 3], true);
+    assert_panics_here("RawTensor::new", line!() + 1, || {
+        let _ = RawTensor::new(vec![1.0], &[2], false);
+    });
+    assert_panics_here("RawTensor::zeros", line!() + 1, || {
+        let _ = RawTensor::zeros(&[0]);
+    });
+    assert_panics_here("Tensor::reshape", line!() + 1, || {
+        let _ = a.reshape(&[5]);
+    });
+    assert_panics_here("Tensor::matmul", line!() + 1, || {
+        let _ = a.matmul(&a);
+    });
+    assert_panics_here("SGD::new", line!() + 1, || {
+        let _ = crate::nn::SGD::new(vec![a.clone()], -1.0, 0.0, 0.0);
+    });
+    assert_panics_here("Adam::new", line!() + 1, || {
+        let _ = crate::nn::Adam::new(vec![a.clone()], -1.0, (0.9, 0.999), 1e-8, 0.0);
+    });
+}

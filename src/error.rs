@@ -131,3 +131,30 @@ impl VoltaError {
 
 /// `Result` specialised to [`VoltaError`].
 pub type Result<T> = std::result::Result<T, VoltaError>;
+
+/// Unwrap a `Result`, panicking with `"{what}: {err}"` (or just `"{err}"` when `what` is
+/// empty) at the location of the first caller without `#[track_caller]`.
+///
+/// This is the panicking half of the `try_x` / `x` pair (DECISIONS.md, "Panic inside the
+/// program, `Result` where data comes from outside"). Use it instead of
+/// `unwrap_or_else(|e| panic!(..))`: `#[track_caller]` does not reach into a closure, so a
+/// `panic!` inside one reports the closure's own line in `src/`, not the user's call (#132).
+pub(crate) trait OrPanic<T> {
+    /// The `Ok` value, or a panic naming `what` and the error.
+    ///
+    /// # Panics
+    /// If `self` is `Err`.
+    #[track_caller]
+    fn or_panic(self, what: &str) -> T;
+}
+
+impl<T, E: std::fmt::Display> OrPanic<T> for std::result::Result<T, E> {
+    #[track_caller]
+    fn or_panic(self, what: &str) -> T {
+        match self {
+            Ok(v) => v,
+            Err(e) if what.is_empty() => panic!("{e}"),
+            Err(e) => panic!("{what}: {e}"),
+        }
+    }
+}

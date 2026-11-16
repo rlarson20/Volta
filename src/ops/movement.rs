@@ -1,6 +1,7 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::device_policy::kernel_failed;
+use crate::error::OrPanic;
 use crate::error::{Result, VoltaError};
 use crate::index::{fetch, slot};
 use crate::real::{Bits, Real, dispatch_bits, dispatch_real};
@@ -762,7 +763,7 @@ impl RawTensor {
     #[must_use]
     #[track_caller]
     pub fn reshape(self_t: &Tensor, new_shape: &[usize]) -> Tensor {
-        Self::try_reshape(self_t, new_shape).unwrap_or_else(|e| panic!("Reshape: {e}"))
+        Self::try_reshape(self_t, new_shape).or_panic("Reshape")
     }
 
     /// Reshape tensor to new shape (fallible)
@@ -869,6 +870,7 @@ impl RawTensor {
     /// If `axes` is not a permutation of `0..rank`: a repeated or out-of-range axis, or a
     /// length other than the tensor's rank.
     #[must_use]
+    #[track_caller]
     pub fn permute(self_t: &Tensor, axes: &[Axis]) -> Tensor {
         let old_shape = self_t.borrow().shape.clone();
         let axes: Vec<usize> = axes.iter().map(|a| a.0).collect();
@@ -904,7 +906,7 @@ impl RawTensor {
     #[must_use]
     #[track_caller]
     pub fn expand(self_t: &Tensor, new_shape: &[usize]) -> Tensor {
-        Self::try_expand(self_t, new_shape).unwrap_or_else(|e| panic!("Expand: {e}"))
+        Self::try_expand(self_t, new_shape).or_panic("Expand")
     }
 
     /// Expand (broadcast) tensor to larger shape (fallible)
@@ -998,8 +1000,9 @@ impl RawTensor {
     /// Panics if `padding` does not match the rank or the padded shape is
     /// invalid. Use [`Self::try_pad_with`] to get an error instead.
     #[must_use]
+    #[track_caller]
     pub fn pad_with(self_t: &Tensor, padding: &[(usize, usize)], value: PadValue) -> Tensor {
-        Self::try_pad_with(self_t, padding, value).unwrap_or_else(|e| panic!("Pad: {e}"))
+        Self::try_pad_with(self_t, padding, value).or_panic("Pad")
     }
 
     /// Fallible version of [`Self::pad_with`].
@@ -1146,6 +1149,7 @@ impl RawTensor {
     /// - If any range has `end > dimension size`
     /// - If any range has `start == end` (zero-sized dimension)
     #[must_use]
+    #[track_caller]
     pub fn shrink(self_t: &Tensor, ranges: &[(usize, usize)]) -> Tensor {
         Self::try_shrink(self_t, ranges).expect("Invalid shrink ranges")
     }
@@ -1232,6 +1236,7 @@ impl RawTensor {
     /// # Panics
     /// If `strides.len()` differs from the tensor's rank, or a stride is zero.
     #[must_use]
+    #[track_caller]
     pub fn stride_op(self_t: &Tensor, strides: &[usize]) -> Tensor {
         let dtype = self_t.dtype();
         let (data, old_shape, device) = {
