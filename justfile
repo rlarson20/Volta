@@ -34,6 +34,28 @@ test-repeat-threads args="" n="10":
 
 # ===== CODE HEALTH & ANALYSIS =====
 
+# The nightly the sanitizer recipes use (#257). Pinned so a nightly regression can't turn
+# the scheduled job red on an untouched tree; bump it by hand, in a PR of its own.
+sanitizer_nightly := "nightly-2026-11-01"
+
+# Miri runs ~100x slower than native, so `miri` takes a test-name filter, not the whole
+# suite; the default covers the graph core, matmul's `unsafe` sgemm/dgemm calls, the specs,
+# dtype casts, storage and safetensors IO (about 6 minutes on a 4-core Linux box, nearly all
+# of it the matmul tests). Pass other filters to widen it (`just miri "nn::"`). Isolation is
+# off because the IO tests write temporary files. Both recipes need the
+# `sanitizer_nightly` toolchain with its `miri` and `rust-src` components
+# (`rustup toolchain install <that nightly> --component miri,rust-src`).
+# Miri (undefined behavior, memory still allocated at exit) over CPU-only library tests
+miri filters="autograd:: ops::matmul spec:: dtype:: storage:: io::":
+	MIRIFLAGS="-Zmiri-disable-isolation" cargo +{{sanitizer_nightly}} miri test --no-default-features --lib -- {{filters}}
+
+# `asan` covers the CPU-only library and integration tests, Linux x86_64 only. Doctests and
+# the trybuild `compile_fail` test (it runs rustc itself, which the sanitizer flags break)
+# are left out. LeakSanitizer is what catches an `Rc` cycle in the graph.
+# AddressSanitizer and LeakSanitizer over the CPU-only tests (#257)
+asan:
+	RUSTFLAGS="-Zsanitizer=address" ASAN_OPTIONS=detect_leaks=1 cargo +{{sanitizer_nightly}} test -Zbuild-std --target x86_64-unknown-linux-gnu --no-default-features --lib --tests -- --skip compile_fail
+
 # Run coverage with llvm-cov and open HTML report
 coverage:
 	cargo llvm-cov --html

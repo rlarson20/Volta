@@ -1,0 +1,76 @@
+name: Sanitizers
+# Undefined behavior and leaks on the CPU-only path (#257): Miri over a filtered subset of
+# the library tests, AddressSanitizer with LeakSanitizer over the CPU suite. Each job calls
+# the justfile recipe (`just miri`, `just asan`), which also pins the nightly, so a local
+# run and CI can't drift. Not a required check, and not part of `cpu-only`: decoupled jobs.
+# GPU/wgpu stays out; its drivers would need suppression files.
+on:
+  # The PRs that can change what these jobs find; the schedule covers everything else.
+  pull_request:
+    paths: [src/ops/matmul.rs, Cargo.lock, justfile, .github/workflows/sanitizers.yml]
+  schedule:
+    - cron: "0 4 * * *" # Nightly
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  miri:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
+        with:
+          tool: just
+      # The toolchain the recipe pins, read from the justfile rather than repeated here.
+      - name: Install the pinned nightly
+        run: |
+          nightly="$(just --evaluate sanitizer_nightly)"
+          rustup toolchain install "$nightly" --profile minimal --component miri,rust-src
+          echo "NIGHTLY=$nightly" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: miri-${{ env.NIGHTLY }}
+      - run: just miri
+
+  asan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2
+        with:
+          tool: just
+      - name: Install the pinned nightly
+        run: |
+          nightly="$(just --evaluate sanitizer_nightly)"
+          rustup toolchain install "$nightly" --profile minimal --component rust-src
+          echo "NIGHTLY=$nightly" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: asan-${{ env.NIGHTLY }}
+      - run: just asan
+
+  # A scheduled failure is open work, so it becomes an issue (#258). Not `merge-gate`: these
+  # jobs are advisory, and only macOS gates main.
+  report-failure:
+    needs: [miri, asan]
+    if: >-
+      always() && github.event_name == 'schedule' &&
+      (needs.miri.result == 'failure' || needs.asan.result == 'failure')
+    permissions:
+      actions: read
+      issues: write
+    uses: ./.github/workflows/report-failure.yml
+    with:
+      title: "Sanitizers scheduled failure on ${{ github.ref_name }}"
+      labels: kind:bug,area:ci,P1
+      workflow: sanitizers.yml
+      details: >-
+        Miri or AddressSanitizer/LeakSanitizer found undefined behavior or a leak on the CPU-only path, or the pinned nightly broke. The failed job's log names which. Reproduce with `just miri` or `just asan` on Linux x86_64 (#257).
