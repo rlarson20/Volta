@@ -16,12 +16,13 @@ fn test_linear_layer() {
 
     loss.into_loss().expect("scalar loss").backward();
 
-    // All should have gradients
-    assert!(x.grad().is_some());
-    assert!(w.grad().is_some());
-    assert!(b.grad().is_some());
-
-    // b gradient should be ones (direct path from sum)
+    // d(sum(xW + b))/dx_i = sum_j W_ij (row sums of W), d/dW_ij = x_i, d/db_j = 1.
+    // Exact in f32 up to the one rounding of each row sum.
+    let gx = x.grad().expect("x grad");
+    for (g, e) in gx.iter().zip([0.3f32, 0.7, 1.1]) {
+        assert!((g - e).abs() < 1e-6, "x grad {gx:?}");
+    }
+    assert_eq!(w.grad(), Some(vec![1.0, 1.0, 2.0, 2.0, 3.0, 3.0]));
     assert_eq!(b.grad(), Some(vec![1.0, 1.0]));
 }
 
@@ -225,10 +226,19 @@ fn test_broadcast_bias_add() {
 
     loss.into_loss().expect("scalar loss").backward();
 
-    // All should have gradients
-    assert!(x.grad().is_some());
-    assert!(w.grad().is_some());
-    assert!(b.grad().is_some());
+    // d/dx[b, i] = sum_j W[i, j] (each row of x gets W's row sums), d/dW[i, j] = sum_b x[b, i]
+    // (x's column sums, repeated across j).
+    let gx = x.grad().expect("x grad");
+    assert_eq!(gx.len(), 6);
+    for (g, e) in gx.iter().zip([1.0f32, 2.6, 4.2, 1.0, 2.6, 4.2]) {
+        assert!((g - e).abs() < 1e-5, "x grad {gx:?}");
+    }
+    assert_eq!(
+        w.grad(),
+        Some(vec![
+            5.0, 5.0, 5.0, 5.0, 7.0, 7.0, 7.0, 7.0, 9.0, 9.0, 9.0, 9.0
+        ])
+    );
 
     // Bias gradient should be [batch_size, batch_size, ...]
     // Sum over batch dimension -> [2, 2, 2, 2]
@@ -775,13 +785,15 @@ fn test_sequential_forward() {
 
     assert_eq!(y.borrow().shape, vec![1, 2]);
 
-    let loss = y.sum();
-    loss.into_loss().expect("scalar loss").backward();
-
-    // All layer params should have gradients
-    for param in model.parameters() {
-        assert!(param.grad().is_some(), "Missing gradient");
-    }
+    // The input gradient through Linear -> ReLU -> Linear, by finite differences, under a
+    // weighted loss so the two outputs' paths are told apart (#123).
+    let w = RawTensor::new(vec![0.7, -1.3], &[1, 2], false);
+    let (max, mean, ok) =
+        RawTensor::check_gradients(&x, |t| model.forward(t).elem_mul(&w).sum(), 1e-3, 1e-2);
+    assert!(
+        ok,
+        "Sequential input gradient: max={max:.3e} mean={mean:.3e}"
+    );
 }
 
 #[test]
@@ -1171,51 +1183,22 @@ fn test_layernorm_parameters() {
     assert!(params.get(1).unwrap().borrow().requires_grad);
 }
 
+/// The input gradient of `LayerNorm` by finite differences, under a random weighted loss:
+/// `sum(ln(x))` has an input gradient of exactly zero, so it cannot test one (#123).
 #[test]
 fn test_layernorm_gradient() {
-    // Numerical gradient check with deterministic data
+    crate::tensor::manual_seed(0x1A7E);
     let ln = LayerNorm::new_with_eps(vec![4], 1e-5);
+    let x = RawTensor::randn(&[8, 4]);
+    x.set_requires_grad(true);
+    let w = RawTensor::randn(&[8, 4]);
 
-    // Use deterministic data (not random) for stable gradients
-    let data: Vec<f32> = (0..32).map(|i| (i as f32) * 0.1).collect();
-    let x = RawTensor::new(data, &[8, 4], true);
-
-    // Simple forward pass: sum of output
-    let y = ln.forward(&x);
-    let loss = y.sum();
-    loss.into_loss().expect("scalar loss").backward();
-
-    // Check that gradients exist and are finite
-    let x_grad = x.grad();
-    assert!(x_grad.is_some(), "Input should have gradient");
-
-    let grad_data = x_grad.unwrap();
-    assert_eq!(
-        grad_data.len(),
-        32,
-        "Gradient should have same size as input"
+    let (max, mean, ok) =
+        RawTensor::check_gradients(&x, |t| ln.forward(t).elem_mul(&w).sum(), 1e-2, 2e-2);
+    assert!(
+        ok,
+        "LayerNorm input gradient: max={max:.3e} mean={mean:.3e}"
     );
-
-    // Check gradients are finite (not NaN or Inf)
-    for &g in &grad_data {
-        assert!(g.is_finite(), "Gradient should be finite, found {g}");
-    }
-
-    // Check gamma and beta have gradients
-    let params = ln.parameters();
-    let gamma_grad = params.first().unwrap().grad();
-    let beta_grad = params.get(1).unwrap().grad();
-
-    assert!(gamma_grad.is_some(), "Gamma should have gradient");
-    assert!(beta_grad.is_some(), "Beta should have gradient");
-
-    // Gradients should be finite
-    for g in &gamma_grad.unwrap() {
-        assert!(g.is_finite(), "Gamma gradient should be finite");
-    }
-    for g in &beta_grad.unwrap() {
-        assert!(g.is_finite(), "Beta gradient should be finite");
-    }
 }
 
 #[test]
@@ -1270,25 +1253,22 @@ fn test_pixelshuffle_forward_shape() {
     assert_eq!(y2.borrow().shape, vec![1, 3, 16, 16]);
 }
 
+/// `PixelShuffle` is a permutation, so its input gradient is the upstream gradient
+/// permuted back: checked by finite differences under a random weighted loss (#123).
 #[test]
 fn test_pixelshuffle_backward_flow() {
+    crate::tensor::manual_seed(0x9E15);
     let layer = PixelShuffle::new(2);
     let x = RawTensor::randn(&[2, 4, 3, 3]); // 1 channel * 4
-    x.borrow_mut().requires_grad = true;
+    x.set_requires_grad(true);
+    let w = RawTensor::randn(&[2, 1, 6, 6]);
 
-    let y = layer.forward(&x);
-    assert_eq!(y.borrow().shape, vec![2, 1, 6, 6]);
-
-    let loss = y.sum();
-    loss.into_loss().expect("scalar loss").backward();
-
-    let grad = x.grad();
+    let (max, mean, ok) =
+        RawTensor::check_gradients(&x, |t| layer.forward(t).elem_mul(&w).sum(), 1e-2, 2e-2);
     assert!(
-        grad.is_some(),
-        "Gradient should flow back through PixelShuffle"
+        ok,
+        "PixelShuffle input gradient: max={max:.3e} mean={mean:.3e}"
     );
-    // Check gradient has correct number of elements: 2 * 4 * 3 * 3 = 72
-    assert_eq!(grad.unwrap().len(), 72);
 }
 
 #[test]
