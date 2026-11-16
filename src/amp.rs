@@ -134,9 +134,12 @@ enum Stage {
 /// `scaler.update()`. As in PyTorch, one scaler serves several optimizers: each has its own
 /// unscale/step stage, so `step(&mut opt_g); step(&mut opt_d); update()` works (a GAN loop),
 /// and `update` backs off if any of them found an inf or NaN. An optimizer is identified by
-/// its parameter list (the same tensors, in the same order). A skipped step multiplies the scale by `backoff_factor`;
-/// `growth_interval` clean steps in a row multiply it by `growth_factor`. Call
-/// [`Self::unscale`] first to read or clip the true gradients before `step`.
+/// its parameter list (the same tensors, in the same order), so two optimizers over an
+/// identical list share one stage. Optimizers whose lists only partly overlap are separate,
+/// and a shared parameter's gradient is unscaled once per optimizer (divided twice), as in
+/// PyTorch: give each parameter to one optimizer. A skipped step multiplies the scale by
+/// `backoff_factor`; `growth_interval` clean steps in a row multiply it by `growth_factor`.
+/// Call [`Self::unscale`] first to read or clip the true gradients before `step`.
 ///
 /// ```
 /// use volta::amp::{GradScaler, autocast};
