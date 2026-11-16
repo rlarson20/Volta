@@ -408,6 +408,19 @@ impl Drop for NoGradGuard {
 // ===== BACKPROPAGATION =====
 
 impl RawTensor {
+    /// Assert that `op`'s backward returned one gradient slot per parent.
+    ///
+    /// # Panics
+    /// If `grads != parents`: an op bug, since `run_backward` pairs them by position.
+    fn check_parent_grads(op: &GradFn, grads: usize, parents: usize) {
+        assert_eq!(
+            grads,
+            parents,
+            "{}: backward returned {grads} gradients for {parents} parents",
+            op.op_name()
+        );
+    }
+
     /// Panics if an input that `grad_fn`'s backward reads was written in place after the
     /// forward pass recorded its version (S9): the gradient would silently use the new
     /// values, where PyTorch raises "modified by an inplace operation".
@@ -539,6 +552,9 @@ impl RawTensor {
 
                 // Compute gradients for parent tensors
                 let parent_grads = grad_fn.backward(&grad_out, &parents);
+                // The zip below pairs by position: a short `backward` would leave a parent
+                // without its gradient, silently freezing it (#169).
+                Self::check_parent_grads(&grad_fn, parent_grads.len(), parents.len());
 
                 // A leaf parent takes the contribution through `Tensor::accumulate_grad`,
                 // the only code allowed to write `grad` (device-move + add-or-set). An
@@ -731,6 +747,29 @@ fn add_host<T: Element>(a: &Storage, b: &Storage, add: impl Fn(T, T) -> T) -> Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #169: a backward that returns fewer gradient slots than its op has parents is an
+    /// op bug that panics, naming the op, instead of leaving a parent without a gradient.
+    #[test]
+    #[should_panic(expected = "backward returned 1 gradients for 2 parents")]
+    fn parent_grad_count_mismatch_panics() {
+        let x = RawTensor::new(vec![1.0, 2.0], &[2], true);
+        let op = x
+            .sum()
+            .borrow()
+            .grad_fn
+            .clone()
+            .expect("sum records a grad_fn");
+        RawTensor::check_parent_grads(&op, 1, 2);
+    }
+
+    /// The matching count passes.
+    #[test]
+    fn parent_grad_count_match_passes() {
+        let x = RawTensor::new(vec![1.0, 2.0], &[2], true);
+        let op = x.sum().borrow().grad_fn.clone().expect("grad_fn");
+        RawTensor::check_parent_grads(&op, 1, 1);
+    }
 
     #[test]
     fn into_loss_rejects_non_scalar() {
