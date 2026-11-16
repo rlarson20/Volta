@@ -48,6 +48,23 @@ pub(crate) fn check_unique(params: &[Tensor]) -> crate::Result<()> {
     Ok(())
 }
 
+/// `Ok` if every tensor in `params` is a leaf (no `grad_fn`). A non-leaf, such as the
+/// result of `param.to_dtype(..)` or `param.to_device(..)` on a parameter that requires
+/// grad, is a graph intermediate: stepping it overwrites a value in the graph while the real
+/// leaf never moves. PyTorch raises `can't optimize a non-leaf Tensor` (#102).
+///
+/// A leaf with `requires_grad == false` (a frozen parameter) is accepted, as in PyTorch: it
+/// never gets a gradient, and `step` skips a parameter without one.
+pub(crate) fn check_leaves(params: &[Tensor]) -> crate::Result<()> {
+    if let Some(i) = params.iter().position(|p| p.borrow().grad_fn.is_some()) {
+        return Err(crate::VoltaError::InvalidParameter(format!(
+            "can't optimize a non-leaf tensor (parameter {i} was computed by an op); pass the \
+             leaf it came from, or make a leaf on the target device or dtype first"
+        )));
+    }
+    Ok(())
+}
+
 /// `Ok` if `0 <= value < 1`, else PyTorch's `Invalid beta parameter at index <i>`.
 pub(crate) fn check_beta(index: usize, value: f32) -> crate::Result<()> {
     if (0.0..1.0).contains(&value) {
