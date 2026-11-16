@@ -79,11 +79,7 @@ fn learned_positional_encoding_gradients_match_finite_differences() {
         .backward();
     let grad = weight.grad_storage().expect("table grad");
     assert_eq!(grad.dtype(), DType::F64);
-    let analytic: Vec<f64> = grad
-        .as_bytes()
-        .chunks_exact(8)
-        .map(|b| f64::from_le_bytes(b.try_into().expect("8 bytes")))
-        .collect();
+    let analytic: Vec<f64> = grad.as_host::<f64>().expect("a host f64 gradient").to_vec();
     assert_eq!(analytic.len(), table.len());
 
     let eps = 1e-6;
