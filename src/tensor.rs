@@ -258,8 +258,8 @@ impl Tensor {
     /// Set `requires_grad` on a leaf tensor.
     ///
     /// # Panics
-    /// Panics if called on a tensor that already has a `grad_fn` attached —
-    /// flipping the flag on a non-leaf tensor would contradict the invariant
+    /// Panics if called on a tensor that already has a `grad_fn` attached, with either
+    /// value of `on` (#134). Flipping the flag on a non-leaf tensor would contradict the invariant
     /// `edge()` maintains (`requires_grad` is derived from inputs, not hand-set,
     /// on anything that isn't a leaf). This is the same rule PyTorch enforces on
     /// `.requires_grad = ...` for non-leaf tensors, and it's an unconditional
@@ -273,9 +273,13 @@ impl Tensor {
     #[track_caller]
     pub fn set_requires_grad(&self, on: bool) {
         let mut t = self.inner.borrow_mut();
+        // Both directions: turning it off on a non-leaf left a node with a `grad_fn` but
+        // `requires_grad == false`, which cut the graph if set before use and was ignored by
+        // `backward` if set after (#134). PyTorch raises in both directions too.
         assert!(
-            !(on && t.grad_fn.is_some()),
-            "set_requires_grad called on a non-leaf tensor"
+            t.grad_fn.is_none(),
+            "set_requires_grad({on}) called on a non-leaf tensor: you can only change \
+             requires_grad on a leaf; use detach() to get a tensor outside the graph"
         );
         assert!(
             !on || t.data.dtype().is_float(),
@@ -755,11 +759,29 @@ impl RawTensor {
         Self::try_randn(shape).or_panic("randn")
     }
 
-    /// Create a tensor filled with random values from N(0, 1) with the same shape as the input
+    /// Create a tensor filled with random values from N(0, 1) with the same shape, dtype
+    /// and device as the input, as PyTorch's `randn_like` (#99). The values are drawn in
+    /// f32 and cast, as `constant_like` does. The result does not require grad.
+    ///
+    /// # Panics
+    /// If `tensor` has an integer or bool dtype (there is no normal sample of one; PyTorch
+    /// raises too).
     #[must_use]
+    #[track_caller]
     pub fn randn_like(tensor: &Tensor) -> Tensor {
+        let dtype = tensor.dtype();
+        assert!(
+            dtype.is_float(),
+            "randn_like: {dtype:?} is not a float dtype (normal samples need one)"
+        );
         let shape = tensor.borrow().shape.clone();
-        Self::randn(shape.truncate_rank())
+        let r = Self::randn(shape.truncate_rank());
+        let r = if dtype == DType::F32 {
+            r
+        } else {
+            r.to_dtype(dtype)
+        };
+        r.to_device(tensor.device())
     }
 
     /// Xavier uniform initialization (fallible)
@@ -2188,8 +2210,13 @@ impl DataLoader {
     /// As [`DataLoader::new`], returning an error instead of panicking.
     ///
     /// # Errors
-    /// [`VoltaError::InvalidParameter`] if `targets` does not hold exactly one target of
-    /// `target_shape` per sample. Checked before anything is allocated or shuffled.
+    /// [`VoltaError::InvalidParameter`], checked before anything is allocated or shuffled, if:
+    /// - `batch_size` is 0;
+    /// - `data_shape` or `target_shape` is not a valid [`Shape`] (a zero dimension, or
+    ///   over [`crate::shape::MAX_NUMEL`] elements);
+    /// - `data.len()` is not a whole number of samples of `data_shape` (a ragged tail used
+    ///   to be dropped without a word, #93);
+    /// - `targets` does not hold exactly one target of `target_shape` per sample.
     pub fn try_new(
         data: Vec<f32>,
         targets: Vec<f32>,
@@ -2198,8 +2225,31 @@ impl DataLoader {
         batch_size: usize,
         shuffle: bool,
     ) -> Result<Self> {
-        let num_samples = data.len() / data_shape.iter().product::<usize>();
-        let target_size = target_shape.iter().product::<usize>();
+        if batch_size == 0 {
+            return Err(VoltaError::InvalidParameter(
+                "DataLoader: batch_size must be at least 1".to_string(),
+            ));
+        }
+        let numel = |name: &str, dims: &[usize]| {
+            Shape::from_dims(dims.to_vec())
+                .map(|s| s.numel())
+                .map_err(|e| match e {
+                    VoltaError::InvalidParameter(m) => {
+                        VoltaError::InvalidParameter(format!("DataLoader {name}: {m}"))
+                    }
+                    other => other,
+                })
+        };
+        let sample_size = numel("data_shape", data_shape)?;
+        let target_size = numel("target_shape", target_shape)?;
+        if data.len() % sample_size != 0 {
+            return Err(VoltaError::InvalidParameter(format!(
+                "DataLoader: {} data values are not a whole number of samples of shape \
+                 {data_shape:?} ({sample_size} values each)",
+                data.len()
+            )));
+        }
+        let num_samples = data.len() / sample_size;
         let expected_targets = num_samples.checked_mul(target_size);
         if expected_targets != Some(targets.len()) {
             return Err(VoltaError::InvalidParameter(format!(
