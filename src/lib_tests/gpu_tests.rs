@@ -418,7 +418,10 @@ fn test_sgd_optimizer_gpu() {
     let gpu_device = Device::gpu().expect("GPU should be available");
 
     // Create a simple parameter on GPU
-    let param = RawTensor::new(vec![0.5; 10], &[10], true).to_device(gpu_device);
+    // A leaf on the GPU: moving a tensor that requires grad would make a non-leaf copy,
+    // which the optimizers reject (#102).
+    let param = RawTensor::new(vec![0.5; 10], &[10], false).to_device(gpu_device);
+    param.set_requires_grad(true);
 
     // Create optimizer with the parameter
     let mut opt = SGD::new(vec![param.clone()], 0.01, 0.0, 0.0);
@@ -449,7 +452,10 @@ fn test_adam_optimizer_gpu() {
     let gpu_device = Device::gpu().expect("GPU should be available");
 
     // Create a simple parameter on GPU
-    let param = RawTensor::new(vec![0.5; 10], &[10], true).to_device(gpu_device);
+    // A leaf on the GPU: moving a tensor that requires grad would make a non-leaf copy,
+    // which the optimizers reject (#102).
+    let param = RawTensor::new(vec![0.5; 10], &[10], false).to_device(gpu_device);
+    param.set_requires_grad(true);
 
     // Create Adam optimizer with the parameter
     let mut opt = Adam::new(vec![param.clone()], 0.01, (0.9, 0.999), 1e-8, 0.0);
@@ -480,7 +486,10 @@ fn test_sgd_momentum_optimizer_gpu() {
     let gpu_device = Device::gpu().expect("GPU should be available");
 
     // Create a simple parameter on GPU
-    let param = RawTensor::new(vec![0.5; 10], &[10], true).to_device(gpu_device);
+    // A leaf on the GPU: moving a tensor that requires grad would make a non-leaf copy,
+    // which the optimizers reject (#102).
+    let param = RawTensor::new(vec![0.5; 10], &[10], false).to_device(gpu_device);
+    param.set_requires_grad(true);
 
     // Create SGD optimizer with momentum
     let mut opt = SGD::new(vec![param.clone()], 0.01, 0.9, 0.0);
