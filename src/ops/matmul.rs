@@ -42,6 +42,22 @@ impl TransposeGradFn {
     }
 }
 
+/// `(m*k, k*n, m*n)`, the three buffer lengths of an `(m,k) @ (k,n)` product. Checked, so the
+/// lengths the `unsafe` gemm calls rely on are the true products on every target, including
+/// a 32-bit one built without overflow checks (#165).
+///
+/// # Panics
+/// If any product overflows `usize`.
+#[track_caller]
+fn gemm_lens(m: usize, k: usize, n: usize) -> (usize, usize, usize) {
+    let len = |x: usize, y: usize| {
+        x.checked_mul(y).unwrap_or_else(|| {
+            panic!("matmul: ({m},{k}) @ ({k},{n}) buffer length overflows usize")
+        })
+    };
+    (len(m, k), len(k, n), len(m, n))
+}
+
 // ===== MATRIX MULTIPLICATION =====
 
 impl RawTensor {
@@ -68,18 +84,19 @@ impl RawTensor {
     /// a transposed or sliced view must be made contiguous before it gets here.
     ///
     /// # Panics
-    /// `a.len() != m * k`, `b.len() != k * n`, or a dimension that does not fit in `i32`
-    /// (cblas path only)
+    /// `a.len() != m * k`, `b.len() != k * n`, a product of two dimensions that overflows
+    /// `usize`, or a dimension that does not fit in `i32` (cblas path only)
     #[must_use]
     pub(crate) fn matmul_raw(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
+        let (len_a, len_b, len_c) = gemm_lens(m, k, n);
         assert_eq!(
             a.len(),
-            m * k,
+            len_a,
             "matmul_raw: A has the wrong length for ({m},{k})"
         );
         assert_eq!(
             b.len(),
-            k * n,
+            len_b,
             "matmul_raw: B has the wrong length for ({k},{n})"
         );
 
@@ -106,10 +123,11 @@ impl RawTensor {
 
             let dim = |x: usize| i32::try_from(x).expect("matmul dim exceeds i32");
             let (mi, ki, ni) = (dim(m), dim(k), dim(n));
-            let mut result = vec![0.0; m * n];
+            let mut result = vec![0.0; len_c];
             // SAFETY: the asserts above fix `a.len() == m*k` and `b.len() == k*n`, and `result`
-            // holds m*n floats. With row-major leading dimensions k, n, n every access is in
-            // bounds, and the three buffers are distinct allocations.
+            // holds m*n floats (`gemm_lens` checked all three products). With row-major
+            // leading dimensions k, n, n every access is in bounds, and the three buffers are
+            // distinct allocations.
             unsafe {
                 cblas_sgemm(
                     101, // CblasRowMajor
@@ -133,10 +151,11 @@ impl RawTensor {
         #[cfg(not(all(feature = "accelerate", target_os = "macos")))]
         {
             // Use matrixmultiply crate for portable performance
-            let mut result = vec![0.0; m * n];
+            let mut result = vec![0.0; len_c];
             // SAFETY: the asserts above fix `a.len() == m*k` and `b.len() == k*n`, and `result`
-            // holds m*n floats. The row strides (k, n, n) and unit column strides keep every
-            // access in bounds, and the three buffers are distinct allocations.
+            // holds m*n floats (`gemm_lens` checked all three products). The row strides
+            // (k, n, n) and unit column strides keep every access in bounds, and the three
+            // buffers are distinct allocations.
             unsafe {
                 matrixmultiply::sgemm(
                     m,
@@ -163,23 +182,26 @@ impl RawTensor {
     /// an Accelerate `cblas_dgemm` path would be unverifiable off macOS (ADDENDUM §11).
     ///
     /// # Panics
-    /// `a.len() != m * k` or `b.len() != k * n`.
+    /// `a.len() != m * k`, `b.len() != k * n`, or a product of two dimensions that overflows
+    /// `usize`.
     #[must_use]
     pub(crate) fn matmul_raw_f64(a: &[f64], b: &[f64], m: usize, k: usize, n: usize) -> Vec<f64> {
+        let (len_a, len_b, len_c) = gemm_lens(m, k, n);
         assert_eq!(
             a.len(),
-            m * k,
+            len_a,
             "matmul_raw_f64: A has the wrong length for ({m},{k})"
         );
         assert_eq!(
             b.len(),
-            k * n,
+            len_b,
             "matmul_raw_f64: B has the wrong length for ({k},{n})"
         );
-        let mut result = vec![0.0; m * n];
+        let mut result = vec![0.0; len_c];
         // SAFETY: as in `matmul_raw`: the asserts fix the input lengths, `result` holds m*n
-        // values, the row strides (k, n, n) and unit column strides keep every access in
-        // bounds, and the three buffers are distinct allocations.
+        // values (`gemm_lens` checked all three products), the row strides (k, n, n) and unit
+        // column strides keep every access in bounds, and the three buffers are distinct
+        // allocations.
         unsafe {
             matrixmultiply::dgemm(
                 m,
@@ -210,7 +232,9 @@ impl RawTensor {
     /// - (n,) @ (n,p) -> (p,)    [vector-matrix]
     /// - (n,) @ (n,) -> scalar   [dot product]
     /// # Panics
-    /// Dimension mismatch, or matrix operands of unequal rank (see `MatmulSpec`)
+    /// Dimension mismatch, matrix operands of unequal rank, or an output (or an operand
+    /// broadcast to the output batch) over [`crate::shape::MAX_NUMEL`] elements, checked
+    /// before anything is allocated (see `MatmulSpec`)
     #[must_use]
     #[track_caller]
     pub fn matmul(self_t: &Tensor, other: &Tensor) -> Tensor {
@@ -671,6 +695,32 @@ mod tests {
             ok_b,
             "grad wrt B failed for {a_dims:?} @ {b_dims:?}: max={max_b:.3e} mean={mean_b:.3e}"
         );
+    }
+
+    /// #165: an output over `MAX_NUMEL` is rejected before the `m * n` buffer is allocated.
+    /// Before the fix this asked for 10^10 floats (40 GB) and aborted under a memory limit.
+    #[test]
+    fn oversized_matmul_output_is_rejected_before_allocating() {
+        let a = RawTensor::zeros(&[100_000, 1]);
+        let b = RawTensor::zeros(&[1, 100_000]);
+        let msg = panic_message(|| a.matmul(&b));
+        assert!(msg.contains("elements >"), "{msg}");
+    }
+
+    /// #165: an operand broadcast to the output batch is validated too. Here the output
+    /// (10^7) and both operands fit, but `a` broadcast to the batch is 10^9 elements.
+    #[test]
+    fn oversized_batched_broadcast_is_rejected_before_allocating() {
+        let a = RawTensor::zeros(&[1, 100, 100]);
+        let b = RawTensor::zeros(&[100_000, 100, 1]);
+        let msg = panic_message(|| a.matmul(&b));
+        assert!(msg.contains("elements >"), "{msg}");
+    }
+
+    #[test]
+    #[should_panic(expected = "buffer length overflows usize")]
+    fn gemm_lens_panics_on_overflow() {
+        let _ = super::gemm_lens(usize::MAX, 2, 1);
     }
 
     #[test]
