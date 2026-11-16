@@ -94,7 +94,7 @@ pub use tensor::{
     nll_loss, ones, rand, randn, randn_like, softmax, sum_dim, zeros,
 };
 
-pub use data::{load_mnist_images, load_mnist_labels, normalize, to_one_hot};
+pub use data::{load_mnist_images, load_mnist_labels, normalize, to_one_hot, try_normalize};
 pub use io::{
     TypedTensorData, load_safetensors, load_safetensors_raw, load_safetensors_with_mapping,
     mapping, save_safetensors, save_safetensors_typed,
