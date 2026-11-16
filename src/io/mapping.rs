@@ -421,14 +421,19 @@ pub fn create_key_mapping(mappings: Vec<(&str, &str)>) -> StateDictMapper {
     mapper
 }
 
-/// Load partial state dict (for transfer learning)
+/// Select one sub-module's entries from a state dict (for transfer learning).
 ///
-/// Strips a prefix and keeps only those keys.
+/// Keeps only the keys that start with `{prefix}.` and strips that prefix from them;
+/// every other key is dropped. `{"enc.w", "dec.w"}` with prefix `enc` becomes `{"w"}`.
+/// It transforms a [`StateDict`] and loads nothing; pass the result to
+/// [`crate::nn::Module::load_state_dict`].
 #[must_use]
-pub fn load_partial(state: StateDict, prefix: &str) -> StateDict {
-    StateDictMapper::new()
-        .strip_prefix(format!("{prefix}."))
-        .map(state)
+pub fn load_partial(mut state: StateDict, prefix: &str) -> StateDict {
+    let prefix_dot = format!("{prefix}.");
+    // Dropping first makes the strip injective: every remaining key has the prefix, so no
+    // two can collide after it is removed.
+    state.retain(|key, _| key.starts_with(&prefix_dot));
+    StateDictMapper::new().strip_prefix(prefix_dot).map(state)
 }
 
 #[cfg(test)]
@@ -437,6 +442,24 @@ mod tests {
     use crate::index::fetch;
     use crate::io::TensorData;
     use std::collections::BTreeMap;
+
+    /// #111: keys outside the prefix are dropped, not passed through under their old name.
+    #[test]
+    fn load_partial_keeps_only_the_prefixed_keys() {
+        let mut s = StateDict::new();
+        for (k, v) in [
+            ("enc.w", 1.0),
+            ("enc.b", 2.0),
+            ("dec.w", 3.0),
+            ("encoder.w", 4.0),
+        ] {
+            s.insert(k.into(), TensorData::from_f32(vec![v], vec![1]));
+        }
+        let out = load_partial(s, "enc");
+        assert_eq!(out.keys().collect::<Vec<_>>(), ["b", "w"]);
+        assert_eq!(out["w"].to_vec_as::<f32>().unwrap(), vec![1.0]);
+        assert_eq!(out["b"].to_vec_as::<f32>().unwrap(), vec![2.0]);
+    }
 
     fn create_test_state() -> StateDict {
         let mut state = BTreeMap::new();
