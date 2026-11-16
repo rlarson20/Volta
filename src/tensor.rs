@@ -2230,6 +2230,10 @@ impl DataLoader {
                 "DataLoader: batch_size must be at least 1".to_string(),
             ));
         }
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "Shape::from_dims returns only InvalidParameter; any other error passes through unchanged"
+        )]
         let numel = |name: &str, dims: &[usize]| {
             Shape::from_dims(dims.to_vec())
                 .map(|s| s.numel())
@@ -2242,7 +2246,7 @@ impl DataLoader {
         };
         let sample_size = numel("data_shape", data_shape)?;
         let target_size = numel("target_shape", target_shape)?;
-        if data.len() % sample_size != 0 {
+        if !data.len().is_multiple_of(sample_size) {
             return Err(VoltaError::InvalidParameter(format!(
                 "DataLoader: {} data values are not a whole number of samples of shape \
                  {data_shape:?} ({sample_size} values each)",
