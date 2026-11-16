@@ -74,9 +74,12 @@ fn check_unary(name: &str, op: fn(&Tensor) -> Tensor) {
     );
 }
 
+/// A unary op under test.
+type UnaryFn = fn(&Tensor) -> Tensor;
+
 #[test]
 fn unary_ops_match_torch_over_wide_ranges() {
-    let ops: [(&str, fn(&Tensor) -> Tensor); 13] = [
+    let ops: [(&str, UnaryFn); 13] = [
         ("neg", Tensor::neg),
         ("exp", Tensor::exp),
         ("exp2", Tensor::exp2),
@@ -96,6 +99,20 @@ fn unary_ops_match_torch_over_wide_ranges() {
     }
 }
 
+/// A stride the fixture stores as f32, back as `usize`.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "asserted a small positive integer first"
+)]
+fn stride_from(s: f32) -> usize {
+    assert!(
+        s >= 1.0 && s.fract() == 0.0 && s < 1e6,
+        "fixture stride {s} is not a small positive integer"
+    );
+    s as usize
+}
+
 #[test]
 fn stride_op_matches_torch_strided_slicing() {
     let f = Fixture::load("extra");
@@ -105,7 +122,7 @@ fn stride_op_matches_torch_strided_slicing() {
         let strides: Vec<usize> = f
             .values(&format!("stride.{name}.strides"))
             .iter()
-            .map(|&s| s as usize)
+            .map(|&s| stride_from(s))
             .collect();
         let out = x.stride_op(&strides);
         let (want, want_shape) = f.get(&format!("stride.{name}.out"));
