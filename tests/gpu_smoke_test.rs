@@ -21,12 +21,7 @@ fn an_adapter_is_present_when_required() {
             volta::gpu::is_gpu_available(),
             "VOLTA_REQUIRE_GPU is set but wgpu found no adapter"
         );
-        println!(
-            "GPU adapter: {}",
-            volta::gpu::get_gpu_context()
-                .expect("an adapter")
-                .device_name()
-        );
+        println!("GPU adapter: {}", volta::Device::gpu().expect("an adapter"));
     }
 }
 #[test]

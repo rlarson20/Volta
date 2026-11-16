@@ -43,8 +43,8 @@ pub use storage::Storage;
 
 #[cfg(feature = "gpu")]
 pub use gpu::{
-    GpuBuffer, GpuContext, get_gpu_context, gpu_cleanup, gpu_compact, gpu_pending_count,
-    gpu_pool_stats, gpu_sync, gpu_sync_threshold, is_gpu_available,
+    GpuBuffer, gpu_cleanup, gpu_compact, gpu_pending_count, gpu_pool_stats, gpu_sync,
+    gpu_sync_threshold, is_gpu_available,
 };
 
 /// Automatic mixed precision: `autocast` and `GradScaler`.

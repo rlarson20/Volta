@@ -341,6 +341,19 @@ mod tests {
         assert_eq!(fetch(&trends.memory_samples, 1), 200);
     }
 
+    /// Each health check records one memory and one pending-count sample, up to the history
+    /// limit (from `tests/gpu_stress.rs` test 13, which moved here with #68).
+    #[test]
+    fn test_check_health_records_samples() {
+        let mut ews = EarlyWarningSystem::with_capacity(3);
+        for _ in 0..5 {
+            let _ = ews.check_health();
+        }
+        let trends = ews.trends();
+        assert_eq!(trends.memory_samples.len(), 3);
+        assert_eq!(trends.pending_samples.len(), 3);
+    }
+
     #[test]
     fn test_health_status_equality() {
         let healthy = HealthStatus::Healthy;

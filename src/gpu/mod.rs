@@ -8,25 +8,27 @@
 
 mod buffer;
 mod context;
-pub mod early_warning;
+// The resource monitors are test diagnostics with no library caller (#68): they exist,
+// and are tested, only in the crate's own test build.
+#[cfg(test)]
+mod early_warning;
 #[deny(missing_docs, clippy::missing_docs_in_private_items)]
 mod kernels;
-pub mod monitor;
+#[cfg(test)]
+mod monitor;
 mod pool;
 pub(crate) mod shader_template;
 /// Pool of `MAP_READ` staging buffers for GPU-to-CPU transfers.
 pub(crate) mod staging_pool;
-pub mod system_monitor;
+#[cfg(test)]
+mod system_monitor;
 
 pub use buffer::GpuBuffer;
+pub(crate) use context::GpuContext;
 #[cfg(test)]
 pub(crate) use context::set_f16_emulation;
 pub(crate) use context::{BinaryBackwardPipelines, ComputePipelines};
-pub use context::{GpuContext, GpuSyncError};
-pub use early_warning::{EarlyWarningSystem, HealthStatus as EarlyWarningHealthStatus, TrendData};
 pub(crate) use kernels::{GpuKernels, MaxResult, OptimizerStepParams};
-pub use monitor::{ResourceStatus, check_system_resources, get_process_memory_mb};
-pub use system_monitor::{MonitorStats, SystemMonitor};
 
 use std::sync::OnceLock;
 
@@ -35,7 +37,7 @@ static GPU_CONTEXT: OnceLock<Option<GpuContext>> = OnceLock::new();
 
 /// Get the global GPU context, initializing it if necessary
 /// Returns None if GPU is not available
-pub fn get_gpu_context() -> Option<&'static GpuContext> {
+pub(crate) fn get_gpu_context() -> Option<&'static GpuContext> {
     GPU_CONTEXT
         .get_or_init(|| match GpuContext::new() {
             Ok(ctx) => {

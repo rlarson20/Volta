@@ -241,6 +241,18 @@ mod tests {
         // Should complete without panic
     }
 
+    /// Elapsed time is measured from creation, so it advances (from `tests/gpu_stress.rs`
+    /// test 12, which moved here with #68).
+    #[test]
+    fn test_elapsed_advances() {
+        let monitor = SystemMonitor::new();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        assert!(
+            monitor.stats().elapsed_secs > 0.0,
+            "elapsed time did not advance"
+        );
+    }
+
     #[test]
     fn test_stats_display() {
         let monitor = SystemMonitor::new();

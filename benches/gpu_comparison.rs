@@ -9,10 +9,9 @@ use volta::{Device, RawTensor, Tensor};
 #[cfg(feature = "gpu")]
 use volta::gpu::invalidate_all_tensor_caches;
 #[cfg(feature = "gpu")]
-use volta::{get_gpu_context, gpu_compact, gpu_pool_stats, gpu_sync};
-
-#[cfg(feature = "gpu")]
-use volta::gpu::monitor::{ResourceStatus, check_system_resources, get_process_memory_mb};
+use volta::{
+    gpu_compact, gpu_pending_count, gpu_pool_stats, gpu_sync, gpu_sync_threshold, is_gpu_available,
+};
 
 /// Generate a random tensor of the given size
 fn random_tensor(size: usize) -> Tensor {
@@ -32,7 +31,21 @@ fn random_tensor_2d(rows: usize, cols: usize) -> Tensor {
 /// Whether a GPU context could be created, so the benches can skip themselves when it could not.
 #[cfg(feature = "gpu")]
 fn is_gpu_enabled() -> bool {
-    get_gpu_context().is_some()
+    is_gpu_available()
+}
+
+/// Panics if the GPU's queued-submission backlog has outgrown the auto-sync threshold, or if
+/// draining it times out, so a benchmark never starts or ends on a runaway queue. `when`
+/// names the point in the benchmark for the message.
+#[cfg(feature = "gpu")]
+fn assert_gpu_drained(when: &str) {
+    let pending = gpu_pending_count();
+    let threshold = gpu_sync_threshold();
+    assert!(
+        pending <= threshold,
+        "{pending} GPU submissions pending {when}, above the auto-sync threshold {threshold}"
+    );
+    assert!(gpu_sync(), "GPU sync timed out {when}");
 }
 
 /// Always `false`: without the `gpu` feature there is no GPU context to benchmark.
@@ -49,28 +62,7 @@ fn bench_matmul_cpu_vs_gpu(c: &mut Criterion) {
         return; // Skip if GPU not available
     }
 
-    // Reset timeout counter to isolate this benchmark from previous state
-    if let Some(ctx) = get_gpu_context() {
-        ctx.reset_timeout_counter();
-    }
-
-    // Pre-flight resource check
-    match check_system_resources() {
-        ResourceStatus::Critical(msg) => {
-            eprintln!("CRITICAL: Cannot run matmul benchmarks - {msg}");
-            eprintln!("Skipping matmul_cpu_vs_gpu to avoid system freeze");
-            return;
-        }
-        ResourceStatus::Warning(msg) => {
-            eprintln!("WARNING: Starting matmul benchmarks with elevated resources: {msg}");
-        }
-        ResourceStatus::Healthy => {
-            println!(
-                "Resources healthy. Starting matmul_cpu_vs_gpu (Memory: {}MB)",
-                get_process_memory_mb()
-            );
-        }
-    }
+    assert_gpu_drained("before the benchmark");
 
     let mut group = c.benchmark_group("matmul_cpu_vs_gpu");
 
@@ -118,20 +110,6 @@ fn bench_matmul_cpu_vs_gpu(c: &mut Criterion) {
     }
     drop(setup_tensors); // Release tensor references
 
-    // Post-flight check
-    let final_memory = get_process_memory_mb();
-    match check_system_resources() {
-        ResourceStatus::Critical(msg) => {
-            eprintln!("CRITICAL after matmul_cpu_vs_gpu: {msg} (Memory: {final_memory}MB)");
-        }
-        ResourceStatus::Warning(msg) => {
-            eprintln!("Warning after matmul_cpu_vs_gpu: {msg} (Memory: {final_memory}MB)");
-        }
-        ResourceStatus::Healthy => {
-            println!("matmul_cpu_vs_gpu complete. Final memory: {final_memory}MB");
-        }
-    }
-
     // Explicit GPU cleanup with memory release
     println!("[Cleanup] Syncing GPU after matmul_cpu_vs_gpu...");
     if !gpu_sync() {
@@ -149,16 +127,7 @@ fn bench_matmul_cpu_vs_gpu(c: &mut Criterion) {
     println!("[Cleanup] Cooldown period (500ms) to allow GPU recovery...");
     std::thread::sleep(std::time::Duration::from_millis(500));
 
-    // Log memory after cleanup
-    println!(
-        "[Cleanup] Post-cleanup memory: {}MB",
-        get_process_memory_mb()
-    );
-
-    // Verify cleanup succeeded
-    if let ResourceStatus::Critical(msg) = check_system_resources() {
-        panic!("CRITICAL after cleanup: {msg}");
-    }
+    assert_gpu_drained("after cleanup");
 }
 
 // ===== BINARY OPERATIONS COMPARISON =====
@@ -169,28 +138,7 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
         return;
     }
 
-    // Reset timeout counter to isolate this benchmark from previous state
-    if let Some(ctx) = get_gpu_context() {
-        ctx.reset_timeout_counter();
-    }
-
-    // Pre-flight resource check
-    match check_system_resources() {
-        ResourceStatus::Critical(msg) => {
-            eprintln!("CRITICAL: Cannot run binary ops benchmarks - {msg}");
-            eprintln!("Skipping binary_ops_cpu_vs_gpu to avoid system freeze");
-            return;
-        }
-        ResourceStatus::Warning(msg) => {
-            eprintln!("WARNING: Starting binary ops benchmarks with elevated resources: {msg}");
-        }
-        ResourceStatus::Healthy => {
-            println!(
-                "Resources healthy. Starting binary_ops_cpu_vs_gpu (Memory: {}MB)",
-                get_process_memory_mb()
-            );
-        }
-    }
+    assert_gpu_drained("before the benchmark");
 
     let mut group = c.benchmark_group("binary_ops_cpu_vs_gpu");
 
@@ -255,20 +203,6 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
     }
     drop(setup_tensors); // Release tensor references
 
-    // Post-flight check
-    let final_memory = get_process_memory_mb();
-    match check_system_resources() {
-        ResourceStatus::Critical(msg) => {
-            eprintln!("CRITICAL after binary_ops_cpu_vs_gpu: {msg} (Memory: {final_memory}MB)");
-        }
-        ResourceStatus::Warning(msg) => {
-            eprintln!("Warning after binary_ops_cpu_vs_gpu: {msg} (Memory: {final_memory}MB)");
-        }
-        ResourceStatus::Healthy => {
-            println!("binary_ops_cpu_vs_gpu complete. Final memory: {final_memory}MB");
-        }
-    }
-
     // Explicit GPU cleanup with memory release
     println!("[Cleanup] Syncing GPU after binary_ops_cpu_vs_gpu...");
     if !gpu_sync() {
@@ -284,16 +218,7 @@ fn bench_binary_ops_cpu_vs_gpu(c: &mut Criterion) {
     // Brief cooldown to ensure clean state for next benchmark
     std::thread::sleep(std::time::Duration::from_millis(200));
 
-    // Log memory after cleanup
-    println!(
-        "[Cleanup] Post-cleanup memory: {}MB",
-        get_process_memory_mb()
-    );
-
-    // Verify cleanup succeeded
-    if let ResourceStatus::Critical(msg) = check_system_resources() {
-        panic!("CRITICAL after cleanup: {msg}");
-    }
+    assert_gpu_drained("after cleanup");
 }
 
 // ===== UNARY OPERATIONS COMPARISON =====
@@ -304,28 +229,7 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
         return;
     }
 
-    // Reset timeout counter to isolate this benchmark from previous state
-    if let Some(ctx) = get_gpu_context() {
-        ctx.reset_timeout_counter();
-    }
-
-    // Pre-flight resource check
-    match check_system_resources() {
-        ResourceStatus::Critical(msg) => {
-            eprintln!("CRITICAL: Cannot run unary ops benchmarks - {msg}");
-            eprintln!("Skipping unary_ops_cpu_vs_gpu to avoid system freeze");
-            return;
-        }
-        ResourceStatus::Warning(msg) => {
-            eprintln!("WARNING: Starting unary ops benchmarks with elevated resources: {msg}");
-        }
-        ResourceStatus::Healthy => {
-            println!(
-                "Resources healthy. Starting unary_ops_cpu_vs_gpu (Memory: {}MB)",
-                get_process_memory_mb()
-            );
-        }
-    }
+    assert_gpu_drained("before the benchmark");
 
     let mut group = c.benchmark_group("unary_ops_cpu_vs_gpu");
 
@@ -384,20 +288,6 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
     }
     drop(setup_tensors); // Release tensor references
 
-    // Post-flight check
-    let final_memory = get_process_memory_mb();
-    match check_system_resources() {
-        ResourceStatus::Critical(msg) => {
-            eprintln!("CRITICAL after unary_ops_cpu_vs_gpu: {msg} (Memory: {final_memory}MB)");
-        }
-        ResourceStatus::Warning(msg) => {
-            eprintln!("Warning after unary_ops_cpu_vs_gpu: {msg} (Memory: {final_memory}MB)");
-        }
-        ResourceStatus::Healthy => {
-            println!("unary_ops_cpu_vs_gpu complete. Final memory: {final_memory}MB");
-        }
-    }
-
     // Explicit GPU cleanup with memory release
     println!("[Cleanup] Syncing GPU after unary_ops_cpu_vs_gpu...");
     if !gpu_sync() {
@@ -413,16 +303,7 @@ fn bench_unary_ops_cpu_vs_gpu(c: &mut Criterion) {
     // Brief cooldown to ensure clean state for next benchmark
     std::thread::sleep(std::time::Duration::from_millis(200));
 
-    // Log memory after cleanup
-    println!(
-        "[Cleanup] Post-cleanup memory: {}MB",
-        get_process_memory_mb()
-    );
-
-    // Verify cleanup succeeded
-    if let ResourceStatus::Critical(msg) = check_system_resources() {
-        panic!("CRITICAL after cleanup: {msg}");
-    }
+    assert_gpu_drained("after cleanup");
 }
 
 // ===== REDUCTION OPERATIONS COMPARISON =====
@@ -433,28 +314,7 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
         return;
     }
 
-    // Reset timeout counter to isolate this benchmark from previous state
-    if let Some(ctx) = get_gpu_context() {
-        ctx.reset_timeout_counter();
-    }
-
-    // Pre-flight resource check
-    match check_system_resources() {
-        ResourceStatus::Critical(msg) => {
-            eprintln!("CRITICAL: Cannot run reduce ops benchmarks - {msg}");
-            eprintln!("Skipping reduce_ops_cpu_vs_gpu to avoid system freeze");
-            return;
-        }
-        ResourceStatus::Warning(msg) => {
-            eprintln!("WARNING: Starting reduce ops benchmarks with elevated resources: {msg}");
-        }
-        ResourceStatus::Healthy => {
-            println!(
-                "Resources healthy. Starting reduce_ops_cpu_vs_gpu (Memory: {}MB)",
-                get_process_memory_mb()
-            );
-        }
-    }
+    assert_gpu_drained("before the benchmark");
 
     let mut group = c.benchmark_group("reduce_ops_cpu_vs_gpu");
 
@@ -513,20 +373,6 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
     }
     drop(setup_tensors); // Release tensor references
 
-    // Post-flight check
-    let final_memory = get_process_memory_mb();
-    match check_system_resources() {
-        ResourceStatus::Critical(msg) => {
-            eprintln!("CRITICAL after reduce_ops_cpu_vs_gpu: {msg} (Memory: {final_memory}MB)");
-        }
-        ResourceStatus::Warning(msg) => {
-            eprintln!("Warning after reduce_ops_cpu_vs_gpu: {msg} (Memory: {final_memory}MB)");
-        }
-        ResourceStatus::Healthy => {
-            println!("reduce_ops_cpu_vs_gpu complete. Final memory: {final_memory}MB");
-        }
-    }
-
     // Explicit GPU cleanup with memory release
     println!("[Cleanup] Syncing GPU after reduce_ops_cpu_vs_gpu...");
     if !gpu_sync() {
@@ -542,16 +388,7 @@ fn bench_reduce_ops_cpu_vs_gpu(c: &mut Criterion) {
     // Brief cooldown to ensure clean state for next benchmark
     std::thread::sleep(std::time::Duration::from_millis(200));
 
-    // Log memory after cleanup
-    println!(
-        "[Cleanup] Post-cleanup memory: {}MB",
-        get_process_memory_mb()
-    );
-
-    // Verify cleanup succeeded
-    if let ResourceStatus::Critical(msg) = check_system_resources() {
-        panic!("CRITICAL after cleanup: {msg}");
-    }
+    assert_gpu_drained("after cleanup");
 }
 
 // ===== MEMORY TRANSFER OVERHEAD =====
@@ -562,30 +399,7 @@ fn bench_memory_transfer(c: &mut Criterion) {
         return;
     }
 
-    // Reset timeout counter to isolate this benchmark from previous state
-    if let Some(ctx) = get_gpu_context() {
-        ctx.reset_timeout_counter();
-    }
-
-    // Pre-flight resource check
-    match check_system_resources() {
-        ResourceStatus::Critical(msg) => {
-            eprintln!("CRITICAL: Cannot run memory transfer benchmarks - {msg}");
-            eprintln!("Skipping memory_transfer to avoid system freeze");
-            return;
-        }
-        ResourceStatus::Warning(msg) => {
-            eprintln!(
-                "WARNING: Starting memory transfer benchmarks with elevated resources: {msg}"
-            );
-        }
-        ResourceStatus::Healthy => {
-            println!(
-                "Resources healthy. Starting memory_transfer (Memory: {}MB)",
-                get_process_memory_mb()
-            );
-        }
-    }
+    assert_gpu_drained("before the benchmark");
 
     let mut group = c.benchmark_group("memory_transfer");
 
@@ -605,20 +419,6 @@ fn bench_memory_transfer(c: &mut Criterion) {
 
     group.finish();
 
-    // Post-flight check
-    let final_memory = get_process_memory_mb();
-    match check_system_resources() {
-        ResourceStatus::Critical(msg) => {
-            eprintln!("CRITICAL after memory_transfer: {msg} (Memory: {final_memory}MB)");
-        }
-        ResourceStatus::Warning(msg) => {
-            eprintln!("Warning after memory_transfer: {msg} (Memory: {final_memory}MB)");
-        }
-        ResourceStatus::Healthy => {
-            println!("memory_transfer complete. Final memory: {final_memory}MB");
-        }
-    }
-
     // Explicit GPU cleanup with memory release
     println!("[Cleanup] Syncing GPU after memory_transfer...");
     if !gpu_sync() {
@@ -634,49 +434,19 @@ fn bench_memory_transfer(c: &mut Criterion) {
     // Brief cooldown to ensure clean state for next benchmark
     std::thread::sleep(std::time::Duration::from_millis(200));
 
-    // Log memory after cleanup
-    println!(
-        "[Cleanup] Post-cleanup memory: {}MB",
-        get_process_memory_mb()
-    );
-
-    // Verify cleanup succeeded
-    if let ResourceStatus::Critical(msg) = check_system_resources() {
-        panic!("CRITICAL after cleanup: {msg}");
-    }
+    assert_gpu_drained("after cleanup");
 }
 
 // ===== GPU BATCH PROCESSING =====
 
-/// Kernel-dispatch overhead on the GPU: `many_small_ops` runs an op over 20 tensors of 256 elements, `single_large_op` runs it once over one 5120-element tensor (the same total work). Uses 10 samples and checks system resources first to avoid exhausting memory. Skipped when no GPU is available.
+/// Kernel-dispatch overhead on the GPU: `many_small_ops` runs an op over 20 tensors of 256 elements, `single_large_op` runs it once over one 5120-element tensor (the same total work). Uses 10 samples to avoid exhausting memory. Skipped when no GPU is available.
 #[cfg(feature = "gpu")]
 fn bench_gpu_batch_processing(c: &mut Criterion) {
     if !is_gpu_enabled() {
         return;
     }
 
-    // Reset timeout counter to isolate this benchmark from previous state
-    if let Some(ctx) = get_gpu_context() {
-        ctx.reset_timeout_counter();
-    }
-
-    // Pre-flight resource check
-    match check_system_resources() {
-        ResourceStatus::Critical(msg) => {
-            eprintln!("CRITICAL: Cannot run GPU benchmarks - {msg}");
-            eprintln!("Skipping gpu_batch_processing to avoid system freeze");
-            return;
-        }
-        ResourceStatus::Warning(msg) => {
-            eprintln!("WARNING: Starting benchmarks with elevated resources: {msg}");
-        }
-        ResourceStatus::Healthy => {
-            println!(
-                "Resources healthy. Starting GPU benchmarks (Memory: {}MB)",
-                get_process_memory_mb()
-            );
-        }
-    }
+    assert_gpu_drained("before the benchmark");
 
     let mut group = c.benchmark_group("gpu_batch_processing");
     group.sample_size(10); // Reduce from 100 to 10 samples to prevent memory exhaustion
@@ -689,11 +459,6 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
     // kernels is much slower than one large kernel with the same total work.
     // Reduced to 20 tensors to prevent memory exhaustion during benchmarking.
     group.bench_function("many_small_ops", |b| {
-        // Check resources before setup
-        if let ResourceStatus::Critical(msg) = check_system_resources() {
-            panic!("Benchmark aborted before setup - {msg}");
-        }
-
         let tensors: Vec<_> =
             (0..20) // Reduced from 100 to 20 tensors
                 .map(|_| random_tensor(256).to_device(Device::gpu().unwrap()))
@@ -709,17 +474,6 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
             eprintln!("Warning: GPU sync timed out after tensor setup");
         }
 
-        // Check resources after setup
-        match check_system_resources() {
-            ResourceStatus::Critical(msg) => {
-                panic!("Benchmark aborted after setup - {msg}");
-            }
-            ResourceStatus::Warning(msg) => {
-                eprintln!("Warning after setup: {msg}");
-            }
-            ResourceStatus::Healthy => {}
-        }
-
         b.iter(|| {
             for t in &tensors {
                 black_box(black_box(&t).relu());
@@ -727,20 +481,10 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
 
             // Sync to ensure GPU work completes and timing is accurate
             assert!(gpu_sync(), "GPU sync timed out inside a timed iteration");
-
-            // Check resources after each iteration
-            if let ResourceStatus::Critical(msg) = check_system_resources() {
-                panic!("Benchmark aborted during iteration - {msg}");
-            }
         });
     });
 
     group.bench_function("single_large_op", |b| {
-        // Check resources before setup
-        if let ResourceStatus::Critical(msg) = check_system_resources() {
-            panic!("Benchmark aborted before setup - {msg}");
-        }
-
         let large_tensor = random_tensor(5120).to_device(Device::gpu().unwrap()); // 20 × 256
 
         // Capture setup tensor for cleanup
@@ -751,27 +495,11 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
             eprintln!("Warning: GPU sync timed out after tensor setup");
         }
 
-        // Check resources after setup
-        match check_system_resources() {
-            ResourceStatus::Critical(msg) => {
-                panic!("Benchmark aborted after setup - {msg}");
-            }
-            ResourceStatus::Warning(msg) => {
-                eprintln!("Warning after setup: {msg}");
-            }
-            ResourceStatus::Healthy => {}
-        }
-
         b.iter(|| {
             black_box(black_box(&large_tensor).relu());
 
             // Sync to ensure GPU work completes and timing is accurate
             assert!(gpu_sync(), "GPU sync timed out inside a timed iteration");
-
-            // Check resources after each iteration
-            if let ResourceStatus::Critical(msg) = check_system_resources() {
-                panic!("Benchmark aborted during iteration - {msg}");
-            }
         });
     });
 
@@ -788,20 +516,6 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
     }
     drop(setup_tensors); // Release tensor references
 
-    // Final resource check
-    let final_memory = get_process_memory_mb();
-    match check_system_resources() {
-        ResourceStatus::Critical(msg) => {
-            eprintln!("CRITICAL after benchmarks: {msg} (Memory: {final_memory}MB)");
-        }
-        ResourceStatus::Warning(msg) => {
-            eprintln!("Warning after benchmarks: {msg} (Memory: {final_memory}MB)");
-        }
-        ResourceStatus::Healthy => {
-            println!("Benchmarks complete. Final memory: {final_memory}MB");
-        }
-    }
-
     // Explicit GPU cleanup with memory release
     println!("[Cleanup] Syncing GPU after gpu_batch_processing...");
     if !gpu_sync() {
@@ -817,16 +531,7 @@ fn bench_gpu_batch_processing(c: &mut Criterion) {
     // Brief cooldown to ensure clean state for next benchmark
     std::thread::sleep(std::time::Duration::from_millis(200));
 
-    // Log memory after cleanup
-    println!(
-        "[Cleanup] Post-cleanup memory: {}MB",
-        get_process_memory_mb()
-    );
-
-    // Verify cleanup succeeded
-    if let ResourceStatus::Critical(msg) = check_system_resources() {
-        panic!("CRITICAL after cleanup: {msg}");
-    }
+    assert_gpu_drained("after cleanup");
 }
 
 /// No-op: without the `gpu` feature there is nothing to benchmark.

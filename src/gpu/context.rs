@@ -39,9 +39,6 @@ const DEFAULT_SYNC_THRESHOLD: u32 = 16;
 /// Set to 5s to accommodate unified memory architecture and thermal throttling
 const HARD_SYNC_TIMEOUT_SECS: u64 = 5;
 
-/// Maximum consecutive timeouts before aborting (3-strike rule)
-const MAX_CONSECUTIVE_TIMEOUTS: u32 = 3;
-
 /// Get the hard sync timeout from environment or default
 ///
 /// Allows runtime configuration for testing:
@@ -54,26 +51,6 @@ fn get_sync_timeout_secs() -> u64 {
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(HARD_SYNC_TIMEOUT_SECS)
 }
-
-/// GPU synchronization errors
-#[derive(Debug)]
-pub enum GpuSyncError {
-    /// Sync timed out (potentially recoverable)
-    Timeout(String),
-    /// GPU appears lost after consecutive timeouts
-    GpuLost(String),
-}
-
-impl std::fmt::Display for GpuSyncError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Self::Timeout(msg) => write!(f, "GPU sync timeout: {msg}"),
-            Self::GpuLost(msg) => write!(f, "GPU lost: {msg}"),
-        }
-    }
-}
-
-impl std::error::Error for GpuSyncError {}
 
 /// Handle to the GPU: device, queue, compiled pipelines, buffer pools, and submission counters.
 pub struct GpuContext {
@@ -99,8 +76,6 @@ pub struct GpuContext {
     pending_submissions: AtomicU32,
     /// Threshold before forcing a sync to prevent command queue exhaustion
     sync_threshold: u32,
-    /// Consecutive timeout counter for 3-strike abort rule
-    consecutive_timeouts: AtomicU32,
 }
 
 /// The backward pipelines of one differentiable binary op, looked up from its
@@ -431,7 +406,6 @@ impl GpuContext {
             staging_pool,
             pending_submissions: AtomicU32::new(0),
             sync_threshold: DEFAULT_SYNC_THRESHOLD,
-            consecutive_timeouts: AtomicU32::new(0),
         })
     }
 
@@ -550,11 +524,6 @@ impl GpuContext {
         &self.staging_pool
     }
 
-    /// Get an Arc reference to the staging buffer pool
-    pub fn staging_pool_arc(&self) -> Arc<StagingBufferPool> {
-        Arc::clone(&self.staging_pool)
-    }
-
     /// Increment the pending submission counter.
     /// Call this after each `queue.submit()`.
     pub fn increment_pending(&self) {
@@ -612,26 +581,6 @@ impl GpuContext {
         }
     }
 
-    /// Force sync with retry on timeout
-    ///
-    /// Attempts to sync up to `max_retries` times, returning true only
-    /// if sync eventually succeeds.
-    pub fn sync_with_retry(&self, max_retries: u32) -> bool {
-        for attempt in 0..max_retries {
-            if self.sync() {
-                return true;
-            }
-            log::warn!(
-                "[GPU] sync retry {}/{max_retries} - GPU may be overwhelmed",
-                attempt + 1
-            );
-            // Small delay between retries
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        log::warn!("[GPU] all sync retries failed - GPU may be lost");
-        false
-    }
-
     /// Conditionally sync if pending submissions exceed the threshold.
     ///
     /// This provides automatic back-pressure to prevent GPU command queue
@@ -659,94 +608,6 @@ impl GpuContext {
     /// Get the sync threshold (diagnostic)
     pub const fn sync_threshold(&self) -> u32 {
         self.sync_threshold
-    }
-
-    /// Force sync with hard timeout and consecutive failure tracking
-    ///
-    /// This method implements a 3-strike rule for GPU timeouts:
-    /// - Returns Ok(()) on successful sync (resets timeout counter)
-    /// - Returns Err(Timeout) on timeout (increments counter)
-    /// - Returns Err(GpuLost) if 3+ consecutive timeouts occur
-    ///
-    /// Use this instead of `sync()` in critical paths where you need
-    /// error handling for GPU failures.
-    ///
-    /// # Errors
-    /// [`GpuSyncError::Timeout`] if the wait for pending submissions times out, and
-    /// [`GpuSyncError::GpuLost`] once timeouts reach `MAX_CONSECUTIVE_TIMEOUTS` in a row
-    /// (checked before the wait, too, so a lost GPU is not polled again).
-    pub fn sync_checked(&self) -> Result<(), GpuSyncError> {
-        let timeout_count = self.consecutive_timeouts.load(Ordering::Relaxed);
-
-        // 3-strike rule: abort after consecutive failures
-        if timeout_count >= MAX_CONSECUTIVE_TIMEOUTS {
-            return Err(GpuSyncError::GpuLost(format!(
-                "{timeout_count} consecutive timeouts - GPU unresponsive"
-            )));
-        }
-
-        let pending = self.pending_submissions.load(Ordering::Relaxed);
-        if pending == 0 {
-            return Ok(());
-        }
-
-        log::debug!("[GPU] sync_checked: {pending} pending submissions...");
-
-        // Flush queued `write_buffer` uploads; see `sync`.
-        self.queue.submit(std::iter::empty::<wgpu::CommandBuffer>());
-
-        // Use the hard sync timeout
-        let result = self.device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(Duration::from_secs(get_sync_timeout_secs())),
-        });
-
-        self.pending_submissions.store(0, Ordering::Relaxed);
-
-        match result {
-            Ok(_) => {
-                // Success - reset timeout counter
-                self.consecutive_timeouts.store(0, Ordering::Relaxed);
-
-                log::debug!("[GPU] sync_checked: success, timeout counter reset");
-
-                Ok(())
-            }
-            Err(e) => {
-                // Timeout - increment counter
-                let new_count = self.consecutive_timeouts.fetch_add(1, Ordering::Relaxed) + 1;
-
-                log::warn!("[GPU] sync timeout #{new_count}: {e:?}");
-
-                if new_count >= MAX_CONSECUTIVE_TIMEOUTS {
-                    Err(GpuSyncError::GpuLost(format!(
-                        "{new_count} consecutive timeouts - aborting"
-                    )))
-                } else {
-                    Err(GpuSyncError::Timeout(format!(
-                        "Timeout #{new_count} of {MAX_CONSECUTIVE_TIMEOUTS}"
-                    )))
-                }
-            }
-        }
-    }
-
-    /// Get consecutive timeout count (diagnostic)
-    ///
-    /// Returns the number of consecutive sync timeouts. This counter
-    /// resets to 0 on successful sync or manual reset.
-    pub fn consecutive_timeouts(&self) -> u32 {
-        self.consecutive_timeouts.load(Ordering::Relaxed)
-    }
-
-    /// Reset the consecutive timeout counter (manual recovery)
-    ///
-    /// Use this to manually clear the timeout counter after diagnosing
-    /// and resolving GPU issues.
-    pub fn reset_timeout_counter(&self) {
-        self.consecutive_timeouts.store(0, Ordering::Relaxed);
-
-        log::debug!("[GPU] timeout counter manually reset");
     }
 
     /// Create all compute pipelines by compiling shaders

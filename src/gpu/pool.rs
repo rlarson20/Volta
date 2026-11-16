@@ -77,12 +77,6 @@ impl BufferPool {
         }
     }
 
-    /// Create a buffer pool with default configuration
-    #[must_use]
-    pub fn with_defaults() -> Self {
-        Self::new(BufferPoolConfig::default())
-    }
-
     /// Round size up to next power of 2 and return the bucket index (log2)
     ///
     /// Examples:
