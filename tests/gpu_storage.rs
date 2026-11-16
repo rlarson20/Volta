@@ -19,9 +19,13 @@ fn wavy(n: usize, salt: f32) -> Vec<f32> {
 
 /// A trainable parameter with the given starting values, on the CPU or the GPU.
 fn param(gpu: bool) -> Tensor {
-    let p = RawTensor::new(wavy(N, 0.1), &[N], true);
+    let p = RawTensor::new(wavy(N, 0.1), &[N], !gpu);
     if gpu {
-        p.to_device(Device::gpu().expect("adapter checked by the caller"))
+        // Move first, then require grad: moving a tensor that requires grad makes a
+        // non-leaf copy, which the optimizers reject (#102).
+        let p = p.to_device(Device::gpu().expect("adapter checked by the caller"));
+        p.set_requires_grad(true);
+        p
     } else {
         p
     }
