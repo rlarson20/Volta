@@ -2,27 +2,10 @@
 // Memory-efficient convolution without intermediate im2col matrix
 // Each thread computes ONE output pixel
 
-struct DirectConvParams {
-    batch_size: u32,
-    in_channels: u32,
-    out_channels: u32,
-    height: u32,
-    width: u32,
-    kernel_h: u32,
-    kernel_w: u32,
-    stride_h: u32,
-    stride_w: u32,
-    pad_h: u32,
-    pad_w: u32,
-    h_out: u32,
-    w_out: u32,
-    _padding: u32,  // 16-byte alignment
-}
-
 @group(0) @binding(0) var<storage, read> input: array<ELEM>;
 @group(0) @binding(1) var<storage, read> weight: array<ELEM>;
 @group(0) @binding(2) var<storage, read_write> output: array<ELEM>;
-@group(0) @binding(3) var<uniform> params: DirectConvParams;
+@group(0) @binding(3) var<uniform> params: ConvParams;
 
 @compute @workgroup_size(16, 16, 1)
 fn direct_conv_main(@builtin(global_invocation_id) global_id: vec3<u32>) {

@@ -193,6 +193,9 @@ impl GpuBuffer {
             });
         encoder.copy_buffer_to_buffer(buffer, 0, &staging_buffer, 0, byte_size);
         ctx.queue().submit(Some(encoder.finish()));
+        // Counted, but no `maybe_sync`: the blocking poll below waits for this submit and
+        // everything before it. It does not reset the counter, so the next `maybe_sync` may
+        // sync an already idle queue once, which costs a poll and nothing else.
         ctx.increment_pending();
 
         // Map the staging buffer and wait for the copy (and everything before it).
