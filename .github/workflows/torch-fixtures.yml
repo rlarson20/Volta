@@ -25,3 +25,19 @@ jobs:
         with:
           tool: uv
       - run: uv run scripts/torch_ref/check_fixtures.py
+
+  # A scheduled failure is open work, so it becomes an issue (#258); without this a weekly or
+  # nightly job just goes red where nobody looks. Not `merge-gate`: only macOS gates main.
+  report-failure:
+    needs: check
+    if: always() && needs.check.result == 'failure' && github.event_name == 'schedule'
+    permissions:
+      actions: read
+      issues: write
+    uses: ./.github/workflows/report-failure.yml
+    with:
+      title: "Torch Fixtures scheduled failure on ${{ github.ref_name }}"
+      labels: kind:bug,area:ci,P1
+      workflow: torch-fixtures.yml
+      details: >-
+        The regenerated PyTorch fixtures no longer match the committed ones (or torch failed to install). Reproduce with `uv run scripts/torch_ref/check_fixtures.py`.
