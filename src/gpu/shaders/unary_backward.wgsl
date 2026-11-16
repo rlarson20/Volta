@@ -135,9 +135,8 @@ fn recip_backward(
     let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
-        // d(1/x)/dx = -1/x²
-        let x_inv = 1.0 / ld_x(idx);
-        st_result(idx, -ld_out_grad(idx) * x_inv * x_inv);
+        // d(1/x)/dx = -1/x², without squaring x (overflow/underflow, #92).
+        st_result(idx, -over_square(ld_out_grad(idx), ld_x(idx)));
     }
 }
 
