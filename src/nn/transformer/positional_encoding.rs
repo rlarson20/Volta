@@ -30,7 +30,16 @@ pub enum PositionalEncodingType {
 /// # use volta::Device;
 /// let pos_enc = PositionalEncoding::new(512, 1024, PositionalEncodingType::Sinusoidal);
 /// ```
-#[derive(Clone, Debug)]
+///
+/// Like every layer, `PositionalEncoding` is not `Clone`: a derived clone would share the
+/// learned weight (a [`crate::Tensor`] handle) instead of copying it (#108).
+///
+/// ```compile_fail
+/// use volta::nn::transformer::{PositionalEncoding, PositionalEncodingType};
+/// let p = PositionalEncoding::new(4, 4, PositionalEncodingType::Learned);
+/// let _copy = p.clone();
+/// ```
+#[derive(Debug)]
 pub struct PositionalEncoding {
     /// Width of each position's vector.
     embed_dim: usize,

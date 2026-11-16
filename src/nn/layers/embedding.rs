@@ -33,7 +33,16 @@ use rand::RngExt;
 /// let embedded = embedding.forward(&indices);
 /// assert_eq!(embedded.shape(), vec![2, 3, 32]);
 /// ```
-#[derive(Clone, Debug)]
+///
+/// Like every layer, `Embedding` is not `Clone`: [`Tensor`] is a shared handle, so a
+/// derived clone would share the weight instead of copying it (#108). Share a weight
+/// explicitly through the `weight` field.
+///
+/// ```compile_fail
+/// let e = volta::Embedding::new(10, 4);
+/// let _copy = e.clone();
+/// ```
+#[derive(Debug)]
 pub struct Embedding {
     /// Lookup table, shape `[vocab_size, dim]`.
     pub weight: Tensor,
