@@ -29,6 +29,10 @@ pub enum DevicePolicy {
     Strict,
     /// A gap runs on the CPU, its result moves back to the GPU, and a
     /// [`FallbackEvent`] is recorded. Mixed devices and kernel failures still panic.
+    ///
+    /// The record is bounded: at most [`MAX_FALLBACK_EVENTS`] events are kept between two
+    /// calls to [`take_fallback_events`], so a training loop that never drains them does
+    /// not grow without limit. Each op still logs one `warn!` per thread.
     PreferGpu,
 }
 
@@ -50,9 +54,18 @@ pub struct FallbackEvent {
     pub pass: Pass,
 }
 
+/// How many [`FallbackEvent`]s a thread keeps between two [`take_fallback_events`] calls.
+///
+/// Past this, further fallbacks are counted, not stored, and one `log::warn!` says so; the
+/// next [`take_fallback_events`] logs the count and starts a fresh record. The oldest events
+/// are the ones kept, since the first fallback of each op is the one that names a gap.
+pub const MAX_FALLBACK_EVENTS: usize = 1024;
+
 thread_local! {
     static POLICY: Cell<DevicePolicy> = const { Cell::new(DevicePolicy::Strict) };
     static EVENTS: RefCell<Vec<FallbackEvent>> = const { RefCell::new(Vec::new()) };
+    // Fallbacks not stored because `EVENTS` was full, since the last drain.
+    static DROPPED: Cell<u64> = const { Cell::new(0) };
     // Ops that have already logged a fallback warning on this thread.
     static WARNED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
@@ -95,9 +108,36 @@ impl Drop for DevicePolicyGuard {
 }
 
 /// Drain and return the fallbacks recorded on this thread, oldest first.
+///
+/// At most [`MAX_FALLBACK_EVENTS`] are returned. If more happened since the last drain,
+/// the extra ones were not stored, and this logs how many with `log::warn!`.
 #[must_use]
 pub fn take_fallback_events() -> Vec<FallbackEvent> {
+    let dropped = DROPPED.with(|d| d.replace(0));
+    if dropped > 0 {
+        log::warn!(
+            "{dropped} device-policy fallbacks were not recorded: the record holds {MAX_FALLBACK_EVENTS} events between drains"
+        );
+    }
     EVENTS.with(|e| std::mem::take(&mut *e.borrow_mut()))
+}
+
+/// Store `event`, or count it as dropped once the record holds [`MAX_FALLBACK_EVENTS`].
+fn record(event: FallbackEvent) {
+    let stored = EVENTS.with(|e| {
+        let mut events = e.borrow_mut();
+        if events.len() < MAX_FALLBACK_EVENTS {
+            events.push(event);
+            true
+        } else {
+            false
+        }
+    });
+    if !stored && DROPPED.with(|d| d.replace(d.get() + 1)) == 0 {
+        log::warn!(
+            "device-policy fallback record is full ({MAX_FALLBACK_EVENTS} events); later fallbacks are counted, not stored, until take_fallback_events()"
+        );
+    }
 }
 
 /// Apply the policy to a gap: `op` has no GPU kernel for GPU inputs.
@@ -114,11 +154,9 @@ pub(crate) fn on_gap(op: &str, pass: Pass) {
             if WARNED.with(|w| w.borrow_mut().insert(op.to_string())) {
                 log::warn!("{op}: no GPU kernel; running on the CPU (DevicePolicy::PreferGpu)");
             }
-            EVENTS.with(|e| {
-                e.borrow_mut().push(FallbackEvent {
-                    op: op.to_string(),
-                    pass,
-                });
+            record(FallbackEvent {
+                op: op.to_string(),
+                pass,
             });
         }
     }
@@ -218,6 +256,25 @@ mod tests {
             ]
         );
         assert!(take_fallback_events().is_empty());
+    }
+
+    /// #125: the record stops at `MAX_FALLBACK_EVENTS`, keeping the oldest, and a drain
+    /// resets both the record and the overflow count.
+    #[test]
+    fn prefer_gpu_record_is_bounded() {
+        let _g = with_device_policy(DevicePolicy::PreferGpu);
+        let _ = take_fallback_events();
+        on_gap("First", Pass::Forward);
+        for _ in 0..MAX_FALLBACK_EVENTS + 500 {
+            on_gap("Later", Pass::Backward);
+        }
+        assert_eq!(DROPPED.with(Cell::get), 501);
+        let events = take_fallback_events();
+        assert_eq!(events.len(), MAX_FALLBACK_EVENTS);
+        assert_eq!(events.first().map(|e| e.op.as_str()), Some("First"));
+        assert_eq!(DROPPED.with(Cell::get), 0);
+        on_gap("Again", Pass::Forward);
+        assert_eq!(take_fallback_events().len(), 1);
     }
 
     /// CPU and GPU inputs together panic.
