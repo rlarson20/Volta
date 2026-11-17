@@ -504,7 +504,8 @@ fn div_broadcast_pass2(
             if (target_b == thread_idx) {
                 let a_val = ld_a(u32(ld_temp_buffer(temp_idx)));
                 let b_val = ld_b(target_b);
-                sum_b = sum_b - ld_temp_buffer(temp_idx + 2u) * a_val / (b_val * b_val);
+                // -g * a / b², without squaring b (overflow/underflow, #92).
+                sum_b = sum_b - ld_temp_buffer(temp_idx + 2u) * over_square(a_val, b_val);
             }
         }
         st_result_grad(a_size + thread_idx, sum_b);

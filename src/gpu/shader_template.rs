@@ -288,6 +288,19 @@ fn max_grad_b(g: f32, a: f32, b: f32) -> f32 {
     if (a == b) { return g * 0.5; }
     return g;
 }
+// `n / d²` without forming `d²` or `1/d²`, either of which overflows or underflows f32
+// where the quotient is finite (#92: div's and recip's gradients at |d| > 1.8e19 or
+// < 1e-19). `n * (1/d) * (1/d)` is not enough: Metal compiles with fast math, which may
+// reassociate it into `n * (1/d²)`. Instead `d = m * 2^e` with |m| in [0.5, 1), and
+// `n / d² = ((n * 2^-e) / m²) * 2^-e`: `m²` is in [0.25, 1), and `ldexp` scales exactly
+// and is not reassociated. Infinite and NaN `d` are handled first (`frexp` is
+// indeterminate for them), with the CPU's results: 0 and NaN.
+fn over_square(n: f32, d: f32) -> f32 {
+    if (is_nan(d)) { return d; }
+    if ((bitcast<u32>(d) & 0x7fffffffu) == 0x7f800000u) { return 0.0; }
+    let parts = frexp(d);
+    return ldexp(ldexp(n, -parts.exp) / (parts.fract * parts.fract), -parts.exp);
+}
 ";
 
 #[cfg(test)]

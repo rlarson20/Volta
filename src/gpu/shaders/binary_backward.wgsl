@@ -124,8 +124,8 @@ fn div_backward_b(
     let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     if (idx < len_out_grad()) {
-        let b_inv = 1.0 / ld_b(idx);
-        st_result_grad(idx, -ld_out_grad(idx) * ld_a(idx) * b_inv * b_inv);
+        // -g * a / b², without squaring b (overflow/underflow, #92).
+        st_result_grad(idx, -ld_out_grad(idx) * over_square(ld_a(idx), ld_b(idx)));
     }
 }
 

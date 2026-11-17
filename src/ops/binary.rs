@@ -32,9 +32,15 @@ define_ops! {
             Mul => |a, b| a * b,
                 |g, a, b| (g * b, g * a),
                 gpu(mul, mul_backward_a, mul_backward_b, mul_broadcast_pass1, mul_broadcast_pass2);
-            /// x / y (element-wise): ∂/∂x = 1/y, ∂/∂y = -x/y²
+            /// x / y (element-wise): ∂/∂x = 1/y, ∂/∂y = -x/y². The y-gradient is
+            /// `-g * x * (1/y) * (1/y)`, the GPU kernels' order: squaring y first overflows
+            /// to inf (gradient 0) for |y| above ~1.8e19 and underflows to 0 (gradient inf)
+            /// below ~1e-19 in f32, where the true value is finite (#92).
             Div => |a, b| a / b,
-                |g, a, b| (g / b, -g * a / (b * b)),
+                |g, a, b| {
+                    let b_inv = 1.0 / b;
+                    (g / b, -g * a * b_inv * b_inv)
+                },
                 gpu(div, div_backward_a, div_backward_b, div_broadcast_pass1, div_broadcast_pass2);
             /// max(x, y) (element-wise), as `torch.maximum`: NaN if either input is NaN. The
             /// gradient goes to the larger input, a tie splits it in half, and a NaN input

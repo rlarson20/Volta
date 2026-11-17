@@ -17,7 +17,9 @@ define_ops! {
         /// d(-x)/dx = -1
         Neg => |x| -x, |g, _x| -g, gpu(neg, neg_backward);
         /// d(1/x)/dx = -1/x²
-        Recip => |x| 1.0 / x, |g, x| -g / (x * x), gpu(recip, recip_backward);
+        // `-g * (1/x) * (1/x)`, not `-g / (x * x)`: `x * x` overflows or underflows where
+        // the gradient is finite (#92). Same order as the `recip_backward` kernel.
+        Recip => |x| 1.0 / x, |g, x| { let r = 1.0 / x; -g * r * r }, gpu(recip, recip_backward);
         /// d(√x)/dx = 1/(2√x)
         Sqrt => |x| x.sqrt(), |g, x| g / (2.0 * x.sqrt()), gpu(sqrt, sqrt_backward);
         /// d(2ˣ)/dx = 2ˣ·ln(2)
