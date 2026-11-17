@@ -80,6 +80,8 @@ impl Muon {
     /// # Errors
     /// `VoltaError::InvalidParameter` if `lr` or `momentum` is negative or NaN, or if the
     /// same tensor is listed twice in `params` (#101).
+    /// A non-leaf parameter (one with a `grad_fn`) is rejected too (#102); a frozen leaf
+    /// (`requires_grad == false`) is accepted and skipped by `step`, as in PyTorch.
     pub fn try_new(
         params: Vec<Tensor>,
         lr: f32,
@@ -88,6 +90,7 @@ impl Muon {
         ns_steps: usize,
     ) -> crate::Result<Self> {
         super::check_unique(&params)?;
+        super::check_leaves(&params)?;
         super::check_non_negative("learning rate", lr)?;
         super::check_non_negative("momentum", momentum)?;
         let velocity = params.iter().map(|_| None).collect();

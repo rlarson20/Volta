@@ -66,6 +66,8 @@ impl Adam {
     /// `VoltaError::InvalidParameter` if `lr`, `eps` or `weight_decay` is negative or NaN,
     /// or a beta is outside `[0, 1)` (a beta of 1 makes the bias correction divide by 0),
     /// or if the same tensor is listed twice in `params` (#101).
+    /// A non-leaf parameter (one with a `grad_fn`) is rejected too (#102); a frozen leaf
+    /// (`requires_grad == false`) is accepted and skipped by `step`, as in PyTorch.
     pub fn try_new(
         params: Vec<Tensor>,
         lr: f32,
@@ -74,6 +76,7 @@ impl Adam {
         weight_decay: f32,
     ) -> crate::Result<Self> {
         super::check_unique(&params)?;
+        super::check_leaves(&params)?;
         super::check_non_negative("learning rate", lr)?;
         super::check_non_negative("epsilon", eps)?;
         super::check_beta(0, betas.0)?;
