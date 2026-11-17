@@ -172,16 +172,23 @@ impl ConvTranspose2dGradFn {
             out_w,
         } = self.spec;
 
-        let out_grad_tensor = Tensor::from_raw(out_grad.clone());
-
         // 1. Gradient w.r.t. input
         // For transposed convolution forward: output[h_out] = input @ weight where h_out = ih*stride + kh - pad
         // So gradient w.r.t. input at (ih, iw) sums out_grad at positions ih*stride + kh - pad
         // The gradient is: grad_input[ih] = sum over kh of out_grad[ih*stride + kh - pad] * weight[kh]
-        let mut grads = dispatch_real!(out_grad.data.dtype(), T => {
-        let mut grad_input_data = vec![T::ZERO; batch * in_channels * in_h * in_w];
+        let weight_parent = parents
+            .get(1)
+            .expect("ConvTranspose2d backward: the weight is a parent");
+        // A parent that does not require grad gets `None` and no work (as in `conv.rs`): the
+        // input of a generator's first layer is noise, and a frozen layer's weight is fixed.
+        let need_input = input.borrow().requires_grad;
+        let need_weight = weight_parent.borrow().requires_grad;
 
+        let mut grads = dispatch_real!(out_grad.data.dtype(), T => {
         let out_grad_data = out_grad.data.host::<T>().to_vec();
+
+        let grad_input = need_input.then(|| {
+        let mut grad_input_data = vec![T::ZERO; batch * in_channels * in_h * in_w];
         let weight_data = self.weight.borrow().data.host::<T>().to_vec();
 
         for b in 0..batch {
@@ -232,12 +239,12 @@ impl ConvTranspose2dGradFn {
             }
         }
 
-        let grad_input = RawTensor::new_with_storage(Storage::from_compute(out_grad.data.dtype(), grad_input_data), Shape::derived(vec![batch, in_channels, in_h, in_w]), Device::CPU, true);
-
-        let mut grads = vec![Some(grad_input)];
+        RawTensor::new_with_storage(Storage::from_compute(out_grad.data.dtype(), grad_input_data), Shape::derived(vec![batch, in_channels, in_h, in_w]), Device::CPU, false)
+        });
 
         // 2. Gradient w.r.t. weight
         // grad_weight[c_in, c_out, kh, kw] = sum over b, ih, iw of input[b, c_in, ih, iw] * out_grad[b, c_out, ih*stride+kh, iw*stride+kw]
+        let grad_weight = need_weight.then(|| {
         let mut grad_weight_data = vec![T::ZERO; in_channels * out_channels * kh * kw];
         let input_data = input.borrow().data.host::<T>().to_vec();
 
@@ -291,26 +298,26 @@ impl ConvTranspose2dGradFn {
             }
         }
 
-        #[allow(
-            clippy::tuple_array_conversions,
-            reason = "just don't know hot to fix right now"
-        )]
-        let grad_weight =
-            RawTensor::new_with_storage(Storage::from_compute(out_grad.data.dtype(), grad_weight_data), Shape::derived(vec![in_channels, out_channels, kh, kw]), Device::CPU, true);
-        grads.push(Some(grad_weight));
-        grads
+        RawTensor::new_with_storage(Storage::from_compute(out_grad.data.dtype(), grad_weight_data), Shape::derived(vec![in_channels, out_channels, kh, kw]), Device::CPU, false)
+        });
+        vec![grad_input, grad_weight]
         });
 
-        // 3. Gradient w.r.t. bias (if present)
-        if self.has_bias && parents.len() > 2 {
-            // Sum over all dimensions except the channel dimension (dim=1)
-            // out_grad: [B, C_out, H_out, W_out] → [C_out]
-            let grad_bias = out_grad_tensor.sum_dim(Axis(3), false); // Sum over W
-            let grad_bias = grad_bias.sum_dim(Axis(2), false); // Sum over H
-            let grad_bias = grad_bias.sum_dim(Axis(0), false); // Sum over B
-            grads.push(Some(grad_bias));
-        } else if self.has_bias {
-            grads.push(None);
+        // 3. Gradient w.r.t. bias (if present). A layer with a bias always passes it as the
+        // third parent, so a missing one is a malformed graph, not a frozen bias.
+        if self.has_bias {
+            let bias = parents
+                .get(2)
+                .expect("ConvTranspose2d backward: has_bias but the bias is not a parent");
+            grads.push(bias.borrow().requires_grad.then(|| {
+                // Sum over all dimensions except the channel dimension (dim=1)
+                // out_grad: [B, C_out, H_out, W_out] → [C_out]
+                // `out_grad` does not require grad, so these sums record no graph.
+                Tensor::from_raw(out_grad.clone())
+                    .sum_dim(Axis(3), false) // Sum over W
+                    .sum_dim(Axis(2), false) // Sum over H
+                    .sum_dim(Axis(0), false) // Sum over B
+            }));
         }
 
         grads
@@ -375,16 +382,23 @@ impl Layer for ConvTranspose2d {
             ..
         } = spec;
 
-        // 1. Permute and reshape input: [B, C_in, H, W] → [B, H, W, C_in] → [B*H*W, C_in]
-        // Must permute first so that the reshape groups (h,w) positions with their channel values
-        let input_permuted = x.permute(&[Axis(0), Axis(2), Axis(3), Axis(1)]); // [B, H, W, C_in]
-        let input_reshaped = input_permuted.reshape(&[batch * in_h * in_w, in_channels]);
+        // Steps 1-3 compute the column matrix only for its values: the output edge below
+        // attaches to `x`, `weight` and `bias` directly, so this runs under `no_grad()` and
+        // records no permute/reshape/matmul nodes (#113).
+        let matmul_result = {
+            let _no_grad = crate::autograd::no_grad();
+            // 1. Permute and reshape input: [B, C_in, H, W] → [B, H, W, C_in] → [B*H*W, C_in]
+            // Must permute first so that the reshape groups (h,w) positions with their channel
+            // values
+            let input_permuted = x.permute(&[Axis(0), Axis(2), Axis(3), Axis(1)]); // [B, H, W, C_in]
+            let input_reshaped = input_permuted.reshape(&[batch * in_h * in_w, in_channels]);
 
-        // 2. Reshape weight: [C_in, C_out, K, K] → [C_in, C_out*K*K]
-        let weight_reshaped = weight.reshape(&[in_channels, out_channels * kh * kw]);
+            // 2. Reshape weight: [C_in, C_out, K, K] → [C_in, C_out*K*K]
+            let weight_reshaped = weight.reshape(&[in_channels, out_channels * kh * kw]);
 
-        // 3. Matrix multiplication: [B*H*W, C_in] @ [C_in, C_out*K*K] → [B*H*W, C_out*K*K]
-        let matmul_result = input_reshaped.matmul(&weight_reshaped);
+            // 3. Matrix multiplication: [B*H*W, C_in] @ [C_in, C_out*K*K] → [B*H*W, C_out*K*K]
+            input_reshaped.matmul(&weight_reshaped)
+        };
 
         // 4. col2im to the output shape, then 5. the bias per output channel, in one host
         // computation (rounded once for half types). There is no GPU kernel for this
@@ -686,6 +700,82 @@ mod tests {
         if let Some(ref b) = conv.bias {
             assert!(b.grad().is_some(), "Bias should have gradients");
         }
+    }
+
+    /// The grad fn of `conv.forward(x)`, and its gradients for a random weighted loss.
+    fn backward_grads(conv: &ConvTranspose2d, x: &Tensor) -> Vec<Option<Tensor>> {
+        let y = conv.forward(x);
+        let (grad_fn, parents) = {
+            let raw = y.borrow();
+            (raw.grad_fn.clone(), raw.parents.clone())
+        };
+        let Some(GradFn::ConvTranspose2d(g)) = grad_fn else {
+            panic!("expected a ConvTranspose2d grad fn");
+        };
+        let out_grad = RawTensor::randn(y.shape().truncate_rank());
+        g.backward(&out_grad.borrow(), &parents)
+    }
+
+    /// #113: the gradients are plain values (`requires_grad = false`), and a parent that
+    /// does not require grad gets `None` instead of a computed gradient.
+    #[test]
+    fn conv_transpose2d_backward_skips_parents_without_grad() {
+        crate::tensor::manual_seed(0xC7E0);
+        let conv = ConvTranspose2d::new(2, 3, 3, 2, 1, true);
+        let x = RawTensor::randn(&[2, 2, 3, 2]);
+        x.set_requires_grad(true);
+
+        let grads = backward_grads(&conv, &x);
+        assert_eq!(grads.len(), 3);
+        for (i, g) in grads.iter().enumerate() {
+            let g = g
+                .as_ref()
+                .unwrap_or_else(|| panic!("gradient {i} should be computed"));
+            assert!(
+                !g.borrow().requires_grad,
+                "gradient {i} must not require grad"
+            );
+        }
+
+        // Input is noise (no grad): no input gradient.
+        let noise = RawTensor::randn(&[2, 2, 3, 2]);
+        let grads = backward_grads(&conv, &noise);
+        assert!(grads.first().expect("input slot").is_none());
+        assert!(grads.get(1).expect("weight slot").is_some());
+
+        // Frozen weight and bias: only the input gradient.
+        conv.weight.set_requires_grad(false);
+        conv.bias.as_ref().expect("bias").set_requires_grad(false);
+        let grads = backward_grads(&conv, &x);
+        assert!(grads.first().expect("input slot").is_some());
+        assert!(grads.get(1).expect("weight slot").is_none());
+        assert!(grads.get(2).expect("bias slot").is_none());
+    }
+
+    /// #113: skipping the input gradient does not change the weight and bias gradients.
+    #[test]
+    fn conv_transpose2d_parameter_grads_match_with_and_without_input_grad() {
+        let run = |input_grad: bool| {
+            crate::tensor::manual_seed(0xC7E1);
+            let conv = ConvTranspose2d::new(2, 3, 3, 2, 1, true);
+            let x = RawTensor::randn(&[2, 2, 3, 2]);
+            x.set_requires_grad(input_grad);
+            let w = RawTensor::randn(&[2, 3, 5, 3]);
+            conv.forward(&x)
+                .elem_mul(&w)
+                .sum()
+                .into_loss()
+                .expect("scalar")
+                .backward();
+            let b = conv.bias.as_ref().expect("bias");
+            (
+                conv.weight.grad().expect("weight grad"),
+                b.grad().expect("bias grad"),
+            )
+        };
+        let with = run(true);
+        let without = run(false);
+        assert_eq!(with, without);
     }
 
     #[test]
