@@ -1008,7 +1008,8 @@ impl RawTensor {
     /// Fallible version of [`Self::pad_with`].
     ///
     /// # Errors
-    /// * `VoltaError::InvalidParameter` - `padding.len()` differs from the rank
+    /// * `VoltaError::InvalidParameter` - `padding.len()` differs from the rank, or a padded
+    ///   dimension `d + left + right` overflows `usize`
     /// * Any `Shape::from_dims` error for the padded shape (zero dim, over the element cap)
     pub fn try_pad_with(
         self_t: &Tensor,
@@ -1031,11 +1032,21 @@ impl RawTensor {
             )));
         }
 
-        let new_shape: Vec<usize> = old_shape
+        // Checked: a user-supplied width can overflow `usize` (#96).
+        let new_shape = old_shape
             .iter()
             .zip(padding)
-            .map(|(d, (l, r))| d + l + r)
-            .collect();
+            .enumerate()
+            .map(|(dim, (d, (l, r)))| {
+                d.checked_add(*l)
+                    .and_then(|n| n.checked_add(*r))
+                    .ok_or_else(|| {
+                        VoltaError::InvalidParameter(format!(
+                            "Padding ({l}, {r}) for dimension {dim} of size {d} overflows usize"
+                        ))
+                    })
+            })
+            .collect::<Result<Vec<usize>>>()?;
 
         let out_shape = Shape::from_dims(new_shape.clone())?;
         let new_size = out_shape.numel();
@@ -1234,21 +1245,39 @@ impl RawTensor {
     /// Similar to slicing with step: array\[`::2`\] takes every other element
     ///
     /// # Panics
-    /// If `strides.len()` differs from the tensor's rank, or a stride is zero.
+    /// If `strides.len()` differs from the tensor's rank, or a stride is zero. Use
+    /// [`Self::try_stride_op`] to get an error instead.
     #[must_use]
     #[track_caller]
     pub fn stride_op(self_t: &Tensor, strides: &[usize]) -> Tensor {
+        Self::try_stride_op(self_t, strides).or_panic("Stride")
+    }
+
+    /// Fallible version of [`Self::stride_op`].
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` if `strides.len()` differs from the rank or a stride is
+    /// zero (strides must be >= 1).
+    pub fn try_stride_op(self_t: &Tensor, strides: &[usize]) -> Result<Tensor> {
+        use crate::error::VoltaError;
         let dtype = self_t.dtype();
         let (data, old_shape, device) = {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
-        assert_eq!(
-            strides.len(),
-            old_shape.rank(),
-            "Strides length must match rank"
-        );
+        if strides.len() != old_shape.rank() {
+            return Err(VoltaError::InvalidParameter(format!(
+                "Strides length ({}) must match tensor rank ({})",
+                strides.len(),
+                old_shape.rank()
+            )));
+        }
+        if let Some(dim) = strides.iter().position(|&s| s == 0) {
+            return Err(VoltaError::InvalidParameter(format!(
+                "stride_op: stride 0 for dimension {dim} (strides must be >= 1)"
+            )));
+        }
 
         let new_shape: Vec<usize> = old_shape
             .iter()
@@ -1289,7 +1318,7 @@ impl RawTensor {
             })
         };
 
-        Self::movement_edge(
+        Ok(Self::movement_edge(
             self_t,
             storage,
             Shape::derived(new_shape),
@@ -1298,6 +1327,6 @@ impl RawTensor {
                 strides: strides.to_vec(),
             },
             old_shape,
-        )
+        ))
     }
 }
