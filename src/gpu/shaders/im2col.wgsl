@@ -5,21 +5,7 @@
 @group(0) @binding(0) var<storage, read> input: array<ELEM>;
 @group(0) @binding(1) var<storage, read_write> output: array<ELEM>;
 
-struct Im2colParams {
-    batch_size: u32,
-    channels: u32,
-    height: u32,
-    width: u32,
-    kernel_h: u32,
-    kernel_w: u32,
-    stride_h: u32,
-    stride_w: u32,
-    h_out: u32,
-    w_out: u32,
-    _padding: vec2<u32>,
-}
-
-@group(0) @binding(2) var<uniform> params: Im2colParams;
+@group(0) @binding(2) var<uniform> params: WindowParams;
 
 // Convert 4D coordinates to linear index (NCHW format)
 fn coords_to_idx_4d(n: u32, c: u32, h: u32, w: u32) -> u32 {

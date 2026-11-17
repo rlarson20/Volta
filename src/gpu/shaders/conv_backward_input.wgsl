@@ -1,27 +1,10 @@
 // GPU-accelerated convolution backward: gradient with respect to input
 // Computes: ∂L/∂X[b,ic,ih,iw] = Σ ∂L/∂Y[b,oc,oh,ow] * W[oc,ic,kh,kw]
 
-struct ConvBackwardInputParams {
-    batch_size: u32,
-    in_channels: u32,
-    out_channels: u32,
-    height: u32,
-    width: u32,
-    kernel_h: u32,
-    kernel_w: u32,
-    stride_h: u32,
-    stride_w: u32,
-    pad_h: u32,
-    pad_w: u32,
-    h_out: u32,
-    w_out: u32,
-    _padding: u32,
-}
-
 @group(0) @binding(0) var<storage, read> out_grad: array<ELEM>;
 @group(0) @binding(1) var<storage, read> weight: array<ELEM>;
 @group(0) @binding(2) var<storage, read_write> grad_input: array<ELEM>;
-@group(0) @binding(3) var<uniform> params: ConvBackwardInputParams;
+@group(0) @binding(3) var<uniform> params: ConvParams;
 
 @compute @workgroup_size(16, 16, 1)
 fn conv_backward_input_main(

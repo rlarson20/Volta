@@ -85,6 +85,7 @@ pub(crate) fn expand(source: &str, elem: Elem, elem2: Elem) -> String {
     }
     out.push_str(&body);
     out.push_str(CONVERSIONS);
+    out.push_str(SHARED_STRUCTS);
     for d in &decls {
         helpers(&mut out, d);
     }
@@ -190,6 +191,46 @@ fn helpers(out: &mut String, d: &Decl) {
         }
     };
 }
+
+/// The uniform structs several shaders share, appended to every expansion (WGSL
+/// declarations are order-independent, and an unused struct costs nothing). Each is the
+/// one definition its `#[repr(C)]` twin in `kernels.rs` must match, field for field; the
+/// `shared_structs_match_their_rust_twins` test there checks the layout (#131).
+pub(super) const SHARED_STRUCTS: &str = r"
+// The geometry of a 2-D convolution: direct_conv, conv_backward_input/weight,
+// igemm_backward_input/weight (kernels::ConvParams).
+struct ConvParams {
+    batch_size: u32,
+    in_channels: u32,
+    out_channels: u32,
+    height: u32,
+    width: u32,
+    kernel_h: u32,
+    kernel_w: u32,
+    stride_h: u32,
+    stride_w: u32,
+    pad_h: u32,
+    pad_w: u32,
+    h_out: u32,
+    w_out: u32,
+    _padding: u32,
+}
+
+// The geometry of an unpadded sliding window: im2col and col2im (kernels::WindowParams).
+struct WindowParams {
+    batch_size: u32,
+    channels: u32,
+    height: u32,
+    width: u32,
+    kernel_h: u32,
+    kernel_w: u32,
+    stride_h: u32,
+    stride_w: u32,
+    h_out: u32,
+    w_out: u32,
+    _padding: vec2<u32>,
+}
+";
 
 /// Bit-exact conversions between f32 and the 16-bit formats, in integer arithmetic so
 /// rounding (to nearest, ties to even), overflow (to inf) and NaN don't depend on the
