@@ -37,7 +37,9 @@ Recursive DFS risks stack overflow on deep computation graphs. Iterative DFS wit
 
 `Rc` keeps the reference count > 0 as long as any child holds a reference to a parent. This means the full computation graph stays alive for the duration of the backward pass — no manual lifetime annotation needed.
 
-**`RefCell` borrow discipline:** `RefCell` provides interior mutability but panics on simultaneous mutable + immutable borrows. The engine must drop the `RefCell` borrow on a node _before_ calling `backward` on its parents, since backward may need to re-borrow the same node. Cloning the node's `GradFn` out of the borrow is what makes this safe.
+**`RefCell` borrow discipline:** `RefCell` provides interior mutability but panics on simultaneous mutable + immutable borrows. No `GradFn::backward` may take a *mutable* borrow of the node it belongs to: it gets the gradient as a separate `RawTensor` and borrows only the parents, which are other `RefCell`s (a graph has no cycles), and the accumulation writes only to parents. So `run_backward` holds a shared `Ref` on the node across its `backward` call and reads `grad_fn`, `parents` and `saved_versions` through it (#168). A shared re-borrow of the node still works; a mutable one would panic with `BorrowMutError`, loudly.
+
+Until #168 the engine cloned the node's `GradFn`, `parents` and `saved_versions` out of the borrow first, so that a backward could re-borrow the node mutably. Nothing did, and the clone was a deep copy per node per pass (`WhereGradFn`'s mask, `MaxPool2dGradFn`'s and `EmbeddingGradFn`'s index `Vec`s are tensor-sized). The other fix the issue named, `Rc<GradFn>`, keeps the clone a refcount bump but changes `RawTensor::grad_fn`'s type and every pattern match on it, for the same result.
 
 ---
 
@@ -47,7 +49,7 @@ Recursive DFS risks stack overflow on deep computation graphs. Iterative DFS wit
 
 **Why closed:** an open trait let an op ship with no backward pass wired in, and cost every implementor a hand-written `clone_box`. `Clone` is derived now.
 
-**Still true from the trait version:** `backward` clones the node's `GradFn` out of the `RefCell` borrow before recursing into parents. That drops the borrow, so a backward pass can re-borrow the same node.
+**Changed from the trait version:** `backward` used to clone the node's `GradFn` out of the `RefCell` borrow before running it. Since #168 it runs it through the held borrow instead ("`RefCell` borrow discipline" above).
 
 **Deviations from the sketch:**
 - No `Custom(CustomGrad)` variant. `edge()` is `pub(crate)`, so no downstream crate could construct one. Add it with a public custom-op API, if that ever exists.

@@ -505,11 +505,9 @@ impl RawTensor {
                     visited.insert(t.as_ptr());
                     // Push post-visit marker
                     recursion_stack.push(Action::PostVisit(t.clone()));
-                    // Push children (parents in backward graph) to visit
-                    let parents = t.borrow().parents.clone();
-                    for parent in parents {
-                        recursion_stack.push(Action::Visit(parent));
-                    }
+                    // Push children (parents in backward graph) to visit: one refcount bump
+                    // each, without copying the `parents` Vec first (#168).
+                    recursion_stack.extend(t.borrow().parents.iter().cloned().map(Action::Visit));
                 }
                 Action::PostVisit(t) => {
                     topo_order.push(t);
@@ -521,60 +519,60 @@ impl RawTensor {
         // topo_order has [leaf, ..., root]. We reverse to get [root, ..., leaf].
 
         for tensor in topo_order.into_iter().rev() {
-            let (grad_fn, parents, saved_versions, shape, device) = {
-                let t = tensor.borrow();
-                (
-                    t.grad_fn.clone(),
-                    t.parents.clone(),
-                    t.saved_versions.clone(),
-                    t.shape.clone(),
-                    t.device.clone(),
-                )
-            };
             // A leaf has nothing to propagate: its gradient was added to `grad` as each
             // contribution arrived. An op output is propagated if anything reached it.
-            if let Some(grad_fn) = grad_fn
-                && let Some(grad_out_data) = pending.remove(&tensor.as_ptr())
-            {
-                let grad_out = Self {
-                    data: grad_out_data,
-                    shape,
-                    grad: None,
-                    requires_grad: false,
-                    grad_fn: None,
-                    parents: vec![],
-                    device,
-                    version: 0,
-                    saved_versions: vec![],
-                };
+            let Some(grad_out_data) = pending.remove(&tensor.as_ptr()) else {
+                continue;
+            };
+            // The node's `Ref` is held across its `backward` call instead of cloning its
+            // `grad_fn` (a deep copy: several variants own buffers the size of a tensor),
+            // `parents` and `saved_versions` out of it (#168). That is sound because no
+            // `backward` reaches its own node: a `GradFn` gets the gradient as a separate
+            // `RawTensor` and borrows only the parents, each a different `RefCell` (a graph
+            // has no cycles), and the accumulation below writes only to parents too.
+            let node = tensor.borrow();
+            let Some(grad_fn) = &node.grad_fn else {
+                unreachable!("only op outputs (with a grad_fn) are put in `pending`");
+            };
+            let parents = &node.parents;
+            let grad_out = Self {
+                data: grad_out_data,
+                shape: node.shape.clone(),
+                grad: None,
+                requires_grad: false,
+                grad_fn: None,
+                parents: vec![],
+                device: node.device.clone(),
+                version: 0,
+                saved_versions: vec![],
+            };
 
-                Self::check_saved_versions(&grad_fn, &parents, &saved_versions);
+            Self::check_saved_versions(grad_fn, parents, &node.saved_versions);
 
-                // Compute gradients for parent tensors
-                let parent_grads = grad_fn.backward(&grad_out, &parents);
-                // The zip below pairs by position: a short `backward` would leave a parent
-                // without its gradient, silently freezing it (#169).
-                Self::check_parent_grads(&grad_fn, parent_grads.len(), parents.len());
+            // Compute gradients for parent tensors
+            let parent_grads = grad_fn.backward(&grad_out, parents);
+            // The zip below pairs by position: a short `backward` would leave a parent
+            // without its gradient, silently freezing it (#169).
+            Self::check_parent_grads(grad_fn, parent_grads.len(), parents.len());
 
-                // A leaf parent takes the contribution through `Tensor::accumulate_grad`,
-                // the only code allowed to write `grad` (device-move + add-or-set). An
-                // op-output parent gets the same checks and device move, but the sum waits
-                // in `pending` for its own backward step.
-                for (parent_grad, parent_ref) in parent_grads.into_iter().zip(parents.iter()) {
-                    if let Some(g) = parent_grad {
-                        let grad_storage = g.borrow().data.clone();
-                        let parent_is_leaf = parent_ref.borrow().grad_fn.is_none();
-                        if parent_is_leaf {
-                            parent_ref.accumulate_grad(grad_storage, &grad_fn);
-                        } else {
-                            let routed = parent_ref.route_grad(grad_storage, &|| grad_fn.op_name());
-                            match pending.entry(parent_ref.as_ptr()) {
-                                Entry::Vacant(slot) => {
-                                    slot.insert(routed);
-                                }
-                                Entry::Occupied(mut slot) => {
-                                    Self::accumulate_grad(slot.get_mut(), &routed);
-                                }
+            // A leaf parent takes the contribution through `Tensor::accumulate_grad`,
+            // the only code allowed to write `grad` (device-move + add-or-set). An
+            // op-output parent gets the same checks and device move, but the sum waits
+            // in `pending` for its own backward step.
+            for (parent_grad, parent_ref) in parent_grads.into_iter().zip(parents.iter()) {
+                if let Some(g) = parent_grad {
+                    let grad_storage = g.borrow().data.clone();
+                    let parent_is_leaf = parent_ref.borrow().grad_fn.is_none();
+                    if parent_is_leaf {
+                        parent_ref.accumulate_grad(grad_storage, grad_fn);
+                    } else {
+                        let routed = parent_ref.route_grad(grad_storage, &|| grad_fn.op_name());
+                        match pending.entry(parent_ref.as_ptr()) {
+                            Entry::Vacant(slot) => {
+                                slot.insert(routed);
+                            }
+                            Entry::Occupied(mut slot) => {
+                                Self::accumulate_grad(slot.get_mut(), &routed);
                             }
                         }
                     }
