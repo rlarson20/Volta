@@ -366,7 +366,9 @@ pub(crate) struct MatmulSpec {
 }
 
 impl MatmulSpec {
-    /// Validates `a` and `b` and computes the broadcast geometry; rejects mismatched ranks or inner dims.
+    /// Validates `a` and `b` and computes the broadcast geometry; rejects mismatched ranks or
+    /// inner dims, and an output (or an operand broadcast to the output batch) that is not a
+    /// valid [`Shape`] (more than [`crate::shape::MAX_NUMEL`] elements).
     pub(crate) fn new(a: &Shape, b: &Shape) -> Result<Self> {
         let (a_dims, b_dims) = (a.truncate_rank(), b.truncate_rank());
         let (rank_a, rank_b) = (a_dims.len(), b_dims.len());
@@ -403,6 +405,16 @@ impl MatmulSpec {
                 ))),
             })
             .collect::<Result<Vec<usize>>>()?;
+        // Validate every buffer the forward allocates (the output, and the operands broadcast to
+        // the output batch) before anything is allocated. This bounds `m * n`, `m * k` and
+        // `k * n` by `MAX_NUMEL`, which the `unsafe` gemm calls rely on (#165).
+        for dims in [
+            with_matrix(&out_batch, m, n),
+            with_matrix(&out_batch, m, k),
+            with_matrix(&out_batch, k, n),
+        ] {
+            Shape::from_dims(dims)?;
+        }
         Ok(Self {
             a_batch: a_batch.to_vec(),
             b_batch: b_batch.to_vec(),
@@ -811,6 +823,15 @@ mod tests {
         // The audit's B4 repro: [2,3,4] @ [2,1,4,6].
         let msg = err_text(MatmulSpec::new(&shape(&[2, 3, 4]), &shape(&[2, 1, 4, 6])));
         assert!(msg.contains("equal rank"), "{msg}");
+    }
+
+    #[test]
+    fn matmul_spec_rejects_an_output_over_max_numel() {
+        let msg = err_text(MatmulSpec::new(
+            &shape(&[100_000, 1]),
+            &shape(&[1, 100_000]),
+        ));
+        assert!(msg.contains("elements >"), "{msg}");
     }
 
     #[test]
