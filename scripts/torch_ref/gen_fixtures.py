@@ -918,7 +918,61 @@ def group_casts():
     print(f"wrote casts: {len(out)} tensors")
 
 
-GROUPS = {"ops": group_ops, "reductions": group_reductions, "optim": group_optim, "layers": group_layers, "transformer": group_transformer, "lstm": group_lstm, "dtypes": group_dtypes, "casts": group_casts, "f64": group_f64, "half": group_half, "intbool": group_intbool, "promotion": group_promotion, "autocast": group_autocast}
+
+def group_extra():
+    """#56: the ops the other groups leave out. `bce_with_logits` (mean) and Volta's
+    `kl_divergence_gaussian` (the VAE term -0.5 * sum(1 + logvar - mu^2 - exp(logvar)),
+    written out in torch ops), the unary ops over wide input ranges, and `stride_op`
+    (strided slicing, `x[::s0, ::s1]`). Every gradient is of sum(out * w) for a fixed random
+    `w`, so a permuted or wrongly scaled gradient fails.
+    """
+    import torch.nn.functional as F
+
+    torch.manual_seed(SEED)
+    t = {}
+
+    # Logits from -60 to 60, 0 included (both max(x, 0) and |x| have a kink there), and
+    # soft targets as well as 0/1.
+    x = leaf([-60.0, -20.0, -3.0, -0.5, 0.0, 0.5, 3.0, 20.0, 60.0, 1e-4, -1e-4, 7.0], (3, 4))
+    y = torch.tensor([0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.3, 1.0, 0.0, 0.5, 0.5, 0.9]).reshape(3, 4)
+    out = F.binary_cross_entropy_with_logits(x, y)
+    (gx,) = grad_of(out, x)
+    t.update({"bce_logits.x": x, "bce_logits.y": y, "bce_logits.out": out.reshape(1), "bce_logits.grad": gx})
+
+    mu = leaf(torch.randn(4, 3).tolist())
+    logvar = leaf((torch.randn(4, 3) * 2).tolist())
+    out = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp()).sum()
+    gmu, glv = grad_of(out, mu, logvar)
+    t.update({"kl.mu": mu, "kl.logvar": logvar, "kl.out": out.reshape(1), "kl.grad_mu": gmu, "kl.grad_logvar": glv})
+
+    # Wide ranges, kept where torch's f32 answer and its gradient are finite: exp below its
+    # overflow (88.7), log/sqrt/recip over 1e-15..1e15 (so x*x stays a normal f32).
+    signed = [-80.0, -30.0, -10.0, -1.5, -1e-3, 0.0, 1e-3, 0.7, 2.5, 10.0, 30.0, 80.0]
+    positive = [1e-15, 1e-8, 1e-3, 0.1, 0.9, 1.0, 1.5, 10.0, 1e3, 1e8, 1e12, 1e15]
+    ranges = {
+        "neg": signed, "exp": signed, "exp2": [v * 1.4 for v in signed[1:-1]] + [-110.0, 110.0],
+        "tanh": signed, "sigmoid": signed, "relu": signed, "erf": signed,
+        "sin": [-1e3, -100.0, -3.0, -1.0, -0.1, 0.0, 0.1, 1.0, 3.0, 100.0, 1e3, 12345.0],
+        "cos": [-1e3, -100.0, -3.0, -1.0, -0.1, 0.0, 0.1, 1.0, 3.0, 100.0, 1e3, 12345.0],
+        "log": positive, "log2": positive, "sqrt": positive,
+        "reciprocal": positive[:6] + [-v for v in positive[:6]],
+    }
+    for op, values in ranges.items():
+        x = leaf(values, (3, 4))
+        t[f"unary.{op}.x"] = x
+        case(t, f"unary.{op}", getattr(torch, op)(x), {"x": x})
+
+    # Strided slicing with unequal strides, a stride larger than the dim, and a stride of 1.
+    for name, shape, strides in [("s23", (5, 7), (2, 3)), ("s14", (3, 4, 5), (1, 4, 2)), ("s51", (4, 6), (5, 1))]:
+        x = leaf(torch.randn(*shape).tolist())
+        t[f"stride.{name}.x"] = x
+        idx = tuple(slice(None, None, s) for s in strides)
+        case(t, f"stride.{name}", x[idx].clone(), {"x": x})
+        t[f"stride.{name}.strides"] = torch.tensor(strides, dtype=torch.float32)
+
+    save("extra", t)
+
+GROUPS = {"ops": group_ops, "reductions": group_reductions, "optim": group_optim, "layers": group_layers, "transformer": group_transformer, "lstm": group_lstm, "dtypes": group_dtypes, "casts": group_casts, "f64": group_f64, "half": group_half, "intbool": group_intbool, "promotion": group_promotion, "autocast": group_autocast, "extra": group_extra}
 
 if __name__ == "__main__":
     wanted = sys.argv[1:] or list(GROUPS)
