@@ -149,6 +149,7 @@ impl StagingBufferPool {
     }
 
     /// Get current number of pooled buffers
+    #[cfg(test)]
     pub fn size(&self) -> usize {
         *self
             .current_count
@@ -157,6 +158,7 @@ impl StagingBufferPool {
     }
 
     /// Get maximum pool capacity
+    #[cfg(test)]
     pub const fn capacity(&self) -> usize {
         self.max_total
     }
@@ -170,7 +172,6 @@ impl StagingBufferPool {
                 .current_count
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
-            max_capacity: self.max_total,
         }
     }
 }
@@ -180,8 +181,6 @@ impl StagingBufferPool {
 pub struct StagingPoolStats {
     /// Total number of buffers currently in the pool
     pub total_pooled: usize,
-    /// Maximum pool capacity
-    pub max_capacity: usize,
 }
 
 impl Default for StagingBufferPool {
