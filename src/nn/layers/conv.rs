@@ -32,46 +32,44 @@ pub enum ConvAlgo {
 }
 
 impl ConvAlgo {
-    /// Auto-select algorithm based on input characteristics
+    /// Auto-select algorithm from a validated convolution geometry.
     ///
-    /// `height` and `width` are the *padded* input extents. The size estimate is
-    /// `im2col_elements = batch * (height - k + 1) * (width - k + 1) * channels * k * k`
-    /// with `k = kernel_size`; it assumes stride 1 and a square kernel, so a strided
-    /// convolution (about a quarter of the estimate at stride 2) or a non-square kernel is
-    /// sized as if it were stride 1 and square. `height - kernel_size` underflows if the
-    /// kernel is larger than the input.
+    /// The size estimate is the real im2col matrix of `spec`:
+    /// `im2col_elements = batch * out_h * out_w * in_ch * kernel_h * kernel_w`, so stride,
+    /// padding and a non-square kernel are all accounted for. `spec` comes from
+    /// [`Conv2dSpec::new`], which has rejected a kernel larger than the padded input, so
+    /// nothing here can underflow; the products saturate rather than wrap (#106, #231).
     ///
-    /// The first rule that matches wins:
+    /// The first rule that matches wins (`k = max(kernel_h, kernel_w)`):
     ///
     /// | Device | Condition | Result |
     /// | --- | --- | --- |
     /// | GPU | `im2col_elements > 1_000_000` | `IGEMM` |
     /// | GPU | otherwise | `Im2col` |
     /// | CPU | `im2col_elements > 5_000_000` | `Direct` |
-    /// | CPU | `kernel_size <= 3 && batch <= 4` | `Direct` |
+    /// | CPU | `k <= 3 && batch <= 4` | `Direct` |
     /// | CPU | `im2col_elements > 1_000_000` | `IGEMM` |
     /// | CPU | otherwise | `Im2col` |
     ///
-    /// The `kernel_size <= 3 && batch <= 4` rule looks only at the kernel and the batch,
-    /// not at the input size: a `4 x 64 x 32 x 32` input with a 3x3 kernel (about 2.07M
-    /// elements) runs `Direct`, and the same input with batch 5 runs `IGEMM`.
-    #[must_use]
-    pub fn auto_select(
-        batch: usize,
-        channels: usize,
-        height: usize,
-        width: usize,
-        kernel_size: usize,
-        has_gpu: bool,
-    ) -> Self {
+    /// The `k <= 3 && batch <= 4` rule looks only at the kernel and the batch, not at the
+    /// input size: a `4 x 64 x 32 x 32` input with a 3x3 kernel (about 2.07M elements) runs
+    /// `Direct`, and the same input with batch 5 runs `IGEMM`.
+    pub(crate) fn auto_select(spec: &Conv2dSpec, has_gpu: bool) -> Self {
         // Thresholds (tunable)
         const MAX_IM2COL_ELEMENTS: usize = 5_000_000; // ~20 MB for f32
 
-        // Memory heuristic: im2col creates (B*H_out*W_out, C*K*K) matrix
-        // Estimate memory and decide
-        let h_out = (height - kernel_size) + 1; // Assuming stride=1, pad=0 for heuristic
-        let w_out = (width - kernel_size) + 1;
-        let im2col_elements = batch * h_out * w_out * channels * kernel_size * kernel_size;
+        // im2col materializes a (B*H_out*W_out, C*Kh*Kw) matrix.
+        let im2col_elements = [
+            spec.out_h,
+            spec.out_w,
+            spec.in_ch,
+            spec.kernel_h,
+            spec.kernel_w,
+        ]
+        .iter()
+        .fold(spec.batch, |acc, &d| acc.saturating_mul(d));
+        let kernel_size = spec.kernel_h.max(spec.kernel_w);
+        let batch = spec.batch;
 
         if has_gpu {
             // On GPU: iGEMM is now GPU-accelerated, providing best balance
@@ -1386,14 +1384,7 @@ impl Conv2d {
         // Note: All algorithms now support gradients!
         let algo = self.algo.get();
         let algo = match algo {
-            ConvAlgo::Auto => ConvAlgo::auto_select(
-                spec.batch,
-                spec.in_ch,
-                spec.padded_h(),
-                spec.padded_w(),
-                spec.kernel_h,
-                x.borrow().device.is_gpu(),
-            ),
+            ConvAlgo::Auto => ConvAlgo::auto_select(&spec, x.borrow().device.is_gpu()),
             other @ (ConvAlgo::Direct | ConvAlgo::Im2col | ConvAlgo::IGEMM) => other,
         };
 
@@ -2002,12 +1993,32 @@ mod conv2d_tests {
         }
     }
 
+    /// `ConvAlgo::auto_select` on the spec of `[batch, channels, h, w]` convolved with a
+    /// `kh x kw` kernel at `stride` and `pad`.
+    fn select(
+        (batch, channels, h, w): (usize, usize, usize, usize),
+        (kh, kw): (usize, usize),
+        stride: usize,
+        pad: usize,
+        gpu: bool,
+    ) -> ConvAlgo {
+        let spec = Conv2dSpec::new(
+            &Shape::derived(vec![batch, channels, h, w]),
+            &Shape::derived(vec![1, channels, kh, kw]),
+            (stride, stride),
+            (pad, pad),
+        )
+        .expect("test geometry must be valid");
+        ConvAlgo::auto_select(&spec, gpu)
+    }
+
     /// One row per branch of `ConvAlgo::auto_select`, and both sides of each threshold
-    /// (1M and 5M estimated im2col elements), so its documented table has a check.
+    /// (1M and 5M im2col elements), so its documented table has a check. Stride 1, no
+    /// padding, square kernel: the estimate is `batch * (h-k+1)^2 * channels * k^2`.
     #[test]
     fn auto_select_follows_documented_rule() {
         use ConvAlgo::{Direct, IGEMM, Im2col};
-        // (batch, channels, padded h, padded w, kernel, has_gpu, expected, why)
+        // (batch, channels, h, w, kernel, has_gpu, expected, why)
         let rows = [
             (1, 1, 8, 8, 3, true, Im2col, "GPU, 324 elements"),
             (1, 64, 43, 43, 3, true, Im2col, "GPU, 968_256 <= 1M"),
@@ -2033,11 +2044,43 @@ mod conv2d_tests {
         ];
         for (batch, channels, h, w, k, gpu, want, why) in rows {
             assert_eq!(
-                ConvAlgo::auto_select(batch, channels, h, w, k, gpu),
+                select((batch, channels, h, w), (k, k), 1, 0, gpu),
                 want,
-                "{why}: auto_select({batch}, {channels}, {h}, {w}, {k}, gpu={gpu})"
+                "{why}: auto_select([{batch}, {channels}, {h}, {w}], k={k}, gpu={gpu})"
             );
         }
+    }
+
+    /// The estimate uses the strided output size (#106). DCGAN's discriminator `conv2`
+    /// (`Conv2d(64, 128, 4, 2, 1)` on `[64, 64, 14, 14]`) has a 64*7*7*64*16 = 3,211,264
+    /// element im2col matrix, so the 1M rule picks `IGEMM`. The stride-1 estimate was
+    /// 11,075,584 (> 5M), which picked `Direct`. Whether `IGEMM` is the fast choice there is
+    /// a threshold question, tracked in #231.
+    #[test]
+    fn auto_select_accounts_for_stride() {
+        assert_eq!(
+            select((64, 64, 14, 14), (4, 4), 2, 1, false),
+            ConvAlgo::IGEMM
+        );
+        // The same layer at stride 1 really is over 5M elements (64*13*13*64*16).
+        assert_eq!(
+            select((64, 64, 12, 12), (4, 4), 1, 1, false),
+            ConvAlgo::Direct
+        );
+    }
+
+    /// #106: a non-square kernel is sized by both of its dims, and the small-kernel rule
+    /// takes the larger one. `[1, 64, 40, 40]` with 1x9: 40*32*64*9 = 737,280 (Im2col);
+    /// sized as 1x1 it would be 102,400, as 9x9 it would be 6.6M.
+    #[test]
+    fn auto_select_uses_both_kernel_dims() {
+        assert_eq!(
+            select((1, 64, 40, 40), (1, 9), 1, 0, false),
+            ConvAlgo::Im2col
+        );
+        // 1x3 counts as a small kernel (k = 3), 1x4 does not.
+        assert_eq!(select((1, 3, 8, 8), (1, 3), 1, 0, false), ConvAlgo::Direct);
+        assert_eq!(select((1, 3, 8, 8), (1, 4), 1, 0, false), ConvAlgo::Im2col);
     }
 
     #[test]

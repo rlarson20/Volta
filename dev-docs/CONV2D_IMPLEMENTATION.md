@@ -44,35 +44,29 @@ conv.set_algo(ConvAlgo::IGEMM);   // GEMM without the im2col matrix
 
 ### Auto-selection Logic
 
-`ConvAlgo::auto_select` (`src/nn/layers/conv.rs`) is the source; its rustdoc has the same
-table, and `auto_select_follows_documented_rule` checks both sides of each threshold. It
-estimates the im2col matrix as
+`ConvAlgo::auto_select` (`src/nn/layers/conv.rs`, crate-private) is the source; its rustdoc
+has the same table, and `auto_select_follows_documented_rule` checks both sides of each
+threshold. It takes the validated `Conv2dSpec` and sizes the real im2col matrix:
 
 ```text
-im2col_elements = batch * (H - k + 1) * (W - k + 1) * channels * k * k
+im2col_elements = batch * out_h * out_w * in_ch * kernel_h * kernel_w
 ```
 
-with `H` and `W` the padded input extents and `k = kernel_size`. The first rule that
-matches wins:
+so stride, padding and a non-square kernel count (#106, #231). With `k = max(kernel_h,
+kernel_w)`, the first rule that matches wins:
 
 | Device | Condition | Result |
 | --- | --- | --- |
 | GPU | `im2col_elements > 1_000_000` | `IGEMM` |
 | GPU | otherwise | `Im2col` |
 | CPU | `im2col_elements > 5_000_000` | `Direct` (saves memory) |
-| CPU | `kernel_size <= 3 && batch <= 4` | `Direct` |
+| CPU | `k <= 3 && batch <= 4` | `Direct` |
 | CPU | `im2col_elements > 1_000_000` | `IGEMM` |
 | CPU | otherwise | `Im2col` |
 
-Two things to know about the heuristic:
-
-- The small-kernel rule looks only at the kernel and the batch, not the input size. A
-  `4 x 64 x 32 x 32` input with a 3x3 kernel (about 2.07M elements) runs `Direct`; the same
-  input with batch 5 runs `IGEMM`.
-- It assumes stride 1 and a square kernel (`Conv2d::forward` passes `kernel_h` only), so a
-  strided or non-square convolution is sized as if it were stride 1 and square. A stride-2
-  convolution produces about a quarter of the estimated matrix, so the 1M and 5M
-  thresholds trip earlier than the real memory use warrants.
+The small-kernel rule looks only at the kernel and the batch, not the input size. A
+`4 x 64 x 32 x 32` input with a 3x3 kernel (about 2.07M elements) runs `Direct`; the same
+input with batch 5 runs `IGEMM`.
 
 All three algorithms support training with full gradients.
 
