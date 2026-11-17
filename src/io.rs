@@ -140,24 +140,7 @@ impl TensorData {
     /// shape's size overflows) if the byte count is wrong, and
     /// `VoltaError::InvalidParameter` if a `Bool` byte is neither 0 nor 1.
     pub fn validate(&self, key: &str) -> crate::Result<()> {
-        let expected = checked_numel(&self.shape)
-            .and_then(|n| n.checked_mul(self.dtype.size_of()))
-            .unwrap_or(usize::MAX);
-        if self.data.len() != expected {
-            return Err(crate::VoltaError::StateDataLength {
-                key: key.to_string(),
-                expected,
-                len: self.data.len(),
-            });
-        }
-        if self.dtype == DType::Bool
-            && let Some((i, b)) = self.data.iter().enumerate().find(|&(_, &b)| b > 1)
-        {
-            return Err(crate::VoltaError::InvalidParameter(format!(
-                "state dict entry '{key}': bool element {i} is the byte {b}, not 0 or 1"
-            )));
-        }
-        Ok(())
+        validate_entry(key, &self.data, &self.shape, self.dtype)
     }
 
     /// Decodes `data` as `dtype`, after [`Self::validate`]. `key` names the entry in the
@@ -208,6 +191,29 @@ impl TensorData {
 /// Product of `shape`, or `None` if it overflows `usize`.
 fn checked_numel(shape: &[usize]) -> Option<usize> {
     shape.iter().try_fold(1usize, |n, &d| n.checked_mul(d))
+}
+
+/// The check behind [`TensorData::validate`], on borrowed parts, so a
+/// [`TypedTensorData`] can be checked without copying its bytes.
+fn validate_entry(key: &str, data: &[u8], shape: &[usize], dtype: DType) -> crate::Result<()> {
+    let expected = checked_numel(shape)
+        .and_then(|n| n.checked_mul(dtype.size_of()))
+        .unwrap_or(usize::MAX);
+    if data.len() != expected {
+        return Err(crate::VoltaError::StateDataLength {
+            key: key.to_string(),
+            expected,
+            len: data.len(),
+        });
+    }
+    if dtype == DType::Bool
+        && let Some((i, b)) = data.iter().enumerate().find(|&(_, &b)| b > 1)
+    {
+        return Err(crate::VoltaError::InvalidParameter(format!(
+            "state dict entry '{key}': bool element {i} is the byte {b}, not 0 or 1"
+        )));
+    }
+    Ok(())
 }
 
 /// Checks every entry of a state dict read from outside the program.
@@ -494,30 +500,36 @@ pub fn save_safetensors<P: AsRef<Path>>(state: &StateDict, path: P) -> Result<()
 
 /// Save typed tensor data to `SafeTensors` format with native dtypes
 ///
-/// # Panics
-/// If an entry's byte count does not match its shape and dtype (`TensorView::new` fails).
-///
 /// # Errors
-/// If the file can't be created or written, or the tensors can't be serialized.
-#[track_caller]
+/// The file can't be created or written, the tensors can't be serialized, or
+/// (`InvalidData`, wrapping the [`crate::VoltaError`] that [`TensorData::validate`] would
+/// return) an entry's byte count does not match its shape and dtype. Entries are checked
+/// before the file is created, so a bad entry leaves nothing on disk.
 pub fn save_safetensors_typed<P: AsRef<Path>>(
     tensors: &BTreeMap<String, TypedTensorData>,
     path: P,
 ) -> Result<()> {
     use safetensors::tensor::TensorView;
 
-    let tensor_views: Vec<(String, TensorView<'_>)> = tensors
+    let tensor_views = tensors
         .iter()
         .map(|(name, td)| {
-            let view = TensorView::new(
+            validate_entry(name, &td.data, &td.shape, td.dtype)
+                .map_err(|e| Error::new(std::io::ErrorKind::InvalidData, e))?;
+            TensorView::new(
                 volta_dtype_to_safetensors(td.dtype),
                 td.shape.clone(),
                 &td.data,
             )
-            .expect("Failed to create TensorView");
-            (name.clone(), view)
+            .map(|view| (name.clone(), view))
+            .map_err(|e| {
+                Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("SafeTensors entry '{name}': {e}"),
+                )
+            })
         })
-        .collect();
+        .collect::<Result<Vec<(String, TensorView<'_>)>>>()?;
 
     let bytes = safetensors::tensor::serialize(tensor_views, None)
         .map_err(|e| Error::other(format!("SafeTensors serialize error: {e}")))?;
@@ -877,6 +889,26 @@ mod io_tests {
         let tmp = TempFile::new("malformed.safetensors");
         let err = save_safetensors(&state, tmp.path()).expect_err("short entry");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    /// #110: `save_safetensors_typed` returns `InvalidData` for an entry whose byte count
+    /// does not match its shape (it used to panic in `TensorView::new`), and creates no file.
+    #[test]
+    fn save_safetensors_typed_rejects_a_length_mismatch() {
+        let mut tensors = BTreeMap::new();
+        tensors.insert(
+            "w".to_string(),
+            TypedTensorData {
+                data: vec![0u8; 12],
+                shape: vec![2, 2],
+                dtype: DType::F32,
+            },
+        );
+        let tmp = TempFile::new("typed_mismatch.safetensors");
+        let err = save_safetensors_typed(&tensors, tmp.path()).expect_err("12 bytes for [2, 2]");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("'w'"), "{err}");
+        assert!(!tmp.path().exists(), "no file is written for a bad entry");
     }
 
     /// `to_tensor` rebuilds the tensor in the saved dtype, and `try_to_tensor` refuses a
