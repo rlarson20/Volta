@@ -13,7 +13,7 @@ body:
     id: evidence
     attributes:
       label: Evidence and repro
-      description: The audit section, if there is one, and the `#[ignore = "<ID>: ..."]` test plus the command that runs it (invariant 6, never a test that asserts the bug).
+      description: The audit section, if there is one, and the `#[ignore = "<ID>: ..."]` test plus the command that runs it \(invariant 6, never a test that asserts the bug\).
       render: markdown
     validations:
       required: true
