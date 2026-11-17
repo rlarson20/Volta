@@ -234,17 +234,6 @@ mod tests {
     }
 
     #[test]
-    fn test_maxpool2d_backward_flow() {
-        let pool = MaxPool2d::new(2, 2, 0);
-        let x = RawTensor::randn(&[1, 1, 4, 4]);
-        x.set_requires_grad(true);
-        let y = pool.forward(&x);
-        let loss = y.sum();
-        loss.into_loss().expect("scalar loss").backward();
-        assert!(x.grad().is_some());
-    }
-
-    #[test]
     fn test_maxpool2d_gradcheck() {
         let pool = MaxPool2d::new(2, 2, 0);
         // Use deterministic, strictly increasing data so every pooling window

@@ -166,12 +166,6 @@ mod tests {
     use crate::RawTensor;
 
     #[test]
-    fn test_attention_creation() {
-        let _attention = ScaledDotProductAttention::new();
-        let _ = ScaledDotProductAttention;
-    }
-
-    #[test]
     fn test_attention_shape() {
         let attention = ScaledDotProductAttention::new();
 

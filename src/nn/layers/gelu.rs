@@ -91,8 +91,10 @@ mod tests {
 
     #[test]
     fn test_gelu_default() {
-        let gelu = GELU;
-        let _ = gelu.forward(&RawTensor::new(vec![0.0], &[1], false));
+        // GELU(0) = 0 * Phi(0) = 0, exactly, for the unit struct and for `new()`.
+        let x = RawTensor::new(vec![0.0], &[1], false);
+        assert_eq!(GELU.forward(&x).item(), 0.0);
+        assert_eq!(GELU::new().forward(&x).item(), 0.0);
     }
 
     #[test]

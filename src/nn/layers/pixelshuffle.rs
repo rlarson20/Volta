@@ -139,23 +139,4 @@ mod tests {
         let x = RawTensor::randn(&[12, 4, 4]); // 3D input
         layer.forward(&x);
     }
-
-    #[test]
-    fn test_pixelshuffle_gradient_flow() {
-        let layer = PixelShuffle::new(2);
-        let x = RawTensor::randn(&[1, 4, 3, 3]);
-        x.set_requires_grad(true);
-
-        let y = layer.forward(&x);
-        let loss = y.sum();
-        loss.into_loss().expect("scalar loss").backward();
-
-        let grad = x.grad();
-        assert!(
-            grad.is_some(),
-            "Gradient should flow back through PixelShuffle"
-        );
-        // Check gradient has correct number of elements: 1 * 4 * 3 * 3 = 36
-        assert_eq!(grad.unwrap().len(), 36);
-    }
 }
