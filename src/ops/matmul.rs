@@ -3,6 +3,7 @@ use crate::device::Device;
 use crate::device_policy::kernel_failed;
 use crate::error::OrPanic;
 use crate::index::{fetch, slot};
+use crate::ops::reduce::pairwise_sum_by;
 use crate::real::{Real, compute_dtype, dispatch_bits, dispatch_real};
 use crate::shape::{Shape, fixed_dims};
 use crate::spec::MatmulSpec;
@@ -259,14 +260,9 @@ impl RawTensor {
                 let [n2] = shape_b.fixed::<1>();
                 assert_eq!(n, n2, "Matmul dimension mismatch: ({m},{n}) @ ({n2})");
 
-                let mut result_data = vec![T::ZERO; m];
-                for i in 0..m {
-                    let mut sum = T::ZERO;
-                    for j in 0..n {
-                        sum += fetch(&a_host, i * n + j) * fetch(&b_host, j);
-                    }
-                    *slot(&mut result_data, i) = sum;
-                }
+                let result_data: Vec<T> = (0..m)
+                    .map(|i| pairwise_sum_by(n, |j| fetch(&a_host, i * n + j) * fetch(&b_host, j)))
+                    .collect();
 
                 edge(
                     [self_t.clone(), other.clone()],
@@ -283,15 +279,9 @@ impl RawTensor {
                 let [n2, p] = shape_b.fixed::<2>();
                 assert_eq!(n, n2, "Matmul dimension mismatch: ({n}) @ ({n2},{p})");
 
-                let mut result_data = vec![T::ZERO; p];
-                for j in 0..p {
-                    let mut sum = T::ZERO;
-                    for i in 0..n {
-                        sum += fetch(&a_host, i) * fetch(&b_host, i * p + j);
-                    }
-
-                    *slot(&mut result_data, j) = sum;
-                }
+                let result_data: Vec<T> = (0..p)
+                    .map(|j| pairwise_sum_by(n, |i| fetch(&a_host, i) * fetch(&b_host, i * p + j)))
+                    .collect();
 
                 edge(
                     [self_t.clone(), other.clone()],
@@ -308,7 +298,7 @@ impl RawTensor {
                 let [n2] = shape_b.fixed::<1>();
                 assert_eq!(n, n2, "Dot product dimension mismatch: ({n}) @ ({n2})");
 
-                let sum: T = a_host.iter().zip(b_host.iter()).map(|(a, b)| a * b).sum();
+                let sum = pairwise_sum_by(n, |i| fetch(&a_host, i) * fetch(&b_host, i));
                 edge(
                     [self_t.clone(), other.clone()],
                     Storage::from_compute(dtype, vec![sum]),
@@ -575,13 +565,13 @@ impl MatMulGradFn {
                     // grad_x = out_grad @ y^T -> (p,) @ (p,n) -> (n,)
                     let [len_x] = x.shape.fixed::<1>();
                     let [_, len_y_p] = y.shape.fixed::<2>();
-                    let mut grad_data = vec![T::ZERO; len_x];
-                    for i in 0..len_x {
-                        for j in 0..len_y_p {
-                            *slot(&mut grad_data, i) +=
-                                fetch(&g_host, j) * fetch(&y_host, i * len_y_p + j);
-                        }
-                    }
+                    let grad_data: Vec<T> = (0..len_x)
+                        .map(|i| {
+                            pairwise_sum_by(len_y_p, |j| {
+                                fetch(&g_host, j) * fetch(&y_host, i * len_y_p + j)
+                            })
+                        })
+                        .collect();
                     Some(RawTensor::from_shape_compute(x.data.dtype(), grad_data, x.shape.clone()))
                 }
                 (None, 1, 1) => {
@@ -606,14 +596,9 @@ impl MatMulGradFn {
                     // Matrix-vector: (m,n) @ (n,) -> (m,)
                     // ∂L/∂v = X^T @ ∂L/∂z -> (n,)
                     let [m, n] = x.shape.fixed::<2>();
-                    let mut grad_data = vec![T::ZERO; n];
-                    for j in 0..n {
-                        let mut sum = T::ZERO;
-                        for i in 0..m {
-                            sum += fetch(&x_host, i * n + j) * fetch(&g_host, i);
-                        }
-                        *slot(&mut grad_data, j) = sum;
-                    }
+                    let grad_data: Vec<T> = (0..n)
+                        .map(|j| pairwise_sum_by(m, |i| fetch(&x_host, i * n + j) * fetch(&g_host, i)))
+                        .collect();
                     Some(RawTensor::from_shape_compute(x.data.dtype(), grad_data, y.shape.clone()))
                 }
                 (None, 1, 2) => {
@@ -1060,5 +1045,49 @@ mod tests {
         let b = operand(&[3, 4, 5]);
         let msg = panic_message(|| a.matmul(&b));
         assert!(msg.contains("do not broadcast"), "{msg}");
+    }
+
+    /// A contraction length where a sequential f32 sum of ones stalls at 2^24 (#213).
+    const LONG: usize = 1 << 25;
+
+    #[test]
+    fn rank1_matmul_forward_sums_a_long_contraction_exactly() {
+        let ones = RawTensor::new(vec![1.0; LONG], &[LONG], false);
+        assert_eq!(ones.matmul(&ones).item(), 33_554_432.0, "dot");
+        let row = RawTensor::new(vec![1.0; LONG], &[1, LONG], false);
+        assert_eq!(
+            row.matmul(&ones).data(),
+            vec![33_554_432.0],
+            "matrix @ vector"
+        );
+        let col = RawTensor::new(vec![1.0; LONG], &[LONG, 1], false);
+        assert_eq!(
+            ones.matmul(&col).data(),
+            vec![33_554_432.0],
+            "vector @ matrix"
+        );
+    }
+
+    #[test]
+    fn rank1_matmul_backward_sums_a_long_contraction_exactly() {
+        // Matrix @ vector: dL/dv = X^T @ dL/dz sums over the LONG rows of X.
+        let x = RawTensor::new(vec![1.0; LONG], &[LONG, 1], false);
+        let v = RawTensor::new(vec![1.0], &[1], true);
+        x.matmul(&v)
+            .sum()
+            .into_loss()
+            .expect("scalar loss")
+            .backward();
+        assert_eq!(v.grad(), Some(vec![33_554_432.0]), "matrix @ vector, dL/dv");
+
+        // Vector @ matrix: dL/du = dL/dz @ Y^T sums over the LONG columns of Y.
+        let u = RawTensor::new(vec![1.0], &[1], true);
+        let y = RawTensor::new(vec![1.0; LONG], &[1, LONG], false);
+        u.matmul(&y)
+            .sum()
+            .into_loss()
+            .expect("scalar loss")
+            .backward();
+        assert_eq!(u.grad(), Some(vec![33_554_432.0]), "vector @ matrix, dL/du");
     }
 }
