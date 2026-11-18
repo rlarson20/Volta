@@ -1,7 +1,7 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::error::OrPanic;
-use crate::index::{fetch, signed, slot, unsigned};
+use crate::index::{fetch, slot};
 use crate::io::{StateDict, TensorData};
 use crate::nn::{Layer, Module};
 use crate::real::{Real, compute_dtype, dispatch_real};
@@ -132,6 +132,67 @@ impl ConvTranspose2d {
 
         result
     }
+
+    /// Gather an output-shaped image back into column form: the adjoint of
+    /// [`col2im_transpose`](Self::col2im_transpose), used by the backward pass.
+    ///
+    /// `img` is `[B, C_out, H_out, W_out]`; the result is the column matrix
+    /// `[B*H_in*W_in, C_out*K_h*K_w]`, whose entry for input position `(ih, iw)` and
+    /// kernel tap `(c, kh, kw)` is the output element that tap wrote to in the forward pass.
+    fn im2col_transpose<T: Real>(img: &[T], spec: &ConvTranspose2dSpec) -> Vec<T> {
+        let ConvTranspose2dSpec {
+            batch,
+            out_ch: out_channels,
+            in_h,
+            in_w,
+            kernel_h: kh,
+            kernel_w: kw,
+            stride_h: sh,
+            stride_w: sw,
+            pad_h: ph,
+            pad_w: pw,
+            out_h: h_out,
+            out_w: w_out,
+            ..
+        } = *spec;
+        assert_eq!(
+            img.len(),
+            batch * out_channels * h_out * w_out,
+            "im2col_transpose: image length"
+        );
+
+        let cols = out_channels * kh * kw;
+        let mut col = vec![T::ZERO; batch * in_h * in_w * cols];
+        for b in 0..batch {
+            for ih in 0..in_h {
+                for iw in 0..in_w {
+                    let row = b * (in_h * in_w) + ih * in_w + iw;
+                    for c in 0..out_channels {
+                        for kh_idx in 0..kh {
+                            for kw_idx in 0..kw {
+                                // A tap that lands in the padding wrote nothing in the
+                                // forward pass, so its column entry stays zero.
+                                let h_pos = ih * sh + kh_idx;
+                                let w_pos = iw * sw + kw_idx;
+                                if h_pos < ph || h_pos >= h_out + ph {
+                                    continue;
+                                }
+                                if w_pos < pw || w_pos >= w_out + pw {
+                                    continue;
+                                }
+                                let img_idx = ((b * out_channels + c) * h_out + (h_pos - ph))
+                                    * w_out
+                                    + (w_pos - pw);
+                                let col_idx = row * cols + (c * kh + kh_idx) * kw + kw_idx;
+                                *slot(&mut col, col_idx) = fetch(img, img_idx);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        col
+    }
 }
 
 /// Gradient function for `ConvTranspose2d`
@@ -164,18 +225,9 @@ impl ConvTranspose2dGradFn {
             in_w,
             kernel_h: kh,
             kernel_w: kw,
-            stride_h,
-            stride_w,
-            pad_h,
-            pad_w,
-            out_h,
-            out_w,
+            ..
         } = self.spec;
 
-        // 1. Gradient w.r.t. input
-        // For transposed convolution forward: output[h_out] = input @ weight where h_out = ih*stride + kh - pad
-        // So gradient w.r.t. input at (ih, iw) sums out_grad at positions ih*stride + kh - pad
-        // The gradient is: grad_input[ih] = sum over kh of out_grad[ih*stride + kh - pad] * weight[kh]
         let weight_parent = parents
             .get(1)
             .expect("ConvTranspose2d backward: the weight is a parent");
@@ -184,121 +236,56 @@ impl ConvTranspose2dGradFn {
         let need_input = input.borrow().requires_grad;
         let need_weight = weight_parent.borrow().requires_grad;
 
-        let mut grads = dispatch_real!(out_grad.data.dtype(), T => {
-        let out_grad_data = out_grad.data.host::<T>().to_vec();
+        // The forward is `col = X_r @ W_r` then `out = col2im(col)`, with
+        // `X_r = [B*H_in*W_in, C_in]` (the input, channels last) and
+        // `W_r = [C_in, C_out*K_h*K_w]`. Its adjoint gathers `out_grad` back into column
+        // form, `dcol = im2col(out_grad)`, and then
+        //   ∂L/∂X_r = dcol @ W_rᵀ   and   ∂L/∂W_r = X_rᵀ @ dcol,
+        // two GEMMs instead of 7-deep scalar loops (#230).
+        let rows = batch * in_h * in_w;
+        let cols = out_channels * kh * kw;
+        let plane = in_h * in_w;
+        let dtype = out_grad.data.dtype();
+        let mut grads = dispatch_real!(dtype, T => {
+        let dcol = (need_input || need_weight)
+            .then(|| ConvTranspose2d::im2col_transpose(&out_grad.data.host::<T>(), &self.spec));
 
         let grad_input = need_input.then(|| {
-        let mut grad_input_data = vec![T::ZERO; batch * in_channels * in_h * in_w];
-        let weight_data = self.weight.borrow().data.host::<T>().to_vec();
-
-        for b in 0..batch {
-            for c_in in 0..in_channels {
-                for ih in 0..in_h {
-                    for iw in 0..in_w {
-                        let mut grad_sum = T::ZERO;
-
-                        for c_out in 0..out_channels {
-                            for kh_idx in 0..kh {
-                                for kw_idx in 0..kw {
-                                    // Position in out_grad: matches forward pass col2im_transpose mapping
-                                    // h_out_pos = ih * stride + kh_idx - padding
-                                    let h_out = signed(ih) * signed(stride_h) + signed(kh_idx)
-                                        - signed(pad_h);
-                                    let w_out = signed(iw) * signed(stride_w) + signed(kw_idx)
-                                        - signed(pad_w);
-
-                                    // Check bounds
-                                    if h_out >= 0
-                                        && h_out < signed(out_h)
-                                        && w_out >= 0
-                                        && w_out < signed(out_w)
-                                    {
-                                        let out_idx = b * (out_channels * out_h * out_w)
-                                            + c_out * (out_h * out_w)
-                                            + unsigned(h_out) * out_w
-                                            + unsigned(w_out);
-
-                                        let w_idx = c_in * (out_channels * kh * kw)
-                                            + c_out * (kh * kw)
-                                            + kh_idx * kw
-                                            + kw_idx;
-
-                                        grad_sum += fetch(&out_grad_data, out_idx)
-                                            * fetch(&weight_data, w_idx);
-                                    }
-                                }
-                            }
-                        }
-
-                        let in_idx =
-                            b * (in_channels * in_h * in_w) + c_in * (in_h * in_w) + ih * in_w + iw;
-
-                        *slot(&mut grad_input_data, in_idx) = grad_sum;
+            let dcol = dcol.as_deref().expect("dcol is built when a gradient is needed");
+            let w_t = RawTensor::transpose_2d(
+                &self.weight.borrow().data.host::<T>(),
+                &[in_channels, cols],
+            );
+            // [B*H_in*W_in, C_in], channels last; permute back to [B, C_in, H_in, W_in].
+            let gi_rows = T::gemm(dcol, &w_t, rows, cols, in_channels);
+            let mut grad_input_data = vec![T::ZERO; batch * in_channels * plane];
+            for b in 0..batch {
+                for p in 0..plane {
+                    for c in 0..in_channels {
+                        *slot(&mut grad_input_data, (b * in_channels + c) * plane + p) =
+                            fetch(&gi_rows, (b * plane + p) * in_channels + c);
                     }
                 }
             }
-        }
-
-        RawTensor::new_with_storage(Storage::from_compute(out_grad.data.dtype(), grad_input_data), Shape::derived(vec![batch, in_channels, in_h, in_w]), Device::CPU, false)
+            RawTensor::new_with_storage(Storage::from_compute(dtype, grad_input_data), Shape::derived(vec![batch, in_channels, in_h, in_w]), Device::CPU, false)
         });
 
-        // 2. Gradient w.r.t. weight
-        // grad_weight[c_in, c_out, kh, kw] = sum over b, ih, iw of input[b, c_in, ih, iw] * out_grad[b, c_out, ih*stride+kh, iw*stride+kw]
         let grad_weight = need_weight.then(|| {
-        let mut grad_weight_data = vec![T::ZERO; in_channels * out_channels * kh * kw];
-        let input_data = input.borrow().data.host::<T>().to_vec();
-
-        for c_in in 0..in_channels {
-            for c_out in 0..out_channels {
-                for kh_idx in 0..kh {
-                    for kw_idx in 0..kw {
-                        let mut grad_sum = T::ZERO;
-
-                        for b in 0..batch {
-                            for ih in 0..in_h {
-                                for iw in 0..in_w {
-                                    // Position in out_grad
-                                    // Use i64 to avoid underflow with unsigned types
-                                    let h_out = signed(ih) * signed(stride_h) + signed(kh_idx)
-                                        - signed(pad_h);
-                                    let w_out = signed(iw) * signed(stride_w) + signed(kw_idx)
-                                        - signed(pad_w);
-
-                                    // Check bounds
-                                    if h_out >= 0
-                                        && h_out < signed(out_h)
-                                        && w_out >= 0
-                                        && w_out < signed(out_w)
-                                    {
-                                        let in_idx = b * (in_channels * in_h * in_w)
-                                            + c_in * (in_h * in_w)
-                                            + ih * in_w
-                                            + iw;
-
-                                        let out_idx = b * (out_channels * out_h * out_w)
-                                            + c_out * (out_h * out_w)
-                                            + unsigned(h_out) * out_w
-                                            + unsigned(w_out);
-
-                                        grad_sum += fetch(&input_data, in_idx)
-                                            * fetch(&out_grad_data, out_idx);
-                                    }
-                                }
-                            }
-                        }
-
-                        let w_idx = c_in * (out_channels * kh * kw)
-                            + c_out * (kh * kw)
-                            + kh_idx * kw
-                            + kw_idx;
-
-                        *slot(&mut grad_weight_data, w_idx) = grad_sum;
+            let dcol = dcol.as_deref().expect("dcol is built when a gradient is needed");
+            // X_rᵀ = [C_in, B*H_in*W_in]: row c is channel c of every image, back to back.
+            let input_data = input.borrow().data.host::<T>().into_owned();
+            let mut x_t = vec![T::ZERO; in_channels * rows];
+            for c in 0..in_channels {
+                for b in 0..batch {
+                    for p in 0..plane {
+                        *slot(&mut x_t, c * rows + b * plane + p) =
+                            fetch(&input_data, (b * in_channels + c) * plane + p);
                     }
                 }
             }
-        }
-
-        RawTensor::new_with_storage(Storage::from_compute(out_grad.data.dtype(), grad_weight_data), Shape::derived(vec![in_channels, out_channels, kh, kw]), Device::CPU, false)
+            // [C_in, C_out*K_h*K_w] is the weight's own layout.
+            let grad_weight_data = T::gemm(&x_t, dcol, in_channels, rows, cols);
+            RawTensor::new_with_storage(Storage::from_compute(dtype, grad_weight_data), Shape::derived(vec![in_channels, out_channels, kh, kw]), Device::CPU, false)
         });
         vec![grad_input, grad_weight]
         });
@@ -699,6 +686,123 @@ mod tests {
         // Check that bias has gradients
         if let Some(ref b) = conv.bias {
             assert!(b.grad().is_some(), "Bias should have gradients");
+        }
+    }
+
+    /// The input and weight gradients of a transposed convolution, by the definition:
+    /// output `(b, co, ih*s + kh - p, iw*s + kw - p)` gets `x[b, ci, ih, iw] * w[ci, co, kh, kw]`.
+    /// Scalar loops in f64; this was the backward before it moved to GEMMs (#230).
+    fn reference_grads(
+        spec: &ConvTranspose2dSpec,
+        x: &[f32],
+        w: &[f32],
+        g: &[f32],
+    ) -> (Vec<f32>, Vec<f32>) {
+        use crate::index::{signed, unsigned};
+        let s = *spec;
+        let mut gi = vec![0.0f64; s.batch * s.in_ch * s.in_h * s.in_w];
+        let mut gw = vec![0.0f64; s.in_ch * s.out_ch * s.kernel_h * s.kernel_w];
+        for b in 0..s.batch {
+            for ci in 0..s.in_ch {
+                for ih in 0..s.in_h {
+                    for iw in 0..s.in_w {
+                        let x_idx = ((b * s.in_ch + ci) * s.in_h + ih) * s.in_w + iw;
+                        for co in 0..s.out_ch {
+                            for kh in 0..s.kernel_h {
+                                for kw in 0..s.kernel_w {
+                                    let oh = signed(ih * s.stride_h + kh) - signed(s.pad_h);
+                                    let ow = signed(iw * s.stride_w + kw) - signed(s.pad_w);
+                                    // Taps in the padding contribute nothing.
+                                    if oh < 0
+                                        || ow < 0
+                                        || oh >= signed(s.out_h)
+                                        || ow >= signed(s.out_w)
+                                    {
+                                        continue;
+                                    }
+                                    let g_idx = ((b * s.out_ch + co) * s.out_h + unsigned(oh))
+                                        * s.out_w
+                                        + unsigned(ow);
+                                    let w_idx =
+                                        ((ci * s.out_ch + co) * s.kernel_h + kh) * s.kernel_w + kw;
+                                    let gv = f64::from(fetch(g, g_idx));
+                                    *slot(&mut gi, x_idx) += gv * f64::from(fetch(w, w_idx));
+                                    *slot(&mut gw, w_idx) += gv * f64::from(fetch(x, x_idx));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "the f64 reference narrows to the f32 result it checks"
+        )]
+        let narrow = |v: Vec<f64>| v.into_iter().map(|e| e as f32).collect();
+        (narrow(gi), narrow(gw))
+    }
+
+    /// `(batch, in_ch, out_ch, in_h, in_w, kernel, stride, padding)`.
+    type Case = (
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        (usize, usize),
+        (usize, usize),
+        (usize, usize),
+    );
+
+    /// #230: the GEMM backward matches the scalar definition, including asymmetric
+    /// stride, padding, kernel and input sizes, and padding that crops whole taps.
+    #[test]
+    fn conv_transpose2d_backward_matches_scalar_reference() {
+        crate::tensor::manual_seed(0x0230);
+        let cases: [Case; 5] = [
+            (2, 3, 4, 5, 5, (4, 4), (2, 2), (1, 1)),
+            (1, 2, 3, 4, 6, (3, 2), (2, 1), (0, 1)),
+            (3, 1, 2, 3, 3, (1, 1), (1, 1), (0, 0)),
+            (2, 4, 2, 4, 3, (5, 3), (3, 2), (2, 1)),
+            (1, 5, 6, 7, 7, (4, 4), (2, 2), (3, 3)),
+        ];
+        for (batch, cin, cout, h, w, kernel, stride, padding) in cases {
+            let conv = ConvTranspose2d {
+                weight: RawTensor::randn(&[cin, cout, kernel.0, kernel.1]),
+                bias: None,
+                stride,
+                padding,
+            };
+            conv.weight.set_requires_grad(true);
+            let x = RawTensor::randn(&[batch, cin, h, w]);
+            x.set_requires_grad(true);
+            let y = conv.forward(&x);
+            let (grad_fn, parents) = {
+                let raw = y.borrow();
+                (raw.grad_fn.clone(), raw.parents.clone())
+            };
+            let Some(GradFn::ConvTranspose2d(g)) = grad_fn else {
+                panic!("expected a ConvTranspose2d grad fn");
+            };
+            let out_grad = RawTensor::randn(y.shape().truncate_rank());
+            let grads = g.backward(&out_grad.borrow(), &parents);
+            let (gi, gw) =
+                reference_grads(&g.spec, &x.data(), &conv.weight.data(), &out_grad.data());
+            let case =
+                format!("{batch}x{cin}x{h}x{w} -> {cout}, k={kernel:?} s={stride:?} p={padding:?}");
+            for (name, actual, expected) in
+                [("input", grads.first(), gi), ("weight", grads.get(1), gw)]
+            {
+                let actual = actual.and_then(Option::as_ref).expect("a gradient").data();
+                assert_eq!(actual.len(), expected.len(), "{name} grad length, {case}");
+                for (i, (a, e)) in actual.iter().zip(&expected).enumerate() {
+                    assert!(
+                        (a - e).abs() <= 1e-4 * (1.0 + e.abs()),
+                        "{name} grad [{i}]: {a} vs {e}, {case}"
+                    );
+                }
+            }
         }
     }
 
