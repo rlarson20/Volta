@@ -33,7 +33,7 @@ The Conv2d implementation uses algorithm selection in `src/nn/layers/conv.rs` wi
 ## Algorithm Selection
 
 ```rust
-let conv = Conv2d::new(3, 16, 3, 1, 1, true);
+let mut conv = Conv2d::new(3, 16, 3, 1, 1, true);
 
 // Auto is the default. To force one algorithm, set it (these are alternatives):
 conv.set_algo(ConvAlgo::Auto);

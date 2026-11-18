@@ -74,7 +74,7 @@ fn bench_case(
         BenchmarkId::new(name, param),
         &case,
         |b, &(batch_sz, ic, oc, h, w, k, s, p)| {
-            let layer = Conv2d::new(ic, oc, k, s, p, false);
+            let mut layer = Conv2d::new(ic, oc, k, s, p, false);
             layer.set_algo(algo);
             let input = random_tensor_4d(batch_sz, ic, h, w);
 
