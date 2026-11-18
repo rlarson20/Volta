@@ -192,6 +192,7 @@ impl Muon {
         for param in &self.params {
             crate::real::compute_dtype(|| "Muon step".to_string(), &[param.dtype()]);
         }
+        super::assert_grad_lens("Muon", &self.params);
         for (param, velocity) in self.params.iter().zip(self.velocity.iter_mut()) {
             let mut p = param.borrow_mut();
             let Some(grad) = p.grad.clone() else {

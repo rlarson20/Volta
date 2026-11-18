@@ -376,24 +376,44 @@ impl Tensor {
     /// where a CPU gradient for a GPU tensor is a gap).
     ///
     /// # Panics
-    /// If `grad`'s dtype differs from the tensor's: a gradient has its tensor's dtype.
+    /// If `grad`'s dtype or length differs from the tensor's (see [`Tensor::try_set_grad`]).
     #[track_caller]
+    pub fn set_grad(&self, grad: Storage) {
+        self.try_set_grad(grad).or_panic("set_grad");
+    }
+
+    /// Fallible [`Tensor::set_grad`]: checks `grad` against the tensor before moving it
+    /// onto the tensor's device, and leaves the existing gradient untouched on error.
+    ///
+    /// # Errors
+    /// - `VoltaError::DTypeMismatch` if `grad`'s dtype differs from the tensor's: a gradient
+    ///   has its tensor's dtype.
+    /// - `VoltaError::ShapeDataMismatch` if `grad` does not hold exactly one element per
+    ///   tensor element. An optimizer reads the parameter and its gradient at one index, so a
+    ///   short or long gradient would update only part of the parameter (#324).
     #[expect(
         clippy::needless_pass_by_value,
         reason = "takes ownership by design: the caller hands over the buffer it just built, and borrowing would make every caller clone"
     )]
-    pub fn set_grad(&self, grad: Storage) {
+    pub fn try_set_grad(&self, grad: Storage) -> Result<()> {
         let mut t = self.inner.borrow_mut();
-        assert!(
-            grad.dtype() == t.data.dtype(),
-            "set_grad: {}",
-            VoltaError::DTypeMismatch {
+        if grad.dtype() != t.data.dtype() {
+            return Err(VoltaError::DTypeMismatch {
                 expected: t.data.dtype(),
                 actual: grad.dtype(),
-            }
-        );
+            });
+        }
+        let elements = t.shape.numel();
+        if grad.len() != elements {
+            return Err(VoltaError::ShapeDataMismatch {
+                shape: t.shape.truncate_rank().to_vec(),
+                elements,
+                len: grad.len(),
+            });
+        }
         let device = t.device.clone();
         t.grad = Some(grad.to_device(&device));
+        Ok(())
     }
 
     // pub(crate) fn snapshot(&self) -> TensorSnapshot<'static> { /* owned clone of fields */ }
