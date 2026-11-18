@@ -38,6 +38,13 @@ bytemuck = { version = "1.24.0", features = ["derive", "extern_crate_alloc"] }
 wgpu = { version = "30.0.1", optional = true }
 pollster = { version = "1.0.1", optional = true }
 
+# wasm32-unknown-unknown has no OS entropy source, so `getrandom` (behind `rand::rng()`,
+# the unseeded RNG) refuses to compile there unless a backend is chosen. `wasm_js` reads
+# `crypto.getRandomValues`, so it assumes a JavaScript host (a browser or Node), as the
+# WASM bindings do. Native targets are unaffected (#64).
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.4", features = ["wasm_js"] }
+
 # Examples
 [[example]]
 name = "readme1"
