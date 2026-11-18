@@ -8,20 +8,12 @@
 
 mod buffer;
 mod context;
-// The resource monitors are test diagnostics with no library caller (#68): they exist,
-// and are tested, only in the crate's own test build.
-#[cfg(test)]
-mod early_warning;
 #[deny(missing_docs, clippy::missing_docs_in_private_items)]
 mod kernels;
-#[cfg(test)]
-mod monitor;
 mod pool;
 pub(crate) mod shader_template;
 /// Pool of `MAP_READ` staging buffers for GPU-to-CPU transfers.
 pub(crate) mod staging_pool;
-#[cfg(test)]
-mod system_monitor;
 
 pub use buffer::GpuBuffer;
 pub(crate) use context::GpuContext;

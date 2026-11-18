@@ -17,7 +17,7 @@ A map of where things live and how they fit together, as of Phases 0–3 and 5 (
 | `nn/` | `Module`/`Layer`/`RecurrentLayer`, `layers/`, `optim/`, `transformer/` |
 | `io.rs`, `io/mapping.rs` | State dicts, SafeTensors load/save, `StateDictMapper` |
 | `data/` | MNIST IDX loaders, `normalize`, `to_one_hot` |
-| `gpu/` | wgpu backend (feature `gpu`): context, buffers, pools, monitors, kernels, WGSL shaders |
+| `gpu/` | wgpu backend (feature `gpu`): context, buffers, pools, kernels, WGSL shaders |
 | `macros/` | `define_ops!`, `assert_trainable!`, `param_test!`, gradcheck and `assert_close` helpers |
 
 ## Tensors and the graph
@@ -105,7 +105,7 @@ A `StateDict` is a `BTreeMap<String, TensorData>`, each entry the bytes of one t
 ## GPU backend (`src/gpu/`, feature `gpu`)
 
 - **Context.** One lazily built `GpuContext` per process (`static GPU_CONTEXT: OnceLock<Option<GpuContext>>`; `None` without an adapter). It counts pending submissions and syncs past a threshold (`gpu_sync_threshold`) for back-pressure.
-- **Buffers.** `GpuBuffer` carries its dtype and returns itself to a power-of-two bucketed `BufferPool` on drop (8 per bucket, 64 total by default). GPU→CPU reads borrow `MAP_READ` buffers from a separate staging pool (also capped at 64). `monitor`, `system_monitor` and `early_warning` report memory and queue pressure.
+- **Buffers.** `GpuBuffer` carries its dtype and returns itself to a power-of-two bucketed `BufferPool` on drop (8 per bucket, 64 total by default). GPU→CPU reads borrow `MAP_READ` buffers from a separate staging pool (also capped at 64).
 - **Kernels.** `kernels.rs` wraps the WGSL shaders in `shaders/`. `shader_template.rs` expands each shader per element type (f32, native f16, and f16/bf16 packed two per `u32`), so one source serves every GPU dtype. Why: "GPU f16, bf16 and Bool". GPU code is gated at the definition site with a non-GPU stub, so call sites carry no `cfg`. Why: "GPU Dispatch".
 - **Coverage.** Unary and binary ops (equal shapes), comparisons and `where`, casts, whole-tensor reductions, 2-D matmul, movement up to rank 4, the three conv algorithms, and the optimizer steps (including Muon) have kernels. What does not is [#67](https://github.com/rlarson20/Volta/issues/67). Rules for GPU work: `.claude/rules/gpu.md`.
 
