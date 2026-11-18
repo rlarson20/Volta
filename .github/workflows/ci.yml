@@ -122,6 +122,28 @@ jobs:
       - name: Bench smoke run
         run: just bench-smoke
 
+  # The library builds for wasm32-unknown-unknown (`just wasm-check`: clippy, CPU features).
+  # `getrandom` needs its `wasm_js` backend there (Cargo.toml), so a dependency or `std` use
+  # that doesn't build for the browser fails here, not in the downstream WASM bindings (#64).
+  # Its own job, like bench-smoke.
+  wasm32:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+          components: clippy
+      - uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2
+        with:
+          tool: just
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      - name: Clippy for wasm32-unknown-unknown
+        run: just wasm-check
+
   # Default features (gpu) on Linux, with Mesa's lavapipe as the adapter: a software
   # Vulkan device (shaderFloat16), so the gpu-gated tests run on every PR, including the
   # f16/bf16 GPU tests and the naga validation of every shader expansion. Not Metal: the

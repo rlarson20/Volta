@@ -249,6 +249,24 @@ macos-cross-if-available:
 		echo "skipped: macos-cross (needs: rustup target add aarch64-apple-darwin, clang, cargo-hack)"
 	fi
 
+# The library type-checks and lints for wasm32-unknown-unknown (#64), without and with
+# `accelerate` (a no-op off macOS). CPU only: the `gpu` feature would need wgpu's WebGPU
+# backend, which nothing here targets. Library only: tests, examples and benches use
+# dev-dependencies and `std::time::Instant`, which panics at run time on this target.
+wasm-check:
+	cargo clippy --lib --no-default-features --target wasm32-unknown-unknown -- -D warnings
+	cargo clippy --lib --no-default-features --features accelerate --target wasm32-unknown-unknown -- -D warnings
+
+# `wasm-check`, skipped with a notice when the target is not installed
+wasm-check-if-available:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	if rustup target list --installed | grep -qx wasm32-unknown-unknown; then
+		just wasm-check
+	else
+		echo "skipped: wasm-check (needs: rustup target add wasm32-unknown-unknown)"
+	fi
+
 # Fail on silent numeric fallbacks (`unwrap_or(0.0)`, `if let Some(slot) = v.get_mut(i)`)
 check-fallbacks:
 	./scripts/check-fallbacks.sh
@@ -281,6 +299,7 @@ ci:
 	just bench-smoke
 	just hack-if-installed
 	just macos-cross-if-available
+	just wasm-check-if-available
 	@echo "CI check passed!"
 
 # Apply .github/rulesets/*.json to GitHub (create or update by name; needs admin `gh` auth)
