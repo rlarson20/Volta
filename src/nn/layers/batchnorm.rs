@@ -5,14 +5,10 @@ use crate::real::{Real, dispatch_real};
 use crate::shape::Axis;
 use crate::tensor::{RawTensor, Tensor};
 
-/// Batch normalization over `[B, C, H, W]` input, with per-channel statistics.
-///
-/// # Panics
-///
-/// `forward` panics if the input is not 4D, its channel count is not `num_features`, or, in
-/// training mode, it has one value per channel (`B * H * W == 1`), as PyTorch raises. The
-/// running statistics are untouched by a rejected batch.
-pub struct BatchNorm2d {
+/// The state and arithmetic `BatchNorm1d` and `BatchNorm2d` share (#119). Each wrapper
+/// checks its input's rank and lays it out as a 2-D tensor with the channels on one axis
+/// and every value of a channel on the other, then calls [`BatchNorm::normalize`].
+struct BatchNorm {
     /// Number of channels `C`.
     num_features: usize,
     /// Added to the variance for numerical stability.
@@ -33,16 +29,9 @@ pub struct BatchNorm2d {
     running_var: Tensor,
 }
 
-impl BatchNorm2d {
-    /// Layer over `num_features` channels with `eps = 1e-5` and `momentum = 0.1`.
-    #[must_use]
-    pub fn new(num_features: usize) -> Self {
-        Self::new_with_params(num_features, 1e-5, 0.1)
-    }
-
-    /// Layer over `num_features` channels with the given `eps` and `momentum`.
-    #[must_use]
-    pub fn new_with_params(num_features: usize, eps: f32, momentum: f32) -> Self {
+impl BatchNorm {
+    /// `gamma = 1`, `beta = 0`, running mean 0 and running variance 1, in training mode.
+    fn new(num_features: usize, eps: f32, momentum: f32) -> Self {
         let gamma = RawTensor::ones(&[num_features]);
         gamma.set_requires_grad(true);
 
@@ -64,24 +53,20 @@ impl BatchNorm2d {
             running_var,
         }
     }
-}
 
-impl Module for BatchNorm2d {
+    /// `gamma` and `beta`.
     fn parameters(&self) -> Vec<Tensor> {
         vec![self.gamma.clone(), self.beta.clone()]
     }
 
-    fn train(&mut self, mode: bool) {
-        self.training = mode;
-    }
-
-    /// Converts the running statistics too: they are buffers, not parameters.
-    fn to_dtype(&mut self, dtype: crate::DType) {
-        crate::nn::cast_parameters(self, dtype);
+    /// Casts the parameters and the running statistics (buffers, not parameters).
+    fn to_dtype<M: Module + ?Sized>(&self, layer: &M, dtype: crate::DType) {
+        crate::nn::cast_parameters(layer, dtype);
         self.running_mean.cast_in_place(dtype);
         self.running_var.cast_in_place(dtype);
     }
 
+    /// The parameters and the running statistics.
     fn state_dict(&self) -> StateDict {
         let mut state = StateDict::new();
         state.insert("gamma".to_string(), TensorData::from_tensor(&self.gamma));
@@ -97,8 +82,8 @@ impl Module for BatchNorm2d {
         state
     }
 
-    fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
-        // Create a list of tuples mapping the string key to the specific tensor
+    /// Loads each of the four entries that is present.
+    fn load_state_dict(&self, state: &StateDict) -> crate::Result<()> {
         let params = [
             ("gamma", &self.gamma),
             ("beta", &self.beta),
@@ -113,133 +98,103 @@ impl Module for BatchNorm2d {
         }
         Ok(())
     }
-}
 
-impl Layer for BatchNorm2d {
-    fn forward(&self, x: &Tensor) -> Tensor {
-        // A half input with f32 parameters normalizes in f32 and returns the input's
-        // dtype, as PyTorch's norm kernels do (audit A5).
-        crate::nn::norm_mixed(x, self.gamma.dtype(), |x| self.forward_in(x))
+    /// Normalizes `x`, a 2-D tensor whose `channel_axis` has the `C` channels and whose
+    /// other axis has every value of a channel (`n` of them), then scales and shifts it.
+    /// In training mode this uses the batch statistics and updates the running ones; the
+    /// caller has checked `n > 1` there.
+    fn normalize(&self, x: &Tensor, channel_axis: Axis, n: usize) -> Tensor {
+        let c = self.num_features;
+        // Per-channel statistics keep the reduced axis, so they broadcast against `x`.
+        let (reduce, stat_dims) = if channel_axis == Axis(0) {
+            (Axis(1), [c, 1])
+        } else {
+            (Axis(0), [1, c])
+        };
+
+        let (mean, var) = if self.training {
+            let batch_mean = x.mean_dim(reduce, true);
+            // Biased variance for normalizing, as PyTorch does in training mode.
+            let diff = x.sub(&batch_mean);
+            let batch_var = diff.elem_mul(&diff).mean_dim(reduce, true);
+            self.update_running(&batch_mean, &batch_var, n);
+            (batch_mean, batch_var)
+        } else {
+            // Running stats are host-side layer state (updated in place in training), so
+            // copy them onto the input's device, in their own dtype: `constant_like(..,
+            // data())` would round f64 stats to f32.
+            let stat = |t: &Tensor| t.detach().reshape(&stat_dims).to_device(x.device());
+            (stat(&self.running_mean), stat(&self.running_var))
+        };
+
+        // Normalize: (x - mean) / sqrt(var + eps), then gamma * x_norm + beta.
+        let diff = x.sub(&mean);
+        let eps_tensor = x.constant_like(vec![self.eps], &[1]);
+        let x_norm = diff.div(&var.add(&eps_tensor).sqrt());
+        x_norm
+            .elem_mul(&self.gamma.reshape(&stat_dims))
+            .add(&self.beta.reshape(&stat_dims))
+    }
+
+    /// `running = (1 - momentum) * running + momentum * batch`, with Bessel's correction
+    /// (`n / (n - 1)`) on the variance, as PyTorch does. `n > 1`.
+    fn update_running(&self, batch_mean: &Tensor, batch_var: &Tensor, n: usize) {
+        let _no_grad = crate::autograd::no_grad();
+        let mut rm = self.running_mean.borrow_mut();
+        let mut rv = self.running_var.borrow_mut();
+        rm.bump_version();
+        rv.bump_version();
+        let dtype = rm.data.dtype();
+        dispatch_real!(dtype, T => {
+        let bm_ref = batch_mean.borrow();
+        let bm_data = bm_ref.data.host::<T>();
+        let bv_ref = batch_var.borrow();
+        let bv_data = bv_ref.data.host::<T>();
+
+        let m = T::from_f64(f64::from(self.momentum));
+        let n = T::from_usize(n);
+
+        let mut rm_guard = rm.data.host_mut::<T>();
+        let rm_host = &mut *rm_guard;
+        let mut rv_guard = rv.data.host_mut::<T>();
+        let rv_host = &mut *rv_guard;
+        for i in 0..self.num_features {
+            let rm_val = fetch(rm_host, i);
+            let bm_val = fetch(&bm_data, i);
+            *slot(rm_host, i) = (1.0 - m).mul_add(rm_val, m * bm_val);
+            let unbiased_var = fetch(&bv_data, i) * n / (n - 1.0);
+            let rv_val = fetch(rv_host, i);
+            *slot(rv_host, i) = (1.0 - m).mul_add(rv_val, m * unbiased_var);
+        }
+        });
     }
 }
 
+/// Batch normalization over `[B, C, H, W]` input, with per-channel statistics.
+///
+/// # Panics
+///
+/// `forward` panics if the input is not 4D, its channel count is not `num_features`, or, in
+/// training mode, it has one value per channel (`B * H * W == 1`), as PyTorch raises. The
+/// running statistics are untouched by a rejected batch.
+pub struct BatchNorm2d {
+    /// Parameters, running statistics and mode.
+    core: BatchNorm,
+}
+
 impl BatchNorm2d {
-    /// The forward pass with `x` already in the parameters' dtype (or another dtype pair
-    /// [`crate::nn::norm_mixed`] leaves alone).
-    fn forward_in(&self, x: &Tensor) -> Tensor {
-        let x_borrow = x.borrow();
-        assert_eq!(
-            x_borrow.shape.rank(),
-            4,
-            "BatchNorm2d expected 4D input (B,C,H,W)"
-        );
-        assert_eq!(
-            x_borrow.shape.dim_at(1),
-            self.num_features,
-            "Channel mismatch"
-        );
-        let [b, _, h, w] = x_borrow.shape.fixed::<4>();
-        let num_pixels = b * h * w;
-        assert!(
-            !self.training || num_pixels > 1,
-            "BatchNorm2d expected more than 1 value per channel when training, got input shape {:?}",
-            x_borrow.shape
-        );
-        drop(x_borrow);
+    /// Layer over `num_features` channels with `eps = 1e-5` and `momentum = 0.1`.
+    #[must_use]
+    pub fn new(num_features: usize) -> Self {
+        Self::new_with_params(num_features, 1e-5, 0.1)
+    }
 
-        // 1. Reshape to normalize over (B, H, W) for each channel
-        // We want stats per channel.
-        // Input: (B, C, H, W)
-        // Permute -> (C, B, H, W)
-        let x_perm = x.permute(&[Axis(1), Axis(0), Axis(2), Axis(3)]);
-
-        // We need reshaping to utilize current Tensor ops for mean/var
-        // (C, B, H, W) -> (C, B*H*W)
-        let x_flat = x_perm.reshape(&[self.num_features, b * h * w]);
-
-        let (mean, var) = if self.training {
-            // Calculate batch stats
-            let batch_mean = x_flat.mean_dim(Axis(1), true); // (C, 1)
-
-            // Unbiased var: sum((x - mean)^2) / (N - 1)
-            // We'll use biased for simplicity/PyTorch-parity in train mode freq: sum / N
-            let diff = x_flat.sub(&batch_mean);
-            let sq_diff = diff.elem_mul(&diff);
-            let batch_var = sq_diff.mean_dim(Axis(1), true); // (C, 1)
-
-            // Update running stats.
-            // running_mean = (1 - m) * running_mean + m * batch_mean
-            {
-                let _no_grad = crate::autograd::no_grad();
-                let mut rm = self.running_mean.borrow_mut();
-                let mut rv = self.running_var.borrow_mut();
-                rm.bump_version();
-                rv.bump_version();
-                let dtype = rm.data.dtype();
-                dispatch_real!(dtype, T => {
-                let bm_ref = batch_mean.borrow();
-                let bm_data = bm_ref.data.host::<T>();
-                let bv_ref = batch_var.borrow();
-                let bv_data = bv_ref.data.host::<T>();
-
-                // Note: PyTorch uses unbiased (N-1) for running_var update,
-                // but biased for batch norm calculation. The guard above ensures N > 1.
-                let m = T::from_f64(f64::from(self.momentum));
-                let num_pixels = T::from_usize(num_pixels);
-
-                let mut rm_guard = rm.data.host_mut::<T>();
-                let rm_host = &mut *rm_guard;
-                let mut rv_guard = rv.data.host_mut::<T>();
-                let rv_host = &mut *rv_guard;
-                for i in 0..self.num_features {
-                    let rm_val = fetch(rm_host, i);
-                    let bm_val = fetch(&bm_data, i);
-                    *slot(rm_host, i) = (1.0 - m).mul_add(rm_val, m * bm_val);
-                    // Bessel correction for running_var update usually applied
-                    let bv_val = fetch(&bv_data, i);
-                    let unbiased_var = bv_val * num_pixels / (num_pixels - 1.0);
-                    let rv_val = fetch(rv_host, i);
-                    *slot(rv_host, i) = (1.0 - m).mul_add(rv_val, m * unbiased_var);
-                }
-                });
-            }
-
-            (batch_mean, batch_var)
-        } else {
-            // Use running stats
-            // Must reshape to (C, 1) to broadcast correctly against (C, N)
-            // Running stats are host-side layer state (updated in place above), so copy
-            // them onto the input's device.
-            // In their own dtype: `constant_like(.., data())` would round f64 stats to f32.
-            let rm_reshaped = self
-                .running_mean
-                .detach()
-                .reshape(&[self.num_features, 1])
-                .to_device(x.device());
-            let rv_reshaped = self
-                .running_var
-                .detach()
-                .reshape(&[self.num_features, 1])
-                .to_device(x.device());
-            (rm_reshaped, rv_reshaped)
-        };
-
-        // Normalize: (x - mean) / sqrt(var + eps)
-        // Broadcast happens automatically on the last dim (B*H*W)
-        let diff = x_flat.sub(&mean);
-        let eps_tensor = x.constant_like(vec![self.eps], &[1]);
-        let denom = var.add(&eps_tensor).sqrt();
-        let x_norm = diff.div(&denom);
-
-        // Scale and shift: gamma * x_norm + beta
-        let gamma_r = self.gamma.reshape(&[self.num_features, 1]);
-        let beta_r = self.beta.reshape(&[self.num_features, 1]);
-
-        let out_flat = x_norm.elem_mul(&gamma_r).add(&beta_r);
-
-        // Reshape back: (C, B*H*W) -> (C, B, H, W) -> (B, C, H, W)
-        let out_perm = out_flat.reshape(&[self.num_features, b, h, w]);
-        out_perm.permute(&[Axis(1), Axis(0), Axis(2), Axis(3)])
+    /// Layer over `num_features` channels with the given `eps` and `momentum`.
+    #[must_use]
+    pub fn new_with_params(num_features: usize, eps: f32, momentum: f32) -> Self {
+        Self {
+            core: BatchNorm::new(num_features, eps, momentum),
+        }
     }
 }
 
@@ -254,24 +209,8 @@ impl BatchNorm2d {
 /// training mode, the batch has one sample (as PyTorch raises). The running statistics are
 /// untouched by a rejected batch.
 pub struct BatchNorm1d {
-    /// Number of features `C`.
-    num_features: usize,
-    /// Added to the variance for numerical stability.
-    eps: f32,
-    /// Weight of the new batch statistics in the running averages.
-    momentum: f32,
-    /// Training mode uses batch statistics; evaluation mode uses the running ones.
-    training: bool,
-    // Parameters (Learnable)
-    /// Learnable scale, shape `[C]`.
-    gamma: Tensor,
-    /// Learnable shift, shape `[C]`.
-    beta: Tensor,
-    // Buffers (Non-learnable)
-    /// Running mean used in evaluation mode (a buffer, not learnable).
-    running_mean: Tensor,
-    /// Running variance used in evaluation mode (a buffer, not learnable).
-    running_var: Tensor,
+    /// Parameters, running statistics and mode.
+    core: BatchNorm,
 }
 
 impl BatchNorm1d {
@@ -284,81 +223,82 @@ impl BatchNorm1d {
     /// Layer over `num_features` features with the given `eps` and `momentum`.
     #[must_use]
     pub fn new_with_params(num_features: usize, eps: f32, momentum: f32) -> Self {
-        let gamma = RawTensor::ones(&[num_features]);
-        gamma.set_requires_grad(true);
-
-        let beta = RawTensor::zeros(&[num_features]);
-        beta.set_requires_grad(true);
-
-        let running_mean = RawTensor::zeros(&[num_features]);
-        let running_var = RawTensor::ones(&[num_features]);
-
         Self {
-            num_features,
-            eps,
-            momentum,
-            training: true,
-            gamma,
-            beta,
-            running_mean,
-            running_var,
+            core: BatchNorm::new(num_features, eps, momentum),
         }
     }
 }
 
-impl Module for BatchNorm1d {
-    fn parameters(&self) -> Vec<Tensor> {
-        vec![self.gamma.clone(), self.beta.clone()]
-    }
+/// `Module` for a wrapper around [`BatchNorm`]: every method forwards to the core.
+macro_rules! batchnorm_module {
+    ($layer:ty) => {
+        impl Module for $layer {
+            fn parameters(&self) -> Vec<Tensor> {
+                self.core.parameters()
+            }
 
-    fn train(&mut self, mode: bool) {
-        self.training = mode;
-    }
+            fn train(&mut self, mode: bool) {
+                self.core.training = mode;
+            }
 
-    /// Converts the running statistics too: they are buffers, not parameters.
-    fn to_dtype(&mut self, dtype: crate::DType) {
-        crate::nn::cast_parameters(self, dtype);
-        self.running_mean.cast_in_place(dtype);
-        self.running_var.cast_in_place(dtype);
-    }
+            /// Converts the running statistics too: they are buffers, not parameters.
+            fn to_dtype(&mut self, dtype: crate::DType) {
+                self.core.to_dtype(self, dtype);
+            }
 
-    fn state_dict(&self) -> StateDict {
-        let mut state = StateDict::new();
-        state.insert("gamma".to_string(), TensorData::from_tensor(&self.gamma));
-        state.insert("beta".to_string(), TensorData::from_tensor(&self.beta));
-        state.insert(
-            "running_mean".to_string(),
-            TensorData::from_tensor(&self.running_mean),
-        );
-        state.insert(
-            "running_var".to_string(),
-            TensorData::from_tensor(&self.running_var),
-        );
-        state
-    }
+            fn state_dict(&self) -> StateDict {
+                self.core.state_dict()
+            }
 
-    fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
-        let params = [
-            ("gamma", &self.gamma),
-            ("beta", &self.beta),
-            ("running_mean", &self.running_mean),
-            ("running_var", &self.running_var),
-        ];
-
-        for (key, tensor) in params {
-            if let Some(t) = state.get(key) {
-                tensor.load_weight(key, t)?;
+            fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
+                self.core.load_state_dict(state)
             }
         }
-        Ok(())
-    }
+
+        impl Layer for $layer {
+            fn forward(&self, x: &Tensor) -> Tensor {
+                // A half input with f32 parameters normalizes in f32 and returns the
+                // input's dtype, as PyTorch's norm kernels do (audit A5).
+                crate::nn::norm_mixed(x, self.core.gamma.dtype(), |x| self.forward_in(x))
+            }
+        }
+    };
 }
 
-impl Layer for BatchNorm1d {
-    fn forward(&self, x: &Tensor) -> Tensor {
-        // A half input with f32 parameters normalizes in f32 and returns the input's
-        // dtype, as PyTorch's norm kernels do (audit A5).
-        crate::nn::norm_mixed(x, self.gamma.dtype(), |x| self.forward_in(x))
+batchnorm_module!(BatchNorm2d);
+batchnorm_module!(BatchNorm1d);
+
+impl BatchNorm2d {
+    /// The forward pass with `x` already in the parameters' dtype (or another dtype pair
+    /// [`crate::nn::norm_mixed`] leaves alone).
+    fn forward_in(&self, x: &Tensor) -> Tensor {
+        let c = self.core.num_features;
+        let x_borrow = x.borrow();
+        assert_eq!(
+            x_borrow.shape.rank(),
+            4,
+            "BatchNorm2d expected 4D input (B,C,H,W)"
+        );
+        assert_eq!(x_borrow.shape.dim_at(1), c, "Channel mismatch");
+        let [b, _, h, w] = x_borrow.shape.fixed::<4>();
+        let num_pixels = b * h * w;
+        assert!(
+            !self.core.training || num_pixels > 1,
+            "BatchNorm2d expected more than 1 value per channel when training, got input shape {:?}",
+            x_borrow.shape
+        );
+        drop(x_borrow);
+
+        // Statistics per channel over (B, H, W): (B, C, H, W) -> (C, B, H, W) -> (C, B*H*W).
+        let x_flat = x
+            .permute(&[Axis(1), Axis(0), Axis(2), Axis(3)])
+            .reshape(&[c, num_pixels]);
+        let out_flat = self.core.normalize(&x_flat, Axis(0), num_pixels);
+
+        // Back: (C, B*H*W) -> (C, B, H, W) -> (B, C, H, W)
+        out_flat
+            .reshape(&[c, b, h, w])
+            .permute(&[Axis(1), Axis(0), Axis(2), Axis(3)])
     }
 }
 
@@ -374,88 +314,18 @@ impl BatchNorm1d {
         );
         assert_eq!(
             x_borrow.shape.dim_at(1),
-            self.num_features,
+            self.core.num_features,
             "Feature mismatch"
         );
         let batch_size = x_borrow.shape.dim_at(0);
         assert!(
-            !self.training || batch_size > 1,
+            !self.core.training || batch_size > 1,
             "BatchNorm1d expected more than 1 value per channel when training, got input shape {:?}",
             x_borrow.shape
         );
         drop(x_borrow);
 
-        let (mean, var) = if self.training {
-            // Calculate batch stats: mean over dim=0
-            let batch_mean = x.mean_dim(Axis(0), true); // [1, C]
-
-            // Variance: mean((x - mean)^2)
-            let diff = x.sub(&batch_mean);
-            let sq_diff = diff.elem_mul(&diff);
-            let batch_var = sq_diff.mean_dim(Axis(0), true); // [1, C]
-
-            // Update running stats.
-            {
-                let _no_grad = crate::autograd::no_grad();
-                let mut rm = self.running_mean.borrow_mut();
-                let mut rv = self.running_var.borrow_mut();
-                rm.bump_version();
-                rv.bump_version();
-                let dtype = rm.data.dtype();
-                dispatch_real!(dtype, T => {
-                let bm_ref = batch_mean.borrow();
-                let bm_data = bm_ref.data.host::<T>();
-                let bv_ref = batch_var.borrow();
-                let bv_data = bv_ref.data.host::<T>();
-
-                let m = T::from_f64(f64::from(self.momentum));
-                let batch_size = T::from_usize(batch_size);
-                let mut rm_guard = rm.data.host_mut::<T>();
-                let rm_host = &mut *rm_guard;
-                let mut rv_guard = rv.data.host_mut::<T>();
-                let rv_host = &mut *rv_guard;
-                for i in 0..self.num_features {
-                    let rm_val = fetch(rm_host, i);
-                    let bm_val = fetch(&bm_data, i);
-                    *slot(rm_host, i) = (1.0 - m).mul_add(rm_val, m * bm_val);
-                    // Bessel correction for running_var update (the guard above ensures N > 1)
-                    let bv_val = fetch(&bv_data, i);
-                    let unbiased_var = bv_val * batch_size / (batch_size - 1.0);
-                    let rv_val = fetch(rv_host, i);
-                    *slot(rv_host, i) = (1.0 - m).mul_add(rv_val, m * unbiased_var);
-                }
-                });
-            }
-
-            (batch_mean, batch_var)
-        } else {
-            // Use running stats, reshaped to [1, C] for broadcasting
-            // Running stats are host-side layer state (updated in place above), so copy
-            // them onto the input's device.
-            // In their own dtype: `constant_like(.., data())` would round f64 stats to f32.
-            let rm_reshaped = self
-                .running_mean
-                .detach()
-                .reshape(&[1, self.num_features])
-                .to_device(x.device());
-            let rv_reshaped = self
-                .running_var
-                .detach()
-                .reshape(&[1, self.num_features])
-                .to_device(x.device());
-            (rm_reshaped, rv_reshaped)
-        };
-
-        // Normalize: (x - mean) / sqrt(var + eps)
-        let diff = x.sub(&mean);
-        let eps_tensor = x.constant_like(vec![self.eps], &[1]);
-        let denom = var.add(&eps_tensor).sqrt();
-        let x_norm = diff.div(&denom);
-
-        // Scale and shift: gamma * x_norm + beta
-        let gamma_r = self.gamma.reshape(&[1, self.num_features]);
-        let beta_r = self.beta.reshape(&[1, self.num_features]);
-
-        x_norm.elem_mul(&gamma_r).add(&beta_r)
+        // Already (B, C): statistics per feature over the batch axis.
+        self.core.normalize(x, Axis(1), batch_size)
     }
 }

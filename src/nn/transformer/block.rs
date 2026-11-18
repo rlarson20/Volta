@@ -1,5 +1,7 @@
 use crate::io::StateDict;
-use crate::nn::{FeedForward, Layer, LayerNorm, Module, MultiHeadAttention};
+use crate::nn::{
+    FeedForward, Layer, LayerNorm, Module, MultiHeadAttention, insert_prefixed, load_child,
+};
 use crate::tensor::Tensor;
 
 /// Transformer Block (Pre-LN architecture)
@@ -115,85 +117,18 @@ impl Module for TransformerBlock {
 
     fn state_dict(&self) -> StateDict {
         let mut state = StateDict::new();
-
-        // Layer norms
-        let norm1_state = self.norm1.state_dict();
-        for (key, value) in norm1_state {
-            state.insert(format!("norm1.{key}"), value);
-        }
-        let norm2_state = self.norm2.state_dict();
-        for (key, value) in norm2_state {
-            state.insert(format!("norm2.{key}"), value);
-        }
-
-        // FFN
-        let ffn_state = self.ffn.state_dict();
-        for (key, value) in ffn_state {
-            state.insert(format!("ffn.{key}"), value);
-        }
-
-        // Attention
-        let attn_state = self.attention.state_dict();
-        for (key, value) in attn_state {
-            state.insert(format!("attention.{key}"), value);
-        }
-
+        insert_prefixed(&mut state, "norm1.", self.norm1.state_dict());
+        insert_prefixed(&mut state, "norm2.", self.norm2.state_dict());
+        insert_prefixed(&mut state, "ffn.", self.ffn.state_dict());
+        insert_prefixed(&mut state, "attention.", self.attention.state_dict());
         state
     }
 
     fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
-        // Load layer norm 1
-        let mut norm1_state = StateDict::new();
-        for (key, value) in state {
-            if let Some(sub_key) = key.strip_prefix("norm1.") {
-                norm1_state.insert(sub_key.to_string(), value.clone());
-            }
-        }
-        if !norm1_state.is_empty() {
-            self.norm1
-                .load_state_dict(&norm1_state)
-                .map_err(|e| e.with_key_prefix("norm1."))?;
-        }
-
-        // Load layer norm 2
-        let mut norm2_state = StateDict::new();
-        for (key, value) in state {
-            if let Some(sub_key) = key.strip_prefix("norm2.") {
-                norm2_state.insert(sub_key.to_string(), value.clone());
-            }
-        }
-        if !norm2_state.is_empty() {
-            self.norm2
-                .load_state_dict(&norm2_state)
-                .map_err(|e| e.with_key_prefix("norm2."))?;
-        }
-
-        // Load FFN
-        let mut ffn_state = StateDict::new();
-        for (key, value) in state {
-            if let Some(sub_key) = key.strip_prefix("ffn.") {
-                ffn_state.insert(sub_key.to_string(), value.clone());
-            }
-        }
-        if !ffn_state.is_empty() {
-            self.ffn
-                .load_state_dict(&ffn_state)
-                .map_err(|e| e.with_key_prefix("ffn."))?;
-        }
-
-        // Load attention
-        let mut attn_state = StateDict::new();
-        for (key, value) in state {
-            if let Some(sub_key) = key.strip_prefix("attention.") {
-                attn_state.insert(sub_key.to_string(), value.clone());
-            }
-        }
-        if !attn_state.is_empty() {
-            self.attention
-                .load_state_dict(&attn_state)
-                .map_err(|e| e.with_key_prefix("attention."))?;
-        }
-        Ok(())
+        load_child(&mut self.norm1, "norm1.", state)?;
+        load_child(&mut self.norm2, "norm2.", state)?;
+        load_child(&mut self.ffn, "ffn.", state)?;
+        load_child(&mut self.attention, "attention.", state)
     }
 
     fn train(&mut self, mode: bool) {

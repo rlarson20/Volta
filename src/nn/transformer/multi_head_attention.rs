@@ -1,6 +1,6 @@
 use crate::io::StateDict;
-use crate::nn::transformer::ScaledDotProductAttention;
-use crate::nn::{Dropout, Layer, Linear, Module};
+use crate::nn::transformer::mask::causal_mask_like;
+use crate::nn::{Dropout, Layer, Linear, Module, insert_prefixed, load_child};
 use crate::shape::Axis;
 use crate::tensor::Tensor;
 
@@ -260,7 +260,7 @@ impl MultiHeadAttention {
         // Apply causal mask if requested
         let scores = if causal {
             // [L, S], broadcast over batch and heads.
-            let causal_mask = ScaledDotProductAttention::create_causal_mask(q_len, kv_len, q);
+            let causal_mask = causal_mask_like(q_len, kv_len, q);
             scores.add(&causal_mask)
         } else {
             scores
@@ -297,55 +297,18 @@ impl Module for MultiHeadAttention {
 
     fn state_dict(&self) -> StateDict {
         let mut state = StateDict::new();
-
-        // Get state from each Linear layer
-        let q_proj_state = self.q_proj.state_dict();
-        for (key, value) in q_proj_state {
-            state.insert(format!("q_proj.{key}"), value);
-        }
-
-        let k_proj_state = self.k_proj.state_dict();
-        for (key, value) in k_proj_state {
-            state.insert(format!("k_proj.{key}"), value);
-        }
-
-        let v_proj_state = self.v_proj.state_dict();
-        for (key, value) in v_proj_state {
-            state.insert(format!("v_proj.{key}"), value);
-        }
-
-        let out_proj_state = self.out_proj.state_dict();
-        for (key, value) in out_proj_state {
-            state.insert(format!("out_proj.{key}"), value);
-        }
-
+        insert_prefixed(&mut state, "q_proj.", self.q_proj.state_dict());
+        insert_prefixed(&mut state, "k_proj.", self.k_proj.state_dict());
+        insert_prefixed(&mut state, "v_proj.", self.v_proj.state_dict());
+        insert_prefixed(&mut state, "out_proj.", self.out_proj.state_dict());
         state
     }
 
     fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
-        // Load each projection's weights by extracting prefixed sub-dicts
-        let prefixes = [
-            ("q_proj.", &mut self.q_proj as &mut Linear),
-            ("k_proj.", &mut self.k_proj),
-            ("v_proj.", &mut self.v_proj),
-            ("out_proj.", &mut self.out_proj),
-        ];
-
-        for (prefix, layer) in prefixes {
-            let mut sub_state = StateDict::new();
-            for (key, value) in state {
-                if let Some(sub_key) = key.strip_prefix(prefix) {
-                    sub_state.insert(sub_key.to_string(), value.clone());
-                }
-            }
-            if !sub_state.is_empty() {
-                layer
-                    .load_state_dict(&sub_state)
-                    .map_err(|e| e.with_key_prefix(prefix))?;
-            }
-        }
-
-        Ok(())
+        load_child(&mut self.q_proj, "q_proj.", state)?;
+        load_child(&mut self.k_proj, "k_proj.", state)?;
+        load_child(&mut self.v_proj, "v_proj.", state)?;
+        load_child(&mut self.out_proj, "out_proj.", state)
     }
 
     fn train(&mut self, mode: bool) {

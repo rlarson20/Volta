@@ -1,3 +1,4 @@
+use crate::nn::transformer::mask::causal_mask_like;
 use crate::shape::Axis;
 use crate::tensor::Tensor;
 
@@ -121,7 +122,7 @@ impl ScaledDotProductAttention {
 
         // Apply causal mask if requested
         let scores = if causal {
-            let causal = Self::create_causal_mask(q_len, kv_len, query);
+            let causal = causal_mask_like(q_len, kv_len, query);
             scores.add(&causal)
         } else {
             scores
@@ -139,24 +140,6 @@ impl ScaledDotProductAttention {
 
         // Apply attention weights to values: [batch, L, S] @ [batch, S, d_v] = [batch, L, d_v]
         attention_weights.matmul(value)
-    }
-
-    /// Additive mask `[q_len, kv_len]`: `-inf` where `j > i`, 0 elsewhere, on `like`'s
-    /// device and in its dtype. This is torch's top-left aligned `is_causal` mask
-    /// (`ones(L, S).tril()`); it broadcasts against any `[.., L, S]` score tensor.
-    pub(super) fn create_causal_mask(q_len: usize, kv_len: usize, like: &Tensor) -> Tensor {
-        let mut mask_data = Vec::with_capacity(q_len * kv_len);
-        for i in 0..q_len {
-            for j in 0..kv_len {
-                // Upper triangle (j > i) gets -inf, lower triangle and diagonal get 0
-                if j > i {
-                    mask_data.push(f32::NEG_INFINITY);
-                } else {
-                    mask_data.push(0.0);
-                }
-            }
-        }
-        like.constant_like(mask_data, &[q_len, kv_len])
     }
 }
 

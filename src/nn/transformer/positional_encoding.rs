@@ -1,7 +1,7 @@
 use crate::Device;
 use crate::io::StateDict;
 use crate::nn::layers::embedding::Embedding;
-use crate::nn::{Layer, Module};
+use crate::nn::{Layer, Module, insert_prefixed, load_child};
 use crate::tensor::{RawTensor, Tensor};
 
 /// Positional encoding type
@@ -171,11 +171,8 @@ impl Module for PositionalEncoding {
     fn state_dict(&self) -> StateDict {
         match &self.learned_embedding {
             Some(emb) => {
-                let inner = emb.state_dict();
                 let mut state = StateDict::new();
-                for (key, value) in &inner {
-                    state.insert(format!("learned_embedding.{key}"), value.clone());
-                }
+                insert_prefixed(&mut state, "learned_embedding.", emb.state_dict());
                 state
             }
             None => StateDict::new(),
@@ -183,18 +180,10 @@ impl Module for PositionalEncoding {
     }
 
     fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
-        if let Some(emb) = &mut self.learned_embedding {
-            let mut inner_state = StateDict::new();
-            let prefix = "learned_embedding.";
-            for (key, value) in state {
-                if let Some(stripped) = key.strip_prefix(prefix) {
-                    inner_state.insert(stripped.to_string(), value.clone());
-                }
-            }
-            emb.load_state_dict(&inner_state)
-                .map_err(|e| e.with_key_prefix(prefix))?;
+        match &mut self.learned_embedding {
+            Some(emb) => load_child(emb, "learned_embedding.", state),
+            None => Ok(()),
         }
-        Ok(())
     }
 
     /// Converts the learned weight, and also the fixed sinusoid table, which is not a
