@@ -19,6 +19,27 @@ pub(crate) fn zeros_like(p: &crate::RawTensor) -> crate::Storage {
     crate::Storage::new_zeros(p.data.len(), &p.device).cast(p.data.dtype())
 }
 
+/// Panics unless every parameter in `params` that has a gradient has exactly one gradient
+/// element per parameter element. The CPU steps read the parameter and its gradient at one
+/// index, so a mismatch would update only part of the parameter (#324); `set_grad` refuses
+/// one, and this catches any other writer. Checked for every parameter before any is updated.
+///
+/// # Panics
+/// If a gradient's length differs from its parameter's.
+#[track_caller]
+pub(crate) fn assert_grad_lens(optimizer: &str, params: &[Tensor]) {
+    for (i, param) in params.iter().enumerate() {
+        let p = param.borrow();
+        if let Some(grad) = &p.grad {
+            assert_eq!(
+                grad.len(),
+                p.data.len(),
+                "{optimizer} step: parameter {i}'s gradient length vs. its element count"
+            );
+        }
+    }
+}
+
 /// `Ok` if `value` is at least 0 (NaN is not), else PyTorch's message:
 /// `Invalid <name> value: <value>`. Optimizer hyperparameters are arguments a user
 /// supplies, so they are checked before any state is allocated (invariant 8).

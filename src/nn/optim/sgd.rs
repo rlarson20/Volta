@@ -97,6 +97,7 @@ impl SGD {
         for param in &self.params {
             crate::real::compute_dtype(|| "SGD step".to_string(), &[param.dtype()]);
         }
+        super::assert_grad_lens("SGD", &self.params);
         // Process each parameter based on its device
         for i in 0..self.params.len() {
             let param = self.params.get(i).expect("SGD: a parameter per index");

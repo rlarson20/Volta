@@ -115,6 +115,7 @@ impl Adam {
         for param in &self.params {
             crate::real::compute_dtype(|| "Adam step".to_string(), &[param.dtype()]);
         }
+        super::assert_grad_lens("Adam", &self.params);
 
         // The parameters that have a gradient, and where each lives. Collected first because
         // the per-parameter steps take `&mut self`.
