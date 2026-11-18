@@ -25,17 +25,12 @@ pub enum TernaryOp {
 #[derive(Clone)]
 pub(crate) struct MulAccGradFn;
 impl MulAccGradFn {
-    /// Gradients for `x`, `y`, and the optional addend, reduced to each one's shape.
+    /// Gradients for `x`, `y`, and the addend, reduced to each one's shape.
     #[expect(
         clippy::unused_self,
         reason = "uniform `GradFn` dispatch: every variant's `backward` takes `&self` (DECISIONS.md, #171)"
     )]
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
-        // SAFETY: MulAcc operation always creates 2 or 3 parents (x, y, optional w)
-        debug_assert!(
-            parents.len() >= 2,
-            "MulAcc grad requires at least 2 parents"
-        );
         let x_ref = parents
             .first()
             .cloned()
@@ -66,7 +61,9 @@ impl MulAccGradFn {
         let grad_y = y_val.requires_grad.then(|| wrap(product(&x_val.data)));
         let grad_z = parents
             .get(2)
-            .is_some_and(|p| p.borrow().requires_grad)
+            .expect("MulAcc backward: three parents")
+            .borrow()
+            .requires_grad
             // A host copy, not `out_grad.data.clone()`: on the GPU that would be GPU storage
             // under a CPU label. This CPU gradient is the gap `accumulate_grad` handles.
             .then(|| {
@@ -96,8 +93,6 @@ pub(crate) struct WhereGradFn {
 impl WhereGradFn {
     /// Routes the gradient to the selected branch and reduces over broadcast dims.
     pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
-        // SAFETY: Where operation always creates exactly 2 parents (true_branch, false_branch)
-        debug_assert!(parents.len() >= 2, "Where grad requires 2 parents");
         let true_ref = parents
             .first()
             .cloned()

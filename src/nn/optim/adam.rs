@@ -116,22 +116,18 @@ impl Adam {
             crate::real::compute_dtype(|| "Adam step".to_string(), &[param.dtype()]);
         }
 
-        // Process each parameter based on its device
-        for i in 0..self.params.len() {
-            // SAFETY: We're iterating over valid indices 0..self.params.len()
-            debug_assert!(i < self.params.len(), "Parameter index out of bounds");
-            let param = self.params.get(i).expect("Adam: a parameter per index");
-            let p = param.borrow();
-
-            // Skip parameters without gradients
-            let _grad = match &p.grad {
-                Some(g) => g.clone(),
-                None => continue,
-            };
-
-            let is_gpu = p.device.is_gpu();
-            drop(p);
-
+        // The parameters that have a gradient, and where each lives. Collected first because
+        // the per-parameter steps take `&mut self`.
+        let targets: Vec<(usize, bool)> = self
+            .params
+            .iter()
+            .enumerate()
+            .filter_map(|(i, param)| {
+                let p = param.borrow();
+                p.grad.is_some().then(|| (i, p.device.is_gpu()))
+            })
+            .collect();
+        for (i, is_gpu) in targets {
             if is_gpu {
                 self.step_gpu_param(i);
             } else {
