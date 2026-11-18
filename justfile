@@ -262,7 +262,7 @@ test-check-ignores:
 
 # CI-like pipeline (fmt -> fallbacks -> ignores -> lint, both feature sets -> tests, both feature
 # sets -> docs with -D warnings, both feature sets -> examples, built then the smoke set run ->
-# feature powerset when cargo-hack is installed -> macOS cross-check on a non-Mac host when its
+# each CPU bench run once in test mode -> feature powerset when cargo-hack is installed -> macOS cross-check on a non-Mac host when its
 # tools are installed)
 ci:
 	cargo fmt --check
@@ -276,6 +276,7 @@ ci:
 	just doc-cpu
 	cargo build --examples
 	just examples-smoke
+	just bench-smoke
 	just hack-if-installed
 	just macos-cross-if-available
 	@echo "CI check passed!"
@@ -343,6 +344,15 @@ bench:
 	cargo bench --bench tensor_ops --
 	cargo bench --bench neural_networks --
 	cargo bench --bench conv_algorithms --
+
+# Run every CPU benchmark function once in Criterion's test mode (`-- --test`): no
+# measurement, so it says nothing about speed and is safe on shared runners. It fails when a
+# benchmark panics, which `clippy --all-targets` (compile only) cannot catch (#140, #192).
+# `gpu_comparison` needs a GPU and is left out.
+bench-smoke:
+	cargo bench --no-default-features --bench tensor_ops -- --test
+	cargo bench --no-default-features --bench neural_networks -- --test
+	cargo bench --no-default-features --bench conv_algorithms -- --test
 
 # Run convolution algorithm comparison benchmarks
 bench-conv:

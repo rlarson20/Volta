@@ -45,6 +45,10 @@ just bench
 # Run convolution algorithm comparison (SAFE)
 just bench-conv
 
+# Run every CPU benchmark function once, unmeasured: catches a panicking bench
+# (in `just ci` and the `bench-smoke` CI job)
+just bench-smoke
+
 # Quick matmul timing smoke check: N release runs of one test, averaged
 just bench-matmul 10                          # extra cargo flags: just bench-matmul 10 --no-default-features
 
