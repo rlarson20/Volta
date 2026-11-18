@@ -23,6 +23,9 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used))]
 #[cfg(feature = "gpu")]
 pub mod gpu;
+#[cfg(not(feature = "gpu"))]
+#[path = "gpu_stub.rs"]
+pub mod gpu;
 
 pub mod dtype;
 /// Error type and `Result` alias.
@@ -42,9 +45,12 @@ pub use spec::PadValue;
 pub use storage::Storage;
 
 #[cfg(feature = "gpu")]
+pub use gpu::GpuBuffer;
+// The control functions exist in every build: without `gpu`, `gpu` is the stub module and
+// each returns its no-GPU answer (#342).
 pub use gpu::{
-    GpuBuffer, gpu_cleanup, gpu_compact, gpu_pending_count, gpu_pool_stats, gpu_sync,
-    gpu_sync_threshold, is_gpu_available,
+    gpu_cleanup, gpu_compact, gpu_pending_count, gpu_pool_stats, gpu_sync, gpu_sync_threshold,
+    is_gpu_available,
 };
 
 /// Automatic mixed precision: `autocast` and `GradScaler`.
