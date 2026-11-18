@@ -7,7 +7,7 @@ Fixes #
 
 ## Checklist
 
-- [ ] `just ci` exits 0 on this branch
+- [ ] CI is green on this PR. Ran locally: <!-- clippy, and the tests the change touches -->
 - [ ] GPU: N/A, or touches `src/gpu/` and the tests ran with `VOLTA_REQUIRE_GPU=1` on: <!-- Apple GPU (local / CI macOS), lavapipe -->
 - [ ] Removed `#[ignore = "<ID>: ..."]`: none, or <!-- defect ID --> and its issue is in `Fixes` above
 - [ ] Out-of-scope findings filed as issues: none, or <!-- links -->

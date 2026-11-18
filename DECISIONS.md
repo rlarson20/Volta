@@ -898,3 +898,16 @@ Autograd is a sequential graph walk over `Rc<RefCell<_>>`, and nothing in it is 
 - *The GPU reduction merges `(value, count)` pairs* with a commutative, associative `combine` (a NaN absorbs, equal maxima add counts, `count == 0` is the identity), so the result does not depend on how the work is grouped, and a multi-pass tie or NaN is counted once. NaN is tested from its bits, never with a float comparison, as for `tanh_sat` (WGSL lets a compiler assume no NaN).
 - *`max_backward` is its own entry point* in `reduce_backward.wgsl`, so `sum`/`mean` backward no longer bind a dummy buffer.
 - *The GPU `max_broadcast_pass2` kernel follows the same rule but is unreachable* (GPU broadcast backward panics, #60), so it has no test.
+
+---
+
+### GitHub Actions is the PR gate; no full local `just ci` per PR
+
+**Decision:** an agent (or anyone) opening a PR runs clippy with `-D warnings` and the tests the change touches, then pushes. The PR's CI is the gate. `just ci` stays as the one-command local copy of CI, for reproducing a failure or checking before a push by choice, not as a step before every PR. The PR template's checkbox now asks for green CI and what ran locally.
+
+**Why:** `ci.yml` calls the same justfile recipes as `just ci` ("One definition of CI"), and its jobs run every recipe `just ci` runs, including the lavapipe GPU lane, `macos-cross` and `bench-smoke`, so a local run before each PR repeats CI. In a cloud session it costs 10–15 minutes per branch, and on 2026-11-18 five worktrees each with its own `target/` filled the container's disk mid-batch. RJ asked for the change (batch 4).
+
+**Choices:**
+- *Clippy stays local.* It's fast. CI's `stable` floats and can be newer than a local toolchain, so a local pass is a floor, not a guarantee.
+- *Touched tests stay local,* including GPU tests on lavapipe, because a failing test is faster to debug before a push than from a CI log.
+- *Real macOS is unchanged:* it runs after each merge ("macOS checks move off the PR gate"), and Metal still needs `just test-gpu` on the Mac.
