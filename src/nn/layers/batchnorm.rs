@@ -54,6 +54,20 @@ impl BatchNorm {
         }
     }
 
+    /// Panics unless `x` has the parameters' dtype, naming `layer`. One rule in training
+    /// and evaluation mode, checked before any computation (#104), as PyTorch refuses an
+    /// f64 input to an f32 `BatchNorm`. A half input with f32 parameters never gets here:
+    /// [`crate::nn::norm_mixed`] casts it to f32 first.
+    #[track_caller]
+    fn check_dtype(&self, layer: &str, x: &Tensor) {
+        let (input, param) = (x.dtype(), self.gamma.dtype());
+        assert!(
+            input == param,
+            "{layer}: input is {input}, parameters are {param}; this layer needs one dtype, as \
+             in PyTorch: cast the input with to_dtype, or the layer with Module::to_dtype"
+        );
+    }
+
     /// `gamma` and `beta`.
     fn parameters(&self) -> Vec<Tensor> {
         vec![self.gamma.clone(), self.beta.clone()]
@@ -174,9 +188,11 @@ impl BatchNorm {
 ///
 /// # Panics
 ///
-/// `forward` panics if the input is not 4D, its channel count is not `num_features`, or, in
-/// training mode, it has one value per channel (`B * H * W == 1`), as PyTorch raises. The
-/// running statistics are untouched by a rejected batch.
+/// `forward` panics if the input is not 4D, its channel count is not `num_features`, its
+/// dtype is not the parameters' (in either mode; a half input with f32 parameters is the
+/// exception, normalized in f32), or, in training mode, it has one value per channel
+/// (`B * H * W == 1`), as PyTorch raises. The running statistics are untouched by a
+/// rejected batch.
 pub struct BatchNorm2d {
     /// Parameters, running statistics and mode.
     core: BatchNorm,
@@ -205,9 +221,10 @@ impl BatchNorm2d {
 ///
 /// # Panics
 ///
-/// `forward` panics if the input is not 2D, its feature count is not `num_features`, or, in
-/// training mode, the batch has one sample (as PyTorch raises). The running statistics are
-/// untouched by a rejected batch.
+/// `forward` panics if the input is not 2D, its feature count is not `num_features`, its
+/// dtype is not the parameters' (in either mode; a half input with f32 parameters is the
+/// exception, normalized in f32), or, in training mode, the batch has one sample (as
+/// PyTorch raises). The running statistics are untouched by a rejected batch.
 pub struct BatchNorm1d {
     /// Parameters, running statistics and mode.
     core: BatchNorm,
@@ -270,8 +287,9 @@ batchnorm_module!(BatchNorm1d);
 
 impl BatchNorm2d {
     /// The forward pass with `x` already in the parameters' dtype (or another dtype pair
-    /// [`crate::nn::norm_mixed`] leaves alone).
+    /// [`crate::nn::norm_mixed`] leaves alone, which panics here).
     fn forward_in(&self, x: &Tensor) -> Tensor {
+        self.core.check_dtype("BatchNorm2d", x);
         let c = self.core.num_features;
         let x_borrow = x.borrow();
         assert_eq!(
@@ -304,8 +322,9 @@ impl BatchNorm2d {
 
 impl BatchNorm1d {
     /// The forward pass with `x` already in the parameters' dtype (or another dtype pair
-    /// [`crate::nn::norm_mixed`] leaves alone).
+    /// [`crate::nn::norm_mixed`] leaves alone, which panics here).
     fn forward_in(&self, x: &Tensor) -> Tensor {
+        self.core.check_dtype("BatchNorm1d", x);
         let x_borrow = x.borrow();
         assert_eq!(
             x_borrow.shape.rank(),
@@ -327,5 +346,63 @@ impl BatchNorm1d {
 
         // Already (B, C): statistics per feature over the batch axis.
         self.core.normalize(x, Axis(1), batch_size)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BatchNorm1d, BatchNorm2d};
+    use crate::DType;
+    use crate::nn::{Layer, Module};
+    use crate::tensor::{RawTensor, Tensor};
+
+    fn f64_input(shape: &[usize]) -> Tensor {
+        let n = shape.iter().product::<usize>();
+        let data = (0..n).map(|i| i as f32 * 0.5 - 1.0).collect::<Vec<_>>();
+        RawTensor::new(data, shape, false).to_dtype(DType::F64)
+    }
+
+    // #104: an f64 input to an f32 layer panicked in training mode with a bare "DType
+    // mismatch" from the running-stat update, and was promoted in evaluation mode.
+
+    #[test]
+    #[should_panic(expected = "BatchNorm1d: input is f64, parameters are f32")]
+    fn batchnorm1d_refuses_f64_input_in_train_mode() {
+        let _ = BatchNorm1d::new(2).forward(&f64_input(&[2, 2]));
+    }
+
+    #[test]
+    #[should_panic(expected = "BatchNorm1d: input is f64, parameters are f32")]
+    fn batchnorm1d_refuses_f64_input_in_eval_mode() {
+        let mut bn = BatchNorm1d::new(2);
+        bn.eval();
+        let _ = bn.forward(&f64_input(&[2, 2]));
+    }
+
+    #[test]
+    #[should_panic(expected = "BatchNorm2d: input is f64, parameters are f32")]
+    fn batchnorm2d_refuses_f64_input_in_train_mode() {
+        let _ = BatchNorm2d::new(1).forward(&f64_input(&[1, 1, 2, 2]));
+    }
+
+    #[test]
+    #[should_panic(expected = "BatchNorm2d: input is f64, parameters are f32")]
+    fn batchnorm2d_refuses_f64_input_in_eval_mode() {
+        let mut bn = BatchNorm2d::new(1);
+        bn.eval();
+        let _ = bn.forward(&f64_input(&[1, 1, 2, 2]));
+    }
+
+    /// The fix the message names works: the layer in f64 takes the f64 input in both
+    /// modes, and its running statistics stay f64.
+    #[test]
+    fn batchnorm_cast_to_input_dtype_accepts_it_in_both_modes() {
+        let x = f64_input(&[2, 2]);
+        let mut bn = BatchNorm1d::new(2);
+        bn.to_dtype(DType::F64);
+        assert_eq!(bn.forward(&x).dtype(), DType::F64);
+        assert_eq!(bn.core.running_mean.dtype(), DType::F64);
+        bn.eval();
+        assert_eq!(bn.forward(&x).dtype(), DType::F64);
     }
 }
