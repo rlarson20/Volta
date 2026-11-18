@@ -10,11 +10,11 @@
 //!
 //! Everything is one `#[test]`: the GPU context and its pending counter are process-global,
 //! and a second test syncing in parallel would reset the counter this one reads. That is
-//! also why this stays an integration test (its own process) rather than a unit test next
-//! to the crate's monitors, which would share the counter with every other GPU unit test.
+//! also why this stays an integration test (its own process) rather than a unit test,
+//! which would share the counter with every other GPU unit test.
 //!
-//! Process memory is read by [`rss_mb`], here, because the crate's resource monitors are not
-//! public API (#68). It runs on Linux and macOS, where RSS can be read.
+//! Process memory is read by [`rss_mb`], here; the crate has no memory probe of its own
+//! (#130 removed the test-only monitors). It runs on Linux and macOS, where RSS can be read.
 
 #![cfg(all(feature = "gpu", any(target_os = "linux", target_os = "macos")))]
 
