@@ -279,18 +279,19 @@ impl GpuBuffer {
         };
         match host.expect("valid bytes for the buffer's dtype") {
             crate::storage::Storage::Cpu(h) => h,
-            #[cfg(feature = "gpu")]
             crate::storage::Storage::Gpu(_) => unreachable!("try_from_bytes builds CPU storage"),
         }
     }
 
-    /// Get the underlying wgpu buffer (for use in compute passes)
+    /// Get the underlying wgpu buffer (for use in compute passes). Internal (#326): a caller
+    /// holding the handle could `destroy()` it, and the pool would then hand the destroyed
+    /// buffer to an unrelated allocation.
     ///
     /// # Panics
     /// If the wgpu buffer was taken out of this `GpuBuffer`. Only `Drop` does that, so a live
     /// buffer never panics here.
     #[must_use]
-    pub fn buffer(&self) -> &wgpu::Buffer {
+    pub(crate) fn buffer(&self) -> &wgpu::Buffer {
         debug_assert!(self.buffer.is_some(), "Buffer should not be taken");
         self.buffer.as_ref().expect("Buffer should not be taken")
     }
@@ -309,14 +310,26 @@ impl GpuBuffer {
 
     /// Copy a region of this buffer to a new GPU buffer of the same element type
     ///
+    /// Internal, like [`Self::buffer`] (#325, #326): every caller passes a region of a buffer
+    /// it built, so an out-of-range region is a bug and panics.
+    ///
     /// # Arguments
     /// * `offset` - Starting element offset in this buffer
     /// * `len` - Number of elements to copy
     /// # Panics
-    /// Panics if buffer is taken, or (16-bit types) `offset` is odd: a copy starts on a
-    /// 4-byte boundary, which is a whole word of two elements.
+    /// Panics if `offset + len` is past this buffer's length (a pooled buffer's slack past
+    /// `len` holds a dropped tensor's data, #325), if the buffer is taken, or (16-bit types)
+    /// if `offset` is odd: a copy starts on a 4-byte boundary, which is a whole word of two
+    /// elements.
     #[must_use]
-    pub fn copy_region(&self, offset: usize, len: usize) -> Option<Self> {
+    #[track_caller]
+    pub(crate) fn copy_region(&self, offset: usize, len: usize) -> Option<Self> {
+        assert!(
+            offset.checked_add(len).is_some_and(|end| end <= self.len),
+            "copy_region: elements {offset}..{offset}+{len} are past the buffer's {} elements \
+             (index-mapping bug)",
+            self.len
+        );
         let ctx = get_gpu_context()?;
         let src_buffer = self.buffer();
         let byte_size = gpu_bytes(self.dtype, len);
@@ -381,5 +394,45 @@ mod upload_tests {
     #[should_panic(expected = "GPU upload of 3 f32 elements: got 8 bytes")]
     fn upload_rejects_a_wrong_byte_length() {
         let _ = GpuBuffer::upload(DType::F32, 3, &[0u8; 8], "test");
+    }
+}
+
+#[cfg(test)]
+mod copy_region_tests {
+    use super::*;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    /// The panic message of `f`, which must panic.
+    fn panic_message(f: impl FnOnce()) -> String {
+        let payload = catch_unwind(AssertUnwindSafe(f)).expect_err("expected a panic");
+        payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(ToString::to_string))
+            .expect("a string panic payload")
+    }
+
+    /// #325: a region past the buffer's length panics with a Volta message instead of
+    /// reading the pooled slack (a dropped tensor's data) or failing inside wgpu. Covers a
+    /// region that ends past the length but inside the size class (`0..8` of 5 elements,
+    /// `3..8`) and one past the size class (`0..9`). Skipped without a GPU.
+    #[test]
+    fn copy_region_rejects_a_region_past_the_length() {
+        if !crate::gpu::is_gpu_available() {
+            return;
+        }
+        let buf = GpuBuffer::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0]).expect("GPU buffer");
+        for (offset, len) in [(0, 8), (3, 5), (0, 9), (usize::MAX, 2)] {
+            let msg = panic_message(|| {
+                let _ = buf.copy_region(offset, len);
+            });
+            assert!(
+                msg.contains("past the buffer's 5 elements"),
+                "copy_region({offset}, {len}): {msg}"
+            );
+        }
+        // An in-range region still copies.
+        let tail = buf.copy_region(3, 2).expect("in-range copy");
+        assert_eq!(tail.to_vec(), vec![4.0, 5.0]);
     }
 }
