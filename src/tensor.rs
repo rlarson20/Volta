@@ -438,6 +438,26 @@ pub struct RawTensor {
     pub(crate) saved_versions: Vec<Option<u64>>,
 }
 
+impl Drop for RawTensor {
+    /// Drops the graph above this node iteratively (#91).
+    ///
+    /// The default drop recurses through `parents`, one stack frame per node, so the
+    /// last handle to a long chain (a running loss total, a long RNN unroll) overflowed
+    /// the stack and aborted the process. Here each parent that this node holds the
+    /// last reference to hands its own parents to a work list before it drops, so every
+    /// node drops with no parents left and the depth stays constant.
+    fn drop(&mut self) {
+        let mut pending = std::mem::take(&mut self.parents);
+        while let Some(parent) = pending.pop() {
+            // `Err` means another handle still holds the parent: dropping ours only
+            // decrements the count, which does not recurse.
+            if let Ok(cell) = Rc::try_unwrap(parent.inner) {
+                pending.append(&mut cell.into_inner().parents);
+            }
+        }
+    }
+}
+
 // ===== RNG HELPERS =====
 
 thread_local! {
