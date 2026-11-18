@@ -2140,16 +2140,17 @@ fn movement_op(
     params: &MovementParams,
     pipeline: &wgpu::ComputePipeline,
 ) -> Option<GpuBuffer> {
-    // Only the first `rank` dims are real; the padded ones are zero.
-    let output_size = crate::index::span(&params.new_shape, 0..params.rank as usize)
-        .iter()
-        .product::<u32>();
+    // Every movement kernel, forward and backward, runs one thread per element of the
+    // buffer it writes. In a backward wrapper `new_shape` is the incoming gradient and
+    // `result` is shaped like the forward input, which `shrink` and `stride` make larger,
+    // so the launch covers `result`, not `new_shape` (#301).
+    let output_size = result.len();
     run_kernel(
         "Movement",
         pipeline,
         &[input, &result],
         bytemuck::bytes_of(params),
-        Groups::Flat(output_size.div_ceil(256)),
+        Groups::cover(output_size),
     )?;
     Some(result)
 }
