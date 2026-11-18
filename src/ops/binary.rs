@@ -50,6 +50,16 @@ define_ops! {
                 gpu(max, max_backward_a, max_backward_b, max_broadcast_pass1, max_broadcast_pass2);
             /// x mod y, floored like `torch.remainder` (the result takes y's sign):
             /// ∂/∂x = 1, ∂/∂y = -floor(x/y)
+            ///
+            /// The CPU computes the exact remainder (Rust's `%`, then the floored step).
+            /// The GPU kernel does not (#302): it computes `x - trunc(x/y) * y` with a
+            /// rounding at each step, then forces the result into the floored range (zero
+            /// or y's sign, magnitude below `|y|`). For `|x/y| < 2^23` it is within
+            /// `(|x| + |y|) * 2^-22` of the exact remainder, counted modulo `y` (a remainder
+            /// just above 0 can come back just below `|y|`); past `2^23` it is not the
+            /// remainder. An infinite `y` with a finite `x` gives the CPU's result exactly,
+            /// and a zero `y`, an infinite `x` or a NaN gives NaN on both. An exact GPU
+            /// kernel is #355.
             Mod => |a, b| {
                     let r = a % b;
                     if r != 0.0 && ((r < 0.0) != (b < 0.0)) { r + b } else { r }
