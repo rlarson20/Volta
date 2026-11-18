@@ -37,7 +37,9 @@ fn matmul(
     let local_row = local_id.y;
     let local_col = local_id.x;
 
-    var sum: f32 = 0.0;
+    // One partial per tile, summed pairwise across tiles (#319): a single running sum over
+    // all of k loses about k * 2^-24 relative, 4% at k = 2^22.
+    var acc: PairwiseSum;
 
     // Number of tiles we need to process
     let num_tiles = (params.k + TILE_SIZE - 1u) / TILE_SIZE;
@@ -65,9 +67,11 @@ fn matmul(
         workgroupBarrier();
 
         // Compute partial dot product for this tile
+        var partial: f32 = 0.0;
         for (var i: u32 = 0u; i < TILE_SIZE; i = i + 1u) {
-            sum = sum + tile_a[local_row * TILE_SIZE + i] * tile_b[i * TILE_SIZE + local_col];
+            partial = partial + tile_a[local_row * TILE_SIZE + i] * tile_b[i * TILE_SIZE + local_col];
         }
+        pairwise_push(&acc, partial);
 
         // Synchronize before loading next tile
         workgroupBarrier();
@@ -75,6 +79,6 @@ fn matmul(
 
     // Write result
     if (row < params.m && col < params.n) {
-        st_c(row * params.n + col, sum);
+        st_c(row * params.n + col, pairwise_total(&acc));
     }
 }
