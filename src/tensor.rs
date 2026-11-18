@@ -1647,6 +1647,11 @@ impl RawTensor {
     /// with batch statistics; put the layer in eval mode, or rebuild it, if the
     /// statistics matter afterwards.
     ///
+    /// # Devices
+    /// A GPU tensor is checked on the GPU: each perturbed input is built from a host copy
+    /// and moved to `tensor`'s device, so `loss_fn` runs the GPU forward and backward
+    /// kernels, and the gradient and losses are read back through the host.
+    ///
     /// # Non-finite gradients
     /// A NaN or infinite relative error at any element (from a NaN or infinite
     /// analytic or numerical gradient, as when `loss_fn` evaluates an op outside its
@@ -1689,17 +1694,21 @@ impl RawTensor {
 
         // Everything below is in f64: the gradient and the losses are widened exactly, and
         // the input is perturbed in its own dtype (f32 or f64), so an f64 tensor gets an
-        // f64-accurate check.
+        // f64-accurate check. A GPU tensor's values are read through a host copy (GPU
+        // storage holds no f64), and each perturbed input goes back to its device, so
+        // `loss_fn` runs the GPU kernels (#124).
         let analytical_grad: Vec<f64> = tensor
             .grad_storage()
             .expect("Tensor must have gradient")
+            .to_device(&Device::CPU)
             .cast(DType::F64)
             .as_host::<f64>()
             .expect("cast to f64")
             .to_vec();
         let mut numerical_grad = vec![0.0f64; analytical_grad.len()];
 
-        let original_data = tensor.borrow().data.clone();
+        let device = tensor.device();
+        let original_data = tensor.borrow().data.to_device(&Device::CPU);
         let original_shape = tensor.borrow().shape.clone();
         let requires_grad = tensor.borrow().requires_grad;
         let dtype = compute_dtype(|| "check_gradients".to_string(), &[original_data.dtype()]);
@@ -1712,6 +1721,7 @@ impl RawTensor {
             );
             fetch(
                 l.data
+                    .to_device(&Device::CPU)
                     .cast(DType::F64)
                     .as_host::<f64>()
                     .expect("cast to f64"),
@@ -1738,7 +1748,12 @@ impl RawTensor {
                             *x -= step;
                         }
                     }
-                    Self::new_with_storage(data, original_shape.clone(), Device::CPU, requires_grad)
+                    Self::new_with_storage(
+                        data.to_device(&device),
+                        original_shape.clone(),
+                        device.clone(),
+                        requires_grad,
+                    )
                 };
                 for i in 0..original_data.len() {
                     let val_plus = loss_value(&loss_fn(&perturbed(i, true)));
