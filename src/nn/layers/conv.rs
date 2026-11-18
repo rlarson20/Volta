@@ -148,7 +148,7 @@ pub struct Conv2d {
     /// `(vertical, horizontal)` zero padding.
     padding: (usize, usize),
     /// Algorithm used by `forward`.
-    algo: std::cell::Cell<ConvAlgo>,
+    algo: ConvAlgo,
 }
 
 /// Gradient function for im2col operation
@@ -808,7 +808,7 @@ impl Conv2d {
             bias: b,
             stride: (stride, stride),
             padding: (padding, padding),
-            algo: std::cell::Cell::new(ConvAlgo::Auto),
+            algo: ConvAlgo::Auto,
         }
     }
 
@@ -863,7 +863,7 @@ impl Conv2d {
             bias: b,
             stride: (stride, stride),
             padding: (padding, padding),
-            algo: std::cell::Cell::new(ConvAlgo::Auto),
+            algo: ConvAlgo::Auto,
         }
     }
 
@@ -876,16 +876,17 @@ impl Conv2d {
     /// ```no_run
     /// # use volta::Conv2d;
     /// # use volta::nn::layers::conv::ConvAlgo;
-    /// let conv = Conv2d::new(3, 16, 3, 1, 1, true);
+    /// let mut conv = Conv2d::new(3, 16, 3, 1, 1, true);
     /// conv.set_algo(ConvAlgo::Direct);  // Force direct convolution
     /// ```
-    pub fn set_algo(&self, algo: ConvAlgo) {
-        self.algo.set(algo);
+    pub fn set_algo(&mut self, algo: ConvAlgo) {
+        self.algo = algo;
     }
 
     /// Get the current convolution algorithm setting
+    #[must_use]
     pub fn get_algo(&self) -> ConvAlgo {
-        self.algo.get()
+        self.algo
     }
 
     /// Im2col: Convert (B, C, H, W) → (B*`H_out`*`W_out`, C*K*K) matrix
@@ -1371,6 +1372,7 @@ impl Conv2d {
     /// the kernel is larger than the padded input; or if the input and weight dtypes are not
     /// one float dtype.
     #[track_caller]
+    #[must_use]
     pub fn forward(&self, x: &Tensor) -> Tensor {
         // One low-precision op under `amp::autocast`: input, weight and bias are cast
         // together (PyTorch's convolutions).
@@ -1382,7 +1384,7 @@ impl Conv2d {
 
         // Algorithm selection
         // Note: All algorithms now support gradients!
-        let algo = self.algo.get();
+        let algo = self.algo;
         let algo = match algo {
             ConvAlgo::Auto => ConvAlgo::auto_select(&spec, x.borrow().device.is_gpu()),
             other @ (ConvAlgo::Direct | ConvAlgo::Im2col | ConvAlgo::IGEMM) => other,
@@ -1922,9 +1924,9 @@ mod conv2d_tests {
     #[test]
     fn test_conv2d_direct_conv_inference() {
         // Test that direct convolution produces correct results for inference
-        let conv = Conv2d::new(2, 4, 3, 1, 1, true);
+        let mut conv = Conv2d::new(2, 4, 3, 1, 1, true);
         // Force direct algorithm (no gradients, so direct will be used)
-        conv.algo.set(ConvAlgo::Direct);
+        conv.set_algo(ConvAlgo::Direct);
 
         let x = RawTensor::randn(&[1, 2, 8, 8]);
         // Don't set requires_grad - direct conv will be used
@@ -1932,7 +1934,7 @@ mod conv2d_tests {
         let y_direct = conv.forward(&x);
 
         // Compare with im2col
-        conv.algo.set(ConvAlgo::Im2col);
+        conv.set_algo(ConvAlgo::Im2col);
         let y_im2col = conv.forward(&x);
 
         // Results should be identical
@@ -1963,8 +1965,8 @@ mod conv2d_tests {
         // orders differ by up to 1.5e-5 (worst of 2000 seeds; 17 exceeded the old 1e-5).
         // A wrong tap or weight is off by O(1).
         crate::tensor::manual_seed(0xD1BAD);
-        let conv = Conv2d::new(2, 4, 3, 1, 2, true);
-        conv.algo.set(ConvAlgo::Direct);
+        let mut conv = Conv2d::new(2, 4, 3, 1, 2, true);
+        conv.set_algo(ConvAlgo::Direct);
 
         let x = RawTensor::new(
             (0..32).map(|i| i as f32).collect::<Vec<_>>(),
@@ -1975,7 +1977,7 @@ mod conv2d_tests {
         let y_direct = conv.forward(&x);
 
         // Compare with im2col
-        conv.algo.set(ConvAlgo::Im2col);
+        conv.set_algo(ConvAlgo::Im2col);
         let y_im2col = conv.forward(&x);
 
         let y_direct_data = y_direct.borrow().data.to_vec();
@@ -2086,8 +2088,8 @@ mod conv2d_tests {
     #[test]
     fn test_conv2d_auto_selects_direct_for_small_input() {
         // Test that auto-selection chooses direct for small inputs without gradients
-        let conv = Conv2d::new(2, 4, 3, 1, 0, false);
-        conv.algo.set(ConvAlgo::Auto);
+        let mut conv = Conv2d::new(2, 4, 3, 1, 0, false);
+        conv.set_algo(ConvAlgo::Auto);
 
         // Small input, no gradients - should select Direct
         let x = RawTensor::randn(&[1, 2, 4, 4]);
@@ -2106,7 +2108,7 @@ mod conv2d_tests {
         // `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels`: conv is
         // linear in `x`, so the step only affects f32 roundoff.
         crate::tensor::manual_seed(0xD100);
-        let conv = Conv2d::new(2, 4, 3, 1, 0, true);
+        let mut conv = Conv2d::new(2, 4, 3, 1, 0, true);
         conv.set_algo(ConvAlgo::Direct);
 
         let x = RawTensor::randn(&[1, 2, 8, 8]);
@@ -2129,7 +2131,7 @@ mod conv2d_tests {
         // `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels`: conv is
         // linear in `x`, so the step only affects f32 roundoff.
         crate::tensor::manual_seed(0xD101);
-        let conv = Conv2d::new(2, 4, 3, 1, 1, true);
+        let mut conv = Conv2d::new(2, 4, 3, 1, 1, true);
         conv.set_algo(ConvAlgo::Direct);
 
         let x = RawTensor::randn(&[1, 2, 6, 6]);
@@ -2152,7 +2154,7 @@ mod conv2d_tests {
         // `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels`: conv is
         // linear in `x`, so the step only affects f32 roundoff.
         crate::tensor::manual_seed(0xD102);
-        let conv = Conv2d::new(2, 4, 3, 2, 1, true);
+        let mut conv = Conv2d::new(2, 4, 3, 2, 1, true);
         conv.set_algo(ConvAlgo::Direct);
 
         let x = RawTensor::randn(&[1, 2, 8, 8]);
@@ -2175,7 +2177,7 @@ mod conv2d_tests {
         // `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels`: conv is
         // linear in `x`, so the step only affects f32 roundoff.
         crate::tensor::manual_seed(0xD111);
-        let conv = Conv2d::new(2, 4, 1, 1, 0, true);
+        let mut conv = Conv2d::new(2, 4, 1, 1, 0, true);
         conv.set_algo(ConvAlgo::Direct);
 
         let x = RawTensor::randn(&[1, 2, 4, 4]);
@@ -2198,7 +2200,7 @@ mod conv2d_tests {
         // `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels`: conv is
         // linear in `x`, so the step only affects f32 roundoff.
         crate::tensor::manual_seed(0xD10B);
-        let conv = Conv2d::new(2, 4, 3, 1, 1, false);
+        let mut conv = Conv2d::new(2, 4, 3, 1, 1, false);
         conv.set_algo(ConvAlgo::Direct);
 
         let x = RawTensor::randn(&[1, 2, 6, 6]);
@@ -2217,7 +2219,7 @@ mod conv2d_tests {
     #[test]
     fn test_direct_conv_backward_flow() {
         // Test that gradients flow through direct conv
-        let conv = Conv2d::new(2, 4, 3, 1, 1, true);
+        let mut conv = Conv2d::new(2, 4, 3, 1, 1, true);
         conv.set_algo(ConvAlgo::Direct);
 
         let x = RawTensor::randn(&[1, 2, 6, 6]);
@@ -2245,10 +2247,10 @@ mod conv2d_tests {
     #[test]
     fn test_direct_conv_gradient_match_im2col() {
         // Test that direct conv gradients match im2col gradients
-        let conv_direct = Conv2d::new(2, 4, 3, 1, 1, true);
+        let mut conv_direct = Conv2d::new(2, 4, 3, 1, 1, true);
         conv_direct.set_algo(ConvAlgo::Direct);
 
-        let conv_im2col = Conv2d::new(2, 4, 3, 1, 1, true);
+        let mut conv_im2col = Conv2d::new(2, 4, 3, 1, 1, true);
         conv_im2col.set_algo(ConvAlgo::Im2col);
 
         // Copy weights from direct to im2col
@@ -2344,7 +2346,7 @@ mod conv2d_tests {
         ];
 
         for (in_ch, out_ch, kernel, stride, padding, h, w, tolerance) in configs {
-            let conv = Conv2d::new(in_ch, out_ch, kernel, stride, padding, true);
+            let mut conv = Conv2d::new(in_ch, out_ch, kernel, stride, padding, true);
             conv.set_algo(ConvAlgo::Direct);
 
             let x = RawTensor::randn(&[1, in_ch, h, w]);
@@ -2363,7 +2365,7 @@ mod conv2d_tests {
     #[test]
     fn test_conv2d_auto_selects_direct_with_gradients() {
         // Test that auto-selection can now choose Direct even with gradients
-        let conv = Conv2d::new(2, 4, 3, 1, 0, true);
+        let mut conv = Conv2d::new(2, 4, 3, 1, 0, true);
         conv.set_algo(ConvAlgo::Auto);
 
         let x = RawTensor::randn(&[1, 2, 4, 4]);
@@ -2385,7 +2387,7 @@ mod conv2d_tests {
     #[test]
     fn test_conv2d_igemm_forward_shape() {
         // Test iGEMM output shape
-        let conv = Conv2d::new(3, 16, 3, 1, 1, true);
+        let mut conv = Conv2d::new(3, 16, 3, 1, 1, true);
         conv.set_algo(ConvAlgo::IGEMM);
 
         let x = RawTensor::randn(&[2, 3, 32, 32]);
@@ -2399,10 +2401,10 @@ mod conv2d_tests {
         // Test iGEMM correctness by comparing with Direct
         let x = RawTensor::randn(&[1, 2, 8, 8]);
 
-        let conv_direct = Conv2d::new(2, 4, 3, 1, 1, true);
+        let mut conv_direct = Conv2d::new(2, 4, 3, 1, 1, true);
         conv_direct.set_algo(ConvAlgo::Direct);
 
-        let conv_igemm = Conv2d::new(2, 4, 3, 1, 1, true);
+        let mut conv_igemm = Conv2d::new(2, 4, 3, 1, 1, true);
         conv_igemm.set_algo(ConvAlgo::IGEMM);
 
         // Copy weights
@@ -2439,7 +2441,7 @@ mod conv2d_tests {
         // `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels`: conv is
         // linear in `x`, so the step only affects f32 roundoff.
         crate::tensor::manual_seed(0x16E0);
-        let conv = Conv2d::new(2, 4, 3, 1, 1, true);
+        let mut conv = Conv2d::new(2, 4, 3, 1, 1, true);
         conv.set_algo(ConvAlgo::IGEMM);
 
         let x = RawTensor::randn(&[1, 2, 8, 8]);
@@ -2467,10 +2469,10 @@ mod conv2d_tests {
         let x_igemm = RawTensor::new(x_data, &[1, 2, 6, 6], true);
         x_igemm.set_requires_grad(true);
 
-        let conv_direct = Conv2d::new(2, 4, 3, 1, 1, true);
+        let mut conv_direct = Conv2d::new(2, 4, 3, 1, 1, true);
         conv_direct.set_algo(ConvAlgo::Direct);
 
-        let conv_igemm = Conv2d::new(2, 4, 3, 1, 1, true);
+        let mut conv_igemm = Conv2d::new(2, 4, 3, 1, 1, true);
         conv_igemm.set_algo(ConvAlgo::IGEMM);
 
         // Copy weights
@@ -2656,9 +2658,9 @@ mod conv2d_tests {
             .to_vec();
         let loss_weights = crate::tensor::randn(&[batch, out_ch, h, w]);
 
-        let conv_direct = Conv2d::new(in_ch, out_ch, 3, 1, 1, true);
+        let mut conv_direct = Conv2d::new(in_ch, out_ch, 3, 1, 1, true);
         conv_direct.set_algo(ConvAlgo::Direct);
-        let conv_igemm = Conv2d::new(in_ch, out_ch, 3, 1, 1, true);
+        let mut conv_igemm = Conv2d::new(in_ch, out_ch, 3, 1, 1, true);
         conv_igemm.set_algo(ConvAlgo::IGEMM);
         let weight_data = conv_direct.weight.borrow().data.to_vec();
         conv_igemm.weight.borrow_mut().data = crate::storage::Storage::cpu(weight_data);
@@ -2724,7 +2726,7 @@ mod conv2d_tests {
         ];
 
         for (kernel, stride, padding, batch, in_ch, out_ch, h, w) in test_cases {
-            let conv = Conv2d::new(in_ch, out_ch, kernel, stride, padding, true);
+            let mut conv = Conv2d::new(in_ch, out_ch, kernel, stride, padding, true);
             conv.set_algo(ConvAlgo::IGEMM);
 
             let x = RawTensor::randn(&[batch, in_ch, h, w]);
@@ -2740,7 +2742,7 @@ mod conv2d_tests {
     #[test]
     fn test_conv2d_igemm_no_bias() {
         // Test iGEMM without bias
-        let conv = Conv2d::new(2, 4, 3, 1, 1, false);
+        let mut conv = Conv2d::new(2, 4, 3, 1, 1, false);
         conv.set_algo(ConvAlgo::IGEMM);
 
         let x = RawTensor::randn(&[1, 2, 8, 8]);
@@ -2757,7 +2759,7 @@ mod conv2d_tests {
         // `conv_transpose::tests::test_conv_transpose2d_gradient_multiple_channels`: conv is
         // linear in `x`, so the step only affects f32 roundoff.
         crate::tensor::manual_seed(0x16EB);
-        let conv = Conv2d::new(2, 4, 3, 1, 1, false);
+        let mut conv = Conv2d::new(2, 4, 3, 1, 1, false);
         conv.set_algo(ConvAlgo::IGEMM);
 
         let x = RawTensor::randn(&[1, 2, 8, 8]);
@@ -2794,7 +2796,7 @@ mod conv2d_tests {
     #[test]
     fn test_conv2d_kernel_larger_than_padded_input_panics_with_spec_message() {
         // 5x5 kernel on a 3x3 input with no padding: (3 - 5) underflows in every algorithm.
-        let conv = Conv2d::new(1, 1, 5, 1, 0, false);
+        let mut conv = Conv2d::new(1, 1, 5, 1, 0, false);
         let x = RawTensor::randn(&[1, 1, 3, 3]);
         for algo in ALL_ALGOS {
             conv.set_algo(algo);
@@ -2805,7 +2807,7 @@ mod conv2d_tests {
 
     #[test]
     fn test_conv2d_zero_stride_panics_with_spec_message() {
-        let conv = Conv2d::new(1, 1, 3, 0, 0, false);
+        let mut conv = Conv2d::new(1, 1, 3, 0, 0, false);
         let x = RawTensor::randn(&[1, 1, 8, 8]);
         for algo in ALL_ALGOS {
             conv.set_algo(algo);
@@ -2833,7 +2835,7 @@ mod conv2d_tests {
     #[test]
     fn test_conv2d_kernel_equal_to_padded_input_gives_one_output_pixel() {
         // Boundary: kernel == padded input is valid and yields a 1x1 output.
-        let conv = Conv2d::new(2, 3, 5, 1, 1, true);
+        let mut conv = Conv2d::new(2, 3, 5, 1, 1, true);
         let x = RawTensor::randn(&[2, 2, 3, 3]);
         for algo in ALL_ALGOS {
             conv.set_algo(algo);
@@ -2925,7 +2927,7 @@ mod conv2d_gpu_tests {
             crate::tensor::manual_seed(0x6C0DE);
             let [_, in_ch, _, _] = self.input;
             let make = |device: Device| {
-                let conv = Conv2d::new_on_device(
+                let mut conv = Conv2d::new_on_device(
                     in_ch,
                     self.out_ch,
                     self.kernel,
@@ -3303,7 +3305,7 @@ mod conv2d_gpu_tests {
 
         let device = Device::gpu().unwrap();
 
-        let conv = Conv2d::new_on_device(2, 4, 3, 1, 1, true, device.clone());
+        let mut conv = Conv2d::new_on_device(2, 4, 3, 1, 1, true, device.clone());
         conv.set_algo(ConvAlgo::Direct);
 
         let x = RawTensor::randn(&[1, 2, 8, 8]).to_device(device);
@@ -3364,7 +3366,7 @@ mod conv2d_gpu_tests {
         x_gpu.set_requires_grad(true);
 
         // Create conv with im2col algorithm
-        let conv = Conv2d::new_on_device(1, 2, 3, 1, 0, true, device);
+        let mut conv = Conv2d::new_on_device(1, 2, 3, 1, 0, true, device);
         conv.set_algo(ConvAlgo::Im2col);
 
         // Forward pass
@@ -3404,9 +3406,9 @@ mod conv2d_gpu_tests {
         };
         crate::tensor::manual_seed(0xC0DE);
 
-        let conv_cpu = Conv2d::new_on_device(3, 5, 3, 2, 1, true, Device::CPU);
+        let mut conv_cpu = Conv2d::new_on_device(3, 5, 3, 2, 1, true, Device::CPU);
         conv_cpu.set_algo(ConvAlgo::Direct);
-        let conv_gpu = Conv2d::new_on_device(3, 5, 3, 2, 1, true, device.clone());
+        let mut conv_gpu = Conv2d::new_on_device(3, 5, 3, 2, 1, true, device.clone());
         conv_gpu.set_algo(ConvAlgo::Direct);
         let weight = conv_cpu.weight.borrow().data.to_vec();
         conv_gpu.weight.borrow_mut().data = Storage::gpu(weight);

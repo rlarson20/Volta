@@ -390,9 +390,8 @@ fn layers_gradcheck_in_f64() {
     manual_seed(1);
     check_layer("Linear", &mut Linear::new(4, 3, true), &[2, 4]);
     for algo in [ConvAlgo::Direct, ConvAlgo::Im2col, ConvAlgo::IGEMM] {
-        let conv = Conv2d::new(2, 3, 3, 2, 1, true);
+        let mut conv = Conv2d::new(2, 3, 3, 2, 1, true);
         conv.set_algo(algo);
-        let mut conv = conv;
         check_layer(&format!("Conv2d {algo:?}"), &mut conv, &[2, 2, 5, 5]);
     }
     check_layer(
