@@ -212,7 +212,13 @@ macro_rules! dispatch_real {
                 type $T = f64;
                 $body
             }
-            other => unreachable!("dispatch_real on {other}: compute_dtype admits floats only"),
+            // Listed, not `_`: a new `DType` is a compile error here (#179).
+            other @ ($crate::dtype::DType::I32
+            | $crate::dtype::DType::I64
+            | $crate::dtype::DType::U8
+            | $crate::dtype::DType::Bool) => {
+                unreachable!("dispatch_real on {other}: compute_dtype admits floats only")
+            }
         }
     };
 }
@@ -232,24 +238,25 @@ impl Bits for u64 {}
 /// Run `$body` with `$B` bound to the [`Bits`] carrier of `$dtype`'s width. Any dtype.
 macro_rules! dispatch_bits {
     ($dtype:expr, $B:ident => $body:expr) => {
-        match $crate::dtype::DType::size_of(&$dtype) {
-            1 => {
+        // On the dtype, not its `size_of`, so the match is exhaustive and a new `DType`
+        // is a compile error here (#179). The widths are `DType::size_of`'s.
+        match $dtype {
+            $crate::dtype::DType::U8 | $crate::dtype::DType::Bool => {
                 type $B = u8;
                 $body
             }
-            2 => {
+            $crate::dtype::DType::F16 | $crate::dtype::DType::BF16 => {
                 type $B = u16;
                 $body
             }
-            4 => {
+            $crate::dtype::DType::F32 | $crate::dtype::DType::I32 => {
                 type $B = u32;
                 $body
             }
-            8 => {
+            $crate::dtype::DType::F64 | $crate::dtype::DType::I64 => {
                 type $B = u64;
                 $body
             }
-            n => unreachable!("dispatch_bits: no {n}-byte dtype"),
         }
     };
 }

@@ -119,22 +119,25 @@ pub trait Element: sealed::Sealed + Copy + Send + Sync + 'static {
     fn wrap(data: Arc<[Self]>) -> HostBuf;
 }
 
-/// Implements [`Element`] for one type and its `HostBuf` variant.
+/// Implements [`Element`] for one type and its `HostBuf` variant. `others` lists every
+/// other variant, so the matches are exhaustive without a `_` arm: a new `HostBuf`
+/// variant is a compile error in each (#179), and listing a type's own variant there is an
+/// unreachable pattern, which the lints reject.
 macro_rules! element {
-    ($t:ty, $variant:ident) => {
+    ($t:ty, $variant:ident, others: $($other:ident)|+) => {
         impl sealed::Sealed for $t {}
         impl Element for $t {
             const DTYPE: DType = DType::$variant;
             fn view(buf: &HostBuf) -> Option<&[Self]> {
                 match buf {
                     HostBuf::$variant(d) => Some(d),
-                    _ => None,
+                    $(HostBuf::$other(_))|+ => None,
                 }
             }
             fn view_mut(buf: &mut HostBuf) -> Option<&mut [Self]> {
                 match buf {
                     HostBuf::$variant(d) => Some(Arc::make_mut(d)),
-                    _ => None,
+                    $(HostBuf::$other(_))|+ => None,
                 }
             }
             fn wrap(data: Arc<[Self]>) -> HostBuf {
@@ -144,14 +147,14 @@ macro_rules! element {
     };
 }
 
-element!(f16, F16);
-element!(bf16, BF16);
-element!(f32, F32);
-element!(f64, F64);
-element!(i32, I32);
-element!(i64, I64);
-element!(u8, U8);
-element!(bool, Bool);
+element!(f16, F16, others: BF16 | F32 | F64 | I32 | I64 | U8 | Bool);
+element!(bf16, BF16, others: F16 | F32 | F64 | I32 | I64 | U8 | Bool);
+element!(f32, F32, others: F16 | BF16 | F64 | I32 | I64 | U8 | Bool);
+element!(f64, F64, others: F16 | BF16 | F32 | I32 | I64 | U8 | Bool);
+element!(i32, I32, others: F16 | BF16 | F32 | F64 | I64 | U8 | Bool);
+element!(i64, I64, others: F16 | BF16 | F32 | F64 | I32 | U8 | Bool);
+element!(u8, U8, others: F16 | BF16 | F32 | F64 | I32 | I64 | Bool);
+element!(bool, Bool, others: F16 | BF16 | F32 | F64 | I32 | I64 | U8);
 
 /// Storage backend for tensor data
 ///

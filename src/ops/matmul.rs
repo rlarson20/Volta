@@ -252,7 +252,22 @@ impl RawTensor {
         };
 
         // Handle different cases, in the operands' dtype.
-        dispatch_real!(dtype, T => match (shape_a.rank(), shape_b.rank()) {
+        dispatch_real!(dtype, T => Self::matmul_in::<T>(
+            self_t, other, dtype, (&data_a, &shape_a), (&data_b, &shape_b),
+        ))
+    }
+
+    /// [`RawTensor::matmul`] in the element type `T` of `dtype`, the operands' compute dtype
+    /// (#179: a function, not a `dispatch_real!` body, so its early `return`s are visible).
+    #[track_caller]
+    fn matmul_in<T: Real>(
+        self_t: &Tensor,
+        other: &Tensor,
+        dtype: crate::DType,
+        (data_a, shape_a): (&Storage, &Shape),
+        (data_b, shape_b): (&Storage, &Shape),
+    ) -> Tensor {
+        match (shape_a.rank(), shape_b.rank()) {
             (2, 1) => {
                 let (a_host, b_host) = (data_a.host::<T>(), data_b.host::<T>());
                 // Matrix-vector: (m,n) @ (n,) -> (m,)
@@ -310,7 +325,7 @@ impl RawTensor {
             _ => {
                 // Matrix forms: rank >= 2 on both sides. The spec validates rank, inner dims and
                 // batch broadcasting once; everything below reads m/k/n from it.
-                let spec = MatmulSpec::new(&shape_a, &shape_b).or_panic("");
+                let spec = MatmulSpec::new(shape_a, shape_b).or_panic("");
 
                 if !spec.is_batched() {
                     // Standard 2D matmul: (m,k) @ (k,n) -> (m,n)
@@ -318,7 +333,7 @@ impl RawTensor {
                     // If both inputs live on the same GPU device, run the GPU kernel. A
                     // `None` from it is a failure, not a reason to use the CPU.
                     if let Some(device) = Self::common_gpu_device(&[self_t, other]) {
-                        let storage = Self::gpu_matmul(&data_a, &data_b, &spec)
+                        let storage = Self::gpu_matmul(data_a, data_b, &spec)
                             .unwrap_or_else(|| kernel_failed("MatMul"));
                         return edge(
                             [self_t.clone(), other.clone()],
@@ -388,7 +403,7 @@ impl RawTensor {
                     GradFn::MatMul(MatMulGradFn::matrix(spec)),
                 )
             }
-        })
+        }
     }
 
     /// Transpose a 2D tensor
