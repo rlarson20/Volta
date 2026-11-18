@@ -1,5 +1,5 @@
 use crate::io::StateDict;
-use crate::nn::{Dropout, GELU, Layer, Linear, Module};
+use crate::nn::{Dropout, GELU, Layer, Linear, Module, insert_prefixed, load_child};
 use crate::tensor::Tensor;
 
 /// Feed-Forward Network (FFN) layer for transformer blocks
@@ -128,49 +128,14 @@ impl Module for FeedForward {
 
     fn state_dict(&self) -> StateDict {
         let mut state = StateDict::new();
-
-        // Get expand layer state
-        let expand_state = self.expand.state_dict();
-        for (key, value) in expand_state {
-            state.insert(format!("expand.{key}"), value);
-        }
-
-        // Get contract layer state
-        let contract_state = self.contract.state_dict();
-        for (key, value) in contract_state {
-            state.insert(format!("contract.{key}"), value);
-        }
-
+        insert_prefixed(&mut state, "expand.", self.expand.state_dict());
+        insert_prefixed(&mut state, "contract.", self.contract.state_dict());
         state
     }
 
     fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
-        // Load expand layer
-        let mut expand_state = StateDict::new();
-        for (key, value) in state {
-            if let Some(sub_key) = key.strip_prefix("expand.") {
-                expand_state.insert(sub_key.to_string(), value.clone());
-            }
-        }
-        if !expand_state.is_empty() {
-            self.expand
-                .load_state_dict(&expand_state)
-                .map_err(|e| e.with_key_prefix("expand."))?;
-        }
-
-        // Load contract layer
-        let mut contract_state = StateDict::new();
-        for (key, value) in state {
-            if let Some(sub_key) = key.strip_prefix("contract.") {
-                contract_state.insert(sub_key.to_string(), value.clone());
-            }
-        }
-        if !contract_state.is_empty() {
-            self.contract
-                .load_state_dict(&contract_state)
-                .map_err(|e| e.with_key_prefix("contract."))?;
-        }
-        Ok(())
+        load_child(&mut self.expand, "expand.", state)?;
+        load_child(&mut self.contract, "contract.", state)
     }
 
     fn train(&mut self, mode: bool) {

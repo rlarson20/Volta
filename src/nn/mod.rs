@@ -50,6 +50,44 @@ pub(crate) fn unique_parameters(params: impl IntoIterator<Item = Tensor>) -> Vec
         .collect()
 }
 
+/// Adds each entry of `child` (a sub-module's `state_dict()`) to `state` under `prefix`,
+/// which ends in `.` (`"ffn."` turns `expand.weight` into `ffn.expand.weight`).
+pub(crate) fn insert_prefixed(state: &mut StateDict, prefix: &str, child: StateDict) {
+    state.extend(
+        child
+            .into_iter()
+            .map(|(key, value)| (format!("{prefix}{key}"), value)),
+    );
+}
+
+/// The entries of `state` whose key starts with `prefix`, with the prefix removed. A key
+/// that is the bare prefix names no parameter and is left out.
+pub(crate) fn sub_state(state: &StateDict, prefix: &str) -> StateDict {
+    // Keys sort lexicographically, so the ones under `prefix` are one contiguous run.
+    state
+        .range(prefix.to_string()..)
+        .map_while(|(key, value)| Some((key.strip_prefix(prefix)?, value)))
+        .filter(|(sub_key, _)| !sub_key.is_empty())
+        .map(|(sub_key, value)| (sub_key.to_string(), value.clone()))
+        .collect()
+}
+
+/// Loads the entries of `state` under `prefix` into `child`, and does nothing when there
+/// are none. An error's key gets the prefix back, so it names the entry in `state`.
+pub(crate) fn load_child<M: Module + ?Sized>(
+    child: &mut M,
+    prefix: &str,
+    state: &StateDict,
+) -> crate::Result<()> {
+    let sub = sub_state(state, prefix);
+    if sub.is_empty() {
+        return Ok(());
+    }
+    child
+        .load_state_dict(&sub)
+        .map_err(|e| e.with_key_prefix(prefix))
+}
+
 /// Private supertrait that keeps [`RecurrentLayer`] implementable only inside
 /// this crate. `Module` and [`Layer`] stay open so users can write custom layers.
 mod sealed {
@@ -193,4 +231,34 @@ pub trait RecurrentLayer: Module + SealedLayer {
     fn initial_state(&self, batch: usize) -> Self::State;
     /// Advance one step: update `state` in place and return the step output.
     fn step(&self, x: &Tensor, state: &mut Self::State) -> Tensor;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::TensorData;
+
+    #[test]
+    fn sub_state_takes_exactly_the_keys_under_the_prefix() {
+        let entry = || TensorData::from_f32(vec![1.0], vec![1]);
+        let state: StateDict = ["a", "a.", "a.w", "a.x.y", "ab.w", "b.w", "a-w"]
+            .into_iter()
+            .map(|k| (k.to_string(), entry()))
+            .collect();
+        let sub = sub_state(&state, "a.");
+        let keys: Vec<&str> = sub.keys().map(String::as_str).collect();
+        // Not the bare prefix, not `ab.` (shares the letter), not `a-w` (sorts before `a.`).
+        assert_eq!(keys, ["w", "x.y"]);
+        assert!(sub_state(&state, "c.").is_empty());
+    }
+
+    #[test]
+    fn insert_prefixed_prepends_the_prefix_to_every_key() {
+        let entry = || TensorData::from_f32(vec![1.0], vec![1]);
+        let child: StateDict = [("w".to_string(), entry()), ("x.y".to_string(), entry())].into();
+        let mut state = StateDict::new();
+        insert_prefixed(&mut state, "p.", child);
+        let keys: Vec<&str> = state.keys().map(String::as_str).collect();
+        assert_eq!(keys, ["p.w", "p.x.y"]);
+    }
 }

@@ -1,7 +1,7 @@
 use crate::Linear;
 use crate::ReLU;
 use crate::io::StateDict;
-use crate::nn::{Layer, Module};
+use crate::nn::{Layer, Module, insert_prefixed, load_child, sub_state};
 use crate::tensor::Tensor;
 
 /// Internal struct to hold a layer with an optional name
@@ -42,58 +42,27 @@ impl Module for Sequential {
     fn state_dict(&self) -> StateDict {
         let mut state = StateDict::new();
         for (i, entry) in self.layers.iter().enumerate() {
-            let sub_state = entry.layer.state_dict();
-            if sub_state.is_empty() {
-                continue;
-            }
-
-            // Use name if available, otherwise use numeric index
-            let index_str = i.to_string();
-            let prefix = entry.name.as_deref().unwrap_or(&index_str);
-
-            for (key, value) in sub_state {
-                state.insert(format!("{prefix}.{key}"), value);
-            }
+            // Under the layer's name if it has one, else its index.
+            let prefix = match &entry.name {
+                Some(name) => format!("{name}."),
+                None => format!("{i}."),
+            };
+            insert_prefixed(&mut state, &prefix, entry.layer.state_dict());
         }
         state
     }
 
     fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
         for (i, entry) in self.layers.iter_mut().enumerate() {
-            // Try name first, fallback to numeric index
-            let possible_prefixes: Vec<String> = if let Some(ref name) = entry.name {
-                vec![format!("{}.", name), format!("{}.", i)]
-            } else {
-                vec![format!("{}.", i)]
+            // A named layer reads its name's entries, and its index's if there are none.
+            let by_index = format!("{i}.");
+            let prefix = match &entry.name {
+                Some(name) if !sub_state(state, &format!("{name}.")).is_empty() => {
+                    format!("{name}.")
+                }
+                _ => by_index,
             };
-
-            // Collect matching keys for this layer
-            let mut sub_state = StateDict::new();
-            let mut matched_prefix = String::new();
-
-            for prefix in possible_prefixes {
-                for (key, value) in state {
-                    if key.starts_with(&prefix) {
-                        let sub_key = &key[prefix.len()..];
-                        if !sub_key.is_empty() {
-                            sub_state.insert(sub_key.to_string(), value.clone());
-                        }
-                    }
-                }
-
-                // If we found keys with this prefix, stop trying others
-                if !sub_state.is_empty() {
-                    matched_prefix = prefix;
-                    break;
-                }
-            }
-
-            if !sub_state.is_empty() {
-                entry
-                    .layer
-                    .load_state_dict(&sub_state)
-                    .map_err(|e| e.with_key_prefix(&matched_prefix))?;
-            }
+            load_child(entry.layer.as_mut(), &prefix, state)?;
         }
         Ok(())
     }

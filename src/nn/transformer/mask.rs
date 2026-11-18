@@ -26,20 +26,23 @@ use crate::tensor::{RawTensor, Tensor};
 /// ```
 #[must_use]
 pub fn causal_mask(seq_len: usize, device: crate::Device) -> Tensor {
-    let mut mask_data = Vec::with_capacity(seq_len * seq_len);
-    for i in 0..seq_len {
-        for j in 0..seq_len {
-            // Upper triangle (j > i) gets -inf, lower triangle and diagonal get 0
-            if j > i {
-                mask_data.push(f32::NEG_INFINITY);
-            } else {
-                mask_data.push(0.0);
-            }
-        }
-    }
-
-    let mask = RawTensor::new(mask_data, &[seq_len, seq_len], false);
+    let mask = RawTensor::new(mask_values(seq_len, seq_len), &[seq_len, seq_len], false);
     mask.to_device(device)
+}
+
+/// Additive mask `[q_len, kv_len]`: `-inf` where `j > i`, 0 elsewhere, on `like`'s device
+/// and in its dtype. This is torch's top-left aligned `is_causal` mask
+/// (`ones(L, S).tril()`); it broadcasts against any `[.., L, S]` score tensor.
+pub(crate) fn causal_mask_like(q_len: usize, kv_len: usize, like: &Tensor) -> Tensor {
+    like.constant_like(mask_values(q_len, kv_len), &[q_len, kv_len])
+}
+
+/// Row-major `[q_len, kv_len]` values of the causal mask: `-inf` above the diagonal
+/// (`j > i`, a future key), 0 on and below it.
+fn mask_values(q_len: usize, kv_len: usize) -> Vec<f32> {
+    (0..q_len)
+        .flat_map(|i| (0..kv_len).map(move |j| if j > i { f32::NEG_INFINITY } else { 0.0 }))
+        .collect()
 }
 
 #[cfg(test)]
