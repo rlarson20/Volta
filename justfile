@@ -45,9 +45,11 @@ sanitizer_nightly := "nightly-2026-11-01"
 # off because the IO tests write temporary files. Both recipes need the
 # `sanitizer_nightly` toolchain with its `miri` and `rust-src` components
 # (`rustup toolchain install <that nightly> --component miri,rust-src`).
+# The `long_contraction` matmul tests sum 2^25 elements to check precision, not memory safety;
+# under Miri that is hours, so they are skipped (#213). They run in every other lane.
 # Miri (undefined behavior, memory still allocated at exit) over CPU-only library tests
 miri filters="autograd:: ops::matmul spec:: dtype:: storage:: io::":
-	MIRIFLAGS="-Zmiri-disable-isolation" cargo +{{sanitizer_nightly}} miri test --no-default-features --lib -- {{filters}}
+	MIRIFLAGS="-Zmiri-disable-isolation" cargo +{{sanitizer_nightly}} miri test --no-default-features --lib -- {{filters}} --skip long_contraction
 
 # `asan` covers the CPU-only library and integration tests, Linux x86_64 only. Doctests and
 # the trybuild `compile_fail` test (it runs rustc itself, which the sanitizer flags break)
