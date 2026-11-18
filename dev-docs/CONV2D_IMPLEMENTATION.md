@@ -73,6 +73,9 @@ All three algorithms support training with full gradients.
 ## iGEMM
 
 `IGEMMVariant` (private) has one variant, `Tiled`, and the grad fn stores it in an unused
-field (`_variant`, #118). The backward is `igemm_backward_input` and
-`igemm_backward_weight` on the grad fn. There is no extension point beyond that: a second
-variant would need a dispatch added to the forward and both backward functions.
+field (`_variant`, #118). The backward is `igemm_backward_input` on the grad fn, and on the
+CPU the weight gradient is `weight_gradient_pairwise`, which Direct shares: a blocked pairwise
+sum over the output positions per weight, so Direct and IGEMM give the same weight gradient
+and neither loses precision over a long feature map (#318). There is no extension point
+beyond that: a second variant would need a dispatch added to the forward and the input
+backward.
