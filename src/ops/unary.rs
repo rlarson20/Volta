@@ -18,7 +18,9 @@ define_ops! {
         Neg => |x| -x, |g, _x| -g, gpu(neg, neg_backward);
         /// d(1/x)/dx = -1/x²
         // `-g * (1/x) * (1/x)`, not `-g / (x * x)`: `x * x` overflows or underflows where
-        // the gradient is finite (#92). Same order as the `recip_backward` kernel.
+        // the gradient is finite (#92). The `recip_backward` kernel computes the same
+        // quotient another way, with `over_square` (`frexp`/`ldexp`), because Metal's fast
+        // math may reassociate `r * r` back into `1/(x * x)`.
         Recip => |x| 1.0 / x, |g, x| { let r = 1.0 / x; -g * r * r }, gpu(recip, recip_backward);
         /// d(√x)/dx = 1/(2√x)
         Sqrt => |x| x.sqrt(), |g, x| g / (2.0 * x.sqrt()), gpu(sqrt, sqrt_backward);

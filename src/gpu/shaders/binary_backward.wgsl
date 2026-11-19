@@ -12,9 +12,9 @@ fn force_use_bindings(x: f32, y: f32) {
     _ = y;
 }
 
-// ============ Legacy entry points (no broadcasting support) ============
-// These are kept for backward compatibility with existing code
-// These use simple direct assignment (no atomics needed for same-shape case)
+// ============ Same-shape entry points ============
+// The only binary backward kernels a same-shape op dispatches; broadcast shapes go
+// through binary_backward_safe.wgsl. Direct assignment, no atomics.
 
 // For add: d(a+b)/da = 1
 @compute @workgroup_size(256)

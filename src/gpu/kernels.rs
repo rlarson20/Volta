@@ -1750,17 +1750,9 @@ impl GpuKernels {
     /// where each row represents a flattened receptive field for one output position.
     ///
     /// # Arguments
-    /// * `input` - 4D input tensor (batch, channels, height, width)
-    /// * `batch_size` - Batch size (B)
-    /// * `channels` - Number of input channels (C)
-    /// * `height` - Input height (H)
-    /// * `width` - Input width (W)
-    /// * `kernel_h` - Kernel height
-    /// * `kernel_w` - Kernel width
-    /// * `stride_h` - Vertical stride
-    /// * `stride_w` - Horizontal stride
-    /// * `h_out` - Output height
-    /// * `w_out` - Output width
+    /// * `input` - 4D input tensor `(B, C, H, W)`, contiguous
+    /// * `spec` - The window geometry: batch, channels, input and output height and width,
+    ///   kernel size and stride (no padding; the caller pads first)
     ///
     /// # Returns
     /// A 2D matrix of shape (B*`H_out`*`W_out`, C*`K_h`*`K_w`)
@@ -1795,16 +1787,7 @@ impl GpuKernels {
     ///
     /// # Arguments
     /// * `col` - 2D col matrix of shape `(B*H_out*W_out, C*K_h*K_w)`
-    /// * `batch_size` - Batch size (B)
-    /// * `channels` - Number of input channels (C)
-    /// * `height` - Input height (H)
-    /// * `width` - Input width (W)
-    /// * `kernel_h` - Kernel height
-    /// * `kernel_w` - Kernel width
-    /// * `stride_h` - Vertical stride
-    /// * `stride_w` - Horizontal stride
-    /// * `h_out` - Output height
-    /// * `w_out` - Output width
+    /// * `spec` - The same window geometry `im2col` took
     ///
     /// # Returns
     /// A 4D tensor of shape (B, C, H, W)
