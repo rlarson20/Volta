@@ -252,4 +252,21 @@ mod tests {
         let x = crate::macros::trainable_input(&[2, 3, 16]);
         crate::macros::assert_trainable!(ffn, x);
     }
+
+    /// #123: the input gradient through expand, GELU and contract, by finite differences
+    /// in f64 under a random weighted loss (`sum` alone would weight every output alike).
+    #[test]
+    fn test_ffn_input_gradient_matches_finite_differences() {
+        crate::tensor::manual_seed(0xFF01);
+        let mut ffn = FeedForward::new(4, 2, 0.0);
+        ffn.to_dtype(crate::DType::F64);
+        let x = crate::nn::transformer::f64_operand(&[2, 3, 4], true);
+        let w = crate::nn::transformer::f64_operand(&[2, 3, 4], false);
+        let (max, mean, ok) =
+            RawTensor::check_gradients(&x, |t| ffn.forward(t).elem_mul(&w).sum(), 1e-6, 1e-6);
+        assert!(
+            ok,
+            "FeedForward input gradient: max={max:.3e} mean={mean:.3e}"
+        );
+    }
 }

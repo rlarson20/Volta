@@ -668,32 +668,6 @@ mod tests {
 
     // ===== Backward Pass Gradient Correctness Tests =====
 
-    #[test]
-    fn test_conv_transpose2d_backward_flow() {
-        // Test that gradients flow through the entire network
-        let conv = ConvTranspose2d::new(2, 4, 3, 1, 0, true);
-        let x = RawTensor::randn(&[1, 2, 5, 5]);
-        x.set_requires_grad(true);
-
-        let y = conv.forward(&x);
-        let loss = y.sum();
-        loss.into_loss().expect("scalar loss").backward();
-
-        // Check that input has gradients
-        assert!(x.grad().is_some(), "Input should have gradients");
-
-        // Check that weights have gradients
-        assert!(
-            conv.weight.grad().is_some(),
-            "Weights should have gradients"
-        );
-
-        // Check that bias has gradients
-        if let Some(ref b) = conv.bias {
-            assert!(b.grad().is_some(), "Bias should have gradients");
-        }
-    }
-
     /// The input and weight gradients of a transposed convolution, by the definition:
     /// output `(b, co, ih*s + kh - p, iw*s + kw - p)` gets `x[b, ci, ih, iw] * w[ci, co, kh, kw]`.
     /// Scalar loops in f64; this was the backward before it moved to GEMMs (#230).
@@ -1075,24 +1049,50 @@ mod tests {
         }
     }
 
+    /// #123: the input gradient on a non-square input, by finite differences under a
+    /// random weighted loss, and the bias gradient by value (each channel's sum of the
+    /// upstream gradient). Input and weight against the scalar definition are in
+    /// `conv_transpose2d_backward_matches_scalar_reference`.
     #[test]
     fn test_conv_transpose2d_gradient_asymmetric_dimensions() {
-        // Test gradient correctness with non-square input
-        let conv = ConvTranspose2d::new(2, 4, 3, 2, 1, true);
-        let x = RawTensor::randn(&[1, 2, 6, 10]);
+        crate::tensor::manual_seed(0x7A5E);
+        let conv = ConvTranspose2d::new(2, 3, 3, 2, 1, true);
+        let x = RawTensor::randn(&[2, 2, 3, 5]);
         x.set_requires_grad(true);
+        let out_dims = conv.forward(&x).shape();
+        let [batch, out_ch, oh, ow] = crate::shape::fixed_dims::<4>(out_dims.truncate_rank());
+        let w = RawTensor::randn(&[batch, out_ch, oh, ow]);
 
-        let y = conv.forward(&x);
-        let loss = y.sum();
-        loss.into_loss().expect("scalar loss").backward();
-
-        // Check gradients exist and have correct shapes
-        assert!(x.grad().is_some(), "Input should have gradients");
-        assert_eq!(x.borrow().shape, vec![1, 2, 6, 10]);
+        let (max, mean, ok) =
+            RawTensor::check_gradients(&x, |t| conv.forward(t).elem_mul(&w).sum(), 1e-2, 2e-2);
         assert!(
-            conv.weight.grad().is_some(),
-            "Weights should have gradients"
+            ok,
+            "ConvTranspose2d input gradient: max={max:.3e} mean={mean:.3e}"
         );
+
+        conv.forward(&x)
+            .elem_mul(&w)
+            .sum()
+            .into_loss()
+            .expect("scalar loss")
+            .backward();
+        let w = w.data();
+        let got = conv
+            .bias
+            .as_ref()
+            .and_then(Tensor::grad)
+            .expect("bias grad");
+        assert_eq!(got.len(), out_ch);
+        for (co, g) in got.iter().enumerate() {
+            let e: f64 = (0..batch)
+                .flat_map(|b| (0..oh * ow).map(move |p| ((b * out_ch + co) * oh * ow) + p))
+                .map(|i| f64::from(fetch(&w, i)))
+                .sum();
+            assert!(
+                (f64::from(*g) - e).abs() < 1e-4,
+                "bias[{co}]: got {g}, expected {e}"
+            );
+        }
     }
 
     #[test]
