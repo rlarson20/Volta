@@ -7,11 +7,15 @@ on:
   pull_request:
     types: [labeled]
 
+# Nothing at the top level; the job grants what it needs.
+permissions: {}
+
 jobs:
   claude-review:
     if: github.event.label.name == 'claude-review'
 
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       pull-requests: read
@@ -20,13 +24,13 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
       - name: Run Claude Code Review
         id: claude-review
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@f431adaf77e0fecf918431e75a2b5b45b85af002 # v1.0.283
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'

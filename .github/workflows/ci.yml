@@ -13,12 +13,23 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Each step calls the justfile recipe that `just ci` uses, so local and CI checks cannot drift.
+# Toolchain, tools and cache come from the local action .github/actions/setup-rust (#258).
+#
+# Required checks (.github/rulesets/*.json): cpu-only (1.89), cpu-only (stable), linux-lavapipe
+# and macos-cross, plus macos (stable) into main. ignore-issues, examples-smoke, bench-smoke and
+# wasm32 run on every PR but are not required; making one required is a ruleset edit
+# (`.github/rulesets/`, applied with `just rulesets`).
 
 jobs:
   # Honest "no default features" lane. Everything here is CPU-only; the `gpu`
   # feature is excluded from every step (wgpu is heavy and cannot run on
   # GPU-less Linux runners). GPU wrappers have not-gpu stubs at their definition
   # (ADDENDUM §9), so call sites carry no `cfg` and this lane's clippy is clean.
+  #
+  # The 1.89 (MSRV) entry builds, lints and tests: what can differ by compiler. The checks
+  # that don't depend on the compiler version (fmt, the fallback grep, rustdoc, the feature
+  # powerset) run on stable only (#258). Both entries keep their job names, which the
+  # rulesets require, so skipping steps needs no ruleset change.
   cpu-only:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -28,20 +39,18 @@ jobs:
         rust: [1.89, stable]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+      - uses: ./.github/actions/setup-rust
         with:
           toolchain: ${{ matrix.rust }}
           components: rustfmt, clippy, rust-src
-      - uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2
-        with:
-          tool: cargo-hack,just
-
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+          tools: cargo-hack,just
 
       - name: Check formatting
+        if: matrix.rust == 'stable'
         run: cargo fmt --check
 
       - name: Check silent fallbacks
+        if: matrix.rust == 'stable'
         run: just check-fallbacks
 
       - name: Clippy (no default features)
@@ -51,12 +60,14 @@ jobs:
         run: just test-cpu
 
       - name: Build docs (no default features)
+        if: matrix.rust == 'stable'
         run: just doc-cpu
 
       # Feature-combination rot check. `--feature-powerset` includes the
       # empty-feature-set compile that would have caught B5. `gpu` is
       # deliberately excluded on Linux.
       - name: cargo-hack feature powerset (no gpu)
+        if: matrix.rust == 'stable'
         run: just hack --exclude-features gpu
 
   # Every `#[ignore]` names a defect ID with an open issue (scripts/check-ignores.sh). Its own
@@ -92,13 +103,9 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+      - uses: ./.github/actions/setup-rust
         with:
           toolchain: stable
-      - uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2
-        with:
-          tool: just
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       - name: Examples smoke run
         run: just examples-smoke
@@ -111,13 +118,9 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+      - uses: ./.github/actions/setup-rust
         with:
           toolchain: stable
-      - uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2
-        with:
-          tool: just
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       - name: Bench smoke run
         run: just bench-smoke
@@ -131,15 +134,11 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+      - uses: ./.github/actions/setup-rust
         with:
           toolchain: stable
           targets: wasm32-unknown-unknown
           components: clippy
-      - uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2
-        with:
-          tool: just
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       - name: Clippy for wasm32-unknown-unknown
         run: just wasm-check
@@ -154,14 +153,10 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+      - uses: ./.github/actions/setup-rust
         with:
           toolchain: stable
           components: clippy, rust-src
-      - uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2
-        with:
-          tool: just
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
       - name: Install lavapipe
         run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
@@ -191,15 +186,12 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+      - uses: ./.github/actions/setup-rust
         with:
           toolchain: stable
           targets: aarch64-apple-darwin
           components: clippy, rust-src
-      - uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2
-        with:
-          tool: cargo-hack,just
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+          tools: cargo-hack,just
 
       - name: Clippy (aarch64-apple-darwin)
         run: just lint-macos-cross
