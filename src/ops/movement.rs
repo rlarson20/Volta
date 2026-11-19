@@ -1353,3 +1353,52 @@ impl RawTensor {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{assert_in_dim, gpu_movement_supported, gpu_pad_supported};
+
+    /// The GPU movement kernels take up to four dims (#389: every mutant of this survived).
+    #[test]
+    fn gpu_movement_covers_rank_four_and_below() {
+        assert!(gpu_movement_supported(1));
+        assert!(gpu_movement_supported(4));
+        assert!(!gpu_movement_supported(5));
+    }
+
+    /// Pad widths of dims 2 and 3 are packed as 16-bit halves, so each must fit in a `u16`;
+    /// dims 0 and 1 are not packed.
+    #[test]
+    fn gpu_pad_needs_rank_four_and_16_bit_widths_on_dims_two_and_three() {
+        let max = usize::from(u16::MAX);
+        assert!(gpu_pad_supported(&[(0, 0), (0, 0), (max, max), (max, max)]));
+        assert!(gpu_pad_supported(&[
+            (max + 1, max + 1),
+            (max + 1, 0),
+            (1, 1)
+        ]));
+        assert!(!gpu_pad_supported(&[(0, 0), (0, 0), (max + 1, 0), (0, 0)]));
+        assert!(!gpu_pad_supported(&[(0, 0), (0, 0), (0, max + 1), (0, 0)]));
+        assert!(!gpu_pad_supported(&[(0, 0), (0, 0), (0, 0), (max + 1, 0)]));
+        assert!(!gpu_pad_supported(&[(0, 0), (0, 0), (0, 0), (0, max + 1)]));
+        assert!(!gpu_pad_supported(&[(0, 0); 5]));
+    }
+
+    /// The guard names a mapper bug at its site, before `fetch` would fail further on.
+    #[test]
+    #[should_panic(expected = "movement: axis 1 maps to input index 3 (size 3)")]
+    fn assert_in_dim_rejects_an_input_index_past_the_axis() {
+        assert_in_dim(1, 3, 3, 0, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "and output index 2 (size 2)")]
+    fn assert_in_dim_rejects_an_output_index_past_the_axis() {
+        assert_in_dim(1, 0, 3, 2, 2);
+    }
+
+    #[test]
+    fn assert_in_dim_accepts_the_last_index() {
+        assert_in_dim(0, 2, 3, 1, 2);
+    }
+}

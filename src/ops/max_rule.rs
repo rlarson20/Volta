@@ -94,6 +94,16 @@ mod tests {
         assert_eq!(maximum(2.0_f64, 1.0), 2.0);
     }
 
+    /// On a tie `maximum` returns its first operand, so the sign of a zero tie follows `a`:
+    /// torch 2.15 gives `maximum(-0., 0.) = -0.` and `maximum(0., -0.) = 0.` (checked on
+    /// CPU torch for #389). Returning `b` on a tie flips both.
+    #[test]
+    fn maximum_returns_the_first_operand_on_a_signed_zero_tie() {
+        assert!(maximum(-0.0_f32, 0.0).is_sign_negative());
+        assert!(maximum(0.0_f32, -0.0).is_sign_positive());
+        assert!(maximum(-0.0_f64, 0.0).is_sign_negative());
+    }
+
     #[test]
     fn maximum_backward_splits_a_tie_and_gives_nan_both_sides() {
         assert_eq!(maximum_backward(1.0, 3.0, 3.0), (0.5, 0.5));
