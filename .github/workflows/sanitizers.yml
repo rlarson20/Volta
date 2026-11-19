@@ -7,7 +7,7 @@ name: Sanitizers
 on:
   # The PRs that can change what these jobs find; the schedule covers everything else.
   pull_request:
-    paths: [src/ops/matmul.rs, Cargo.lock, justfile, .github/workflows/sanitizers.yml]
+    paths: [src/ops/matmul.rs, src/io.rs, Cargo.lock, justfile, .github/workflows/sanitizers.yml]
   schedule:
     - cron: "0 4 * * *" # Nightly
   workflow_dispatch:

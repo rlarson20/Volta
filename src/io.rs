@@ -470,8 +470,9 @@ fn write_atomically(path: &Path, write: impl FnOnce(&mut File) -> Result<()>) ->
         }
         return Err(e);
     }
-    // Persist the rename itself. Directories can't be opened as files on Windows.
-    #[cfg(unix)]
+    // Persist the rename itself. Directories can't be opened as files on Windows, and Miri
+    // supports `fsync` only on regular files (#425), so the sanitizer job skips this step.
+    #[cfg(all(unix, not(miri)))]
     File::open(dir)?.sync_all()?;
     Ok(())
 }
