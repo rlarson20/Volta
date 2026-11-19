@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 use volta::amp::autocast;
-use volta::io::{StateDict, TensorData, TypedTensorData, load_safetensors_raw};
+use volta::io::{StateDict, TensorData, load_safetensors};
 use volta::nn::{
     BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, Layer, LayerNorm, Linear, Module, ReLU,
     Sequential,
@@ -44,7 +44,7 @@ const BOUNDS: &[(&str, f64)] = &[
 ];
 
 /// The `autocast` fixture group.
-struct Fixture(BTreeMap<String, TypedTensorData>);
+struct Fixture(BTreeMap<String, TensorData>);
 
 impl Fixture {
     /// Load the fixture, or panic with the regeneration command.
@@ -54,7 +54,7 @@ impl Fixture {
             "/tests/fixtures/torch/autocast.safetensors"
         );
         Self(
-            load_safetensors_raw(path)
+            load_safetensors(path)
                 .unwrap_or_else(|e| panic!("{path}: {e}; regenerate with `just torch-fixtures`")),
         )
     }
@@ -65,7 +65,7 @@ impl Fixture {
             .0
             .get(name)
             .unwrap_or_else(|| panic!("autocast fixture: no tensor {name:?}"));
-        (t.to_storage().expect("valid bytes"), t.shape.clone())
+        (t.to_storage(name).expect("valid bytes"), t.shape.clone())
     }
 
     /// The values under `name` decoded to f64, with the stored dtype.

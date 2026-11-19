@@ -197,8 +197,7 @@ fn checked_numel(shape: &[usize]) -> Option<usize> {
     shape.iter().try_fold(1usize, |n, &d| n.checked_mul(d))
 }
 
-/// The check behind [`TensorData::validate`], on borrowed parts, so a
-/// [`TypedTensorData`] can be checked without copying its bytes.
+/// The check behind [`TensorData::validate`], on borrowed parts.
 fn validate_entry(key: &str, data: &[u8], shape: &[usize], dtype: DType) -> crate::Result<()> {
     let expected = checked_numel(shape)
         .and_then(|n| n.checked_mul(dtype.size_of()))
@@ -393,82 +392,6 @@ pub fn load_safetensors<P: AsRef<Path>>(path: P) -> Result<StateDict> {
     Ok(state_dict)
 }
 
-/// Tensor data with native dtype support for `SafeTensors`
-#[derive(Clone)]
-#[non_exhaustive]
-pub struct TypedTensorData {
-    /// Raw bytes of tensor data
-    pub data: Vec<u8>,
-    /// Shape of the tensor
-    pub shape: Vec<usize>,
-    /// Data type
-    pub dtype: DType,
-}
-
-impl TypedTensorData {
-    /// The same entry as a [`TensorData`], in the same dtype (the bytes are copied, not
-    /// converted).
-    ///
-    /// # Errors
-    /// Whatever [`TensorData::validate`] returns for it.
-    pub fn to_tensor_data(&self) -> crate::Result<TensorData> {
-        let td = TensorData {
-            data: self.data.clone(),
-            shape: self.shape.clone(),
-            dtype: self.dtype,
-        };
-        td.validate("")?;
-        Ok(td)
-    }
-
-    /// Storage holding the data in its own dtype.
-    ///
-    /// # Errors
-    /// `InvalidParameter` if the bytes don't decode as `dtype` (see
-    /// [`Storage::try_from_bytes`]).
-    pub fn to_storage(&self) -> crate::Result<Storage> {
-        Storage::try_from_bytes(&self.data, self.dtype)
-    }
-
-    /// Get number of elements
-    #[must_use]
-    pub fn numel(&self) -> usize {
-        self.shape.iter().product()
-    }
-}
-
-/// Load a `SafeTensors` file with native dtypes preserved
-///
-/// Returns a map of tensor names to `TypedTensorData`, preserving the original
-/// dtype (F16, BF16, etc.) without conversion.
-/// # Errors
-/// The file can't be read or parsed, or an entry has a dtype Volta does not support
-/// (`InvalidData`; I8, U16, U32, U64, the f8 formats, ...).
-pub fn load_safetensors_raw<P: AsRef<Path>>(path: P) -> Result<BTreeMap<String, TypedTensorData>> {
-    let mut file = File::open(path)?;
-    let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer)?;
-
-    let tensors = SafeTensors::deserialize(&buffer)
-        .map_err(|e| Error::other(format!("SafeTensors parse error: {e}")))?;
-
-    let mut result = BTreeMap::new();
-
-    for (name, tensor) in tensors.tensors() {
-        let dtype = entry_dtype(&name, &tensor)?;
-        result.insert(
-            name.clone(),
-            TypedTensorData {
-                data: tensor.data().to_vec(),
-                shape: tensor.shape().to_vec(),
-                dtype,
-            },
-        );
-    }
-
-    Ok(result)
-}
-
 /// Save a `StateDict` to `SafeTensors` format, each entry in its own dtype.
 /// # Errors
 /// The file can't be written, or (`InvalidData`, wrapping the [`crate::VoltaError`] from
@@ -496,47 +419,6 @@ pub fn save_safetensors<P: AsRef<Path>>(state: &StateDict, path: P) -> Result<()
         .collect::<Result<Vec<(String, TensorView<'_>)>>>()?;
 
     let bytes = safetensors::tensor::serialize(tensors, None)
-        .map_err(|e| Error::other(format!("SafeTensors serialize error: {e}")))?;
-
-    let mut file = File::create(path)?;
-    file.write_all(&bytes)?;
-    Ok(())
-}
-
-/// Save typed tensor data to `SafeTensors` format with native dtypes
-///
-/// # Errors
-/// The file can't be created or written, the tensors can't be serialized, or
-/// (`InvalidData`, wrapping the [`crate::VoltaError`] that [`TensorData::validate`] would
-/// return) an entry's byte count does not match its shape and dtype. Entries are checked
-/// before the file is created, so a bad entry leaves nothing on disk.
-pub fn save_safetensors_typed<P: AsRef<Path>>(
-    tensors: &BTreeMap<String, TypedTensorData>,
-    path: P,
-) -> Result<()> {
-    use safetensors::tensor::TensorView;
-
-    let tensor_views = tensors
-        .iter()
-        .map(|(name, td)| {
-            validate_entry(name, &td.data, &td.shape, td.dtype)
-                .map_err(|e| Error::new(std::io::ErrorKind::InvalidData, e))?;
-            TensorView::new(
-                volta_dtype_to_safetensors(td.dtype),
-                td.shape.clone(),
-                &td.data,
-            )
-            .map(|view| (name.clone(), view))
-            .map_err(|e| {
-                Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("SafeTensors entry '{name}': {e}"),
-                )
-            })
-        })
-        .collect::<Result<Vec<(String, TensorView<'_>)>>>()?;
-
-    let bytes = safetensors::tensor::serialize(tensor_views, None)
         .map_err(|e| Error::other(format!("SafeTensors serialize error: {e}")))?;
 
     let mut file = File::create(path)?;
@@ -897,21 +779,16 @@ mod io_tests {
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 
-    /// #110: `save_safetensors_typed` returns `InvalidData` for an entry whose byte count
+    /// #110: `save_safetensors` returns `InvalidData` for an entry whose byte count
     /// does not match its shape (it used to panic in `TensorView::new`), and creates no file.
     #[test]
-    fn save_safetensors_typed_rejects_a_length_mismatch() {
-        let mut tensors = BTreeMap::new();
-        tensors.insert(
-            "w".to_string(),
-            TypedTensorData {
-                data: vec![0u8; 12],
-                shape: vec![2, 2],
-                dtype: DType::F32,
-            },
-        );
-        let tmp = TempFile::new("typed_mismatch.safetensors");
-        let err = save_safetensors_typed(&tensors, tmp.path()).expect_err("12 bytes for [2, 2]");
+    fn save_safetensors_rejects_a_length_mismatch_and_writes_nothing() {
+        let mut entry = TensorData::from_f32(vec![0.0; 4], vec![2, 2]);
+        entry.data.truncate(12);
+        let mut state = StateDict::new();
+        state.insert("w".to_string(), entry);
+        let tmp = TempFile::new("mismatch.safetensors");
+        let err = save_safetensors(&state, tmp.path()).expect_err("12 bytes for [2, 2]");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("'w'"), "{err}");
         assert!(!tmp.path().exists(), "no file is written for a bad entry");
@@ -980,72 +857,40 @@ mod io_tests {
         assert_eq!(got, vec![1.0, 3.0, 2.0, 4.0]);
     }
 
+    /// Each entry keeps its own dtype through a save and load, bit for bit.
     #[test]
-    fn test_safetensors_raw_dtypes() {
-        use crate::DType;
-
-        // Create typed tensor data
-        let mut tensors = BTreeMap::new();
-
-        // F32 tensor
-        let f32_data: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0];
-        tensors.insert(
-            "f32_tensor".to_string(),
-            TypedTensorData {
-                data: bytemuck::cast_slice(&f32_data).to_vec(),
-                shape: vec![2, 2],
-                dtype: DType::F32,
-            },
-        );
-
-        // F16 tensor
-        let f16_data: Vec<half::f16> = [1.0, 2.0, 3.0, 4.0]
+    fn safetensors_round_trip_keeps_f32_and_f16() {
+        let f32_data = vec![1.0f32, 2.0, 3.0, 4.0];
+        let f16_data: Vec<half::f16> = [1.0f32, -2.5, 3.0, 65504.0]
             .iter()
             .map(|&x| half::f16::from_f32(x))
             .collect();
-        tensors.insert(
+        let mut state = StateDict::new();
+        state.insert(
+            "f32_tensor".to_string(),
+            TensorData::from_f32(f32_data.clone(), vec![2, 2]),
+        );
+        state.insert(
             "f16_tensor".to_string(),
-            TypedTensorData {
-                data: bytemuck::cast_slice(&f16_data).to_vec(),
-                shape: vec![2, 2],
-                dtype: DType::F16,
-            },
+            TensorData::from_typed(f16_data.clone(), vec![2, 2]),
         );
 
-        let tmp = TempFile::new("test_typed.safetensors");
-        let path = tmp.path();
+        let tmp = TempFile::new("round_trip_dtypes.safetensors");
+        save_safetensors(&state, tmp.path()).unwrap();
+        let loaded = load_safetensors(tmp.path()).unwrap();
 
-        // Save with native dtypes
-        save_safetensors_typed(&tensors, path).unwrap();
-
-        // Load with native dtypes
-        let loaded = load_safetensors_raw(path).unwrap();
-
-        // Verify dtypes are preserved
-        assert_eq!(loaded.get("f32_tensor").unwrap().dtype, DType::F32);
-        assert_eq!(loaded.get("f16_tensor").unwrap().dtype, DType::F16);
-
-        // Verify shapes
-        assert_eq!(loaded.get("f32_tensor").unwrap().shape, vec![2, 2]);
-        assert_eq!(loaded.get("f16_tensor").unwrap().shape, vec![2, 2]);
-
-        // Verify data conversion
-        let f32_loaded = loaded
-            .get("f32_tensor")
-            .unwrap()
-            .to_storage()
-            .expect("valid f32 bytes")
-            .to_f32_vec();
-        assert_eq!(f32_loaded, f32_data);
-
-        let f16_loaded = loaded
-            .get("f16_tensor")
-            .unwrap()
-            .to_storage()
-            .expect("valid f16 bytes")
-            .to_f32_vec();
-        for (a, b) in f16_loaded.iter().zip([1.0f32, 2.0, 3.0, 4.0].iter()) {
-            assert!((a - b).abs() < 0.01, "F16 conversion mismatch");
-        }
+        assert_eq!(loaded, state);
+        let f32_entry = loaded.get("f32_tensor").unwrap();
+        assert_eq!(
+            (f32_entry.dtype, f32_entry.shape.clone()),
+            (DType::F32, vec![2, 2])
+        );
+        assert_eq!(f32_entry.to_vec_as::<f32>().unwrap(), f32_data);
+        let f16_entry = loaded.get("f16_tensor").unwrap();
+        assert_eq!(
+            (f16_entry.dtype, f16_entry.shape.clone()),
+            (DType::F16, vec![2, 2])
+        );
+        assert_eq!(f16_entry.to_vec_as::<half::f16>().unwrap(), f16_data);
     }
 }

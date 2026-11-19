@@ -6,13 +6,13 @@
 //! values match at 1e-6 relative (f32, one rounding order apart at most).
 
 use std::collections::BTreeMap;
-use volta::io::{TypedTensorData, load_safetensors_raw};
+use volta::io::{TensorData, load_safetensors};
 use volta::nn::{Embedding, Layer, Module};
 use volta::storage::Element;
 use volta::{Axis, DType, PadValue, RawTensor, Tensor};
 
 /// The `intbool` fixture group.
-struct Fixture(BTreeMap<String, TypedTensorData>);
+struct Fixture(BTreeMap<String, TensorData>);
 
 impl Fixture {
     /// Load the fixture, or panic with the regeneration command.
@@ -22,7 +22,7 @@ impl Fixture {
             "/tests/fixtures/torch/intbool.safetensors"
         );
         Self(
-            load_safetensors_raw(path)
+            load_safetensors(path)
                 .unwrap_or_else(|e| panic!("{path}: {e}; regenerate with `just torch-fixtures`")),
         )
     }
@@ -34,7 +34,7 @@ impl Fixture {
             .get(name)
             .unwrap_or_else(|| panic!("intbool fixture: no tensor {name:?}"));
         assert_eq!(t.dtype, T::DTYPE, "{name}: stored dtype");
-        let s = t.to_storage().expect("valid bytes");
+        let s = t.to_storage(name).expect("valid bytes");
         (
             s.as_host::<T>().expect("dtype checked").to_vec(),
             t.shape.clone(),

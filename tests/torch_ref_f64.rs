@@ -6,7 +6,7 @@
 //! that `load_state_dict` takes carry them exactly; every computation after that is f64.
 
 use std::collections::BTreeMap;
-use volta::io::{StateDict, TensorData, TypedTensorData, load_safetensors_raw};
+use volta::io::{StateDict, TensorData, load_safetensors};
 use volta::nn::{
     Adam, BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, Embedding, Layer, LayerNorm, Linear,
     MaxPool2d, Module,
@@ -18,7 +18,7 @@ use volta::{Axis, DType, RawTensor, Tensor};
 const TOL: f64 = 1e-10;
 
 /// The `f64` fixture group.
-struct Fixture(BTreeMap<String, TypedTensorData>);
+struct Fixture(BTreeMap<String, TensorData>);
 
 impl Fixture {
     /// Load the fixture, or panic with the regeneration command.
@@ -28,7 +28,7 @@ impl Fixture {
             "/tests/fixtures/torch/f64.safetensors"
         );
         Self(
-            load_safetensors_raw(path)
+            load_safetensors(path)
                 .unwrap_or_else(|e| panic!("{path}: {e}; regenerate with `just torch-fixtures`")),
         )
     }
@@ -40,7 +40,7 @@ impl Fixture {
             .get(name)
             .unwrap_or_else(|| panic!("f64 fixture: no tensor {name:?}"));
         assert_eq!(t.dtype, DType::F64, "{name} is stored as f64");
-        let s = t.to_storage().expect("valid f64 bytes");
+        let s = t.to_storage(name).expect("valid f64 bytes");
         (s.as_host::<f64>().expect("f64").to_vec(), t.shape.clone())
     }
 
