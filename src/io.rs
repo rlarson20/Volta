@@ -454,10 +454,12 @@ fn write_atomically(path: &Path, write: impl FnOnce(&mut File) -> Result<()>) ->
     ));
     let tmp = dir.join(tmp_name);
 
-    // `create_new` refuses to reuse a path some other writer already holds.
-    let mut file = File::options().write(true).create_new(true).open(&tmp)?;
-    let written = write(&mut file).and_then(|()| file.sync_all());
-    drop(file);
+    // `create_new` refuses to reuse a path some other writer already holds. The file is
+    // closed at the end of the block, before the rename.
+    let written = {
+        let mut file = File::options().write(true).create_new(true).open(&tmp)?;
+        write(&mut file).and_then(|()| file.sync_all())
+    };
     let result = written.and_then(|()| std::fs::rename(&tmp, path));
     if let Err(e) = result {
         if let Err(cleanup) = std::fs::remove_file(&tmp) {
