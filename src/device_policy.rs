@@ -38,6 +38,7 @@ pub enum DevicePolicy {
 
 /// Which pass a fallback happened in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Pass {
     /// An op's forward computation.
     Forward,
@@ -47,11 +48,25 @@ pub enum Pass {
 
 /// One op that ran on the CPU for GPU inputs under [`DevicePolicy::PreferGpu`].
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct FallbackEvent {
     /// The op, as `GradFn` names it (`"Binary(Add)"`, `"MatMul"`, ...).
     pub op: String,
     /// The pass the fallback happened in.
     pub pass: Pass,
+}
+
+impl FallbackEvent {
+    /// An event for `op` in `pass`, for comparing against [`take_fallback_events`]'s
+    /// output (the struct is `#[non_exhaustive]`, so it has no literal form outside the
+    /// crate).
+    #[must_use]
+    pub fn new(op: impl Into<String>, pass: Pass) -> Self {
+        Self {
+            op: op.into(),
+            pass,
+        }
+    }
 }
 
 /// How many [`FallbackEvent`]s a thread keeps between two [`take_fallback_events`] calls.

@@ -9,6 +9,7 @@ use crate::{RawTensor, Tensor};
 
 /// Ternary operations: three inputs, one output
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub enum TernaryOp {
     /// `x * y + z`, fused.
     MulAcc,

@@ -71,6 +71,7 @@ macro_rules! define_ops {
     ) => {
         $(#[$emeta])*
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        #[non_exhaustive]
         pub enum $name {
             $(
                 $(#[$meta])*
@@ -178,6 +179,7 @@ macro_rules! define_ops {
     ) => {
         $(#[$emeta])*
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        #[non_exhaustive]
         pub enum $name {
             $(
                 $(#[$dmeta])*

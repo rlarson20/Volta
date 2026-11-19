@@ -14,6 +14,7 @@ use crate::{RawTensor, Tensor};
 /// These operations collapse all dimensions and require special gradient handling
 /// since the output shape differs from the input.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub enum ReduceOp {
     /// Sum of all elements; the gradient broadcasts ones.
     Sum,

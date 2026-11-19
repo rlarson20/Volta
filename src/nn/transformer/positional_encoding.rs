@@ -6,6 +6,7 @@ use crate::tensor::{RawTensor, Tensor};
 
 /// Positional encoding type
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PositionalEncodingType {
     /// Sinusoidal (fixed, non-learnable) positional encoding
     Sinusoidal,
