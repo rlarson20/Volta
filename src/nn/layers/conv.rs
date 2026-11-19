@@ -7,6 +7,7 @@ use crate::error::OrPanic;
 use crate::index::{fetch, signed, slot, unsigned};
 use crate::io::{StateDict, TensorData};
 use crate::nn::{Layer, Module};
+use crate::ops::reduce::pairwise_sum_by;
 use crate::real::{Real, compute_dtype, dispatch_real};
 use crate::shape::Axis;
 use crate::shape::Shape;
@@ -101,7 +102,8 @@ impl ConvAlgo {
 ///
 /// Only `Tiled` exists. It computes the convolution as a GEMM over cache-sized tiles
 /// without materializing the im2col matrix (`Conv2d::igemm_forward`, and
-/// `igemm_backward_input` / `igemm_backward_weight` on the grad fn). The grad fn stores
+/// `igemm_backward_input` on the grad fn; the CPU weight gradient is
+/// `weight_gradient_pairwise`, shared with Direct, #318). The grad fn stores
 /// the variant in an unused field (`_variant`, #118), so nothing dispatches on it yet.
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
 enum IGEMMVariant {
@@ -378,86 +380,14 @@ impl DirectConvGradFn {
         RawTensor::from_shape_compute(dtype, grad_x_data, Shape::derived(self.spec.input_dims()))
     }
 
-    /// CPU implementation of weight gradient computation
+    /// CPU implementation of weight gradient computation: [`weight_gradient_pairwise`].
     fn compute_weight_gradient_cpu<T: Real>(
         &self,
         dtype: DType,
         out_grad_data: &[T],
         x_data: &[T],
     ) -> Tensor {
-        let Conv2dSpec {
-            batch,
-            in_ch,
-            out_ch,
-            in_h: height,
-            in_w: width,
-            kernel_h,
-            kernel_w,
-            stride_h,
-            stride_w,
-            pad_h,
-            pad_w,
-            out_h: h_out,
-            out_w: w_out,
-        } = self.spec;
-        let mut grad_w_data = vec![T::ZERO; out_ch * in_ch * kernel_h * kernel_w];
-
-        // Weight gradient: sum of outer products of input patches and output gradients
-        // ∂L/∂W[o,ic,kh,kw] = sum_{b,oh,ow} X[b,ic,oh*sh+kh-ph,ow*sw+kw-pw] * ∂L/∂Y[b,o,oh,ow]
-        for b in 0..batch {
-            for oc in 0..out_ch {
-                for oh in 0..h_out {
-                    for ow in 0..w_out {
-                        // Get output gradient
-                        let out_idx =
-                            b * (out_ch * h_out * w_out) + oc * (h_out * w_out) + oh * w_out + ow;
-                        let dout = fetch(out_grad_data, out_idx);
-
-                        // Starting position in input (accounting for padding)
-                        let h_start = oh * stride_h;
-                        let w_start = ow * stride_w;
-
-                        // Accumulate gradient for each weight element
-                        for ic in 0..in_ch {
-                            for kh in 0..kernel_h {
-                                for kw in 0..kernel_w {
-                                    let h_pos = h_start + kh;
-                                    let w_pos = w_start + kw;
-
-                                    // Check if within padded bounds
-                                    let in_h = signed(h_pos) - signed(pad_h);
-                                    let in_w = signed(w_pos) - signed(pad_w);
-
-                                    if in_h >= 0
-                                        && in_h < signed(height)
-                                        && in_w >= 0
-                                        && in_w < signed(width)
-                                    {
-                                        let in_h = unsigned(in_h);
-                                        let in_w = unsigned(in_w);
-
-                                        // Get input value
-                                        let in_idx = b * (in_ch * height * width)
-                                            + ic * (height * width)
-                                            + in_h * width
-                                            + in_w;
-                                        let in_val = fetch(x_data, in_idx);
-
-                                        // Accumulate weight gradient
-                                        let w_idx = oc * (in_ch * kernel_h * kernel_w)
-                                            + ic * (kernel_h * kernel_w)
-                                            + kh * kernel_w
-                                            + kw;
-                                        *slot(&mut grad_w_data, w_idx) += in_val * dout;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
+        let grad_w_data = weight_gradient_pairwise(x_data, out_grad_data, &self.spec);
         RawTensor::from_shape_compute(dtype, grad_w_data, Shape::derived(self.spec.weight_dims()))
     }
 }
@@ -485,11 +415,8 @@ impl IGEMMGradFn {
         let Conv2dSpec {
             batch,
             in_ch,
-            out_ch,
             in_h: height,
             in_w: width,
-            kernel_h,
-            kernel_w,
             ..
         } = self.spec;
 
@@ -573,7 +500,6 @@ impl IGEMMGradFn {
             } else {
                 // CPU path
                 dispatch_real!(out_grad.data.dtype(), T => {
-                let mut grad_w_data = vec![T::ZERO; out_ch * in_ch * kernel_h * kernel_w];
                 let out_grad_data = out_grad.data.host::<T>().to_vec();
                 let x_data = x
                     .as_ref()
@@ -583,15 +509,8 @@ impl IGEMMGradFn {
                     .host::<T>()
                     .to_vec();
 
-                // Weight gradient: sum over outer products
-                let config = TileConfig::default();
-                Self::igemm_backward_weight(
-                    &x_data,
-                    &out_grad_data,
-                    &mut grad_w_data,
-                    &self.spec,
-                    &config,
-                );
+                // Weight gradient: the same blocked pairwise sum as Direct (#318).
+                let grad_w_data = weight_gradient_pairwise(&x_data, &out_grad_data, &self.spec);
 
                 Some(RawTensor::from_shape_compute(out_grad.data.dtype(), grad_w_data, Shape::derived(self.spec.weight_dims())))
                 })
@@ -683,104 +602,64 @@ impl IGEMMGradFn {
             }
         }
     }
+}
 
-    /// Compute weight gradient for iGEMM using tiled approach
-    fn igemm_backward_weight<T: Real>(
-        x: &[T],
-        out_grad: &[T],
-        grad_w: &mut [T],
-        spec: &Conv2dSpec,
-        config: &TileConfig,
-    ) {
-        let Conv2dSpec {
-            batch,
-            in_ch,
-            out_ch,
-            in_h: height,
-            in_w: width,
-            kernel_h,
-            kernel_w,
-            stride_h,
-            stride_w,
-            pad_h,
-            pad_w,
-            out_h: h_out,
-            out_w: w_out,
-        } = *spec;
-        let kernel_size = kernel_h * kernel_w;
-        let spatial_out = h_out * w_out;
-
-        // Tile over output channels and spatial positions
-        for oc_start in (0..out_ch).step_by(config.output_channels) {
-            let oc_end = (oc_start + config.output_channels).min(out_ch);
-
-            for s_start in (0..batch * spatial_out).step_by(config.output_spacial_dims) {
-                let s_end = (s_start + config.output_spacial_dims).min(batch * spatial_out);
-
-                // Tile over input channels
-                for ic_start in (0..in_ch).step_by(config.input_channels) {
-                    let ic_end = (ic_start + config.input_channels).min(in_ch);
-
-                    // For each output position in tile:
-                    for s_idx in s_start..s_end {
-                        let b = s_idx / spatial_out;
-                        let remaining = s_idx % spatial_out;
-                        let oh = remaining / w_out;
-                        let ow = remaining % w_out;
-
-                        // Starting position in input
-                        let h_start = oh * stride_h;
-                        let w_start = ow * stride_w;
-
-                        // Output grad index: (b, oc, oh, ow)
-                        let out_idx_base = b * (out_ch * spatial_out) + remaining;
-
-                        // For each output channel and kernel position:
-                        for oc in oc_start..oc_end {
-                            let out_idx = out_idx_base + oc * spatial_out;
-                            let dout = fetch(out_grad, out_idx);
-
-                            for ic in ic_start..ic_end {
-                                for kh in 0..kernel_h {
-                                    for kw in 0..kernel_w {
-                                        let h_pos = h_start + kh;
-                                        let w_pos = w_start + kw;
-
-                                        // Check padding
-                                        let in_h = signed(h_pos) - signed(pad_h);
-                                        let in_w = signed(w_pos) - signed(pad_w);
-
-                                        if in_h >= 0
-                                            && in_h < signed(height)
-                                            && in_w >= 0
-                                            && in_w < signed(width)
-                                        {
-                                            let in_h = unsigned(in_h);
-                                            let in_w = unsigned(in_w);
-
-                                            // Input index: (b, ic, in_h, in_w)
-                                            let in_idx = b * (in_ch * height * width)
-                                                + ic * (height * width)
-                                                + in_h * width
-                                                + in_w;
-
-                                            // Weight grad index: (oc, ic, kh, kw)
-                                            let w_idx = oc * (in_ch * kernel_size)
-                                                + ic * kernel_size
-                                                + kh * kernel_w
-                                                + kw;
-
-                                            *slot(grad_w, w_idx) += fetch(x, in_idx) * dout;
-                                        }
-                                    }
-                                }
-                            }
+/// The weight gradient `∂L/∂W[oc,ic,kh,kw] = Σ_{b,oh,ow} X[b,ic,oh·sh+kh-ph,ow·sw+kw-pw] ·
+/// ∂L/∂Y[b,oc,oh,ow]` for the Direct and IGEMM algorithms (#318).
+///
+/// Each weight sums one product per output position, `batch * out_h * out_w` of them, so a
+/// sequential f32 chain loses about `n * 2^-24` relative: 4% at 2^22 positions, and stuck at
+/// 2^24 for a sum of ones past that. Im2col goes through gemm, which blocks its sum, so the
+/// algorithm `ConvAlgo::Auto` picked used to change the gradient. Here each weight is a
+/// [`pairwise_sum_by`] over the positions in `(b, oh, ow)` order, the error of a blocked
+/// pairwise sum. A position whose tap falls in the padding contributes an explicit zero.
+fn weight_gradient_pairwise<T: Real>(x: &[T], out_grad: &[T], spec: &Conv2dSpec) -> Vec<T> {
+    let Conv2dSpec {
+        batch,
+        in_ch,
+        out_ch,
+        in_h: height,
+        in_w: width,
+        kernel_h,
+        kernel_w,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        out_h: h_out,
+        out_w: w_out,
+    } = *spec;
+    let spatial_out = h_out * w_out;
+    let positions = batch * spatial_out;
+    let mut grad_w = vec![T::ZERO; out_ch * in_ch * kernel_h * kernel_w];
+    for oc in 0..out_ch {
+        for ic in 0..in_ch {
+            for kh in 0..kernel_h {
+                for kw in 0..kernel_w {
+                    let g = pairwise_sum_by(positions, |s| {
+                        let b = s / spatial_out;
+                        let oh = (s % spatial_out) / w_out;
+                        let ow = s % w_out;
+                        let in_h = signed(oh * stride_h + kh) - signed(pad_h);
+                        let in_w = signed(ow * stride_w + kw) - signed(pad_w);
+                        // A tap in the padding: the padded input is zero there.
+                        if in_h < 0 || in_h >= signed(height) || in_w < 0 || in_w >= signed(width) {
+                            return T::ZERO;
                         }
-                    }
+                        let in_idx =
+                            ((b * in_ch + ic) * height + unsigned(in_h)) * width + unsigned(in_w);
+                        let out_idx = (b * out_ch + oc) * spatial_out + oh * w_out + ow;
+                        fetch(x, in_idx) * fetch(out_grad, out_idx)
+                    });
+                    *slot(
+                        &mut grad_w,
+                        ((oc * in_ch + ic) * kernel_h + kh) * kernel_w + kw,
+                    ) = g;
                 }
             }
         }
     }
+    grad_w
 }
 
 impl Conv2d {
@@ -2521,7 +2400,8 @@ mod conv2d_tests {
         }
     }
 
-    /// Regression: `igemm_tiled`, `igemm_backward_weight`, and `igemm_backward_input` added the
+    /// Regression: `igemm_tiled`, `igemm_backward_weight` (since replaced by
+    /// `weight_gradient_pairwise`, #318), and `igemm_backward_input` added the
     /// batch offset twice (`s_idx` already contains `b * spatial`). Every iGEMM correctness test
     /// used batch 1 and the batch > 1 tests checked only shapes, so the wrong indices were
     /// hidden by `if let Some` / `unwrap_or(&0.0)`, which dropped the out-of-range accesses.
