@@ -766,6 +766,14 @@ Seeds spread about 0.25 points, so a 5-seed mean has a standard error near 0.05;
 - *Keep the residual in attention and drop it from the block.* It works, but attention would not match any torch module, and a model ported from PyTorch adds the residual around attention itself, so it would add it twice.
 - *Keep `new_with_norm` as `Attn(LN(x))`.* Nothing called it, and a norm without the residual is half a sublayer with no torch counterpart. A Pre-LN sublayer is `TransformerBlock`'s job.
 
+### GELU keeps PyTorch's `erf` formula; the GPU `erf` matches the CPU's (#323)
+
+**Decision:** GELU stays `x/2 * (1 + erf(x / sqrt 2))`, PyTorch's formula, on both backends, though it cancels in `1 + erf` for negative `x` (relative error 4% at -5, 100% at -6, absolute under 6e-8; audit N11). The GPU `erf` was made as accurate as the CPU's instead: for `|x| >= 1` it is `1 - erfc`, with `erfc` from a fit whose error is relative to `erfc` ([Numerical Recipes](https://numerical.recipes/book.html) `erfcc`, 2nd ed. 6.2), so it is within an ulp of `libm::erff` and GELU(-3) on the GPU equals the CPU's on lavapipe (it was 4.4e-5 off).
+
+**Why:** matching PyTorch is the target, and the CPU is bit-identical to PyTorch 2.15 f32 at every probe point. An `erfc`-based GELU would beat PyTorch but depart from it, and RJ chose to keep it (2026-11-19). Whether PyTorch would take an `erfc` form is worth checking upstream before Volta departs.
+
+**Rejected:** moving both backends to `x/2 * erfc(-x / sqrt 2)` (more accurate, documented departure from PyTorch).
+
 ## Optimizers
 
 ### Tied weights: containers deduplicate, optimizers reject duplicates (#101)
