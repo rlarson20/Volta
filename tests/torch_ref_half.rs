@@ -12,7 +12,7 @@
 
 use half::{bf16, f16};
 use std::collections::BTreeMap;
-use volta::io::{StateDict, TensorData, TypedTensorData, load_safetensors_raw};
+use volta::io::{StateDict, TensorData, load_safetensors};
 use volta::nn::{
     BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, Embedding, Layer, LayerNorm, Linear, MaxPool2d,
     Module, SGD,
@@ -85,7 +85,7 @@ fn bound(label: &str) -> f64 {
 /// The `half` fixture group, read for one dtype.
 struct Fixture<H> {
     /// Every tensor in the file.
-    all: BTreeMap<String, TypedTensorData>,
+    all: BTreeMap<String, TensorData>,
     /// The dtype under test.
     _h: std::marker::PhantomData<H>,
 }
@@ -98,7 +98,7 @@ impl<H: Half> Fixture<H> {
             "/tests/fixtures/torch/half.safetensors"
         );
         Self {
-            all: load_safetensors_raw(path)
+            all: load_safetensors(path)
                 .unwrap_or_else(|e| panic!("{path}: {e}; regenerate with `just torch-fixtures`")),
             _h: std::marker::PhantomData,
         }
@@ -112,7 +112,7 @@ impl<H: Half> Fixture<H> {
             .get(&key)
             .unwrap_or_else(|| panic!("half fixture: no tensor {key:?}"));
         assert_eq!(t.dtype, H::DTYPE, "{key}: stored dtype");
-        let s = t.to_storage().expect("valid half bytes");
+        let s = t.to_storage(&key).expect("valid half bytes");
         (s.as_host::<H>().expect("half").to_vec(), t.shape.clone())
     }
 

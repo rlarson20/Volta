@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 use volta::io::mapping::StateDictMapper;
-use volta::io::{TensorData, load_safetensors, load_safetensors_raw};
+use volta::io::{TensorData, load_safetensors};
 use volta::nn::{BatchNorm1d, Layer, Module, SGD};
 use volta::nn::{FeedForward, MultiHeadAttention, ScaledDotProductAttention, TransformerBlock};
 use volta::storage::Storage;
@@ -130,28 +130,18 @@ fn write_raw(
     path
 }
 
-/// S18: an unsupported dtype is rejected by name, by both loaders, rather than read as
-/// f32 bit patterns. Converting by value was the alternative; it is lossy for U32/U64.
+/// S18: an unsupported dtype is rejected by name rather than read as f32 bit patterns.
+/// Converting by value was the alternative; it is lossy for U32/U64.
 fn assert_rejected(name: &str, dtype: safetensors::Dtype, shape: Vec<usize>, bytes: &[u8]) {
     let path = write_raw(name, dtype, shape, bytes);
-    let f32_load = load_safetensors(&path).map(|_| ());
-    let raw_load = load_safetensors_raw(&path).map(|_| ());
+    let result = load_safetensors(&path).map(|_| ());
     let _ = std::fs::remove_file(&path);
-    for (loader, result) in [
-        ("load_safetensors", f32_load),
-        ("load_safetensors_raw", raw_load),
-    ] {
-        let err = result.expect_err(&format!("{loader} accepted a {dtype:?} tensor"));
-        assert_eq!(
-            err.kind(),
-            std::io::ErrorKind::InvalidData,
-            "{loader}: {err}"
-        );
-        assert!(
-            err.to_string().contains(&format!("{dtype:?}")),
-            "{loader}'s error should name the dtype: {err}"
-        );
-    }
+    let err = result.expect_err(&format!("load_safetensors accepted a {dtype:?} tensor"));
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData, "{err}");
+    assert!(
+        err.to_string().contains(&format!("{dtype:?}")),
+        "the error should name the dtype: {err}"
+    );
 }
 
 /// U32 has no Volta dtype; it used to load as bit patterns (1 became 1.4e-45).

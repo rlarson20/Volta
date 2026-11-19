@@ -6,7 +6,7 @@
 
 use half::{bf16, f16};
 use volta::DType;
-use volta::io::load_safetensors_raw;
+use volta::io::load_safetensors;
 use volta::storage::Storage;
 
 /// Path of the cast fixture.
@@ -96,7 +96,7 @@ fn canon(s: &Storage) -> Vec<String> {
 /// Every cast in the fixture, collected, so one run lists all disagreements.
 #[test]
 fn cast_matches_torch_for_every_pair() {
-    let entries = load_safetensors_raw(FIXTURE).expect("cast fixture loads");
+    let entries = load_safetensors(FIXTURE).expect("cast fixture loads");
     let mut checked = 0;
     let mut wrong = Vec::new();
     for (name, expected) in &entries {
@@ -105,13 +105,14 @@ fn cast_matches_torch_for_every_pair() {
         let [_, src, set, dst] = parts.as_slice() else {
             continue;
         };
+        let input_key = format!("cast.{src}.{set}");
         let input = entries
-            .get(&format!("cast.{src}.{set}"))
+            .get(&input_key)
             .unwrap_or_else(|| panic!("no input for {name}"))
-            .to_storage()
+            .to_storage(&input_key)
             .expect("input decodes");
         assert_eq!(input.dtype(), dtype_of(src), "{name}: input dtype");
-        let expected = expected.to_storage().expect("output decodes");
+        let expected = expected.to_storage(name).expect("output decodes");
         assert_eq!(expected.dtype(), dtype_of(dst), "{name}: fixture dtype");
 
         let actual = input.cast(dtype_of(dst));

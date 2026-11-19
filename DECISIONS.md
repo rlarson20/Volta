@@ -706,7 +706,7 @@ Seeds spread about 0.25 points, so a 5-seed mean has a standard error near 0.05;
 
 **The bincode format changed on purpose:** an old `.bin` file (f32 values, no dtype) does not decode. There is no version tag, migration or shim; bincode is slated to be dropped (separate issue), so a compatibility layer would be dead weight. `load_safetensors` now returns entries in their stored dtype instead of decoding them to f32. *(bincode was then removed by #222; see "SafeTensors is the only state-dict format".)*
 
-**Not done here:** `TypedTensorData` is now the same data without `Encode`; merging the two is a follow-up issue.
+**Not done here:** `TypedTensorData` was then the same data without `Encode`. #223 removed it with `load_safetensors_raw` and `save_safetensors_typed`: `TensorData`, `load_safetensors` and `save_safetensors` do the same thing, and `load_safetensors` also validates every entry.
 
 ### SafeTensors is the only state-dict format (#222)
 

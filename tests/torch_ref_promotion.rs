@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use volta::io::{TypedTensorData, load_safetensors_raw};
+use volta::io::{TensorData, load_safetensors};
 use volta::storage::Storage;
 use volta::{DType, RawTensor, Tensor};
 
@@ -28,7 +28,7 @@ const DTYPES: [(&str, DType); 8] = [
 ];
 
 /// The `promotion` fixture group.
-struct Fixture(BTreeMap<String, TypedTensorData>);
+struct Fixture(BTreeMap<String, TensorData>);
 
 impl Fixture {
     /// Load the fixture, or panic with the regeneration command.
@@ -38,7 +38,7 @@ impl Fixture {
             "/tests/fixtures/torch/promotion.safetensors"
         );
         Self(
-            load_safetensors_raw(path)
+            load_safetensors(path)
                 .unwrap_or_else(|e| panic!("{path}: {e}; regenerate with `just torch-fixtures`")),
         )
     }
@@ -48,7 +48,7 @@ impl Fixture {
         self.0
             .get(name)
             .unwrap_or_else(|| panic!("promotion fixture: no tensor {name:?}"))
-            .to_storage()
+            .to_storage(name)
             .expect("valid bytes")
     }
 
