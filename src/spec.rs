@@ -34,9 +34,27 @@ fn check_stride(stride: (usize, usize)) -> Result<()> {
     Ok(())
 }
 
+/// The error for a geometry whose intermediate extent overflows `usize`.
+fn overflow(what: &str, axis: &str, detail: &str) -> VoltaError {
+    VoltaError::InvalidParameter(format!("{what} {axis} overflows usize ({detail})"))
+}
+
 /// Output extent of a sliding window: `(padded - kernel) / stride + 1`.
+///
+/// `padded = input + 2 * pad` is checked, so a huge padding is an
+/// `InvalidParameter` in every profile rather than a debug panic or a release
+/// wrap to a small, plausible extent.
 fn window_out(axis: &str, input: usize, kernel: usize, stride: usize, pad: usize) -> Result<usize> {
-    let padded = input + 2 * pad;
+    let padded = pad
+        .checked_mul(2)
+        .and_then(|p| input.checked_add(p))
+        .ok_or_else(|| {
+            overflow(
+                "padded input",
+                axis,
+                &format!("input {input}, padding {pad}"),
+            )
+        })?;
     if kernel > padded {
         return Err(VoltaError::InvalidParameter(format!(
             "kernel {axis} {kernel} is larger than padded input {axis} {padded} \
@@ -236,6 +254,9 @@ impl ConvTranspose2dSpec {
 }
 
 /// Output extent of a transposed convolution: `(input - 1) * stride + kernel - 2 * pad`.
+///
+/// Every step is checked: a huge stride, kernel or padding is an
+/// `InvalidParameter`, never a debug panic or a release wrap.
 fn transpose_out(
     axis: &str,
     input: usize,
@@ -243,8 +264,16 @@ fn transpose_out(
     stride: usize,
     pad: usize,
 ) -> Result<usize> {
-    let full = (input - 1) * stride + kernel;
-    if full <= 2 * pad {
+    let detail = || format!("input {input}, kernel {kernel}, stride {stride}, padding {pad}");
+    let full = input
+        .checked_sub(1)
+        .and_then(|n| n.checked_mul(stride))
+        .and_then(|n| n.checked_add(kernel))
+        .ok_or_else(|| overflow("transposed conv output", axis, &detail()))?;
+    // A padding whose double overflows is larger than any `full`, so the
+    // output would be non-positive: report it as that, not as an overflow.
+    let trim = pad.saturating_mul(2);
+    if full <= trim {
         return Err(VoltaError::InvalidParameter(format!(
             "transposed conv output {axis} would be non-positive \
              (input {input}, kernel {kernel}, stride {stride}, padding {pad})"
@@ -694,6 +723,76 @@ mod tests {
             (1, 1),
         ));
         assert!(msg.contains("output"), "{msg}");
+    }
+
+    #[test]
+    fn conv_rejects_padding_that_overflows_the_padded_extent() {
+        // 4 + 2 * (usize::MAX / 2) = usize::MAX + 3: wraps to 2 in release.
+        let msg = err_text(Conv2dSpec::new(
+            &shape(&[1, 3, 4, 4]),
+            &shape(&[5, 3, 1, 1]),
+            (1, 1),
+            (0, usize::MAX / 2),
+        ));
+        assert!(msg.contains("padded input width overflows usize"), "{msg}");
+    }
+
+    #[test]
+    fn pool_rejects_padding_that_overflows_the_padded_extent() {
+        let msg = err_text(Window2dSpec::new(
+            &shape(&[1, 1, 4, 4]),
+            (1, 1),
+            (1, 1),
+            (usize::MAX / 2, 0),
+        ));
+        assert!(msg.contains("padded input height overflows usize"), "{msg}");
+    }
+
+    #[test]
+    fn window_accepts_the_largest_padding_that_fits() {
+        // 1 + 2 * ((usize::MAX - 1) / 2) = usize::MAX exactly: no overflow.
+        let pad = (usize::MAX - 1) / 2;
+        let spec =
+            Window2dSpec::new(&shape(&[1, 1, 1, 1]), (1, 1), (usize::MAX, 1), (pad, 0)).unwrap();
+        assert_eq!(spec.padded_h(), usize::MAX);
+        // (usize::MAX - 1) / usize::MAX + 1 = 1
+        assert_eq!(spec.output_dims(), [1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn transpose_rejects_stride_that_overflows_the_output() {
+        // (4 - 1) * (usize::MAX / 2) overflows.
+        let msg = err_text(ConvTranspose2dSpec::new(
+            &shape(&[1, 3, 4, 4]),
+            &shape(&[3, 5, 3, 3]),
+            (usize::MAX / 2, 1),
+            (0, 0),
+        ));
+        assert!(
+            msg.contains("transposed conv output height overflows usize"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn transpose_rejects_kernel_that_overflows_the_output() {
+        // (2 - 1) * usize::MAX + 1 overflows in the add, not the multiply.
+        let msg = err_text(transpose_out("width", 2, 1, usize::MAX, 0));
+        assert!(
+            msg.contains("transposed conv output width overflows usize"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn transpose_treats_padding_that_overflows_when_doubled_as_non_positive() {
+        let msg = err_text(ConvTranspose2dSpec::new(
+            &shape(&[1, 3, 4, 4]),
+            &shape(&[3, 5, 3, 3]),
+            (1, 1),
+            (usize::MAX, 0),
+        ));
+        assert!(msg.contains("would be non-positive"), "{msg}");
     }
 
     #[test]
