@@ -243,13 +243,11 @@ impl Adam {
             // Apply weight decay to gradient
             let mut active_grad = grad;
             if self.weight_decay != 0.0 {
-                for (g, theta) in active_grad
-                    .host_mut::<T>()
-                    .iter_mut()
-                    .zip(data.host::<T>().iter())
-                {
-                    *g += weight_decay * *theta;
-                }
+                active_grad.with_host_mut::<T, _>(|g_host| {
+                    for (g, theta) in g_host.iter_mut().zip(data.host::<T>().iter()) {
+                        *g += weight_decay * *theta;
+                    }
+                });
             }
 
             state.step += 1;
@@ -261,9 +259,12 @@ impl Adam {
                     "Adam state dtype; convert the model before the optimizer's first step"
                 );
             }
-            let (mut m_guard, mut v_guard) = (state.m.host_mut::<T>(), state.v.host_mut::<T>());
-            let (m_slice, v_slice) = (&mut *m_guard, &mut *v_guard);
+            // Bias correction, the same f64 scales the GPU kernel gets (#304)
+            let (m_hat_scale, v_hat_scale) = bias_correction_scales(self.betas, step);
+            let (m_hat_scale, v_hat_scale) = (T::from_f64(m_hat_scale), T::from_f64(v_hat_scale));
 
+            state.m.with_host_mut::<T, _>(|m_slice| {
+            state.v.with_host_mut::<T, _>(|v_slice| {
             // Update biased moments
             let g_host = active_grad.host::<T>();
             for j in 0..g_host.len() {
@@ -275,13 +276,8 @@ impl Adam {
                     .mul_add(v_val, (1.0 - beta2) * g_val.powi(2));
             }
 
-            // Bias correction, the same f64 scales the GPU kernel gets (#304)
-            let (m_hat_scale, v_hat_scale) = bias_correction_scales(self.betas, step);
-            let (m_hat_scale, v_hat_scale) = (T::from_f64(m_hat_scale), T::from_f64(v_hat_scale));
-
             // Update parameters
-            let mut p_guard = data.host_mut::<T>();
-            let p_data = &mut *p_guard;
+            data.with_host_mut::<T, _>(|p_data| {
             for j in 0..p_data.len() {
                 let m_val = fetch(m_slice, j);
                 let v_val = fetch(v_slice, j);
@@ -289,6 +285,9 @@ impl Adam {
                 let v_hat = v_val * v_hat_scale;
                 *slot(p_data, j) -= lr * m_hat / (v_hat.sqrt() + eps);
             }
+            });
+            });
+            });
             });
         });
     }

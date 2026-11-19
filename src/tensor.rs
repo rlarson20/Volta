@@ -1860,15 +1860,14 @@ impl RawTensor {
                 let step = T::from_f64(f64::from(epsilon));
                 let perturbed = |i: usize, up: bool| {
                     let mut data = original_data.clone();
-                    {
-                        let mut host = data.host_mut::<T>();
-                        let x = slot(&mut host, i);
+                    data.with_host_mut::<T, _>(|host| {
+                        let x = slot(host, i);
                         if up {
                             *x += step;
                         } else {
                             *x -= step;
                         }
-                    }
+                    });
                     Self::new_with_storage(
                         data.to_device(&device),
                         original_shape.clone(),

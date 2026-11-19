@@ -280,23 +280,23 @@ impl Muon {
                     data.dtype(),
                     "Muon velocity dtype; convert the model before the optimizer's first step"
                 );
-                let mut velocity = velocity.host_mut::<T>();
+                let mut update: Vec<T> = velocity.with_host_mut::<T, _>(|velocity| {
+                    // v ← momentum·v + g
+                    for (v, &g) in velocity.iter_mut().zip(grad.iter()) {
+                        *v = momentum.mul_add(*v, g);
+                    }
 
-                // v ← momentum·v + g
-                for (v, &g) in velocity.iter_mut().zip(grad.iter()) {
-                    *v = momentum.mul_add(*v, g);
-                }
-
-                // Nesterov looks one momentum step ahead: update = momentum·v + g
-                let mut update: Vec<T> = if step.nesterov {
-                    velocity
-                        .iter()
-                        .zip(grad.iter())
-                        .map(|(&v, &g)| momentum * v + g)
-                        .collect()
-                } else {
-                    velocity.to_vec()
-                };
+                    // Nesterov looks one momentum step ahead: update = momentum·v + g
+                    if step.nesterov {
+                        velocity
+                            .iter()
+                            .zip(grad.iter())
+                            .map(|(&v, &g)| momentum * v + g)
+                            .collect()
+                    } else {
+                        velocity.to_vec()
+                    }
+                });
 
                 if step.orthogonalize {
                     Self::newton_schulz_with(
@@ -310,13 +310,11 @@ impl Muon {
                 }
 
                 // w -= lr · scale · update
-                for (w, u) in data
-                    .host_mut::<T>()
-                    .iter_mut()
-                    .zip(&update)
-                {
-                    *w -= lr * scale * *u;
-                }
+                data.with_host_mut::<T, _>(|w_host| {
+                    for (w, u) in w_host.iter_mut().zip(&update) {
+                        *w -= lr * scale * *u;
+                    }
+                });
                 });
             });
         }

@@ -206,13 +206,11 @@ impl SGD {
             // Apply weight decay to gradient
             let mut active_grad = grad;
             if self.weight_decay != 0.0 {
-                for (g, theta) in active_grad
-                    .host_mut::<T>()
-                    .iter_mut()
-                    .zip(data.host::<T>().iter())
-                {
-                    *g += weight_decay * *theta;
-                }
+                active_grad.with_host_mut::<T, _>(|g_host| {
+                    for (g, theta) in g_host.iter_mut().zip(data.host::<T>().iter()) {
+                        *g += weight_decay * *theta;
+                    }
+                });
             }
 
             if self.momentum > 0.0 {
@@ -226,24 +224,26 @@ impl SGD {
                     dtype,
                     "SGD velocity dtype; convert the model before the optimizer's first step"
                 );
-                let mut vel_slice = vel.host_mut::<T>();
+                vel.with_host_mut::<T, _>(|vel_slice| {
+                    // Update velocity: v = momentum·v - lr·grad
+                    for (v, &g) in vel_slice.iter_mut().zip(active_grad.host::<T>().iter()) {
+                        *v = momentum.mul_add(*v, -(lr * g));
+                    }
 
-                // Update velocity: v = momentum·v - lr·grad
-                for (v, &g) in vel_slice.iter_mut().zip(active_grad.host::<T>().iter()) {
-                    *v = momentum.mul_add(*v, -(lr * g));
-                }
-
-                // Update parameters: θ = θ + v
-                let mut p_data = data.host_mut::<T>();
-                for (d, &v) in p_data.iter_mut().zip(vel_slice.iter()) {
-                    *d += v;
-                }
+                    // Update parameters: θ = θ + v
+                    data.with_host_mut::<T, _>(|p_data| {
+                        for (d, &v) in p_data.iter_mut().zip(vel_slice.iter()) {
+                            *d += v;
+                        }
+                    });
+                });
             } else {
                 // Simple SGD: θ = θ - lr·grad
-                let mut p_data = data.host_mut::<T>();
-                for (d, &g) in p_data.iter_mut().zip(active_grad.host::<T>().iter()) {
-                    *d -= lr * g;
-                }
+                data.with_host_mut::<T, _>(|p_data| {
+                    for (d, &g) in p_data.iter_mut().zip(active_grad.host::<T>().iter()) {
+                        *d -= lr * g;
+                    }
+                });
             }
             });
         });
