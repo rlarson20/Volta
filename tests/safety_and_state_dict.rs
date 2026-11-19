@@ -24,7 +24,7 @@ impl Module for CountingModule {
         state
     }
 
-    fn load_state_dict(&mut self, _state: &StateDict) -> volta::Result<()> {
+    fn load_state_dict_partial(&mut self, _state: &StateDict) -> volta::Result<()> {
         Ok(())
     }
 }

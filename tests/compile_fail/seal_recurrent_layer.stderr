@@ -1,13 +1,13 @@
 error[E0277]: the trait bound `Outsider: nn::sealed::SealedLayer` is not satisfied
-  --> tests/compile_fail/seal_recurrent_layer.rs:21:5
+  --> tests/compile_fail/seal_recurrent_layer.rs:24:5
    |
-21 |     fn initial_state(&self, _batch: usize) -> Self::State {}
+24 |     fn initial_state(&self, _batch: usize) -> Self::State {}
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
    |
 help: the trait `nn::sealed::SealedLayer` is not implemented for `Outsider`
-  --> tests/compile_fail/seal_recurrent_layer.rs:4:1
+  --> tests/compile_fail/seal_recurrent_layer.rs:7:1
    |
- 4 | struct Outsider;
+ 7 | struct Outsider;
    | ^^^^^^^^^^^^^^^
 help: the trait `nn::sealed::SealedLayer` is implemented for `LSTMCell`
   --> src/nn/layers/lstm.rs
@@ -24,15 +24,15 @@ note: required by a bound in `RecurrentLayer`
              volta::nn::LSTMCell
 
 error[E0277]: the trait bound `Outsider: nn::sealed::SealedLayer` is not satisfied
-  --> tests/compile_fail/seal_recurrent_layer.rs:22:5
+  --> tests/compile_fail/seal_recurrent_layer.rs:25:5
    |
-22 |     fn step(&self, _x: &Tensor, _state: &mut Self::State) -> Tensor {
+25 |     fn step(&self, _x: &Tensor, _state: &mut Self::State) -> Tensor {
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
    |
 help: the trait `nn::sealed::SealedLayer` is not implemented for `Outsider`
-  --> tests/compile_fail/seal_recurrent_layer.rs:4:1
+  --> tests/compile_fail/seal_recurrent_layer.rs:7:1
    |
- 4 | struct Outsider;
+ 7 | struct Outsider;
    | ^^^^^^^^^^^^^^^
 help: the trait `nn::sealed::SealedLayer` is implemented for `LSTMCell`
   --> src/nn/layers/lstm.rs
@@ -49,15 +49,15 @@ note: required by a bound in `RecurrentLayer`
              volta::nn::LSTMCell
 
 error[E0277]: the trait bound `Outsider: nn::sealed::SealedLayer` is not satisfied
-  --> tests/compile_fail/seal_recurrent_layer.rs:19:25
+  --> tests/compile_fail/seal_recurrent_layer.rs:22:25
    |
-19 | impl RecurrentLayer for Outsider {
+22 | impl RecurrentLayer for Outsider {
    |                         ^^^^^^^^ unsatisfied trait bound
    |
 help: the trait `nn::sealed::SealedLayer` is not implemented for `Outsider`
-  --> tests/compile_fail/seal_recurrent_layer.rs:4:1
+  --> tests/compile_fail/seal_recurrent_layer.rs:7:1
    |
- 4 | struct Outsider;
+ 7 | struct Outsider;
    | ^^^^^^^^^^^^^^^
 help: the trait `nn::sealed::SealedLayer` is implemented for `LSTMCell`
   --> src/nn/layers/lstm.rs

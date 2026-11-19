@@ -95,6 +95,18 @@ pub enum VoltaError {
         len: usize,
     },
 
+    /// A strict [`Module::load_state_dict`](crate::nn::Module::load_state_dict) got a
+    /// state dict whose keys differ from the module's. Nothing was loaded.
+    #[error(
+        "State dict keys do not match the module: missing {missing:?}, unexpected {unexpected:?}"
+    )]
+    StateKeyMismatch {
+        /// Keys of the module's state dict that `state` lacks, in key order.
+        missing: Vec<String>,
+        /// Keys of `state` the module does not have, in key order.
+        unexpected: Vec<String>,
+    },
+
     /// A [`StateDictMapper`](crate::io::mapping::StateDictMapper) renaming step would give
     /// two entries the same name, so one of them would be lost.
     #[error("State dict entries '{first}' and '{second}' both map to '{key}'")]

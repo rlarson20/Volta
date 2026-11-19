@@ -31,7 +31,7 @@ impl Module for Linear {
         state
     }
 
-    fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
+    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
         if let Some(w) = state.get("weight") {
             self.weight.load_weight("weight", w)?;
         }

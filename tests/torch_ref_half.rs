@@ -479,7 +479,7 @@ fn other_layers<H: Half>() {
 
     let mut bn = BatchNorm2d::new(2);
     bn.to_dtype(H::DTYPE);
-    bn.load_state_dict(&state(&[
+    bn.load_state_dict_partial(&state(&[
         ("gamma", f.f32s("batchnorm.gamma"), vec![2]),
         ("beta", f.f32s("batchnorm.beta"), vec![2]),
     ]))

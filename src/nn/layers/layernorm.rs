@@ -88,7 +88,7 @@ impl Module for LayerNorm {
         state
     }
 
-    fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
+    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
         let params = [("gamma", &self.gamma), ("beta", &self.beta)];
 
         for (key, tensor) in params {

@@ -42,15 +42,28 @@ fn sequential_named_layer_prefers_its_name_and_falls_back_to_its_index() {
         values(&weights, "weight")
     );
 
-    // Both present: the name wins, and the index entries are not read.
+    // Both present: the name wins, and the index entries are not read. The strict load
+    // names the unread entry and loads nothing (#344); the partial one skips it.
     let mut model = build();
     let mut state = prefixed("fc.");
     state.insert(
         "0.weight".to_string(),
         TensorData::from_f32(vec![0.0; 2], vec![1, 2]),
     );
+    let before = values(&model.state_dict(), "fc.weight");
+    match model.load_state_dict(&state) {
+        Err(VoltaError::StateKeyMismatch {
+            missing,
+            unexpected,
+        }) => {
+            assert!(missing.is_empty(), "{missing:?}");
+            assert_eq!(unexpected, vec!["0.weight".to_string()]);
+        }
+        other => panic!("expected StateKeyMismatch, got {other:?}"),
+    }
+    assert_eq!(values(&model.state_dict(), "fc.weight"), before);
     model
-        .load_state_dict(&state)
+        .load_state_dict_partial(&state)
         .expect("the name's entries fit");
     assert_eq!(
         values(&model.state_dict(), "fc.weight"),

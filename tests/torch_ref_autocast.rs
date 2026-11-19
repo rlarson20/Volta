@@ -362,7 +362,7 @@ fn batchnorm_after_conv_under_autocast_matches_torch() {
         )]))
         .expect("load");
         let mut bn = BatchNorm2d::new(2);
-        bn.load_state_dict(&state(vec![
+        bn.load_state_dict_partial(&state(vec![
             ("gamma", f.f32s(&format!("{p}.bn.gamma")), vec![2]),
             ("beta", f.f32s(&format!("{p}.bn.beta")), vec![2]),
         ]))

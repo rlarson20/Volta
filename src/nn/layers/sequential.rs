@@ -1,5 +1,5 @@
 use crate::io::StateDict;
-use crate::nn::{Layer, Module, insert_prefixed, load_child, sub_state};
+use crate::nn::{Layer, Module, check_keys, insert_prefixed, load_child, sub_state};
 use crate::tensor::Tensor;
 
 /// Internal struct to hold a layer with an optional name
@@ -14,6 +14,15 @@ pub(crate) struct LayerEntry {
 pub struct Sequential {
     /// The layers, with their optional names.
     pub(crate) layers: Vec<LayerEntry>,
+}
+
+/// The prefix layer `i` loads from: a named layer reads its name's entries, and its
+/// index's if `state` has none under the name.
+fn load_prefix(entry: &LayerEntry, i: usize, state: &StateDict) -> String {
+    match &entry.name {
+        Some(name) if !sub_state(state, &format!("{name}.")).is_empty() => format!("{name}."),
+        _ => format!("{i}."),
+    }
 }
 
 impl Module for Sequential {
@@ -50,16 +59,29 @@ impl Module for Sequential {
         state
     }
 
+    /// Strict, as [`Module::load_state_dict`], with each named layer's keys expected
+    /// under the prefix [`Self::load_state_dict_partial`] would read: its name, or its
+    /// index when `state` has no entry under the name. So a checkpoint saved from an
+    /// unnamed model loads strictly into a named one.
     fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
+        let mut expected = Vec::new();
+        for (i, entry) in self.layers.iter().enumerate() {
+            let prefix = load_prefix(entry, i, state);
+            expected.extend(
+                entry
+                    .layer
+                    .state_dict()
+                    .into_keys()
+                    .map(|k| format!("{prefix}{k}")),
+            );
+        }
+        check_keys(&expected, state)?;
+        self.load_state_dict_partial(state)
+    }
+
+    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
         for (i, entry) in self.layers.iter_mut().enumerate() {
-            // A named layer reads its name's entries, and its index's if there are none.
-            let by_index = format!("{i}.");
-            let prefix = match &entry.name {
-                Some(name) if !sub_state(state, &format!("{name}.")).is_empty() => {
-                    format!("{name}.")
-                }
-                _ => by_index,
-            };
+            let prefix = load_prefix(entry, i, state);
             load_child(entry.layer.as_mut(), &prefix, state)?;
         }
         Ok(())

@@ -195,7 +195,7 @@ fn maxpool_all_neg_inf_window_with_padding_keeps_its_first_real_element() {
 fn batchnorm2d_train_and_eval_match_torch() {
     let f = Fixture::load("layers");
     let mut bn = BatchNorm2d::new(2);
-    bn.load_state_dict(&state_of(&[
+    bn.load_state_dict_partial(&state_of(&[
         ("gamma", f.values("bn.gamma"), vec![2]),
         ("beta", f.values("bn.beta"), vec![2]),
     ]))
