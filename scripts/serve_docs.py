@@ -7,8 +7,8 @@
 Build Volta's rustdoc and serve it over HTTP, for reading the docs from another machine.
 
 Usage (from anywhere; paths resolve against the repository this script lives in):
-    uv run scripts/serve_docs.py                          # build, serve on 127.0.0.1:8000
-    uv run scripts/serve_docs.py --host 0.0.0.0           # reachable from the LAN
+    uv run scripts/serve_docs.py                          # build, serve on port 7447
+    uv run scripts/serve_docs.py --host 127.0.0.1         # this machine only
     uv run scripts/serve_docs.py --features gpu,accelerate
     uv run scripts/serve_docs.py --rebuild-every 600 --pull
     uv run scripts/serve_docs.py --no-build               # serve the last snapshot as is
@@ -25,9 +25,10 @@ With `--rebuild-every N`, it rebuilds every N seconds (after `git pull --ff-only
 reader never sees a half-written tree or a failed build. A failed pull or build is logged
 and the previous snapshot keeps being served.
 
-No authentication and no TLS: by default it binds to 127.0.0.1. To reach it from outside
-the machine, bind to a private interface (LAN, Tailscale) or put a reverse proxy that
-handles TLS and auth (Caddy, nginx) in front and keep this on 127.0.0.1.
+It listens on every interface (0.0.0.0) and logs `http://<hostname>:<port>/volta/`, which
+other devices on the same tailnet (MagicDNS) or LAN can open. There is no authentication
+and no TLS, so the host firewall decides who can reach it: on NixOS, open the port only on
+`tailscale0` (`networking.firewall.interfaces.tailscale0.allowedTCPPorts = [ 7447 ];`).
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ import http.server
 import logging
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -49,6 +51,7 @@ log = logging.getLogger("serve_docs")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CRATE = "volta"
+DEFAULT_PORT = 7447  # distinctive, so it does not collide with dev servers on 8000/8080
 KEEP_SNAPSHOTS = 2  # the live one plus the previous one, for requests still in flight
 
 
@@ -189,9 +192,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         epilog="Arguments after `--` go to `cargo doc` verbatim.",
     )
     p.add_argument(
-        "--host", default="127.0.0.1", help="bind address (default: 127.0.0.1)"
+        "--host",
+        default="0.0.0.0",
+        help="bind address (default: 0.0.0.0, every interface)",
     )
-    p.add_argument("--port", type=int, default=8000, help="port (default: 8000)")
+    p.add_argument(
+        "--port",
+        type=int,
+        default=DEFAULT_PORT,
+        help=f"port (default: {DEFAULT_PORT})",
+    )
     p.add_argument(
         "--features",
         help="cargo features to document, e.g. gpu,accelerate (default: none, CPU-only)",
@@ -254,9 +264,9 @@ def main(argv: list[str]) -> int:
         current = take_snapshot(doc_dir, snapshots_dir)
     snapshot = Snapshot(current)
 
-    server = http.server.ThreadingHTTPServer(
-        (args.host, args.port), make_handler(snapshot)
-    )
+    host: str = args.host
+
+    server = http.server.ThreadingHTTPServer((host, args.port), make_handler(snapshot))
     stop = threading.Event()
     if args.rebuild_every is not None:
         threading.Thread(
@@ -273,12 +283,10 @@ def main(argv: list[str]) -> int:
             daemon=True,
         ).start()
 
-    host, port = server.server_address[:2]
-    log.info("serving %s at http://%s:%d/%s/", current, host, port, CRATE)
-    if args.host not in ("127.0.0.1", "localhost", "::1"):
-        log.warning(
-            "bound to %s with no auth or TLS; keep it on a trusted network", args.host
-        )
+    port = server.server_address[1]
+    log.info("serving %s on %s:%d", current, host, port)
+    shown = socket.gethostname() if host in ("0.0.0.0", "::") else host
+    log.info("open http://%s:%d/%s/", shown, port, CRATE)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
