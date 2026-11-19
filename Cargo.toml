@@ -65,7 +65,9 @@ rustversion = "1"
 naga = { version = "30", features = ["wgsl-in"] }
 
 [features]
-default = ["gpu", "accelerate"]
+# CPU-only by default; each backend is opt-in and additive (#378, DECISIONS.md,
+# "Default features are CPU-only").
+default = []
 accelerate = []
 gpu = ["wgpu", "pollster"]
 

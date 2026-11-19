@@ -48,7 +48,7 @@ This library trains MLPs, CNNs, RNNs, GANs, VAEs, and other architectures on CPU
   - **GPU Training Pipeline:** Fully GPU-accelerated training for Conv2d layers with device-aware constructors and GPU optimizer state storage
   - **Benchmarking Suite:** Criterion benchmarks in 4 targets (tensor_ops, neural_networks, gpu_comparison, conv_algorithms) with HTML reports
   - **Enhanced GPU Safety:** GPU buffer pooling, command queue throttling, CPU cache invalidation, and early warning system
-  - **Code Quality:** `cargo clippy --all-targets -- -D warnings` (with the pedantic set configured in `Cargo.toml`) is clean with and without default features, and runs in CI
+  - **Code Quality:** `cargo clippy --all-targets -- -D warnings` (with the pedantic set configured in `Cargo.toml`) is clean with no features and with `gpu` + `accelerate`, and runs in CI
   - **GPU Convolution:** Fully GPU-accelerated Conv2d with Direct, im2col, and iGEMM algorithms
     - All algorithms support both forward and backward passes on GPU
     - Auto-selection chooses optimal algorithm based on input size and device
@@ -74,18 +74,16 @@ Add Volta to your `Cargo.toml`:
 volta = "0.3.0"
 ```
 
-Both optional backends are default features: `gpu` (experimental WGPU acceleration, which compiles `wgpu`) and `accelerate` (Apple's Accelerate framework for matrix multiplication on macOS; a no-op on other platforms).
+The default build is CPU-only. Both backends are opt-in features, and they add to each other: `gpu` (experimental WGPU acceleration, which compiles `wgpu`) and `accelerate` (Apple's Accelerate framework for matrix multiplication on macOS; a no-op on other platforms).
 
-### CPU-only build
-
-To build without the GPU backend, turn the default features off:
+### GPU and Accelerate
 
 ```toml
 [dependencies]
-volta = { version = "0.3.0", default-features = false }
+volta = { version = "0.3.0", features = ["gpu", "accelerate"] }
 ```
 
-Add back what you want, for example `features = ["accelerate"]` for BLAS on macOS without the GPU backend.
+Pick either one alone, for example `features = ["accelerate"]` for BLAS on macOS without the GPU backend.
 
 ## Architecture
 
@@ -327,20 +325,20 @@ Volta has an extensive test suite that validates the correctness of every operat
 cargo test -- --nocapture
 ```
 
-The default features include `gpu` and `accelerate`, so this already builds the GPU backend (GPU tests skip when no adapter is found). For a CPU-only run:
+That is a CPU-only run (the default features are empty). To build and run the GPU backend's tests as well (they skip when no adapter is found):
 
 ```bash
-cargo test --no-default-features
+cargo test --features gpu,accelerate
 ```
 
 `cargo test <filter>` runs the tests whose names contain `<filter>`; there are no category modules. To run one test file, name it:
 
 ```bash
-cargo test --no-default-features --test torch_ref_layers   # layers against PyTorch values
-cargo test --no-default-features --lib conv                # library tests with "conv" in the name
+cargo test --test torch_ref_layers   # layers against PyTorch values
+cargo test --lib conv                # library tests with "conv" in the name
 ```
 
-`just ci` runs the full gate (fmt, clippy, tests and docs with and without default features, and the examples).
+`just ci` runs the full gate (fmt, clippy, tests and docs with no features and with `gpu` + `accelerate`, and the examples).
 
 ## Available Examples
 
@@ -373,9 +371,9 @@ cargo run --release --example time_sequence    # LSTM sine-wave prediction (trai
 # External model loading
 cargo run --example load_external_mnist        # Load PyTorch weights via SafeTensors
 
-# GPU acceleration (the `gpu` feature is on by default)
-cargo run --example gpu                        # GPU tensor operations
-cargo run --example gpu_training               # GPU-accelerated training
+# GPU acceleration (needs the `gpu` feature)
+cargo run --features gpu --example gpu         # GPU tensor operations
+cargo run --features gpu --example gpu_training  # GPU-accelerated training
 
 # Regression
 cargo run --example regression                 # Polynomial curve fitting

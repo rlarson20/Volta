@@ -1,8 +1,14 @@
+# Every optional backend, `gpu` and `accelerate`. The default features are empty (CPU-only,
+# #378; DECISIONS.md, "Default features are CPU-only"), so a recipe that checks the GPU or
+# Accelerate code passes this. The `-cpu` recipes keep `--no-default-features`, which says
+# the same thing explicitly.
+full := "--features gpu,accelerate"
+
 md:
 	fd . --extension md | xargs nvim
 
 test-all:
-	cargo nextest run --no-fail-fast
+	cargo nextest run --no-fail-fast {{full}}
 
 # Run tests n times (default 10) to catch flakes; stops at the first failing run.
 # `filters` is one nextest filter or several separated by spaces (quote them):
@@ -14,7 +20,7 @@ test-repeat filters n="10":
 	set -euo pipefail
 	for i in $(seq 1 {{n}}); do
 		echo "run $i/{{n}}"
-		cargo nextest run --no-fail-fast {{filters}} || { echo "FAILED on run $i/{{n}}"; exit 1; }
+		cargo nextest run --no-fail-fast {{full}} {{filters}} || { echo "FAILED on run $i/{{n}}"; exit 1; }
 	done
 	echo "all {{n}} runs passed"
 
@@ -28,7 +34,7 @@ test-repeat-threads args="" n="10":
 	set -euo pipefail
 	for i in $(seq 1 {{n}}); do
 		echo "run $i/{{n}}"
-		cargo test {{args}} || { echo "FAILED on run $i/{{n}}"; exit 1; }
+		cargo test {{full}} {{args}} || { echo "FAILED on run $i/{{n}}"; exit 1; }
 	done
 	echo "all {{n}} runs passed"
 
@@ -60,12 +66,12 @@ asan:
 
 # Run coverage with llvm-cov and open HTML report
 coverage:
-	cargo llvm-cov --html
+	cargo llvm-cov {{full}} --html
 	open target/llvm-cov/html/index.html
 
 # Terminal-only coverage summary
 coverage-summary:
-	cargo llvm-cov
+	cargo llvm-cov {{full}}
 
 # Per-file coverage table, no default features (the CPU lane; coverage.yml runs this)
 coverage-cpu:
@@ -73,11 +79,11 @@ coverage-cpu:
 
 # Fast targeted mutation testing (e.g. just mutants src/tensor.rs)
 mutants target="":
-	cargo mutants -- {{target}}
+	cargo mutants {{full}} -- {{target}}
 
 # Full mutation testing (WARNING: slow)
 mutants-all:
-	cargo mutants
+	cargo mutants {{full}}
 
 # Mutation testing of the autograd core on the CPU lane (mutants.yml runs this in shards, e.g.
 # `just mutants-core --shard 0/8`). gpu_ops.rs is excluded: it is compiled out without `gpu`,
@@ -101,12 +107,12 @@ expand mod:
 
 # Validate all WGSL shaders in src/gpu/shaders/
 validate-shaders:
-	cargo test --lib shader_template
+	cargo test {{full}} --lib shader_template
 
 # Run the GPU tests: the gpu_* integration targets and the GPU lib tests (gpu_tests, gpu_half_tests)
 test-gpu:
-	cargo test --test 'gpu_*' -- --nocapture
-	cargo test --lib gpu_ -- --nocapture
+	cargo test {{full}} --test 'gpu_*' -- --nocapture
+	cargo test {{full}} --lib gpu_ -- --nocapture
 
 # Regenerate the PyTorch reference fixtures in tests/fixtures/torch/ (needs uv; pinned torch)
 torch-fixtures:
@@ -136,16 +142,16 @@ mnist-autocast: mnist-data
 test-cpu:
 	cargo test --no-default-features
 
-# Run all tests with default features (GPU tests run only when an adapter is present; ci.yml's
-# linux-lavapipe job sets VOLTA_REQUIRE_GPU=1 so a missing one fails)
-test-default:
-	cargo test
+# Run all tests with `gpu` and `accelerate` (GPU tests run only when an adapter is present;
+# ci.yml's linux-lavapipe job sets VOLTA_REQUIRE_GPU=1 so a missing one fails)
+test-full:
+	cargo test {{full}}
 
 # ===== EXAMPLE & INTEGRATION QUALITY =====
 
 # Compile-check every example (catches API drift)
 examples-check:
-	cargo build --examples
+	cargo build --examples {{full}}
 
 # Run the quick, data-free examples (release, CPU) under a time limit; fail on a panic, a
 # timeout, or a printed NaN/inf. The set is in scripts/examples-smoke.sh and dev-docs/DEVELOPMENT.md
@@ -154,7 +160,7 @@ examples-smoke:
 
 # Run a single example by name
 example name:
-	cargo run --example {{name}}
+	cargo run {{full}} --example {{name}}
 
 # ===== PROJECT METRICS & HYGIENE =====
 
@@ -178,21 +184,21 @@ clean:
 
 # ===== AGGREGATE WORKFLOWS =====
 
-# Clippy over every target with no default features, then with them; the single definition of
+# Clippy over every target with no features, then with all of them; the single definition of
 # the lint gate (ci.yml and pre-commit call this too)
-lint: lint-cpu lint-default
+lint: lint-cpu lint-full
 
-# Clippy over every target with default features (ci.yml's linux-lavapipe job)
-lint-default:
-	cargo clippy --all-targets -- -D warnings
+# Clippy over every target with `gpu` and `accelerate` (ci.yml's linux-lavapipe job)
+lint-full:
+	cargo clippy {{full}} --all-targets -- -D warnings
 
 # Clippy over every target with no default features (the CPU-only lane)
 lint-cpu:
 	cargo clippy --no-default-features --all-targets -- -D warnings
 
-# Rustdoc with warnings denied (a broken intra-doc link fails), default features
-doc:
-	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+# Rustdoc with warnings denied (a broken intra-doc link fails), `gpu` and `accelerate`
+doc-full:
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps {{full}}
 
 # Rustdoc with warnings denied, no default features
 doc-cpu:
@@ -225,9 +231,9 @@ lint-macos-cross:
 	{{macos_cross_env}} cargo clippy --target aarch64-apple-darwin --all-targets --all-features -- -D warnings
 	{{macos_cross_env}} cargo clippy --target aarch64-apple-darwin --all-targets --no-default-features -- -D warnings
 
-# Rustdoc for aarch64-apple-darwin with warnings denied, default features
+# Rustdoc for aarch64-apple-darwin with warnings denied, `gpu` and `accelerate`
 doc-macos-cross:
-	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --target aarch64-apple-darwin
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps {{full}} --target aarch64-apple-darwin
 
 # Feature powerset for aarch64-apple-darwin; needs cargo-hack
 hack-macos-cross:
@@ -237,12 +243,12 @@ hack-macos-cross:
 macos-cross: lint-macos-cross doc-macos-cross hack-macos-cross
 
 # `macos-cross` on a non-macOS host, skipped with a notice when the target, clang or cargo-hack
-# is missing (on a Mac, `just lint`/`doc`/`hack` already check this code natively)
+# is missing (on a Mac, `just lint`/`doc-full`/`hack` already check this code natively)
 macos-cross-if-available:
 	#!/usr/bin/env bash
 	set -euo pipefail
 	if [[ "$(uname -s)" == Darwin ]]; then
-		echo "skipped: macos-cross (native macOS; just lint/doc/hack cover it)"
+		echo "skipped: macos-cross (native macOS; just lint/doc-full/hack cover it)"
 	elif rustup target list --installed | grep -qx aarch64-apple-darwin && command -v clang >/dev/null && command -v cargo-hack >/dev/null; then
 		just macos-cross
 	else
@@ -290,11 +296,11 @@ ci:
 	just test-check-ignores
 	just check-ignores
 	just lint
-	just test-default
+	just test-full
 	just test-cpu
-	just doc
+	just doc-full
 	just doc-cpu
-	cargo build --examples
+	just examples-check
 	just examples-smoke
 	just bench-smoke
 	just hack-if-installed
@@ -362,9 +368,9 @@ pre-release: ci validate-shaders dead-deps coverage-summary
 # Run all benchmarks
 # Run the CPU benchmarks (gpu_comparison is slow and needs a GPU: use `just bench-gpu`)
 bench:
-	cargo bench --bench tensor_ops --
-	cargo bench --bench neural_networks --
-	cargo bench --bench conv_algorithms --
+	cargo bench {{full}} --bench tensor_ops --
+	cargo bench {{full}} --bench neural_networks --
+	cargo bench {{full}} --bench conv_algorithms --
 
 # Run every CPU benchmark function once in Criterion's test mode (`-- --test`): no
 # measurement, so it says nothing about speed and is safe on shared runners. It fails when a
@@ -377,11 +383,11 @@ bench-smoke:
 
 # Run convolution algorithm comparison benchmarks
 bench-conv:
-	cargo bench --bench conv_algorithms --
+	cargo bench {{full}} --bench conv_algorithms --
 
 # Run specific benchmark
 bench-name name:
-	cargo bench --bench {{name}} --
+	cargo bench {{full}} --bench {{name}} --
 
 # Benchmark CPU only (no features)
 bench-cpu:
@@ -401,15 +407,15 @@ bench-gpu:
 
 # Save benchmark results for comparison
 bench-save:
-	cargo bench --bench tensor_ops -- --save-baseline main
-	cargo bench --bench neural_networks -- --save-baseline main
-	cargo bench --bench conv_algorithms -- --save-baseline main
+	cargo bench {{full}} --bench tensor_ops -- --save-baseline main
+	cargo bench {{full}} --bench neural_networks -- --save-baseline main
+	cargo bench {{full}} --bench conv_algorithms -- --save-baseline main
 
 # Compare against baseline saved by `just bench-save`
 bench-compare:
-	cargo bench --bench tensor_ops -- --baseline main
-	cargo bench --bench neural_networks -- --baseline main
-	cargo bench --bench conv_algorithms -- --baseline main
+	cargo bench {{full}} --bench tensor_ops -- --baseline main
+	cargo bench {{full}} --bench neural_networks -- --baseline main
+	cargo bench {{full}} --bench conv_algorithms -- --baseline main
 
 # Time the 256x256 `matmul_raw` smoke test N times in release and average (was bench.sh).
 # A quick regression check, not a benchmark: use `just bench` for criterion numbers.

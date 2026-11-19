@@ -21,7 +21,8 @@ concurrency:
 # (`.github/rulesets/`, applied with `just rulesets`).
 
 jobs:
-  # Honest "no default features" lane. Everything here is CPU-only; the `gpu`
+  # Honest "no features" lane (`--no-default-features`, which is also the default since #378).
+  # Everything here is CPU-only; the `gpu`
   # feature is excluded from every step (wgpu is heavy and cannot run on
   # GPU-less Linux runners). GPU wrappers have not-gpu stubs at their definition
   # (ADDENDUM §9), so call sites carry no `cfg` and this lane's clippy is clean.
@@ -143,7 +144,7 @@ jobs:
       - name: Clippy for wasm32-unknown-unknown
         run: just wasm-check
 
-  # Default features (gpu) on Linux, with Mesa's lavapipe as the adapter: a software
+  # `gpu` and `accelerate` (`just test-full`) on Linux, with Mesa's lavapipe as the adapter: a software
   # Vulkan device (shaderFloat16), so the gpu-gated tests run on every PR, including the
   # f16/bf16 GPU tests and the naga validation of every shader expansion. Not Metal: the
   # `macos` job (macos.yml) stays the Apple-GPU check. VOLTA_REQUIRE_GPU makes a missing adapter fail
@@ -161,19 +162,19 @@ jobs:
       - name: Install lavapipe
         run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
 
-      - name: Test (default features, GPU on lavapipe)
+      - name: Test (gpu + accelerate, GPU on lavapipe)
         env:
           VOLTA_REQUIRE_GPU: "1"
-        run: just test-default
+        run: just test-full
 
-      # The default-features halves of `just lint` and `just doc`. cpu-only runs only the
-      # no-default-features halves and macos-cross lints the aarch64-apple-darwin build, so
+      # The all-features halves of `just lint` and the docs. cpu-only runs only the
+      # no-features halves and macos-cross lints the aarch64-apple-darwin build, so
       # without these a warning in Linux GPU code passed CI but failed `just ci` (#258).
-      - name: Clippy (default features)
-        run: just lint-default
+      - name: Clippy (gpu + accelerate)
+        run: just lint-full
 
-      - name: Build docs (default features)
-        run: just doc
+      - name: Build docs (gpu + accelerate)
+        run: just doc-full
 
   # The macOS build, type-checked from Linux: clippy (all features, then none), rustdoc and the
   # feature powerset for aarch64-apple-darwin, which covers the Accelerate matmul path, the Metal

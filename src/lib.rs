@@ -45,14 +45,13 @@
 //!
 //! ## Features
 //!
-//! Both are on by default.
+//! Both are off by default (a CPU-only build; DECISIONS.md, "Default features are
+//! CPU-only"). Turn on what you want: `volta = { version = "..", features = ["gpu"] }`.
 //!
 //! - `gpu`: the GPU backend, on [wgpu](https://wgpu.rs). Without it, [`gpu`] is a stub whose
 //!   functions report no GPU, and [`Device::gpu`] returns `None`.
 //! - `accelerate`: CPU matmul through Apple's Accelerate framework on macOS; no effect
 //!   on other platforms.
-//!
-//! For a CPU-only build: `volta = { version = "..", default-features = false }`.
 // A library must not write to stdout/stderr unprompted — diagnostics go through
 // the `log` facade. Scoped to non-test builds of the library crate: examples and
 // integration tests are separate crates (unaffected), and unit-test modules may

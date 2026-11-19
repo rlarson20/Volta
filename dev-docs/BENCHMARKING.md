@@ -50,7 +50,7 @@ just bench-conv
 just bench-smoke
 
 # Quick matmul timing smoke check: N release runs of one test, averaged
-just bench-matmul 10                          # extra cargo flags: just bench-matmul 10 --no-default-features
+just bench-matmul 10                          # CPU-only; with Accelerate: just bench-matmul 10 --features accelerate
 
 # Run specific benchmark
 just bench-name tensor_ops

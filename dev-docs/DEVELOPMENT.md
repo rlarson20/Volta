@@ -47,7 +47,7 @@ Decide by where an argument comes from (DECISIONS.md, "Panic inside the program,
 
 ## Testing workflow
 
-- Before opening a PR, run clippy and the tests your change touches; GitHub Actions runs the full gate on the PR (CLAUDE.md, "Commands"). `just ci` runs the same checks locally (fmt, clippy, test and `-D warnings` doc, each with and without default features, then examples and the cargo-hack feature powerset when installed) when you want them before pushing. The fast loop is `cargo test --no-default-features --lib <name-filter>`; the filter matches test names, and there are no category modules.
+- Before opening a PR, run clippy and the tests your change touches; GitHub Actions runs the full gate on the PR (CLAUDE.md, "Commands"). `just ci` runs the same checks locally (fmt, clippy, test and `-D warnings` doc, each with no features and with `gpu` + `accelerate`, then examples and the cargo-hack feature powerset when installed) when you want them before pushing. The fast loop is `cargo test --lib <name-filter>` (CPU-only, the default); the filter matches test names, and there are no category modules.
 - `check_gradients_simple` is the quick check; `check_gradients` is the full one. Avoid ops with non-deterministic gradients on ties (argmax, argmin), and make sure the gradient shape matches the input's.
 - Never write a test that asserts a known bug. Use `#[ignore = "<defect ID>: <why>"]`.
 - Where the tests live: unit tests beside the code or in `src/lib_tests/`; integration, parity, and GPU tests in `tests/` (`tests/gpu_*.rs`, `tests/parity_*.rs`); compile-fail tests in `tests/compile_fail/`.
