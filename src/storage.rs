@@ -17,6 +17,18 @@ use half::{bf16, f16};
 use std::borrow::Cow;
 use std::sync::Arc;
 
+// Tensor bytes are the elements' native-endian bytes (`HostBuf::as_bytes`,
+// `Storage::try_from_bytes`), and safetensors, `TensorData` and the GPU upload all treat
+// them as little-endian, which safetensors requires by specification. On a big-endian
+// host every file written would be unreadable by other tools and every valid file would
+// be misread, so refuse to build there rather than convert silently (#396). Lifting this
+// means byte-swapping in `as_bytes`/`pod_from_bytes` and testing on a big-endian target.
+#[cfg(target_endian = "big")]
+compile_error!(
+    "volta assumes a little-endian host: tensor bytes are serialized natively and \
+     safetensors is little-endian (#396)"
+);
+
 #[cfg(feature = "gpu")]
 use std::sync::OnceLock;
 
@@ -83,7 +95,8 @@ impl HostBuf {
         self.len() == 0
     }
 
-    /// The elements' native-endian bytes, borrowed.
+    /// The elements' bytes, borrowed: native-endian, which is little-endian on every
+    /// target this crate builds for (a big-endian target is a `compile_error!`).
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         match self {
@@ -251,7 +264,8 @@ impl Clone for Storage {
     }
 }
 
-/// Decode native-endian `bytes` as `T`s; the copy handles any alignment.
+/// Decode native-endian (so little-endian, see the `compile_error!` above) `bytes` as
+/// `T`s; the copy handles any alignment.
 fn pod_from_bytes<T: bytemuck::Pod>(bytes: &[u8]) -> Arc<[T]> {
     Arc::from(bytemuck::pod_collect_to_vec::<u8, T>(bytes))
 }
@@ -701,7 +715,8 @@ impl Storage {
         self.to_host_f32().to_vec()
     }
 
-    /// The elements' native-endian bytes. GPU storage syncs through the host copy.
+    /// The elements' little-endian bytes (native order; big-endian targets don't build).
+    /// GPU storage syncs through the host copy.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         self.host_buf().as_bytes()
@@ -1084,6 +1099,25 @@ mod tests {
         let tail = bytes.get(1..).expect("17 bytes");
         let s = Storage::try_from_bytes(tail, DType::F64).expect("16 bytes of f64");
         assert_eq!(s.as_host::<f64>().expect("f64"), &[1.25, -3.0]);
+    }
+
+    /// The byte layout is little-endian, as safetensors requires: a known value's bytes
+    /// match `to_le_bytes` both ways, for a multi-byte float and integer.
+    #[test]
+    fn bytes_are_little_endian() {
+        let s = Storage::cpu(vec![1.0f32, -2.5]);
+        let want: Vec<u8> = [1.0f32, -2.5]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        assert_eq!(s.as_bytes(), want.as_slice());
+
+        let le: Vec<u8> = [0x0102_0304i32, -1]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let back = Storage::try_from_bytes(&le, DType::I32).expect("8 bytes of i32");
+        assert_eq!(back.as_host::<i32>().expect("i32"), &[0x0102_0304, -1]);
     }
 
     #[test]
