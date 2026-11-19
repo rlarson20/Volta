@@ -3,17 +3,19 @@
 // Op codes:
 // 0 = SGD: param -= lr * grad
 // 1 = SGD with momentum: v = momentum*v - lr*grad; param += v
-// 2 = Adam: param -= lr * (m / (1-beta1^t)) / (sqrt(v / (1-beta2^t)) + eps)
+// 2 = Adam: param -= lr * (m * m_hat_scale) / (sqrt(v * v_hat_scale) + eps)
+//    The host computes m_hat_scale = 1/(1-beta1^t) and v_hat_scale = 1/(1-beta2^t) in f64
+//    (#304): an f32 pow per element is off by up to 2.4e-4 relative at t = 1.
 
 struct OptimizerParams {
     op: u32,              // 0=SGD, 1=SGD+momentum, 2=Adam
     lr: f32,              // Learning rate
     beta1: f32,           // Adam beta1 or momentum
     beta2: f32,           // Adam beta2
-    t: f32,               // Timestep for bias correction
+    m_hat_scale: f32,     // Adam 1/(1-beta1^t), from the host; 0 for SGD
     eps: f32,             // Adam epsilon
     weight_decay: f32,    // L2 regularization
-    _padding: f32,
+    v_hat_scale: f32,     // Adam 1/(1-beta2^t), from the host; 0 for SGD
 }
 
 @group(0) @binding(0) var<storage, read_write> params: array<ELEM>;
@@ -57,13 +59,9 @@ fn main(
         // v = beta2 * v + (1 - beta2) * grad^2
         st_state2(idx, p.beta2 * ld_state2(idx) + (1.0 - p.beta2) * grad * grad);
 
-        // Bias correction
-        let m_hat_scale = 1.0 / (1.0 - pow(p.beta1, p.t));
-        let v_hat_scale = 1.0 / (1.0 - pow(p.beta2, p.t));
-
-        // param = param - lr * m_hat / (sqrt(v_hat) + eps)
-        let m_hat = ld_state1(idx) * m_hat_scale;
-        let v_hat = ld_state2(idx) * v_hat_scale;
+        // param = param - lr * m_hat / (sqrt(v_hat) + eps), bias-corrected by host scales
+        let m_hat = ld_state1(idx) * p.m_hat_scale;
+        let v_hat = ld_state2(idx) * p.v_hat_scale;
         st_params(idx, ld_params(idx) - p.lr * m_hat / (sqrt(v_hat) + p.eps));
     }
 }

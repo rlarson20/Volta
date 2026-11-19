@@ -190,18 +190,24 @@ impl Adam {
             .expect("Adam: state slot per parameter")
             .get_or_insert_with(|| AdamState::new(&p));
         state.step += 1;
+        let (m_hat_scale, v_hat_scale) = bias_correction_scales(self.betas, state.step);
         let (m_state, v_state) = (&mut state.m, &mut state.v);
 
-        // Setup optimizer parameters
+        // Setup optimizer parameters. The scales are narrowed once here, so every element
+        // gets the correctly rounded factor rather than an f32 `pow` of its own (#304).
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "the GPU kernel works in f32; narrowing a correctly computed f64 scale rounds once"
+        )]
         let opt_params = OptimizerStepParams {
             op: 2, // Adam
             lr: self.lr,
             beta1: self.betas.0,
             beta2: self.betas.1,
-            t: state.step as f32,
+            m_hat_scale: m_hat_scale as f32,
             eps: self.eps,
             weight_decay: self.weight_decay,
-            padding: 0.0,
+            v_hat_scale: v_hat_scale as f32,
         };
 
         // Updates params, m and v in place. `gpu_optimizer_step` unshares each buffer first
@@ -272,10 +278,9 @@ impl Adam {
                 .mul_add(v_val, (1.0 - beta2) * g_val.powi(2));
         }
 
-        // Bias correction
-        let t = i32::try_from(step).expect("Adam step count fits i32");
-        let m_hat_scale = 1.0 / (1.0 - beta1.powi(t));
-        let v_hat_scale = 1.0 / (1.0 - beta2.powi(t));
+        // Bias correction, the same f64 scales the GPU kernel gets (#304)
+        let (m_hat_scale, v_hat_scale) = bias_correction_scales(self.betas, step);
+        let (m_hat_scale, v_hat_scale) = (T::from_f64(m_hat_scale), T::from_f64(v_hat_scale));
 
         // Update parameters
         let mut p_guard = p.data.host_mut::<T>();
@@ -289,6 +294,20 @@ impl Adam {
         }
         });
     }
+}
+
+/// Adam's bias-correction scales `(1 / (1 - beta1^t), 1 / (1 - beta2^t))` for step `t`,
+/// computed in `f64` so that both backends round each scale once, to their own dtype (#304).
+///
+/// At `t = 1` with `beta2 = 0.999`, `1 - beta2^t` is `1e-3`, so one ulp of error in an f32
+/// power becomes about `6e-5` relative in the scale, and it scales every element alike.
+///
+/// # Panics
+/// If `step` does not fit an `i32`.
+fn bias_correction_scales(betas: (f32, f32), step: usize) -> (f64, f64) {
+    let t = i32::try_from(step).expect("Adam step count fits i32");
+    let scale = |beta: f32| 1.0 / (1.0 - f64::from(beta).powi(t));
+    (scale(betas.0), scale(betas.1))
 }
 
 // Fallback when GPU feature is not enabled
