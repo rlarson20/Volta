@@ -43,8 +43,14 @@ fn igemm_backward_input_main(
                 // In forward: out[oh,ow] = in[ih-ph+kh, iw-pw+kw] * weight[kh,kw]
                 // So: ih = oh * stride_h - pad_h + kh
                 // Therefore: oh = (ih + pad_h - kh) / stride_h
-                let oh_candidate = (ih + params.pad_h - kh);
-                let ow_candidate = (iw + params.pad_w - kw);
+                // A tap above or left of the padded input (`ih + pad_h < kh`) has no
+                // output position; test it before subtracting, without u32 wraparound
+                // (#314).
+                if (ih + params.pad_h < kh || iw + params.pad_w < kw) {
+                    continue;
+                }
+                let oh_candidate = ih + params.pad_h - kh;
+                let ow_candidate = iw + params.pad_w - kw;
 
                 // Check if this is a valid output position
                 if (oh_candidate % params.stride_h == 0u && ow_candidate % params.stride_w == 0u) {
