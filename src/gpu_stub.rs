@@ -15,6 +15,13 @@ pub const fn is_gpu_available() -> bool {
     false
 }
 
+/// The largest tensor the GPU can hold: always `None` without the `gpu` feature, as the
+/// real function returns with no GPU.
+#[must_use]
+pub const fn max_tensor_bytes() -> Option<u64> {
+    None
+}
+
 /// Wait for pending GPU work: `true` (nothing to wait for) without the `gpu` feature, as
 /// the real function returns with no GPU.
 #[must_use]

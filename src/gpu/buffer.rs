@@ -21,6 +21,7 @@ use super::get_gpu_context;
 use super::pool::BufferPool;
 use crate::dtype::DType;
 use crate::storage::HostBuf;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -58,15 +59,58 @@ fn gpu_bytes(dtype: DType, len: usize) -> usize {
     }
 }
 
+/// `Ok` if `len` elements of `dtype` fit in one storage binding on this GPU
+/// ([`super::GpuContext::max_binding_bytes`]), the largest tensor a kernel can bind.
+///
+/// # Errors
+/// A message naming the tensor's size and the limit if it does not fit, or saying that no
+/// GPU is available. The caller wraps it in its own `VoltaError`.
+pub(crate) fn check_fits(dtype: DType, len: usize) -> std::result::Result<(), String> {
+    let ctx = get_gpu_context().ok_or_else(|| "no GPU is available".to_string())?;
+    let limit = ctx.max_binding_bytes();
+    let bytes = gpu_bytes_checked(dtype, len);
+    if bytes.is_some_and(|b| b as u64 <= limit) {
+        return Ok(());
+    }
+    Err(format!(
+        "a tensor of {len} {dtype} elements ({} bytes on the GPU) exceeds {}'s \
+         {limit}-byte storage binding limit (`max_storage_buffer_binding_size`)",
+        bytes.map_or_else(|| "over usize::MAX".to_string(), |b| b.to_string()),
+        ctx.device_name(),
+    ))
+}
+
+/// [`gpu_bytes`], or `None` if the byte count overflows `usize`.
+fn gpu_bytes_checked(dtype: DType, len: usize) -> Option<usize> {
+    match dtype {
+        DType::F32 | DType::Bool => len.checked_mul(4),
+        DType::F16 | DType::BF16 => len.div_ceil(2).checked_mul(4),
+        DType::F64 | DType::I32 | DType::I64 | DType::U8 => Some(gpu_bytes(dtype, len)),
+    }
+}
+
 impl GpuBuffer {
     /// A pooled or fresh storage buffer of at least `byte_size` bytes.
+    ///
+    /// # Panics
+    /// If `byte_size` is over this GPU's storage binding limit (#306): no kernel could bind
+    /// the buffer. `to_device` checks an upload first and returns an error instead
+    /// ([`check_fits`]); this catches a kernel output that outgrows its inputs.
+    #[track_caller]
     fn allocate(byte_size: usize, label: &str) -> Option<wgpu::Buffer> {
         let ctx = get_gpu_context()?;
+        let limit = ctx.max_binding_bytes();
+        assert!(
+            byte_size as u64 <= limit,
+            "GPU {label}: {byte_size} bytes exceed this GPU's {limit}-byte storage binding \
+             limit (`max_storage_buffer_binding_size`)"
+        );
         if let Some(buffer) = ctx.buffer_pool().acquire(byte_size) {
             return Some(buffer);
         }
-        // Allocate with the bucket size (power of 2) for consistent pooling
-        let alloc_size = BufferPool::allocation_size(byte_size);
+        // A pooled size rounds up to its power-of-two bucket; a size too large to pool is
+        // allocated exactly, so it never costs twice its bytes (#306).
+        let alloc_size = ctx.buffer_pool().allocation_size_for(byte_size);
         Some(ctx.device().create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
             size: alloc_size as u64,
@@ -158,10 +202,32 @@ impl GpuBuffer {
 
     /// A zero-initialized buffer of `len` `dtype` elements (all-zero bits are 0.0 or
     /// `false` in every GPU element type).
+    ///
+    /// Costs a host allocation and an upload of `gpu_bytes(dtype, len)` bytes. For a kernel
+    /// output that the kernel writes in full, use [`Self::uninit_of`].
     #[must_use]
     pub(crate) fn zeros_of(dtype: DType, len: usize) -> Option<Self> {
         let bytes = vec![0u8; gpu_bytes(dtype, len)];
         Self::upload(dtype, len, &bytes, "Tensor Buffer (zeros)")
+    }
+
+    /// A buffer of `len` `dtype` elements whose contents are unspecified (#310): a pooled
+    /// buffer still holds a dropped tensor's bytes, a fresh one is zero (wgpu clears new
+    /// buffers). Nothing is uploaded.
+    ///
+    /// Only for a kernel output whose shader writes every element `0..len` on every path.
+    /// An output a kernel writes in part, accumulates into, or reads before writing takes
+    /// [`Self::zeros_of`].
+    #[must_use]
+    pub(crate) fn uninit_of(dtype: DType, len: usize) -> Option<Self> {
+        let ctx = get_gpu_context()?;
+        let buffer = Self::allocate(gpu_bytes(dtype, len), "Tensor Buffer (output)")?;
+        Some(Self {
+            buffer: Some(buffer),
+            len,
+            dtype,
+            pool: Some(ctx.buffer_pool_arc()),
+        })
     }
 
     /// The element type.
@@ -294,6 +360,22 @@ impl GpuBuffer {
     pub(crate) fn buffer(&self) -> &wgpu::Buffer {
         debug_assert!(self.buffer.is_some(), "Buffer should not be taken");
         self.buffer.as_ref().expect("Buffer should not be taken")
+    }
+
+    /// The binding a kernel uses for this buffer: bytes `0..gpu_bytes(dtype, len)`, not the
+    /// whole allocation. A pooled buffer is rounded up to a power of two, and the slack past
+    /// `len` holds a dropped tensor's bytes; binding only the tensor's bytes keeps a shader
+    /// that bounds its loop with `arrayLength` inside them (#306, G13), and lets a tensor
+    /// whose bucket is over the binding limit still bind.
+    #[must_use]
+    pub(crate) fn binding(&self) -> wgpu::BindingResource<'_> {
+        wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+            buffer: self.buffer(),
+            offset: 0,
+            // An empty buffer has no bytes to bind; wgpu takes `None` as the whole (empty)
+            // buffer, which is what binding it did before.
+            size: NonZeroU64::new(gpu_bytes(self.dtype, self.len) as u64),
+        })
     }
 
     /// Get the number of elements
@@ -434,5 +516,52 @@ mod copy_region_tests {
         // An in-range region still copies.
         let tail = buf.copy_region(3, 2).expect("in-range copy");
         assert_eq!(tail.to_vec(), vec![4.0, 5.0]);
+    }
+}
+
+#[cfg(test)]
+mod limit_tests {
+    use super::*;
+
+    /// #306: `check_fits` accepts a tensor at the binding limit and refuses one element
+    /// past it, and a length whose byte count overflows, without allocating either.
+    /// Skipped without a GPU.
+    #[test]
+    fn check_fits_is_the_binding_limit() {
+        let Some(ctx) = get_gpu_context() else {
+            return;
+        };
+        let limit = usize::try_from(ctx.max_binding_bytes()).expect("limit fits usize");
+        let at = limit / 4;
+        assert!(check_fits(DType::F32, at).is_ok());
+        let msg = check_fits(DType::F32, at + 1).expect_err("one element past the limit");
+        assert!(msg.contains("storage binding limit"), "{msg}");
+        // Two 16-bit elements per word: 2 * (limit / 4) of them fill the limit exactly.
+        assert!(check_fits(DType::F16, 2 * at).is_ok());
+        assert!(check_fits(DType::BF16, 2 * at + 1).is_err());
+        let msg = check_fits(DType::F32, usize::MAX).expect_err("overflowing byte count");
+        assert!(msg.contains("over usize::MAX"), "{msg}");
+    }
+
+    /// #306 / G13: a buffer binds its tensor's bytes, not its pooled allocation. Five f32
+    /// elements sit in a 32-byte bucket; the binding is 20 bytes. Skipped without a GPU.
+    #[test]
+    fn binding_covers_only_the_tensor() {
+        if get_gpu_context().is_none() {
+            return;
+        }
+        for (dtype, len, bytes) in [
+            (DType::F32, 5, 20),
+            (DType::F16, 5, 12),
+            (DType::Bool, 3, 12),
+        ] {
+            let buf = GpuBuffer::uninit_of(dtype, len).expect("GPU buffer");
+            let wgpu::BindingResource::Buffer(b) = buf.binding() else {
+                panic!("a buffer binding")
+            };
+            assert_eq!(b.offset, 0);
+            assert_eq!(b.size.map(NonZeroU64::get), Some(bytes), "{dtype} x {len}");
+            assert!(buf.buffer().size() >= bytes);
+        }
     }
 }

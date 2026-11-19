@@ -1474,16 +1474,28 @@ impl RawTensor {
     /// Returns `self_t` itself when it is already on `device`.
     ///
     /// # Panics
-    /// If `device` is a GPU and no GPU is available, or it names a GPU other than this
-    /// machine's adapter (`Device::gpu()`).
+    /// As [`Self::try_to_device`] errs: if `device` is a GPU and no GPU is available, it
+    /// names a GPU other than this machine's adapter (`Device::gpu()`), the tensor's dtype
+    /// can't live on the GPU, or the tensor is larger than the GPU can bind.
     #[must_use]
     #[track_caller]
     pub fn to_device(self_t: &Tensor, device: Device) -> Tensor {
+        Self::try_to_device(self_t, device).or_panic("")
+    }
+
+    /// [`Self::to_device`], with an error in place of each panic.
+    ///
+    /// # Errors
+    /// [`VoltaError::DeviceError`] if `device` is a GPU and no GPU is available, or it
+    /// names a GPU other than this machine's adapter, or as [`Storage::try_to_device`]: the
+    /// dtype is F64 or an integer type, or the tensor is over the GPU's storage binding
+    /// limit ([`crate::gpu::max_tensor_bytes`], #306). Nothing is allocated first.
+    pub fn try_to_device(self_t: &Tensor, device: Device) -> Result<Tensor> {
         // Fast path: already on requested device
         {
             let t = self_t.borrow();
             if t.device == device {
-                return self_t.clone();
+                return Ok(self_t.clone());
             }
         }
 
@@ -1493,20 +1505,26 @@ impl RawTensor {
             && let Some(real) = Device::gpu()
             && real != device
         {
-            panic!("to_device({device}): no such GPU; the available GPU is {real}");
+            return Err(VoltaError::DeviceError(format!(
+                "to_device({device}): no such GPU; the available GPU is {real}"
+            )));
         }
 
         let (data, shape, source) = {
             let t = self_t.borrow();
-            (t.data.to_device(&device), t.shape.clone(), t.device.clone())
+            (
+                t.data.try_to_device(&device)?,
+                t.shape.clone(),
+                t.device.clone(),
+            )
         };
-        edge(
+        Ok(edge(
             [self_t.clone()],
             data,
             shape,
             device,
             GradFn::ToDevice(ToDeviceGradFn { source }),
-        )
+        ))
     }
 
     /// Converts to `dtype` as a differentiable op, like PyTorch's `x.to(dtype)`. The values
@@ -2250,12 +2268,22 @@ impl Tensor {
     /// back to this tensor. See [`RawTensor::to_device`].
     ///
     /// # Panics
-    /// If `device` is a GPU and no GPU is available, or it names a GPU other than this
-    /// machine's adapter (`Device::gpu()`).
+    /// As [`Self::try_to_device`] errs: if `device` is a GPU and no GPU is available, it
+    /// names a GPU other than this machine's adapter (`Device::gpu()`), the dtype can't
+    /// live on the GPU, or the tensor is larger than the GPU can bind.
     #[must_use]
     #[track_caller]
     pub fn to_device(&self, device: Device) -> Self {
         RawTensor::to_device(self, device)
+    }
+
+    /// [`Self::to_device`], with an error in place of each panic.
+    ///
+    /// # Errors
+    /// As [`RawTensor::try_to_device`]: no GPU, another GPU's name, a dtype the GPU can't
+    /// hold, or a tensor over the GPU's storage binding limit (#306).
+    pub fn try_to_device(&self, device: Device) -> Result<Self> {
+        RawTensor::try_to_device(self, device)
     }
 
     /// Matrix product.

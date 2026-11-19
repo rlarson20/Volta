@@ -16,6 +16,7 @@ pub(crate) mod shader_template;
 pub(crate) mod staging_pool;
 
 pub use buffer::GpuBuffer;
+pub(crate) use buffer::check_fits;
 pub(crate) use context::GpuContext;
 #[cfg(test)]
 pub(crate) use context::set_f16_emulation;
@@ -48,6 +49,19 @@ pub(crate) fn get_gpu_context() -> Option<&'static GpuContext> {
 #[must_use]
 pub fn is_gpu_available() -> bool {
     get_gpu_context().is_some()
+}
+
+/// The largest tensor, in bytes on the GPU, that this machine's GPU can hold, or `None`
+/// without a GPU.
+///
+/// It is the adapter's `max_storage_buffer_binding_size` (every kernel binds a tensor as
+/// one storage buffer), which Volta requests in place of wgpu's 128 MiB default (#306).
+/// An f32 or bool element takes 4 bytes, and f16 and bf16 take 2, padded to a whole 4-byte
+/// word. [`crate::Tensor::try_to_device`] returns an error for a larger tensor before
+/// allocating anything; a kernel whose output would be larger panics.
+#[must_use]
+pub fn max_tensor_bytes() -> Option<u64> {
+    get_gpu_context().map(GpuContext::max_binding_bytes)
 }
 
 /// Force GPU synchronization - wait for all pending commands to complete.
