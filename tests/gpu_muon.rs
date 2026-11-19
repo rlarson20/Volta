@@ -125,3 +125,28 @@ fn gpu_parameter_without_a_gradient_is_untouched() {
     opt.step();
     assert_eq!(p.data(), values);
 }
+
+/// Muon's update is scale invariant (#322): a gradient scaled by 1e20 moves a GPU
+/// parameter as the unscaled one does. The CPU scales its Frobenius norm by the largest
+/// entry; the GPU still squares the raw entries to inf and gives a zero update.
+#[test]
+#[ignore = "#373: GPU Muon norm overflows past 1.8e19"]
+fn gpu_muon_update_is_the_same_for_a_1e20_scaled_gradient() {
+    if !is_gpu_available() {
+        return;
+    }
+    let g = [0.3f32, -1.2, 0.7, 2.1, -0.4, 0.9];
+    let start = [0.0f32; 6];
+    let unit = run(&[2, 3], &start, &[g.to_vec()], true, true);
+    let scaled = run(
+        &[2, 3],
+        &start,
+        &[g.iter().map(|v| v * 1e20).collect()],
+        true,
+        true,
+    );
+    assert_eq!(unit[0].len(), scaled[0].len());
+    for (i, (s, u)) in scaled[0].iter().zip(&unit[0]).enumerate() {
+        assert!((s - u).abs() < 1e-5, "[{i}]: {s} vs {u}");
+    }
+}
