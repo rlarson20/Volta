@@ -25,6 +25,11 @@ jobs:
   # feature is excluded from every step (wgpu is heavy and cannot run on
   # GPU-less Linux runners). GPU wrappers have not-gpu stubs at their definition
   # (ADDENDUM §9), so call sites carry no `cfg` and this lane's clippy is clean.
+  #
+  # The 1.89 (MSRV) entry builds, lints and tests: what can differ by compiler. The checks
+  # that don't depend on the compiler version (fmt, the fallback grep, rustdoc, the feature
+  # powerset) run on stable only (#258). Both entries keep their job names, which the
+  # rulesets require, so skipping steps needs no ruleset change.
   cpu-only:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -41,9 +46,11 @@ jobs:
           tools: cargo-hack,just
 
       - name: Check formatting
+        if: matrix.rust == 'stable'
         run: cargo fmt --check
 
       - name: Check silent fallbacks
+        if: matrix.rust == 'stable'
         run: just check-fallbacks
 
       - name: Clippy (no default features)
@@ -53,12 +60,14 @@ jobs:
         run: just test-cpu
 
       - name: Build docs (no default features)
+        if: matrix.rust == 'stable'
         run: just doc-cpu
 
       # Feature-combination rot check. `--feature-powerset` includes the
       # empty-feature-set compile that would have caught B5. `gpu` is
       # deliberately excluded on Linux.
       - name: cargo-hack feature powerset (no gpu)
+        if: matrix.rust == 'stable'
         run: just hack --exclude-features gpu
 
   # Every `#[ignore]` names a defect ID with an open issue (scripts/check-ignores.sh). Its own
