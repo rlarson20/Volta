@@ -165,10 +165,10 @@ impl SGD {
             lr: self.lr,
             beta1, // Momentum coefficient
             beta2: 0.0,
-            t: 0.0,
+            m_hat_scale: 0.0,
             eps: 0.0,
             weight_decay: self.weight_decay,
-            padding: 0.0,
+            v_hat_scale: 0.0,
         };
 
         // Updates the parameter (and velocity) in place. `gpu_optimizer_step` unshares each

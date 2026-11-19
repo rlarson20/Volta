@@ -87,14 +87,17 @@ pub struct OptimizerStepParams {
     pub beta1: f32,
     /// Adam's second-moment decay; unused by the SGD ops.
     pub beta2: f32,
-    /// Step count for Adam's bias correction (`1 - beta^t`), held as an `f32`.
-    pub t: f32,
+    /// Adam's first-moment bias correction `1 / (1 - beta1^t)`, computed on the host in
+    /// `f64` and narrowed (#304); zero for the SGD ops.
+    pub m_hat_scale: f32,
     /// Adam's epsilon, added to the denominator.
     pub eps: f32,
     /// L2 coefficient: when nonzero, `weight_decay * param` is added to the gradient before the update.
     pub weight_decay: f32,
-    /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
-    pub padding: f32,
+    /// Adam's second-moment bias correction `1 / (1 - beta2^t)`, computed like
+    /// `m_hat_scale`; zero for the SGD ops. Also brings the struct to 32 bytes, a multiple
+    /// of 16 as a WGSL uniform requires.
+    pub v_hat_scale: f32,
 }
 
 /// Parameters for the Muon kernels

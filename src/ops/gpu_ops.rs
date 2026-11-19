@@ -718,10 +718,10 @@ impl RawTensor {
             lr: step.lr * step.scale,
             beta1: 0.0,
             beta2: 0.0,
-            t: 0.0,
+            m_hat_scale: 0.0,
             eps: 0.0,
             weight_decay: 0.0,
-            padding: 0.0,
+            v_hat_scale: 0.0,
         };
         GpuKernels::optimizer_step(
             param.gpu_buffer_mut()?,
@@ -1269,10 +1269,10 @@ mod tests {
             lr,
             beta1: 0.0,
             beta2: 0.0,
-            t: 0.0,
+            m_hat_scale: 0.0,
             eps: 0.0,
             weight_decay: 0.0,
-            padding: 0.0,
+            v_hat_scale: 0.0,
         }
     }
 
