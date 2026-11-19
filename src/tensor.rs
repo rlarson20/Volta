@@ -430,7 +430,8 @@ impl Tensor {
 /// public because constructors and ops are its associated functions
 /// (`RawTensor::new(..) -> Tensor`); its fields are crate-private, and `Tensor`'s methods
 /// (`shape()`, `data()`, `grad()`, `device()`, ...) read them from outside. Fields:
-/// - `data`: CPU: flat `Vec<f32>` of actual values (row-major order), GPU: `Arc<GpuBuffer>`
+/// - `data`: a [`Storage`]: a typed host buffer of any [`DType`] (row-major), or a GPU
+///   buffer (f32, f16, bf16 or bool) with an optional cached host copy
 /// - `shape`: dimensions, e.g. [batch, channels, height, width]
 /// - `grad`: accumulated gradient (Some if `requires_grad`, None otherwise)
 /// - `requires_grad`: whether to track gradients for this tensor
@@ -1165,6 +1166,14 @@ impl RawTensor {
     /// value, so large `|x|` neither overflows nor produces NaN gradients.
     /// The gradient is `sigmoid(x) - y` (divided by the element count for the mean).
     ///
+    /// The tail term is `ln(1 + e)`, not `log1p(e)` (there is no `log1p` op yet; #348), so
+    /// it is rounded to the f32 spacing of 1 (`1.19e-7`): from about `|x| = 15.5` it reads
+    /// `1.19e-7`, and from about `|x| = 16.6` (`exp(-|x|) < 2^-24`) exactly 0. The absolute
+    /// error per element stays below about `6e-8`, and the gradient is not affected
+    /// (`-3.059022e-7` at `x = 15`, `y = 1`, the exact value to f32). What changes is the
+    /// loss value of a confident prediction: `3.576e-7` at `x = 15` (PyTorch `3.059e-7`)
+    /// and exactly 0 from `x = 17` (PyTorch `4.14e-8`).
+    ///
     /// # Arguments
     /// * `logits` - Raw network outputs (before sigmoid)
     /// * `target` - Target labels (0 or 1)
@@ -1185,9 +1194,10 @@ impl RawTensor {
         let zeros = logits.constant_like(vec![0.0; shape.numel()], shape.truncate_rank());
         let one = logits.constant_like(vec![1.0; shape.numel()], shape.truncate_rank());
 
-        // max(x, 0); ties at x == 0 route gradient to `logits`, giving relu'(0) = 1.
+        // max(x, 0); `max_elem` splits a tie in half, so at x == 0 this passes 1/2.
         let pos_part = logits.max_elem(&zeros);
-        // |x| = max(x, -x)
+        // |x| = max(x, -x); at x == 0 the halves cancel, so |x| passes 0 there and the
+        // gradient at 0 is 1/2 - y = sigmoid(0) - y.
         let abs_logits = logits.max_elem(&logits.neg());
         // ln(1 + exp(-|x|)); exp argument is <= 0, so it cannot overflow.
         let softplus_term = one.add(&abs_logits.neg().exp()).log();
@@ -1609,6 +1619,10 @@ impl RawTensor {
     }
 
     /// Numerically stable softmax along `dim` (subtracts the max first).
+    ///
+    /// # Panics
+    /// If `dim` is not less than the tensor's rank, or the dtype is not a float (as
+    /// [`Self::max_dim`]).
     #[must_use]
     pub fn softmax(self_t: &Tensor, dim: Axis) -> Tensor {
         let max = Self::max_dim(self_t, dim, true);
@@ -1620,6 +1634,10 @@ impl RawTensor {
     /// `LogSoftmax` along a specific axis (numerically stable)
     /// `log(exp(x_i)` / `sum(exp(x_j))`) = `x_i` - `log(sum(exp(x_j)))`
     /// Uses `LogSumExp` trick: log(sum(exp(x))) = m + log(sum(exp(x-m)))
+    ///
+    /// # Panics
+    /// If `dim` is not less than the tensor's rank, or the dtype is not a float (as
+    /// [`Self::max_dim`]).
     #[must_use]
     pub fn log_softmax(self_t: &Tensor, dim: Axis) -> Tensor {
         let max = Self::max_dim(self_t, dim, true);
@@ -1880,24 +1898,44 @@ impl RawTensor {
 
 impl Tensor {
     /// Elementwise sum, with broadcasting.
+    ///
+    /// # Panics
+    /// As [`RawTensor::binary_op`]: if the shapes don't broadcast, the operands are on
+    /// different devices, the promoted dtype is not a float, or the dtypes differ under
+    /// [`DTypePolicy::Strict`](crate::DTypePolicy::Strict).
     #[must_use]
     pub fn add(&self, other: &Self) -> Self {
         RawTensor::binary_op(self, other, BinaryOp::Add)
     }
 
     /// Elementwise difference, with broadcasting.
+    ///
+    /// # Panics
+    /// As [`RawTensor::binary_op`]: if the shapes don't broadcast, the operands are on
+    /// different devices, the promoted dtype is not a float, or the dtypes differ under
+    /// [`DTypePolicy::Strict`](crate::DTypePolicy::Strict).
     #[must_use]
     pub fn sub(&self, other: &Self) -> Self {
         RawTensor::binary_op(self, other, BinaryOp::Sub)
     }
 
     /// Elementwise product, with broadcasting.
+    ///
+    /// # Panics
+    /// As [`RawTensor::binary_op`]: if the shapes don't broadcast, the operands are on
+    /// different devices, the promoted dtype is not a float, or the dtypes differ under
+    /// [`DTypePolicy::Strict`](crate::DTypePolicy::Strict).
     #[must_use]
     pub fn elem_mul(&self, other: &Self) -> Self {
         RawTensor::binary_op(self, other, BinaryOp::Mul)
     }
 
     /// Elementwise quotient, with broadcasting.
+    ///
+    /// # Panics
+    /// As [`RawTensor::binary_op`]: if the shapes don't broadcast, the operands are on
+    /// different devices, the promoted dtype is not a float, or the dtypes differ under
+    /// [`DTypePolicy::Strict`](crate::DTypePolicy::Strict).
     #[must_use]
     pub fn div(&self, other: &Self) -> Self {
         RawTensor::binary_op(self, other, BinaryOp::Div)
@@ -1905,36 +1943,62 @@ impl Tensor {
 
     /// Elementwise maximum, with broadcasting, as `torch.maximum`: NaN if either input is
     /// NaN. A tie splits the gradient in half, and a NaN input gives both sides all of it.
+    ///
+    /// # Panics
+    /// As [`RawTensor::binary_op`]: if the shapes don't broadcast, the operands are on
+    /// different devices, the promoted dtype is not a float, or the dtypes differ under
+    /// [`DTypePolicy::Strict`](crate::DTypePolicy::Strict).
     #[must_use]
     pub fn max_elem(&self, other: &Self) -> Self {
         RawTensor::binary_op(self, other, BinaryOp::Max)
     }
 
     /// Elementwise remainder, with broadcasting.
+    ///
+    /// # Panics
+    /// As [`RawTensor::binary_op`]: if the shapes don't broadcast, the operands are on
+    /// different devices, the promoted dtype is not a float, or the dtypes differ under
+    /// [`DTypePolicy::Strict`](crate::DTypePolicy::Strict).
     #[must_use]
     pub fn modulo(&self, other: &Self) -> Self {
         RawTensor::binary_op(self, other, BinaryOp::Mod)
     }
 
     /// Elementwise `self < other` as a Bool tensor, with broadcasting (`RawTensor::compare`).
+    ///
+    /// # Panics
+    /// As [`RawTensor::compare`]: if the shapes don't broadcast, the operands are on
+    /// different devices, or the dtypes differ under [`DTypePolicy::Strict`](crate::DTypePolicy::Strict).
     #[must_use]
     pub fn lt(&self, other: &Self) -> Self {
         RawTensor::compare(self, other, CmpOp::Lt)
     }
 
     /// Elementwise `self <= other` as a Bool tensor, with broadcasting.
+    ///
+    /// # Panics
+    /// As [`RawTensor::compare`]: if the shapes don't broadcast, the operands are on
+    /// different devices, or the dtypes differ under [`DTypePolicy::Strict`](crate::DTypePolicy::Strict).
     #[must_use]
     pub fn le(&self, other: &Self) -> Self {
         RawTensor::compare(self, other, CmpOp::Le)
     }
 
     /// Elementwise `self > other` as a Bool tensor, with broadcasting.
+    ///
+    /// # Panics
+    /// As [`RawTensor::compare`]: if the shapes don't broadcast, the operands are on
+    /// different devices, or the dtypes differ under [`DTypePolicy::Strict`](crate::DTypePolicy::Strict).
     #[must_use]
     pub fn gt(&self, other: &Self) -> Self {
         RawTensor::compare(self, other, CmpOp::Gt)
     }
 
     /// Elementwise `self >= other` as a Bool tensor, with broadcasting.
+    ///
+    /// # Panics
+    /// As [`RawTensor::compare`]: if the shapes don't broadcast, the operands are on
+    /// different devices, or the dtypes differ under [`DTypePolicy::Strict`](crate::DTypePolicy::Strict).
     #[must_use]
     pub fn ge(&self, other: &Self) -> Self {
         RawTensor::compare(self, other, CmpOp::Ge)
@@ -1942,12 +2006,20 @@ impl Tensor {
 
     /// Elementwise `self == other` as a Bool tensor, with broadcasting (PyTorch's `eq`;
     /// named like `elem_mul` so it can't be mistaken for `PartialEq::eq`).
+    ///
+    /// # Panics
+    /// As [`RawTensor::compare`]: if the shapes don't broadcast, the operands are on
+    /// different devices, or the dtypes differ under [`DTypePolicy::Strict`](crate::DTypePolicy::Strict).
     #[must_use]
     pub fn elem_eq(&self, other: &Self) -> Self {
         RawTensor::compare(self, other, CmpOp::Eq)
     }
 
     /// Elementwise `self != other` as a Bool tensor, with broadcasting.
+    ///
+    /// # Panics
+    /// As [`RawTensor::compare`]: if the shapes don't broadcast, the operands are on
+    /// different devices, or the dtypes differ under [`DTypePolicy::Strict`](crate::DTypePolicy::Strict).
     #[must_use]
     pub fn elem_ne(&self, other: &Self) -> Self {
         RawTensor::compare(self, other, CmpOp::Ne)
@@ -2052,7 +2124,11 @@ impl Tensor {
         RawTensor::reduce_op(self, ReduceOp::Mean)
     }
 
-    /// Fused `self * y + z`.
+    /// Fused `self * y + z`, on equal shapes (no broadcasting).
+    ///
+    /// # Panics
+    /// As [`RawTensor::ternary_op`]: if the three shapes differ, the operands are on
+    /// different devices, or the promoted dtype is not a float.
     #[must_use]
     pub fn mulacc(&self, y: &Self, z: &Self) -> Self {
         RawTensor::ternary_op(self, y, z, TernaryOp::MulAcc)
@@ -2095,6 +2171,9 @@ impl Tensor {
     }
 
     /// Permutes the dimensions by `axes`.
+    ///
+    /// # Panics
+    /// As [`RawTensor::permute`]: if `axes` is not a permutation of `0..rank`.
     #[must_use]
     #[track_caller]
     pub fn permute(&self, axes: &[Axis]) -> Self {
@@ -2124,6 +2203,10 @@ impl Tensor {
     }
 
     /// Pads each dimension by `(before, after)`, filling the border with `value`.
+    ///
+    /// # Panics
+    /// As [`RawTensor::pad_with`]: if `padding` does not have one entry per dimension, or
+    /// the padded shape is invalid. Use [`RawTensor::try_pad_with`] to get an error instead.
     #[must_use]
     #[track_caller]
     pub fn pad_with(&self, padding: &[(usize, usize)], value: PadValue) -> Self {
@@ -2131,6 +2214,10 @@ impl Tensor {
     }
 
     /// Slices each dimension to the half-open `(start, end)` range.
+    ///
+    /// # Panics
+    /// As [`RawTensor::shrink`]: if `ranges` does not have one entry per dimension, or a
+    /// range is empty, reversed, or past the dimension's end.
     #[must_use]
     #[track_caller]
     pub fn shrink(&self, ranges: &[(usize, usize)]) -> Self {
@@ -2138,6 +2225,10 @@ impl Tensor {
     }
 
     /// Takes every `strides[i]`-th element along each dimension.
+    ///
+    /// # Panics
+    /// As [`RawTensor::stride_op`]: if `strides` does not have one entry per dimension, or
+    /// a stride is 0. Use [`RawTensor::try_stride_op`] to get an error instead.
     #[must_use]
     #[track_caller]
     pub fn stride_op(&self, strides: &[usize]) -> Self {
@@ -2168,6 +2259,11 @@ impl Tensor {
     }
 
     /// Matrix product.
+    ///
+    /// # Panics
+    /// As [`RawTensor::matmul`]: on an inner-dimension mismatch, matrix operands of unequal
+    /// rank, an output over [`crate::shape::MAX_NUMEL`] elements, or dtypes that differ or
+    /// are not a float.
     #[must_use]
     #[track_caller]
     pub fn matmul(&self, other: &Self) -> Self {
@@ -2175,6 +2271,9 @@ impl Tensor {
     }
 
     /// Transposes a 2-D tensor.
+    ///
+    /// # Panics
+    /// As [`RawTensor::transpose`]: if the tensor is not 2-D.
     #[must_use]
     #[track_caller]
     pub fn transpose(&self) -> Self {
@@ -2197,6 +2296,10 @@ impl Tensor {
     }
 
     /// Sum along `dim`.
+    ///
+    /// # Panics
+    /// As [`RawTensor::sum_dim`]: if `dim` is not less than the rank. Use
+    /// [`RawTensor::try_sum_dim`] to get an error instead.
     #[must_use]
     #[track_caller]
     pub fn sum_dim(&self, dim: Axis, keepdim: bool) -> Self {
@@ -2205,6 +2308,10 @@ impl Tensor {
 
     /// Maximum along `dim`, as `torch.max(x, dim)`: a NaN in a lane makes it NaN, and the
     /// whole gradient goes to one element per lane (the first on a tie, the first NaN).
+    ///
+    /// # Panics
+    /// As [`RawTensor::max_dim`]: if `dim` is not less than the rank, or the dtype is not
+    /// a float.
     #[must_use]
     #[track_caller]
     pub fn max_dim(&self, dim: Axis, keepdim: bool) -> Self {
@@ -2212,6 +2319,10 @@ impl Tensor {
     }
 
     /// Mean along `dim`.
+    ///
+    /// # Panics
+    /// As [`RawTensor::mean_dim`]: if `dim` is not less than the rank, or the dtype is not
+    /// a float.
     #[must_use]
     #[track_caller]
     pub fn mean_dim(&self, dim: Axis, keepdim: bool) -> Self {
@@ -2219,12 +2330,18 @@ impl Tensor {
     }
 
     /// Softmax along `dim`.
+    ///
+    /// # Panics
+    /// As [`RawTensor::softmax`].
     #[must_use]
     pub fn softmax(&self, dim: Axis) -> Self {
         RawTensor::softmax(self, dim)
     }
 
     /// Log-softmax along `dim`.
+    ///
+    /// # Panics
+    /// As [`RawTensor::log_softmax`].
     #[must_use]
     pub fn log_softmax(&self, dim: Axis) -> Self {
         RawTensor::log_softmax(self, dim)
