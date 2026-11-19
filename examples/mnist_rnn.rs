@@ -5,14 +5,17 @@
 //! An LSTM processes the sequence row-by-row, and the final hidden
 //! state is used for classification.
 //!
+//! Trains on the 60,000-image `train` split and reports accuracy on the held-out 10,000-image `t10k` split.
+//!
 //! Needs the MNIST files under `data/mnist`; if they are missing it prints how to download them and exits, rather than train on made-up data.
 #[path = "common/mnist.rs"]
 mod mnist;
-use std::path::Path;
-use volta::data::{load_mnist_images, load_mnist_labels, to_one_hot};
 use volta::nn::{Adam, BatchNorm1d, LSTMCell, Layer, Linear, Module, RecurrentLayer};
 use volta::utils::ProgressBar;
 use volta::{DataLoader, RawTensor};
+
+/// Per-sample input shape: `[seq_len, features]`, each pixel row is a timestep.
+const SAMPLE_SHAPE: &[usize] = &[28, 28];
 
 /// Extract a single timestep from a batched sequence tensor.
 ///
@@ -48,49 +51,25 @@ fn extract_timestep(batch: &volta::Tensor, t: usize) -> volta::Tensor {
 fn main() {
     println!("=== MNIST RNN (LSTM) Training ===\n");
 
-    // Try to load MNIST data
     let mnist_dir = "data/mnist";
-    let train_images_path = format!("{mnist_dir}/train-images-idx3-ubyte");
-    let train_labels_path = format!("{mnist_dir}/train-labels-idx1-ubyte");
-
-    let (image_data, label_data, num_samples) = if Path::new(&train_images_path).exists()
-        && Path::new(&train_labels_path).exists()
-    {
-        println!("Loading MNIST data from {mnist_dir}...");
-
-        let images = load_mnist_images(&train_images_path).expect("Failed to load MNIST images");
-        let labels = load_mnist_labels(&train_labels_path).expect("Failed to load MNIST labels");
-
-        let num_samples = labels.len();
-        let label_data = to_one_hot(&labels, 10).expect("MNIST labels are digits 0-9");
-
-        println!("Loaded {num_samples} training samples");
-        (images, label_data, num_samples)
-    } else {
-        eprintln!("MNIST data not found in {mnist_dir}.");
-        mnist::print_download_hint();
-        std::process::exit(1);
-    };
-
-    // Pixels must span [0, 1] (`load_mnist_images` scales them); a second rescale would break this.
-    let (lo, hi) = image_data
-        .iter()
-        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &x| {
-            (lo.min(x), hi.max(x))
-        });
-    assert!(
-        lo == 0.0 && hi == 1.0,
-        "training images must span [0, 1], found [{lo}, {hi}]"
+    println!("Loading MNIST data from {mnist_dir}...");
+    let train = mnist::load_split(mnist_dir, "train");
+    // Held-out set: accuracy is measured on these 10,000 images, never trained on.
+    let test = mnist::load_split(mnist_dir, "t10k");
+    let num_samples = train.len;
+    println!(
+        "Loaded {num_samples} training and {} test samples",
+        test.len
     );
 
     // Create DataLoader
     // Shape: [28, 28] - treating image as 28 timesteps of 28 features
     let batch_size = 64;
     let mut dataloader = DataLoader::new(
-        image_data,
-        label_data,
-        &[28, 28], // [seq_len, features] - each row is a timestep
-        &[10],     // 10-class one-hot labels
+        train.images,
+        train.labels,
+        SAMPLE_SHAPE,
+        &[10], // 10-class one-hot labels
         batch_size,
         true, // shuffle
     );
@@ -177,13 +156,21 @@ fn main() {
     // Test accuracy
     println!("\n=== Testing ===");
     bn.train(false);
-    dataloader.reset();
 
+    // A separate, unshuffled loader over the t10k split.
+    let mut test_loader = DataLoader::new(
+        test.images,
+        test.labels,
+        SAMPLE_SHAPE,
+        &[10],
+        batch_size,
+        false,
+    );
     let mut total_correct = 0;
     let mut total_samples = 0;
-    let mut progress = ProgressBar::new(total_batches, "Testing");
+    let mut progress = ProgressBar::new(test.len.div_ceil(batch_size), "Testing");
 
-    for (test_x, test_y) in &mut dataloader {
+    for (test_x, test_y) in &mut test_loader {
         // Process sequence through LSTM
         let batch = test_x.shape().dim(volta::Axis(0)).expect("batch dim");
         let mut state = lstm.initial_state(batch);
@@ -236,5 +223,6 @@ fn main() {
     println!();
 
     let accuracy = total_correct as f32 / total_samples as f32 * 100.0;
-    println!("Training Set Accuracy: {total_correct}/{total_samples} ({accuracy:.2}%)");
+    assert_eq!(total_samples, test.len, "every test sample is scored once");
+    println!("Test Accuracy (t10k): {total_correct}/{total_samples} ({accuracy:.2}%)");
 }
