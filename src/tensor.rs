@@ -87,20 +87,6 @@ impl Tensor {
         std::rc::Rc::ptr_eq(&self.inner, &other.inner)
     }
 
-    /// Wrap an already-built `RawTensor` value into a `Tensor` handle.
-    ///
-    /// For the rare case where code outside this module needs a `Tensor` around a
-    /// `RawTensor` it already has in hand (e.g. wrapping a `&RawTensor` gradient
-    /// argument so a `Tensor` method can be called on it) — `inner` being private
-    /// means a `Tensor { inner: .. }` struct literal only compiles inside this
-    /// module, so this is the crate-wide way to do it instead.
-    #[must_use]
-    pub(crate) fn from_raw(raw: RawTensor) -> Self {
-        Self {
-            inner: Rc::new(RefCell::new(raw)),
-        }
-    }
-
     /// This tensor's shape.
     ///
     /// Read-only — unlike `requires_grad`/`grad_fn`/`parents`, nothing about graph
