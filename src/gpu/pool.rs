@@ -110,6 +110,18 @@ impl BufferPool {
         Self::bucket_to_size(bucket)
     }
 
+    /// The byte size to allocate for a request of `min_size` bytes: its power-of-two bucket
+    /// if the pool takes buffers that large, else `min_size` itself (such a buffer is
+    /// never pooled, so rounding it up would only waste up to half of it, #306).
+    #[must_use]
+    pub const fn allocation_size_for(&self, min_size: usize) -> usize {
+        if min_size > self.config.max_pooled_size {
+            min_size
+        } else {
+            Self::allocation_size(min_size)
+        }
+    }
+
     /// Try to acquire a buffer from the pool
     ///
     /// Returns `Some(buffer)` if a suitable buffer is available,

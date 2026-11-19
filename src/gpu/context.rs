@@ -31,6 +31,10 @@ pub(crate) fn set_f16_emulation(on: bool) {
 /// Compiled cast pipelines by (input, output element type, entry point).
 type CastPipelines = HashMap<(Elem, Elem, &'static str), Arc<wgpu::ComputePipeline>>;
 
+/// The largest storage binding Volta requests: 2^32 four-byte elements, the most a `u32`
+/// element index can address (#306).
+const MAX_ADDRESSABLE_BINDING_BYTES: u64 = (1 << 32) * 4;
+
 /// Default threshold for pending submissions before forcing a sync.
 /// This prevents GPU command queue exhaustion during rapid-fire operations.
 const DEFAULT_SYNC_THRESHOLD: u32 = 16;
@@ -372,6 +376,21 @@ impl GpuContext {
         // Native f16 storage where the adapter has it; f16 falls back to packed words
         // otherwise, and bf16 is always packed (`shader_template`).
         let f16_native = adapter.features().contains(wgpu::Features::SHADER_F16);
+        // The two buffer-size limits are the adapter's, not wgpu's defaults (a 128 MiB
+        // binding and a 256 MiB buffer), so a tensor as large as the GPU can bind works
+        // (#306), clamped to what Volta can use. Shaders index elements with a `u32`, so a
+        // binding past 2^32 four-byte elements could not be addressed; and every Volta
+        // buffer is bound as a storage buffer, so a buffer larger than the binding limit
+        // would be useless. The other limits stay at the defaults.
+        let adapter_limits = adapter.limits();
+        let max_binding = adapter_limits
+            .max_storage_buffer_binding_size
+            .min(MAX_ADDRESSABLE_BINDING_BYTES);
+        let required_limits = wgpu::Limits {
+            max_storage_buffer_binding_size: max_binding,
+            max_buffer_size: adapter_limits.max_buffer_size.min(max_binding),
+            ..wgpu::Limits::default()
+        };
         let device_descriptor = wgpu::DeviceDescriptor {
             label: Some("Volta GPU Device"),
             required_features: if f16_native {
@@ -379,7 +398,7 @@ impl GpuContext {
             } else {
                 wgpu::Features::empty()
             },
-            required_limits: wgpu::Limits::default(),
+            required_limits,
             memory_hints: wgpu::MemoryHints::Performance,
             ..Default::default()
         };
@@ -410,6 +429,14 @@ impl GpuContext {
             pending_submissions: AtomicU32::new(0),
             sync_threshold: DEFAULT_SYNC_THRESHOLD,
         })
+    }
+
+    /// The largest tensor, in bytes, a kernel can bind: the device's
+    /// `max_storage_buffer_binding_size`, which Volta requests at the adapter's value
+    /// (#306). `to_device` refuses a larger upload with a `VoltaError`.
+    #[must_use]
+    pub fn max_binding_bytes(&self) -> u64 {
+        self.device.limits().max_storage_buffer_binding_size
     }
 
     /// Get the GPU device name for display

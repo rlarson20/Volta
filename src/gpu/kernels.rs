@@ -386,21 +386,21 @@ fn reduce_to_scalar(input: &GpuBuffer, kind: Reduction) -> Option<(GpuBuffer, Op
     let passes: Vec<Pass> = previous
         .zip(&levels)
         .map(|(prev, level)| {
-            let mut bindings: Vec<(u32, &wgpu::Buffer)> = Vec::with_capacity(5);
+            let mut bindings: Vec<(u32, wgpu::BindingResource<'_>)> = Vec::with_capacity(5);
             let pipeline = match prev {
                 None => {
-                    bindings.push((0, input.buffer()));
+                    bindings.push((0, input.binding()));
                     first
                 }
                 Some(prev) => {
-                    bindings.push((1, prev.out.buffer()));
-                    bindings.extend(prev.count.as_ref().map(|c| (3, c.buffer())));
+                    bindings.push((1, prev.out.binding()));
+                    bindings.extend(prev.count.as_ref().map(|c| (3, c.binding())));
                     next
                 }
             };
-            bindings.push((2, level.out.buffer()));
-            bindings.extend(level.count.as_ref().map(|c| (4, c.buffer())));
-            bindings.push((5, &level.params));
+            bindings.push((2, level.out.binding()));
+            bindings.extend(level.count.as_ref().map(|c| (4, c.binding())));
+            bindings.push((5, level.params.as_entire_binding()));
             Pass {
                 pipeline,
                 bindings,
@@ -466,16 +466,16 @@ fn reduce_backward(
         (_, None) => &pipelines.mean_backward,
     };
     // Exactly the bindings the entry point uses (the pipelines use an auto layout).
-    let mut bindings: Vec<(u32, &wgpu::Buffer)> = vec![
-        (0, out_grad.buffer()),
-        (2, result.buffer()),
-        (3, &params_buffer),
+    let mut bindings: Vec<(u32, wgpu::BindingResource<'_>)> = vec![
+        (0, out_grad.binding()),
+        (2, result.binding()),
+        (3, params_buffer.as_entire_binding()),
     ];
     if let Some(saved) = max {
         assert_same_dtype("max_backward", &[out_grad, saved.input]);
-        bindings.push((1, saved.count.buffer()));
-        bindings.push((4, saved.input.buffer()));
-        bindings.push((5, saved.value.buffer()));
+        bindings.push((1, saved.count.binding()));
+        bindings.push((4, saved.input.binding()));
+        bindings.push((5, saved.value.binding()));
     }
     run_passes(
         ctx,
@@ -580,13 +580,14 @@ impl Groups {
 }
 
 /// One compute pass: its pipeline, exactly the buffers its entry point binds in group 0 as
-/// `(binding, buffer)` (the pipelines use auto layouts, which hold only what the entry
-/// point uses), and its launch grid.
+/// `(binding, resource)` (the pipelines use auto layouts, which hold only what the entry
+/// point uses), and its launch grid. A data buffer is bound by [`GpuBuffer::binding`], its
+/// tensor's bytes only, never the pooled allocation's slack (#306).
 struct Pass<'a> {
     /// The compute pipeline.
     pipeline: &'a wgpu::ComputePipeline,
     /// Group-0 bindings.
-    bindings: Vec<(u32, &'a wgpu::Buffer)>,
+    bindings: Vec<(u32, wgpu::BindingResource<'a>)>,
     /// The launch grid.
     groups: Groups,
 }
@@ -605,7 +606,7 @@ fn uniform_buffer(ctx: &GpuContext, bytes: &[u8]) -> wgpu::Buffer {
 /// pending (`increment_pending`) and let the throttle decide whether to wait
 /// (`maybe_sync`). Every kernel submits through here, so none can skip either step (#131).
 ///
-/// A pass borrows raw `wgpu::Buffer`s, so the caller holds every `GpuBuffer` it binds past
+/// A pass borrows the `wgpu::Buffer`s it binds, so the caller holds every `GpuBuffer` it binds past
 /// this call: dropping one returns it to the shared pool, where another thread could write
 /// it before the submit (#244).
 fn run_passes(ctx: &GpuContext, label: &str, passes: &[Pass<'_>]) {
@@ -616,9 +617,9 @@ fn run_passes(ctx: &GpuContext, label: &str, passes: &[Pass<'_>]) {
         let entries: Vec<wgpu::BindGroupEntry> = p
             .bindings
             .iter()
-            .map(|&(binding, buffer)| wgpu::BindGroupEntry {
-                binding,
-                resource: buffer.as_entire_binding(),
+            .map(|(binding, resource)| wgpu::BindGroupEntry {
+                binding: *binding,
+                resource: resource.clone(),
             })
             .collect();
         let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
@@ -658,12 +659,16 @@ fn run_kernel(
 ) -> Option<()> {
     let ctx = get_gpu_context()?;
     let params = (!uniform.is_empty()).then(|| uniform_buffer(ctx, uniform));
-    let mut bindings: Vec<(u32, &wgpu::Buffer)> = buffers
+    let mut bindings: Vec<(u32, wgpu::BindingResource<'_>)> = buffers
         .iter()
         .zip(0u32..)
-        .map(|(b, binding)| (binding, b.buffer()))
+        .map(|(b, binding)| (binding, b.binding()))
         .collect();
-    bindings.extend(params.as_ref().map(|p| (pack_u32(buffers.len()), p)));
+    bindings.extend(
+        params
+            .as_ref()
+            .map(|p| (pack_u32(buffers.len()), p.as_entire_binding())),
+    );
     run_passes(
         ctx,
         label,
@@ -704,7 +709,7 @@ impl GpuKernels {
                 input.len(),
             ),
         };
-        let out = GpuBuffer::zeros_of(target, n)?;
+        let out = GpuBuffer::uninit_of(target, n)?; // every element written
         dispatch_counted("Cast", &pipeline, &[input, &out], n)?;
         Some(out)
     }
@@ -714,7 +719,8 @@ impl GpuKernels {
     #[must_use]
     pub(crate) fn amp_unscale(grad: &GpuBuffer, inv: f32) -> Option<(GpuBuffer, bool)> {
         let ctx = get_gpu_context()?;
-        let out = GpuBuffer::zeros_of(grad.dtype(), grad.len())?;
+        let out = GpuBuffer::uninit_of(grad.dtype(), grad.len())?; // every element written
+        // `found` stays zeroed: the shader only ever sets it.
         let found = GpuBuffer::zeros_of(DType::Bool, 1)?;
         let params = [pack_u32(grad.len()), inv.to_bits(), 0, 0];
         run_kernel(
@@ -748,7 +754,7 @@ impl GpuKernels {
             CmpOp::Eq => &p.cmp_eq,
             CmpOp::Ne => &p.cmp_ne,
         };
-        let out = GpuBuffer::zeros_of(DType::Bool, a.len())?;
+        let out = GpuBuffer::uninit_of(DType::Bool, a.len())?; // every element written
         dispatch_counted("Compare", pipeline, &[a, b, &out], a.len())?;
         Some(out)
     }
@@ -767,7 +773,7 @@ impl GpuKernels {
         assert_same_dtype("where", &[x, y]);
         assert_same_len("where", &[cond, x, y]);
         let ctx = get_gpu_context()?;
-        let out = GpuBuffer::zeros_of(x.dtype(), x.len())?;
+        let out = GpuBuffer::uninit_of(x.dtype(), x.len())?; // every element written
         dispatch_counted(
             "Where",
             &ctx.pipelines_for(x.dtype()).where_select,
@@ -794,7 +800,7 @@ impl GpuKernels {
         assert_same_dtype("binary_op", &[a, b]);
         assert_same_len("binary_op", &[a, b]);
         let ctx = get_gpu_context()?;
-        let result = GpuBuffer::zeros_of(a.dtype(), a.len())?;
+        let result = GpuBuffer::uninit_of(a.dtype(), a.len())?; // every element written
         let pipeline = op.gpu_forward(ctx.pipelines_for(a.dtype()));
         run_kernel(
             "Binary Op",
@@ -813,7 +819,7 @@ impl GpuKernels {
     pub fn unary_op(input: &GpuBuffer, op: UnaryOp) -> Option<GpuBuffer> {
         let ctx = get_gpu_context()?;
         let (pipeline, _) = op.gpu_pipelines(ctx.pipelines_for(input.dtype()))?;
-        let result = GpuBuffer::zeros_of(input.dtype(), input.len())?;
+        let result = GpuBuffer::uninit_of(input.dtype(), input.len())?; // every element written
         run_kernel(
             "Unary Op",
             pipeline,
@@ -845,7 +851,7 @@ impl GpuKernels {
         assert_same_len("unary_backward", &[out_grad, x]);
         let ctx = get_gpu_context()?;
         let (_, pipeline) = op.gpu_pipelines(ctx.pipelines_for(out_grad.dtype()))?;
-        let result = GpuBuffer::zeros_of(out_grad.dtype(), out_grad.len())?;
+        let result = GpuBuffer::uninit_of(out_grad.dtype(), out_grad.len())?; // every element written
         run_kernel(
             "Unary Backward",
             pipeline,
@@ -879,7 +885,7 @@ impl GpuKernels {
         assert_same_dtype("binary_backward_a", &[out_grad, a, b]);
         assert_same_len("binary_backward_a", &[out_grad, a, b]);
         let ctx = get_gpu_context()?;
-        let result = GpuBuffer::zeros_of(out_grad.dtype(), out_grad.len())?;
+        let result = GpuBuffer::uninit_of(out_grad.dtype(), out_grad.len())?; // every element written
         let pipeline = op.gpu_backward(ctx.pipelines_for(out_grad.dtype()))?.a;
         run_kernel(
             "Binary Backward A",
@@ -914,7 +920,7 @@ impl GpuKernels {
         assert_same_dtype("binary_backward_b", &[out_grad, a, b]);
         assert_same_len("binary_backward_b", &[out_grad, a, b]);
         let ctx = get_gpu_context()?;
-        let result = GpuBuffer::zeros_of(out_grad.dtype(), out_grad.len())?;
+        let result = GpuBuffer::uninit_of(out_grad.dtype(), out_grad.len())?; // every element written
         let pipeline = op.gpu_backward(ctx.pipelines_for(out_grad.dtype()))?.b;
         run_kernel(
             "Binary Backward B",
@@ -1014,12 +1020,12 @@ impl GpuKernels {
         let params_buffer = uniform_buffer(ctx, bytemuck::bytes_of(&params));
         let backward = op.gpu_backward(ctx.pipelines_for(out_grad.dtype()))?;
         let bindings = vec![
-            (0, out_grad.buffer()),
-            (1, a.buffer()),
-            (2, b.buffer()),
-            (3, temp_buffer.buffer()),
-            (4, result_grad.buffer()),
-            (5, &params_buffer),
+            (0, out_grad.binding()),
+            (1, a.binding()),
+            (2, b.binding()),
+            (3, temp_buffer.binding()),
+            (4, result_grad.binding()),
+            (5, params_buffer.as_entire_binding()),
         ];
         run_passes(
             ctx,
@@ -1071,7 +1077,8 @@ impl GpuKernels {
         assert_eq!(b.len(), k * n, "B buffer size doesn't match dimensions");
 
         let ctx = get_gpu_context()?;
-        let result = GpuBuffer::zeros_of(a.dtype(), m * n)?;
+        // Every element written: the tiles cover (m, n) and each in-bounds thread stores.
+        let result = GpuBuffer::uninit_of(a.dtype(), m * n)?;
 
         run_kernel(
             "MatMul",
@@ -2262,9 +2269,9 @@ fn muon_dispatch(
     }
     let ctx = get_gpu_context()?;
     let params_buffer = uniform_buffer(ctx, bytemuck::bytes_of(params));
-    let mut bindings: Vec<(u32, &wgpu::Buffer)> =
-        buffers.iter().map(|&(i, b)| (i, b.buffer())).collect();
-    bindings.push((3, &params_buffer));
+    let mut bindings: Vec<(u32, wgpu::BindingResource<'_>)> =
+        buffers.iter().map(|&(i, b)| (i, b.binding())).collect();
+    bindings.push((3, params_buffer.as_entire_binding()));
     run_passes(
         ctx,
         "Muon",

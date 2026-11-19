@@ -825,51 +825,71 @@ impl Storage {
     /// Move to a specific device
     ///
     /// # Panics
-    /// If `device` is a GPU and no GPU is available (it never returns CPU storage for a
-    /// GPU request), or the storage is F64 or an integer type: GPU tensors hold F32, F16,
-    /// BF16 and Bool (PyTorch's MPS refuses f64 too), and converting on the way would
-    /// change the dtype silently.
+    /// As [`Self::try_to_device`] errs: if `device` is a GPU and no GPU is available (it
+    /// never returns CPU storage for a GPU request), the storage is F64 or an integer type,
+    /// or it is larger than the GPU can bind.
     #[must_use]
     #[track_caller]
     pub fn to_device(&self, device: &Device) -> Self {
+        self.try_to_device(device).or_panic("")
+    }
+
+    /// Move to a specific device, or say why it can't be moved.
+    ///
+    /// # Errors
+    /// [`VoltaError::DeviceError`] if `device` is a GPU and no GPU is available; if the
+    /// storage is F64 or an integer type (GPU tensors hold F32, F16, BF16 and Bool, as
+    /// PyTorch's MPS refuses f64, and converting on the way would change the dtype
+    /// silently); or if it is larger than the GPU's storage binding limit
+    /// ([`crate::gpu::max_tensor_bytes`]), checked before anything is allocated (#306).
+    pub fn try_to_device(&self, device: &Device) -> Result<Self, VoltaError> {
         match device {
-            Device::CPU => match self {
+            Device::CPU => Ok(match self {
                 // Already host memory: share the buffer.
                 Self::Cpu(_) => self.clone(),
                 Self::Gpu(_) => Self::Cpu(self.host_buf().clone()),
-            },
+            }),
             Device::GPU(_) => {
                 #[cfg(feature = "gpu")]
                 {
-                    assert!(
-                        is_gpu_available(),
-                        "to_device({device}): no GPU is available"
-                    );
+                    if !is_gpu_available() {
+                        return Err(VoltaError::DeviceError(format!(
+                            "to_device({device}): no GPU is available"
+                        )));
+                    }
                     match self {
                         // Already on the (only) GPU: share the buffer.
-                        Self::Gpu(_) => self.clone(),
+                        Self::Gpu(_) => Ok(self.clone()),
                         Self::Cpu(buf) => {
-                            assert!(
-                                matches!(
-                                    buf.dtype(),
-                                    DType::F32 | DType::F16 | DType::BF16 | DType::Bool
-                                ),
-                                "to_device({device}): GPU tensors hold f32, f16, bf16 or bool, \
-                                 not {} (PyTorch's MPS refuses f64 too); cast with to_dtype first",
-                                buf.dtype()
-                            );
-                            let buffer = GpuBuffer::from_host(buf).unwrap_or_else(|| {
-                                panic!("to_device({device}): GPU buffer allocation failed")
-                            });
-                            Self::from_gpu_buffer(buffer)
+                            if !matches!(
+                                buf.dtype(),
+                                DType::F32 | DType::F16 | DType::BF16 | DType::Bool
+                            ) {
+                                return Err(VoltaError::DeviceError(format!(
+                                    "to_device({device}): GPU tensors hold f32, f16, bf16 or \
+                                     bool, not {} (PyTorch's MPS refuses f64 too); cast with \
+                                     to_dtype first",
+                                    buf.dtype()
+                                )));
+                            }
+                            crate::gpu::check_fits(buf.dtype(), buf.len()).map_err(|e| {
+                                VoltaError::DeviceError(format!("to_device({device}): {e}"))
+                            })?;
+                            let buffer = GpuBuffer::from_host(buf).ok_or_else(|| {
+                                VoltaError::DeviceError(format!(
+                                    "to_device({device}): GPU buffer allocation failed"
+                                ))
+                            })?;
+                            Ok(Self::from_gpu_buffer(buffer))
                         }
                     }
                 }
                 #[cfg(not(feature = "gpu"))]
                 {
-                    panic!(
-                        "to_device({device}): no GPU is available (built without the `gpu` feature)"
-                    )
+                    Err(VoltaError::DeviceError(format!(
+                        "to_device({device}): no GPU is available (built without the `gpu` \
+                         feature)"
+                    )))
                 }
             }
         }

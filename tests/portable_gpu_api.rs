@@ -1,4 +1,4 @@
-//! The eight GPU control functions exist with and without the `gpu` feature (#342), so a
+//! The nine GPU control functions exist with and without the `gpu` feature (#342), so a
 //! portable program needs no `cfg` of its own to call them.
 //!
 //! The first test compiles and runs under every feature set. The second runs only without
@@ -8,7 +8,7 @@
 use volta::RawTensor;
 use volta::gpu::{
     gpu_cleanup, gpu_compact, gpu_pending_count, gpu_pool_stats, gpu_sync, gpu_sync_threshold,
-    is_gpu_available,
+    is_gpu_available, max_tensor_bytes,
 };
 
 /// Every function is callable through the same paths in every build.
@@ -23,6 +23,7 @@ fn control_functions_are_callable_in_every_build() {
     let _ = gpu_pool_stats();
     let _ = gpu_cleanup();
     let _ = gpu_compact();
+    assert_eq!(max_tensor_bytes().is_some(), is_gpu_available());
     volta::gpu::invalidate_all_tensor_caches(&[&t]);
     assert_eq!(t.data(), vec![1.0, 2.0], "a CPU tensor is untouched");
 }
@@ -38,6 +39,7 @@ fn stubs_give_the_no_gpu_answers() {
     assert_eq!(gpu_pool_stats(), None);
     assert!(!gpu_cleanup(), "no GPU to clean up");
     assert!(!gpu_compact(), "no GPU to compact");
+    assert_eq!(max_tensor_bytes(), None);
     let t = RawTensor::new(vec![3.0], &[1], false);
     volta::gpu::invalidate_all_tensor_caches(&[&t]);
     assert_eq!(t.item(), 3.0);
