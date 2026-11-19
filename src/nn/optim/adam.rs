@@ -43,6 +43,20 @@ impl AdamState {
     }
 }
 
+/// The refusal for the first half (f16 or bf16) parameter in `params`, if any (#317).
+fn half_parameter(params: &[Tensor]) -> Option<String> {
+    params.iter().enumerate().find_map(|(i, p)| {
+        let dtype = p.dtype();
+        matches!(dtype, crate::DType::F16 | crate::DType::BF16).then(|| {
+            format!(
+                "Adam: parameter {i} is {dtype}; Adam keeps its moment estimates in the \
+                 parameter's dtype, where the second moment underflows (#317). Keep the \
+                 parameters f32 and run the forward under amp::autocast"
+            )
+        })
+    })
+}
+
 impl Adam {
     /// Optimizer over `params`. Moment estimates are allocated on each parameter's first step.
     ///
@@ -68,6 +82,11 @@ impl Adam {
     /// or if the same tensor is listed twice in `params` (#101).
     /// A non-leaf parameter (one with a `grad_fn`) is rejected too (#102); a frozen leaf
     /// (`requires_grad == false`) is accepted and skipped by `step`, as in PyTorch.
+    /// So is a half (f16 or bf16) parameter (#317): Adam keeps its moment estimates in the
+    /// parameter's dtype, and in f16 the second moment `(1 - beta2) * g^2` underflows to 0
+    /// for `|g|` below about 5.5e-3, which gives a finite but wrong step (and a different
+    /// one on the GPU). Keep the parameters f32 and run the forward under
+    /// [`crate::amp::autocast`] instead.
     pub fn try_new(
         params: Vec<Tensor>,
         lr: f32,
@@ -77,6 +96,9 @@ impl Adam {
     ) -> crate::Result<Self> {
         super::check_unique(&params)?;
         super::check_leaves(&params)?;
+        if let Some(message) = half_parameter(&params) {
+            return Err(crate::VoltaError::InvalidParameter(message));
+        }
         super::check_non_negative("learning rate", lr)?;
         super::check_non_negative("epsilon", eps)?;
         super::check_beta(0, betas.0)?;
@@ -106,14 +128,19 @@ impl Adam {
     /// Updates all parameters using their accumulated gradients.
     ///
     /// # Panics
-    /// If a parameter's dtype is not a float. This is checked for every parameter before
-    /// any is updated.
+    /// If a parameter's dtype is not f32 or f64: an integer dtype has no kernel, and a half
+    /// parameter (cast with `Module::to_dtype` after the optimizer was built) is refused as
+    /// [`Self::try_new`] refuses it. This is checked for every parameter before any is
+    /// updated.
     #[track_caller]
     pub fn step(&mut self) {
         // Each parameter steps in its own dtype (a mixed list is fine, as in PyTorch);
         // each must have a kernel. Checked for all before any is updated.
         for param in &self.params {
             crate::real::compute_dtype(|| "Adam step".to_string(), &[param.dtype()]);
+        }
+        if let Some(message) = half_parameter(&self.params) {
+            panic!("{message}");
         }
         super::assert_grad_lens("Adam", &self.params);
 

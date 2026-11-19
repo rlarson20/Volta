@@ -1,4 +1,4 @@
-//! Every op family, every layer kind, SGD and Adam in f16 and bf16 against PyTorch
+//! Every op family, every layer kind, and SGD in f16 and bf16 against PyTorch
 //! computing natively in those dtypes on the CPU (`tests/fixtures/torch/half.safetensors`,
 //! generator group `half`).
 //!
@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use volta::io::{StateDict, TensorData, TypedTensorData, load_safetensors_raw};
 use volta::storage::Element;
 use volta::{
-    Adam, Axis, BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, DType, Embedding, Layer, LayerNorm,
+    Axis, BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, DType, Embedding, Layer, LayerNorm,
     Linear, MaxPool2d, Module, RawTensor, SGD, Storage, Tensor,
 };
 
@@ -69,7 +69,6 @@ const BOUNDS: &[(&str, f64, f64)] = &[
     ("batchnorm", 1.5, 3.0),
     ("layernorm", 1.5, 2.0),
     ("sgd", 1.0, 0.0),
-    ("adam", 1.0, 0.0),
 ];
 
 /// The bound for `label` (`<case>.out`, `<case>.grad_<x>` or `<optimizer>.after<k>`).
@@ -528,35 +527,22 @@ fn other_layers<H: Half>() {
     check(&f, "embedding", &out, &[("weight", w, None)]);
 }
 
-/// Three steps of SGD with momentum and of Adam with L2 weight decay under fixed
-/// gradients. Volta steps in f32 and rounds parameter and state once per step; torch
-/// rounds after each of its in-place ops (f32 master weights are P7).
+/// Three steps of SGD with momentum under fixed gradients. Volta steps in f32 and rounds
+/// parameter and state once per step; torch rounds after each of its in-place ops (f32
+/// master weights are P7). Adam refuses half parameters (#317,
+/// `tests/adam_half_params.rs`).
 fn optimizers<H: Half>() {
     let f = Fixture::<H>::load();
-    for name in ["sgd", "adam"] {
-        let p = f.tensor(&format!("{name}.init"), true);
-        let mut opt: Box<dyn FnMut()> = if name == "sgd" {
-            let mut o = SGD::new(vec![p.clone()], 2f32.powi(-4), 0.875, 0.0);
-            Box::new(move || o.step())
-        } else {
-            let mut o = Adam::new(
-                vec![p.clone()],
-                2f32.powi(-7),
-                (0.875, 1.0 - 2f32.powi(-10)),
-                2f32.powi(-14),
-                2f32.powi(-7),
-            );
-            Box::new(move || o.step())
-        };
-        for k in 0..3 {
-            p.set_grad(Storage::from_typed(f.get(&format!("{name}.g{k}")).0));
-            opt();
-            assert_close::<H>(
-                &format!("{name}.after{k}"),
-                &read::<H>(&p),
-                &f.values(&format!("{name}.after{k}")),
-            );
-        }
+    let p = f.tensor("sgd.init", true);
+    let mut o = SGD::new(vec![p.clone()], 2f32.powi(-4), 0.875, 0.0);
+    for k in 0..3 {
+        p.set_grad(Storage::from_typed(f.get(&format!("sgd.g{k}")).0));
+        o.step();
+        assert_close::<H>(
+            &format!("sgd.after{k}"),
+            &read::<H>(&p),
+            &f.values(&format!("sgd.after{k}")),
+        );
     }
 }
 

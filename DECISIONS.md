@@ -784,6 +784,14 @@ A weight shared between layers (`l2.weight = l1.weight.clone()`) is one tensor. 
 
 **History:** the first H8 fix made `Muon::new` panic on a GPU parameter instead of writing the kernel. That was wrong: a missing GPU path is a gap to close (`.claude/rules/gpu.md`), and refusing the input where the CPU path works only moves the failure. It was replaced by the kernels above.
 
+### Adam refuses half parameters (#317)
+
+**Decision:** `Adam::try_new` returns `InvalidParameter` for an f16 or bf16 parameter, and `step` panics with the same message for one cast to half after the optimizer was built. The message points to f32 parameters under `amp::autocast`.
+
+**Why:** Adam keeps `m` and `v` in the parameter's dtype. In f16, `(1 - beta2) * g^2` is below the smallest subnormal for `|g|` under about 5.5e-3, so `v` is stored as 0 every step: the CPU step grew as `lr * sqrt(t)` and the GPU step was `lr * m / eps` (100 per step on the issue's probe), a finite wrong answer that also differed between backends. PyTorch is wrong here too (its f16 `eps` rounds to 0). Autocast already gives the supported path: f32 parameters, f32 gradients, low-precision activations.
+
+**Rejected for now:** f32 optimizer state for half parameters. It is the fuller fix, but it touches SGD, Muon and the GPU optimizer kernel and overlaps f32 master weights, so it is tracked on #76. SGD and Muon still step half parameters (their state has no squared term to underflow). The `half` torch fixture and `gpu_half_optimizers_match_cpu` no longer run Adam.
+
 ## Concurrency and Async
 
 ### Stay synchronous
