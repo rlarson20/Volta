@@ -129,10 +129,9 @@ fn gpu_parameter_without_a_gradient_is_untouched() {
 }
 
 /// Muon's update is scale invariant (#322): a gradient scaled by 1e20 moves a GPU
-/// parameter as the unscaled one does. The CPU scales its Frobenius norm by the largest
-/// entry; the GPU still squares the raw entries to inf and gives a zero update.
+/// parameter as the unscaled one does. Both backends divide by the largest entry before
+/// squaring (#373), so no square overflows to inf.
 #[test]
-#[ignore = "#373: GPU Muon norm overflows past 1.8e19"]
 fn gpu_muon_update_is_the_same_for_a_1e20_scaled_gradient() {
     if !is_gpu_available() {
         return;

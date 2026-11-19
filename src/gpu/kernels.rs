@@ -320,6 +320,8 @@ enum Reduction {
     SumSquares,
     /// Maximum, with the number of elements equal to it.
     Max,
+    /// Largest magnitude, `Max` of `abs(x)` (the count is computed and unused).
+    AbsMax,
 }
 
 /// Elements one workgroup of `reduce.wgsl` consumes per pass (256 threads x 4).
@@ -342,6 +344,7 @@ fn reduce_to_scalar(input: &GpuBuffer, kind: Reduction) -> Option<(GpuBuffer, Op
         Reduction::Sum | Reduction::Mean => (&pipelines.sum_first, &pipelines.sum_next),
         Reduction::SumSquares => (&pipelines.sumsq_first, &pipelines.sum_next),
         Reduction::Max => (&pipelines.max_first, &pipelines.max_next),
+        Reduction::AbsMax => (&pipelines.absmax_first, &pipelines.max_next),
     };
     let total = input.len();
     assert!(total > 0, "GPU reduction of an empty buffer");
@@ -355,7 +358,7 @@ fn reduce_to_scalar(input: &GpuBuffer, kind: Reduction) -> Option<(GpuBuffer, Op
     loop {
         let groups = n.div_ceil(REDUCE_PER_GROUP);
         let count = match kind {
-            Reduction::Max => Some(GpuBuffer::zeros_of(DType::Bool, groups)?),
+            Reduction::Max | Reduction::AbsMax => Some(GpuBuffer::zeros_of(DType::Bool, groups)?),
             Reduction::Sum | Reduction::Mean | Reduction::SumSquares => None,
         };
         let divisor = if kind == Reduction::Mean && groups == 1 {
@@ -1698,14 +1701,43 @@ impl GpuKernels {
             g.copy_region(0, g.len())?
         };
 
-        // Frobenius normalization: the sum of squares stays on the device.
+        // Frobenius normalization, all on the device, as the CPU's `frobenius_norm`
+        // (#373): divide by the largest magnitude `m` before squaring, so an entry past
+        // about 1.8e19 does not square to inf, then norm = m * sqrt(sum((x / m)^2)). An
+        // all-zero or infinite `m` takes the plain sum; NaN propagates.
         let ctx = get_gpu_context()?;
-        let norm_sq = Self::sum_squares(&x0)?;
         let len = pack_u32(x0.len());
+        let (abs_max, _) = reduce_to_scalar(&x0, Reduction::AbsMax)?;
+        let scaled = GpuBuffer::zeros(x0.len())?;
+        muon_dispatch(
+            &ctx.pipelines().muon_scale,
+            &[(0, &x0), (1, &abs_max), (2, &scaled)],
+            &MuonParams {
+                n: len,
+                flag: 0,
+                alpha: 0.0,
+                beta: 0.0,
+            },
+            workgroups_for(x0.len()),
+        )?;
+        let scaled_sq = Self::sum_squares(&scaled)?;
+        drop(scaled);
+        let norm = GpuBuffer::zeros(1)?;
+        muon_dispatch(
+            &ctx.pipelines().muon_norm,
+            &[(0, &abs_max), (1, &scaled_sq), (2, &norm)],
+            &MuonParams {
+                n: 1,
+                flag: 0,
+                alpha: 0.0,
+                beta: 0.0,
+            },
+            1,
+        )?;
         let mut x = GpuBuffer::zeros(x0.len())?;
         muon_dispatch(
             &ctx.pipelines().muon_normalize,
-            &[(0, &x0), (1, &norm_sq), (2, &x)],
+            &[(0, &x0), (1, &norm), (2, &x)],
             &MuonParams {
                 n: len,
                 flag: 0,
@@ -2592,6 +2624,42 @@ mod muon_tests {
         let buf = GpuBuffer::from_slice(&g).expect("GPU buffer");
         let _ = GpuKernels::muon_newton_schulz(&buf, 5, 9, 5, COEFFS, EPS).expect("GPU");
         assert_eq!(buf.to_vec(), g);
+    }
+
+    /// #373: the GPU Frobenius norm scales by the largest magnitude as the CPU's does, so
+    /// a 1e20-scaled matrix orthogonalizes like the unscaled one, and an infinite or NaN
+    /// entry gives the same NaN pattern on both backends.
+    #[test]
+    fn newton_schulz_norm_matches_the_cpu_at_extreme_scales() {
+        if !gpu::is_gpu_available() {
+            return;
+        }
+        crate::tensor::manual_seed(0x373);
+        let base = random_matrix(4, 6);
+        let scaled: Vec<f32> = base.iter().map(|v| v * 1e20).collect();
+        let mut with_inf = base.clone();
+        *crate::index::slot(&mut with_inf, 3) = f32::INFINITY;
+        let mut with_nan = base.clone();
+        *crate::index::slot(&mut with_nan, 7) = f32::NAN;
+        for (name, g) in [("1e20", &scaled), ("inf", &with_inf), ("nan", &with_nan)] {
+            let mut cpu = g.clone();
+            Muon::newton_schulz(&mut cpu, 4, 6, 5);
+            let gpu = on_gpu(g, 4, 6, 5);
+            assert_eq!(gpu.len(), cpu.len(), "{name}: length");
+            for (i, (c, d)) in cpu.iter().zip(&gpu).enumerate() {
+                assert!(
+                    (c.is_nan() && d.is_nan()) || (c - d).abs() < 1e-5,
+                    "{name}[{i}]: CPU {c}, GPU {d}"
+                );
+            }
+        }
+        // The 1e20 case is not degenerate: it moves like the unscaled matrix.
+        let unit = on_gpu(&base, 4, 6, 5);
+        let big = on_gpu(&scaled, 4, 6, 5);
+        assert!(unit.iter().any(|v| v.abs() > 0.1), "{unit:?}");
+        for (i, (u, b)) in unit.iter().zip(&big).enumerate() {
+            assert!((u - b).abs() < 1e-5, "[{i}]: unit {u}, 1e20 {b}");
+        }
     }
 
     #[test]

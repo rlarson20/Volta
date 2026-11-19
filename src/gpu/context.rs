@@ -249,6 +249,8 @@ pub struct ComputePipelines {
     pub max_first: wgpu::ComputePipeline,
     /// Later pass of a maximum: (value, count) pairs to fewer pairs.
     pub max_next: wgpu::ComputePipeline,
+    /// First pass of the largest magnitude, `max_first` on `abs(x)` (finished by `max_next`).
+    pub absmax_first: wgpu::ComputePipeline,
 
     // Movement operations
     /// Forward `permute` movement op.
@@ -302,7 +304,12 @@ pub struct ComputePipelines {
     // Muon: momentum, Frobenius norm, and the elementwise pieces of Newton-Schulz
     /// Muon momentum buffer update (optionally Nesterov).
     pub muon_momentum: wgpu::ComputePipeline,
-    /// Divides a buffer by the norm from the `sumsq_first` reduction (plus an epsilon).
+    /// Divides a buffer by its largest magnitude (or 1 if that is 0 or inf), before the
+    /// sum of squares.
+    pub muon_scale: wgpu::ComputePipeline,
+    /// The Frobenius norm from the largest magnitude and the scaled sum of squares.
+    pub muon_norm: wgpu::ComputePipeline,
+    /// Multiplies a buffer by `1 / (norm + epsilon)`, the norm from `muon_norm`.
     pub muon_normalize: wgpu::ComputePipeline,
     /// Computes `alpha * x + beta * y`.
     pub muon_axpby: wgpu::ComputePipeline,
@@ -1108,6 +1115,7 @@ impl GpuContext {
             ),
             max_first: create_pipeline(&reduce_shader, "max_first", "Max First Pipeline"),
             max_next: create_pipeline(&reduce_shader, "max_next", "Max Next Pipeline"),
+            absmax_first: create_pipeline(&reduce_shader, "absmax_first", "AbsMax First Pipeline"),
 
             // Movement operations
             permute: create_pipeline(&movement_shader, "permute", "Permute Pipeline"),
@@ -1185,6 +1193,8 @@ impl GpuContext {
 
             // Muon
             muon_momentum: create_pipeline(&muon_shader, "momentum", "Muon Momentum Pipeline"),
+            muon_scale: create_pipeline(&muon_shader, "scale", "Muon Scale Pipeline"),
+            muon_norm: create_pipeline(&muon_shader, "norm", "Muon Norm Pipeline"),
             muon_normalize: create_pipeline(&muon_shader, "normalize", "Muon Normalize Pipeline"),
             muon_axpby: create_pipeline(&muon_shader, "axpby", "Muon Axpby Pipeline"),
 
