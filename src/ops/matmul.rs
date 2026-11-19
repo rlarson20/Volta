@@ -61,6 +61,13 @@ fn gemm_lens(m: usize, k: usize, n: usize) -> (usize, usize, usize) {
 
 // ===== MATRIX MULTIPLICATION =====
 
+/// Columns of `a` (rows of `b`) per `cblas_sgemm` call in [`RawTensor::matmul_raw`]. A single
+/// call over `k` near 2^20 was off by 1e-3 of the result (the exact sum 174760.67 came back
+/// 174589.61), where `matrixmultiply` and the GPU are within 1e-6. Blocks keep each call's
+/// error at its own length, and the block sums add in order, `k / ACCELERATE_K_BLOCK` terms.
+#[cfg(all(feature = "accelerate", target_os = "macos"))]
+const ACCELERATE_K_BLOCK: usize = 4096;
+
 impl RawTensor {
     /// Transpose a 2D matrix
     ///
@@ -125,27 +132,35 @@ impl RawTensor {
             let dim = |x: usize| i32::try_from(x).expect("matmul dim exceeds i32");
             let (mi, ki, ni) = (dim(m), dim(k), dim(n));
             let mut result = vec![0.0; len_c];
-            // SAFETY: the asserts above fix `a.len() == m*k` and `b.len() == k*n`, and `result`
-            // holds m*n floats (`gemm_lens` checked all three products). With row-major
-            // leading dimensions k, n, n every access is in bounds, and the three buffers are
-            // distinct allocations.
-            unsafe {
-                cblas_sgemm(
-                    101, // CblasRowMajor
-                    111, // CblasNoTrans
-                    111, // CblasNoTrans
-                    mi,
-                    ni,
-                    ki,
-                    1.0,
-                    a.as_ptr(),
-                    ki,
-                    b.as_ptr(),
-                    ni,
-                    0.0,
-                    result.as_mut_ptr(),
-                    ni,
-                );
+            // The contraction runs in blocks of `ACCELERATE_K_BLOCK`, each added onto
+            // `result` (beta = 1). One call over a long `k` loses accuracy (#384).
+            for k0 in (0..k).step_by(ACCELERATE_K_BLOCK) {
+                let kc = ACCELERATE_K_BLOCK.min(k - k0);
+                // SAFETY: the asserts above fix `a.len() == m*k` and `b.len() == k*n`, and
+                // `result` holds m*n floats (`gemm_lens` checked all three products). The
+                // block reads columns `k0..k0 + kc` of `a` (leading dimension k) and rows
+                // `k0..k0 + kc` of `b` (leading dimension n), and `k0 + kc <= k`, so every
+                // access is in bounds. The offsets are `wrapping_add` because an empty
+                // `a` or `b` (m or n of 0) is never read. The three buffers are distinct
+                // allocations.
+                unsafe {
+                    cblas_sgemm(
+                        101, // CblasRowMajor
+                        111, // CblasNoTrans
+                        111, // CblasNoTrans
+                        mi,
+                        ni,
+                        dim(kc),
+                        1.0,
+                        a.as_ptr().wrapping_add(k0),
+                        ki,
+                        b.as_ptr().wrapping_add(k0 * n),
+                        ni,
+                        if k0 == 0 { 0.0 } else { 1.0 },
+                        result.as_mut_ptr(),
+                        ni,
+                    );
+                }
             }
             result
         }
@@ -1013,6 +1028,29 @@ mod tests {
             2e-2,
         );
         assert!(ok_b, "grad wrt B failed: max={max_b:.3e} mean={mean_b:.3e}");
+    }
+
+    #[test]
+    fn matmul_raw_long_contraction_is_accurate() {
+        // [2, k] @ [k, 2] with k = 1_048_561: Accelerate's `cblas_sgemm` in one call gave
+        // 174589.61 for an exact 174760.67 (#384); `matrixmultiply` and the GPU are within
+        // 1e-6. Linspace operands over [-1, 1) give a sum near 1e5.
+        let k = 1_048_561usize;
+        let n = 2 * k;
+        let ramp = |i: usize| -1.0 + (i as f32 / n as f32) * 2.0;
+        let a: Vec<f32> = (0..n).map(ramp).collect();
+        let b = a.clone();
+        let got = RawTensor::matmul_raw(&a, &b, 2, k, 2);
+        // C[0][0] is row 0 of `a` against column 0 of `b`.
+        let exact: f64 = (0..k)
+            .map(|i| f64::from(fetch(&a, i)) * f64::from(fetch(&b, 2 * i)))
+            .sum();
+        let rel = (f64::from(fetch(&got, 0)) - exact).abs() / exact.abs();
+        assert!(
+            rel < 1e-5,
+            "got {}, exact {exact}, relative {rel:e}",
+            fetch(&got, 0)
+        );
     }
 
     #[test]
