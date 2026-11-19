@@ -69,3 +69,9 @@ Decide by where an argument comes from (DECISIONS.md, "Panic inside the program,
 | `gpu` | Does nothing without the `gpu` feature. |
 
 A new example joins the set when it needs no downloaded data and runs in seconds; add it to the `smoke` list in the script and to this table, with its loss assertion.
+
+## Serving the built docs
+
+`just serve-docs` (`scripts/serve_docs.py`, standard library only, needs `uv`) runs `cargo doc --no-deps`, copies `target/doc` to a snapshot under `target/doc-serve/`, and serves it on every interface at port 7447, logging the link to open (`http://<hostname>:7447/volta/`, which other devices on the tailnet or LAN can reach). Pass flags through the recipe: `just serve-docs --port 9000 --features gpu,accelerate`. `--rebuild-every <seconds>` rebuilds in the background (with `--pull`, after `git pull --ff-only`) and swaps to the new snapshot only when the build succeeds, so a failed build keeps the last good docs up. `--no-build` serves the latest snapshot without building. Arguments after `--` go to `cargo doc`.
+
+It has no auth or TLS, so the host firewall decides who can reach it. On NixOS, open the port only on Tailscale: `networking.firewall.interfaces.tailscale0.allowedTCPPorts = [ 7447 ];`. `--host 127.0.0.1` limits it to the machine itself.
