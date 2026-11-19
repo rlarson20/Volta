@@ -1386,3 +1386,50 @@ fn test_operation_resulting_in_zero_valid() {
         0.0
     );
 }
+
+// ===== IN-PLACE DATA UPDATES (#61) =====
+
+#[test]
+fn update_data_writes_values_and_bumps_version() {
+    let w = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], true);
+    let before = w.borrow().version;
+    let n = w.update_data(|data| {
+        for v in data.as_host_f32_mut().expect("CPU f32") {
+            *v *= 2.0;
+        }
+        data.len()
+    });
+    assert_eq!(n, 3, "update_data returns the closure's value");
+    assert_eq!(w.data(), vec![2.0, 4.0, 6.0]);
+    assert_eq!(w.borrow().version, before + 1);
+    assert!(w.requires_grad(), "graph metadata is kept");
+}
+
+#[test]
+#[should_panic(expected = "update_data: the update changed the storage from 3 F32 elements")]
+fn update_data_rejects_a_length_change() {
+    let w = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], false);
+    w.update_data(|data| *data = crate::storage::Storage::cpu(vec![0.0; 4]));
+}
+
+#[test]
+#[should_panic(expected = "was modified by an inplace operation")]
+fn update_data_before_backward_is_caught() {
+    // `mul` saves both inputs; an in-place update between forward and backward must be
+    // detected (S9), as it was when the optimizers bumped the version by hand.
+    let w = RawTensor::new(vec![1.0, 2.0], &[2], true);
+    let x = RawTensor::new(vec![3.0, 4.0], &[2], false);
+    let loss = w.elem_mul(&x).sum();
+    w.update_data(|data| data.as_host_f32_mut().expect("CPU f32")[0] = 9.0);
+    loss.into_loss().expect("scalar").backward();
+}
+
+#[test]
+fn move_to_device_keeps_grad_and_bumps_version() {
+    let w = RawTensor::new(vec![1.0, 2.0], &[2], true);
+    w.elem_mul(&w).sum().into_loss().expect("scalar").backward();
+    let before = w.borrow().version;
+    w.move_to_device(&crate::Device::CPU);
+    assert_eq!(w.borrow().version, before + 1);
+    assert_eq!(w.grad(), Some(vec![2.0, 4.0]));
+}

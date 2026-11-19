@@ -844,14 +844,13 @@ fn test_adam_converges_faster() {
     // Initialize deliberately far from solution (w=0)
     let layer = Linear::new(1, 1, false);
     // Force weight to 0.0
-    *layer
-        .weight
-        .borrow_mut()
-        .data
-        .as_host_f32_mut()
-        .expect("test weight is CPU F32")
-        .first_mut()
-        .unwrap() = 0.0;
+    layer.weight.update_data(|data| {
+        *data
+            .as_host_f32_mut()
+            .expect("test weight is CPU F32")
+            .first_mut()
+            .unwrap() = 0.0;
+    });
 
     let model = Sequential::new(vec![Box::new(layer)]);
 

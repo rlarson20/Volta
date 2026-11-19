@@ -2135,11 +2135,13 @@ mod conv2d_tests {
 
         // Copy weights from direct to im2col
         let direct_weight_data = conv_direct.weight.borrow().data.to_vec();
-        conv_im2col.weight.borrow_mut().data = crate::storage::Storage::cpu(direct_weight_data);
+        conv_im2col
+            .weight
+            .replace_data(crate::storage::Storage::cpu(direct_weight_data));
 
         if let (Some(direct_bias), Some(im2col_bias)) = (&conv_direct.bias, &conv_im2col.bias) {
             let direct_bias_data = direct_bias.borrow().data.to_vec();
-            im2col_bias.borrow_mut().data = crate::storage::Storage::cpu(direct_bias_data);
+            im2col_bias.replace_data(crate::storage::Storage::cpu(direct_bias_data));
         }
 
         let x = RawTensor::randn(&[1, 2, 6, 6]);
@@ -2289,11 +2291,16 @@ mod conv2d_tests {
 
         // Copy weights
         let weight_data = conv_direct.weight.borrow().data.to_vec();
-        conv_igemm.weight.borrow_mut().data = crate::storage::Storage::cpu(weight_data);
+        conv_igemm
+            .weight
+            .replace_data(crate::storage::Storage::cpu(weight_data));
 
         let bias_data = conv_direct.bias.as_ref().unwrap().borrow().data.to_vec();
-        conv_igemm.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::cpu(bias_data);
+        conv_igemm
+            .bias
+            .as_ref()
+            .unwrap()
+            .replace_data(crate::storage::Storage::cpu(bias_data));
 
         let y_direct = conv_direct.forward(&x);
         let y_igemm = conv_igemm.forward(&x);
@@ -2357,11 +2364,16 @@ mod conv2d_tests {
 
         // Copy weights
         let weight_data = conv_direct.weight.borrow().data.to_vec();
-        conv_igemm.weight.borrow_mut().data = crate::storage::Storage::cpu(weight_data);
+        conv_igemm
+            .weight
+            .replace_data(crate::storage::Storage::cpu(weight_data));
 
         let bias_data = conv_direct.bias.as_ref().unwrap().borrow().data.to_vec();
-        conv_igemm.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::cpu(bias_data);
+        conv_igemm
+            .bias
+            .as_ref()
+            .unwrap()
+            .replace_data(crate::storage::Storage::cpu(bias_data));
 
         // Forward and backward
         let y_direct = conv_direct.forward(&x_direct);
@@ -2544,10 +2556,15 @@ mod conv2d_tests {
         let mut conv_igemm = Conv2d::new(in_ch, out_ch, 3, 1, 1, true);
         conv_igemm.set_algo(ConvAlgo::IGEMM);
         let weight_data = conv_direct.weight.borrow().data.to_vec();
-        conv_igemm.weight.borrow_mut().data = crate::storage::Storage::cpu(weight_data);
+        conv_igemm
+            .weight
+            .replace_data(crate::storage::Storage::cpu(weight_data));
         let bias_data = conv_direct.bias.as_ref().unwrap().borrow().data.to_vec();
-        conv_igemm.bias.as_ref().unwrap().borrow_mut().data =
-            crate::storage::Storage::cpu(bias_data);
+        conv_igemm
+            .bias
+            .as_ref()
+            .unwrap()
+            .replace_data(crate::storage::Storage::cpu(bias_data));
 
         let x_direct = RawTensor::new(x_data.clone(), &[batch, in_ch, h, w], true);
         let x_igemm = RawTensor::new(x_data, &[batch, in_ch, h, w], true);
@@ -2824,11 +2841,11 @@ mod conv2d_gpu_tests {
             let conv_gpu = make(device.clone());
 
             let weight = conv_cpu.weight.borrow().data.to_vec();
-            conv_gpu.weight.borrow_mut().data = Storage::gpu(weight);
+            conv_gpu.weight.replace_data(Storage::gpu(weight));
             if let (Some(b_cpu), Some(b_gpu)) = (&conv_cpu.bias, &conv_gpu.bias) {
                 let bias = crate::tensor::randn(&[self.out_ch]).borrow().data.to_vec();
-                b_cpu.borrow_mut().data = Storage::cpu(bias.clone());
-                b_gpu.borrow_mut().data = Storage::gpu(bias);
+                b_cpu.replace_data(Storage::cpu(bias.clone()));
+                b_gpu.replace_data(Storage::gpu(bias));
             }
 
             let x_cpu = crate::tensor::randn(&self.input);
@@ -2974,14 +2991,18 @@ mod conv2d_gpu_tests {
         // Create Conv2d with simple weights (1 output channel, 1 input channel, 2x2 kernel, stride 1, padding 0)
         // Weights: all ones
         let conv_cpu = Conv2d::new_on_device(1, 1, 2, 1, 0, false, Device::CPU);
-        conv_cpu.weight.borrow_mut().data = crate::storage::Storage::cpu(vec![1.0; 4]);
+        conv_cpu
+            .weight
+            .replace_data(crate::storage::Storage::cpu(vec![1.0; 4]));
 
         let y_cpu = conv_cpu.forward(&x_cpu);
 
         // Now try on GPU
         let x_gpu = x_cpu.to_device(device.clone());
         let conv_gpu = Conv2d::new_on_device(1, 1, 2, 1, 0, false, device);
-        conv_gpu.weight.borrow_mut().data = crate::storage::Storage::gpu(vec![1.0; 4]);
+        conv_gpu
+            .weight
+            .replace_data(crate::storage::Storage::gpu(vec![1.0; 4]));
 
         let y_gpu = conv_gpu.forward(&x_gpu);
 
@@ -3292,9 +3313,13 @@ mod conv2d_gpu_tests {
         let mut conv_gpu = Conv2d::new_on_device(3, 5, 3, 2, 1, true, device.clone());
         conv_gpu.set_algo(ConvAlgo::Direct);
         let weight = conv_cpu.weight.borrow().data.to_vec();
-        conv_gpu.weight.borrow_mut().data = Storage::gpu(weight);
+        conv_gpu.weight.replace_data(Storage::gpu(weight));
         let bias = conv_cpu.bias.as_ref().expect("bias").borrow().data.to_vec();
-        conv_gpu.bias.as_ref().expect("bias").borrow_mut().data = Storage::gpu(bias);
+        conv_gpu
+            .bias
+            .as_ref()
+            .expect("bias")
+            .replace_data(Storage::gpu(bias));
 
         let x_cpu = RawTensor::randn(&[2, 3, 9, 7]);
         x_cpu.set_requires_grad(true);

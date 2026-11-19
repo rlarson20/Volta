@@ -170,6 +170,73 @@ impl Tensor {
         }
     }
 
+    /// Rewrites this tensor's values in place, outside the graph: an optimizer step, a
+    /// running-statistics update. `f` gets the storage and may change its values but not
+    /// its length, dtype or device; changing one of them panics after `f` returns. The
+    /// version is bumped first (S9), so a backward pass that saved these values detects
+    /// the write.
+    ///
+    /// `f` must not touch this tensor through another handle (a borrow of it would panic
+    /// as a `RefCell` double borrow): read what it needs, such as the gradient, before.
+    ///
+    /// # Panics
+    /// If `f` changes the storage's length, dtype or device kind.
+    #[track_caller]
+    pub(crate) fn update_data<R>(&self, f: impl FnOnce(&mut Storage) -> R) -> R {
+        let mut t = self.inner.borrow_mut();
+        t.bump_version();
+        let (len, dtype, gpu) = (t.data.len(), t.data.dtype(), t.data.is_gpu());
+        let out = f(&mut t.data);
+        assert!(
+            t.data.len() == len && t.data.dtype() == dtype && t.data.is_gpu() == gpu,
+            "update_data: the update changed the storage from {len} {dtype:?} elements \
+             (gpu: {gpu}) to {} {:?} (gpu: {}); it may change only values",
+            t.data.len(),
+            t.data.dtype(),
+            t.data.is_gpu(),
+        );
+        out
+    }
+
+    /// Replaces this tensor's storage with `data`, keeping shape, `requires_grad` and
+    /// graph metadata: a test setting known weights. Bumps the version (S9).
+    ///
+    /// # Panics
+    /// If `data`'s length or dtype differs from the current storage's, or it is on the
+    /// other side of the CPU/GPU split from this tensor's device.
+    #[cfg(test)]
+    #[track_caller]
+    pub(crate) fn replace_data(&self, data: Storage) {
+        self.update_data(|d| *d = data);
+    }
+
+    /// Moves this tensor's data (and its gradient) to `device` in place, keeping graph
+    /// metadata: [`crate::nn::Module::to_device`]'s per-parameter step. Unlike
+    /// [`Self::to_device`] it builds no new tensor. Bumps the version (S9).
+    ///
+    /// # Panics
+    /// If `device` is a GPU and none is available ([`Storage::to_device`]).
+    #[track_caller]
+    pub(crate) fn move_to_device(&self, device: &Device) {
+        {
+            let mut t = self.inner.borrow_mut();
+            t.data = t.data.to_device(device);
+            t.bump_version();
+            t.device = device.clone();
+        }
+        // `set_grad` moves an existing gradient onto the new device (invariant 3).
+        if let Some(g) = self.grad_storage() {
+            self.set_grad(g);
+        }
+    }
+
+    /// Drops the host copies a GPU tensor's data and gradient cache; a no-op on the CPU.
+    /// The public entry point is [`crate::gpu::invalidate_all_tensor_caches`].
+    #[cfg(feature = "gpu")]
+    pub(crate) fn invalidate_gpu_cache(&self) {
+        self.inner.borrow_mut().invalidate_gpu_cache();
+    }
+
     /// This tensor's data in its own dtype, without conversion: the lossless counterpart of
     /// [`Self::data`] (which decodes to `f32`). `T` names the dtype, e.g.
     /// `t.to_vec_as::<f64>()`. A GPU tensor is copied to the host.

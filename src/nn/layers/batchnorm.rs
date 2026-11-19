@@ -160,32 +160,33 @@ impl BatchNorm {
     /// (`n / (n - 1)`) on the variance, as PyTorch does. `n > 1`.
     fn update_running(&self, batch_mean: &Tensor, batch_var: &Tensor, n: usize) {
         let _no_grad = crate::autograd::no_grad();
-        let mut rm = self.running_mean.borrow_mut();
-        let mut rv = self.running_var.borrow_mut();
-        rm.bump_version();
-        rv.bump_version();
-        let dtype = rm.data.dtype();
-        dispatch_real!(dtype, T => {
-        let bm_ref = batch_mean.borrow();
-        let bm_data = bm_ref.data.host::<T>();
-        let bv_ref = batch_var.borrow();
-        let bv_data = bv_ref.data.host::<T>();
+        let dtype = self.running_mean.dtype();
+        // Both statistics are rewritten in place (S9; `update_data` bumps each version).
+        self.running_mean.update_data(|rm| {
+            self.running_var.update_data(|rv| {
+                dispatch_real!(dtype, T => {
+                let bm_ref = batch_mean.borrow();
+                let bm_data = bm_ref.data.host::<T>();
+                let bv_ref = batch_var.borrow();
+                let bv_data = bv_ref.data.host::<T>();
 
-        let m = T::from_f64(f64::from(self.momentum));
-        let n = T::from_usize(n);
+                let m = T::from_f64(f64::from(self.momentum));
+                let n = T::from_usize(n);
 
-        let mut rm_guard = rm.data.host_mut::<T>();
-        let rm_host = &mut *rm_guard;
-        let mut rv_guard = rv.data.host_mut::<T>();
-        let rv_host = &mut *rv_guard;
-        for i in 0..self.num_features {
-            let rm_val = fetch(rm_host, i);
-            let bm_val = fetch(&bm_data, i);
-            *slot(rm_host, i) = (1.0 - m).mul_add(rm_val, m * bm_val);
-            let unbiased_var = fetch(&bv_data, i) * n / (n - 1.0);
-            let rv_val = fetch(rv_host, i);
-            *slot(rv_host, i) = (1.0 - m).mul_add(rv_val, m * unbiased_var);
-        }
+                let mut rm_guard = rm.host_mut::<T>();
+                let rm_host = &mut *rm_guard;
+                let mut rv_guard = rv.host_mut::<T>();
+                let rv_host = &mut *rv_guard;
+                for i in 0..self.num_features {
+                    let rm_val = fetch(rm_host, i);
+                    let bm_val = fetch(&bm_data, i);
+                    *slot(rm_host, i) = (1.0 - m).mul_add(rm_val, m * bm_val);
+                    let unbiased_var = fetch(&bv_data, i) * n / (n - 1.0);
+                    let rv_val = fetch(rv_host, i);
+                    *slot(rv_host, i) = (1.0 - m).mul_add(rv_val, m * unbiased_var);
+                }
+                });
+            });
         });
     }
 }

@@ -130,20 +130,15 @@ impl SGD {
         use crate::gpu::OptimizerStepParams;
 
         let param = self.params.get(i).expect("SGD: a parameter per index");
-        let mut p = param.borrow_mut();
-
-        let grad = match &p.grad {
-            Some(g) => g.clone(),
-            None => return,
+        let Some(grad) = param.grad_storage() else {
+            return;
         };
-        // The step rewrites the parameter in place (S9).
-        p.bump_version();
 
-        let len = p.data.len();
-        let device = p.device.clone();
+        let len = param.borrow().data.len();
+        let device = param.device();
         // Plain SGD keeps no state, but the kernel binds both state buffers, in the
         // parameter's dtype (the kernel binds one element type).
-        let dtype = p.data.dtype();
+        let dtype = param.dtype();
         let mut dummy_state1 = Storage::new_zeros(len, &device).cast(dtype);
         let mut dummy_state2 = Storage::new_zeros(len, &device).cast(dtype);
         let (op, beta1, state1) = if self.momentum == 0.0 {
@@ -156,7 +151,7 @@ impl SGD {
                 self.velocity
                     .get_mut(i)
                     .expect("SGD: velocity slot per parameter")
-                    .get_or_insert_with(|| super::zeros_like(&p)),
+                    .get_or_insert_with(|| super::zeros_like(param)),
             )
         };
 
@@ -171,78 +166,86 @@ impl SGD {
             v_hat_scale: 0.0,
         };
 
-        // Updates the parameter (and velocity) in place. `gpu_optimizer_step` unshares each
-        // buffer first and drops its host copy, so snapshots and later reads stay correct.
-        crate::RawTensor::gpu_optimizer_step(
-            &mut p.data,
-            &grad,
-            state1,
-            &mut dummy_state2,
-            &opt_params,
-        )
-        .expect("GPU SGD step failed: the parameter was not updated");
+        // Updates the parameter (and velocity) in place, bumping its version (S9).
+        // `gpu_optimizer_step` unshares each buffer first and drops its host copy, so
+        // snapshots and later reads stay correct.
+        param
+            .update_data(|data| {
+                crate::RawTensor::gpu_optimizer_step(
+                    data,
+                    &grad,
+                    state1,
+                    &mut dummy_state2,
+                    &opt_params,
+                )
+            })
+            .expect("GPU SGD step failed: the parameter was not updated");
     }
 
     /// CPU update for a single parameter
     fn step_cpu_param(&mut self, i: usize) {
         let param = self.params.get(i).expect("SGD: a parameter per index");
-        let mut p = param.borrow_mut();
-
-        let grad = match &p.grad {
-            Some(g) => g.clone(),
-            None => return,
+        let Some(grad) = param.grad_storage() else {
+            return;
         };
-        // The step rewrites the parameter in place (S9).
-        p.bump_version();
 
-        let dtype = p.data.dtype();
-        dispatch_real!(dtype, T => {
-        let lr = T::from_f64(f64::from(self.lr));
-        let momentum = T::from_f64(f64::from(self.momentum));
-        let weight_decay = T::from_f64(f64::from(self.weight_decay));
-        // Apply weight decay to gradient
-        let mut active_grad = grad;
-        if self.weight_decay != 0.0 {
-            for (g, theta) in active_grad
-                .host_mut::<T>()
-                .iter_mut()
-                .zip(p.data.host::<T>().iter())
-            {
-                *g += weight_decay * *theta;
-            }
-        }
-
+        let dtype = param.dtype();
         if self.momentum > 0.0 {
             // Allocated on the parameter's first step, in its current dtype.
-            let vel = self
-                .velocity
+            self.velocity
                 .get_mut(i)
                 .expect("SGD: velocity slot per parameter")
-                .get_or_insert_with(|| super::zeros_like(&p));
-            assert_eq!(
-                vel.dtype(),
-                dtype,
-                "SGD velocity dtype; convert the model before the optimizer's first step"
-            );
-            let mut vel_slice = vel.host_mut::<T>();
-
-            // Update velocity: v = momentum·v - lr·grad
-            for (v, &g) in vel_slice.iter_mut().zip(active_grad.host::<T>().iter()) {
-                *v = momentum.mul_add(*v, -(lr * g));
-            }
-
-            // Update parameters: θ = θ + v
-            let mut p_data = p.data.host_mut::<T>();
-            for (d, &v) in p_data.iter_mut().zip(vel_slice.iter()) {
-                *d += v;
-            }
-        } else {
-            // Simple SGD: θ = θ - lr·grad
-            let mut p_data = p.data.host_mut::<T>();
-            for (d, &g) in p_data.iter_mut().zip(active_grad.host::<T>().iter()) {
-                *d -= lr * g;
-            }
+                .get_or_insert_with(|| super::zeros_like(param));
         }
+        // The step rewrites the parameter in place (S9; `update_data` bumps the version).
+        param.update_data(|data| {
+            dispatch_real!(dtype, T => {
+            let lr = T::from_f64(f64::from(self.lr));
+            let momentum = T::from_f64(f64::from(self.momentum));
+            let weight_decay = T::from_f64(f64::from(self.weight_decay));
+            // Apply weight decay to gradient
+            let mut active_grad = grad;
+            if self.weight_decay != 0.0 {
+                for (g, theta) in active_grad
+                    .host_mut::<T>()
+                    .iter_mut()
+                    .zip(data.host::<T>().iter())
+                {
+                    *g += weight_decay * *theta;
+                }
+            }
+
+            if self.momentum > 0.0 {
+                let vel = self
+                    .velocity
+                    .get_mut(i)
+                    .and_then(Option::as_mut)
+                    .expect("SGD: velocity allocated above");
+                assert_eq!(
+                    vel.dtype(),
+                    dtype,
+                    "SGD velocity dtype; convert the model before the optimizer's first step"
+                );
+                let mut vel_slice = vel.host_mut::<T>();
+
+                // Update velocity: v = momentum·v - lr·grad
+                for (v, &g) in vel_slice.iter_mut().zip(active_grad.host::<T>().iter()) {
+                    *v = momentum.mul_add(*v, -(lr * g));
+                }
+
+                // Update parameters: θ = θ + v
+                let mut p_data = data.host_mut::<T>();
+                for (d, &v) in p_data.iter_mut().zip(vel_slice.iter()) {
+                    *d += v;
+                }
+            } else {
+                // Simple SGD: θ = θ - lr·grad
+                let mut p_data = data.host_mut::<T>();
+                for (d, &g) in p_data.iter_mut().zip(active_grad.host::<T>().iter()) {
+                    *d -= lr * g;
+                }
+            }
+            });
         });
     }
 }
