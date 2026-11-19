@@ -300,10 +300,15 @@ impl ConvTranspose2dGradFn {
                 // Sum over all dimensions except the channel dimension (dim=1)
                 // out_grad: [B, C_out, H_out, W_out] → [C_out]
                 // `out_grad` does not require grad, so these sums record no graph.
-                Tensor::from_raw(out_grad.clone())
-                    .sum_dim(Axis(3), false) // Sum over W
-                    .sum_dim(Axis(2), false) // Sum over H
-                    .sum_dim(Axis(0), false) // Sum over B
+                RawTensor::new_with_storage(
+                    out_grad.data.clone(),
+                    out_grad.shape.clone(),
+                    out_grad.device.clone(),
+                    false,
+                )
+                .sum_dim(Axis(3), false) // Sum over W
+                .sum_dim(Axis(2), false) // Sum over H
+                .sum_dim(Axis(0), false) // Sum over B
             }));
         }
 
