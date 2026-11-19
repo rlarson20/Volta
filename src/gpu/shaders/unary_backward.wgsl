@@ -149,7 +149,7 @@ fn exp2_backward(
     let idx = global_id.x;
     if (idx < len_out_grad()) {
         // d(2^x)/dx = 2^x * ln(2)
-        st_result(idx, ld_out_grad(idx) * pow(2.0, ld_x(idx)) * 0.6931471805599453); // ln(2)
+        st_result(idx, ld_out_grad(idx) * exp2(ld_x(idx)) * 0.6931471805599453); // ln(2)
     }
 }
 
