@@ -69,3 +69,9 @@ Decide by where an argument comes from (DECISIONS.md, "Panic inside the program,
 | `gpu` | Does nothing without the `gpu` feature. |
 
 A new example joins the set when it needs no downloaded data and runs in seconds; add it to the `smoke` list in the script and to this table, with its loss assertion.
+
+## Serving the built docs
+
+`just serve-docs` (`scripts/serve_docs.py`, standard library only, needs `uv`) runs `cargo doc --no-deps`, copies `target/doc` to a snapshot under `target/doc-serve/`, and serves it at `http://127.0.0.1:8000/volta/`. Pass flags through the recipe: `just serve-docs --host 0.0.0.0 --port 9000 --features gpu,accelerate`. `--rebuild-every <seconds>` rebuilds in the background (with `--pull`, after `git pull --ff-only`) and swaps to the new snapshot only when the build succeeds, so a failed build keeps the last good docs up. `--no-build` serves the latest snapshot without building. Arguments after `--` go to `cargo doc`.
+
+It has no auth or TLS. Keep it on `127.0.0.1` behind a reverse proxy (Caddy, nginx) that adds them, or bind it only to a trusted interface such as a LAN or Tailscale address.

@@ -204,6 +204,12 @@ doc-full:
 doc-cpu:
 	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --no-default-features
 
+# Flags go to the script, e.g. `just serve-docs --host 0.0.0.0 --rebuild-every 600 --pull`
+# (dev-docs/DEVELOPMENT.md, "Serving the built docs").
+# Build rustdoc and serve it over HTTP on 127.0.0.1:8000 (needs uv)
+serve-docs *flags:
+	uv run scripts/serve_docs.py {{flags}}
+
 # Feature-combination rot check (e.g. `just hack --exclude-features gpu`); needs cargo-hack
 hack *flags:
 	cargo hack check --feature-powerset --no-dev-deps {{flags}}
