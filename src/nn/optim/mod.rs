@@ -101,6 +101,9 @@ pub(crate) fn check_beta(index: usize, value: f32) -> crate::Result<()> {
 /// (PyTorch's `torch.optim.Optimizer`): [`crate::amp::GradScaler`] unscales its
 /// parameters' gradients and decides whether to call `step`. The inherent methods of the
 /// same names do the work; this trait forwards to them.
+///
+/// Open for implementation outside the crate: a method added to this trait in a later
+/// version comes with a default body, so existing implementations keep compiling.
 pub trait Optimizer {
     /// Update every parameter from its gradient.
     fn step(&mut self);

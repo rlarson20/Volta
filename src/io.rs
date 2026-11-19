@@ -20,11 +20,14 @@ pub type StateDict = BTreeMap<String, TensorData>;
 ///
 /// `data` holds the elements' bytes exactly as [`Storage::as_bytes`] gives them
 /// (native-endian, which is little-endian on every platform Volta builds for, the same
-/// layout safetensors uses), so a save and load is bit-exact for every dtype. The fields
-/// are public, so nothing stops a caller from building an entry whose byte count does not
-/// match `shape` and `dtype`; [`TensorData::to_storage`] checks that before decoding, and
-/// the loaders check every entry they read.
+/// layout safetensors uses), so a save and load is bit-exact for every dtype. Build one with
+/// [`TensorData::from_f32`], [`TensorData::from_typed`] or [`TensorData::from_tensor`]; the
+/// struct is `#[non_exhaustive]`, so it can gain fields without a breaking change. The
+/// fields are public to read and write, so nothing stops a caller from editing an entry
+/// until its byte count no longer matches `shape` and `dtype`; [`TensorData::to_storage`]
+/// checks that before decoding, and the loaders check every entry they read.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TensorData {
     /// Row-major element bytes: `shape.iter().product::<usize>() * dtype.size_of()` of them.
     pub data: Vec<u8>,
@@ -39,6 +42,7 @@ pub struct TensorData {
 /// Intended for debugging and tooling: `expected` is usually taken from
 /// `model.state_dict()`, and `loaded` is what was deserialized or passed in.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct StateDictDiff {
     /// Keys that exist in `expected` but are missing from `loaded`.
     pub missing_keys: Vec<String>,
@@ -391,6 +395,7 @@ pub fn load_safetensors<P: AsRef<Path>>(path: P) -> Result<StateDict> {
 
 /// Tensor data with native dtype support for `SafeTensors`
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct TypedTensorData {
     /// Raw bytes of tensor data
     pub data: Vec<u8>,

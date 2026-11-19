@@ -14,6 +14,7 @@ use crate::{RawTensor, Tensor};
 /// An elementwise comparison, as PyTorch's `lt`, `le`, `gt`, `ge`, `eq` and `ne`. NaN
 /// compares false except under `Ne` (IEEE, as in PyTorch); `false < true` for Bool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CmpOp {
     /// `a < b`
     Lt,

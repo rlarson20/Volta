@@ -108,6 +108,9 @@ pub(crate) use sealed::SealedLayer;
 /// This is the base of the layer traits. It has no `forward`, because the input contract differs
 /// by kind of layer: see [`Layer`] (one tensor in, one out; [`Embedding`] takes an integer index
 /// tensor) and [`RecurrentLayer`] (input plus carried state).
+///
+/// Open for implementation outside the crate: a method added to this trait in a later
+/// version comes with a default body, so existing implementations keep compiling.
 pub trait Module {
     /// Every learnable tensor of the module, in a stable order. A tensor shared between
     /// layers (a tied weight) is listed once.
@@ -223,6 +226,9 @@ pub(crate) fn cast_parameters<M: Module + ?Sized>(module: &M, dtype: DType) {
 }
 
 /// A layer that maps one tensor to one tensor. Only `Layer`s can go in a [`Sequential`].
+///
+/// Open for implementation outside the crate: a method added to this trait in a later
+/// version comes with a default body, so existing implementations keep compiling.
 pub trait Layer: Module {
     /// Run the layer on `x`.
     fn forward(&self, x: &Tensor) -> Tensor;

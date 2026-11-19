@@ -124,10 +124,7 @@ fn pair(shape: &[usize]) -> (Tensor, Tensor) {
 
 /// Shorthand for one expected event.
 fn event(op: &str, pass: Pass) -> FallbackEvent {
-    FallbackEvent {
-        op: op.to_string(),
-        pass,
-    }
+    FallbackEvent::new(op, pass)
 }
 
 /// Under `Strict`, a GPU binary op whose operands broadcast (no GPU kernel) panics.
