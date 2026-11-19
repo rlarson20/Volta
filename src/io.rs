@@ -393,6 +393,9 @@ pub fn load_safetensors<P: AsRef<Path>>(path: P) -> Result<StateDict> {
 }
 
 /// Save a `StateDict` to `SafeTensors` format, each entry in its own dtype.
+///
+/// The file is written to a temporary file next to `path`, synced, and renamed over
+/// `path`, so a failed or interrupted save leaves an existing file at `path` intact.
 /// # Errors
 /// The file can't be written, or (`InvalidData`, wrapping the [`crate::VoltaError`] from
 /// [`TensorData::validate`]) an entry's byte count does not match its shape and dtype.
@@ -421,8 +424,53 @@ pub fn save_safetensors<P: AsRef<Path>>(state: &StateDict, path: P) -> Result<()
     let bytes = safetensors::tensor::serialize(tensors, None)
         .map_err(|e| Error::other(format!("SafeTensors serialize error: {e}")))?;
 
-    let mut file = File::create(path)?;
-    file.write_all(&bytes)?;
+    write_atomically(path.as_ref(), |file| file.write_all(&bytes))
+}
+
+/// Distinguishes temporary files made by concurrent saves in one process.
+static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Write `path` through a temporary file in the same directory: `write` fills it, it is
+/// flushed to disk with `sync_all`, then renamed over `path`. A failed write, a full disk or
+/// a crash before the rename leaves any existing file at `path` as it was (#395). On an
+/// error the temporary file is removed.
+fn write_atomically(path: &Path, write: impl FnOnce(&mut File) -> Result<()>) -> Result<()> {
+    let file_name = path.file_name().ok_or_else(|| {
+        Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{} does not name a file", path.display()),
+        )
+    })?;
+    let dir = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    let mut tmp_name = std::ffi::OsString::from(".");
+    tmp_name.push(file_name);
+    tmp_name.push(format!(
+        ".{}.{}.tmp",
+        std::process::id(),
+        TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let tmp = dir.join(tmp_name);
+
+    // `create_new` refuses to reuse a path some other writer already holds.
+    let mut file = File::options().write(true).create_new(true).open(&tmp)?;
+    let written = write(&mut file).and_then(|()| file.sync_all());
+    drop(file);
+    let result = written.and_then(|()| std::fs::rename(&tmp, path));
+    if let Err(e) = result {
+        if let Err(cleanup) = std::fs::remove_file(&tmp) {
+            log::warn!(
+                "could not remove temporary file {}: {cleanup}",
+                tmp.display()
+            );
+        }
+        return Err(e);
+    }
+    // Persist the rename itself. Directories can't be opened as files on Windows.
+    #[cfg(unix)]
+    File::open(dir)?.sync_all()?;
     Ok(())
 }
 
@@ -792,6 +840,67 @@ mod io_tests {
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("'w'"), "{err}");
         assert!(!tmp.path().exists(), "no file is written for a bad entry");
+    }
+
+    /// #395: a save that fails mid-write leaves the previous file byte-for-byte intact
+    /// and removes its temporary file.
+    #[test]
+    fn failed_write_leaves_the_existing_file_intact() {
+        let dir = std::env::temp_dir().join(format!("volta_{}_atomic_fail", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let target = dir.join("model.safetensors");
+        let mut state = StateDict::new();
+        state.insert(
+            "w".to_string(),
+            TensorData::from_f32(vec![1.0, 2.0], vec![2]),
+        );
+        save_safetensors(&state, &target).expect("first save");
+        let before = std::fs::read(&target).expect("read");
+
+        let err = write_atomically(&target, |file| {
+            file.write_all(b"partial")?;
+            Err(Error::other("injected write failure"))
+        })
+        .expect_err("injected failure");
+        assert_eq!(err.to_string(), "injected write failure");
+
+        assert_eq!(std::fs::read(&target).expect("read"), before);
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .expect("list")
+            .map(|e| e.expect("entry").file_name())
+            .collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("model.safetensors")]);
+        std::fs::remove_dir_all(&dir).expect("cleanup");
+    }
+
+    /// #395: a successful save replaces an existing file, leaves no temporary file, and
+    /// loads back as the new state.
+    #[test]
+    fn save_replaces_an_existing_file() {
+        let dir = std::env::temp_dir().join(format!("volta_{}_atomic_ok", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let target = dir.join("model.safetensors");
+        let mut old = StateDict::new();
+        old.insert(
+            "w".to_string(),
+            TensorData::from_f32(vec![1.0, 2.0], vec![2]),
+        );
+        save_safetensors(&old, &target).expect("first save");
+        let mut new = StateDict::new();
+        new.insert(
+            "v".to_string(),
+            TensorData::from_f32(vec![3.0, 4.0, 5.0], vec![3]),
+        );
+        save_safetensors(&new, &target).expect("second save");
+
+        let loaded = load_safetensors(&target).expect("load");
+        assert_eq!(loaded.keys().collect::<Vec<_>>(), vec!["v"]);
+        assert_eq!(
+            loaded["v"].to_vec_as::<f32>().expect("f32"),
+            vec![3.0, 4.0, 5.0]
+        );
+        assert_eq!(std::fs::read_dir(&dir).expect("list").count(), 1);
+        std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 
     /// `to_tensor` rebuilds the tensor in the saved dtype, and `try_to_tensor` refuses a
