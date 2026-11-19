@@ -8,11 +8,13 @@
 //! expanded gradient for each source element (O(input x output)). Each test compares with
 //! an f64 reference. GPU tests run on any adapter (lavapipe in a cloud session) and cover
 //! both kernels: one thread per source (under 256 terms) and one workgroup per source.
+//! Imports use only paths that exist both before and after #341.
 
 #[path = "common/mod.rs"]
 mod common;
 
-use volta::{Conv2d, ConvAlgo, Device, Module, RawTensor, Tensor};
+use volta::nn::{Conv2d, ConvAlgo, Module};
+use volta::{Device, RawTensor, Tensor};
 
 /// 2^22 terms: where a single f32 chain is 4% low.
 const N: usize = 1 << 22;
