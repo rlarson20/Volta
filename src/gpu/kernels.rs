@@ -1449,7 +1449,11 @@ impl GpuKernels {
         )
     }
 
-    /// Expand backward: sum gradients over broadcast dimensions
+    /// Expand backward: each source element's gradient summed over the broadcast axes.
+    ///
+    /// Only the broadcast axes are visited (#308), and each source's terms are summed
+    /// pairwise (#303). Sources with at least [`EXPAND_WIDE_TERMS`] terms get a workgroup
+    /// each; fewer, a thread each.
     #[must_use]
     pub fn expand_backward(
         out_grad: &GpuBuffer,
@@ -1469,12 +1473,23 @@ impl GpuKernels {
             padding: [0, 0],
         };
 
-        movement_op(
-            out_grad,
-            result,
-            &params,
-            &ctx.pipelines_for(out_grad.dtype()).expand_backward,
-        )
+        let terms: usize = old_shape
+            .iter()
+            .zip(new_shape)
+            .map(|(&old, &new)| if old == 1 { new } else { 1 })
+            .product();
+        let pipelines = ctx.pipelines_for(out_grad.dtype());
+        if terms < EXPAND_WIDE_TERMS {
+            return movement_op(out_grad, result, &params, &pipelines.expand_backward);
+        }
+        run_kernel(
+            "Movement",
+            &pipelines.expand_backward_wide,
+            &[out_grad, &result],
+            bytemuck::bytes_of(&params),
+            Groups::Flat(pack_u32(output_size)),
+        )?;
+        Some(result)
     }
 
     /// Pad backward: extract center region from gradient (remove padding)
@@ -2135,6 +2150,10 @@ fn pack_pad_widths(padding: &[(usize, usize)]) -> ([u32; 4], u32, u32) {
     }
     (pad_to_u32_4(&low), packed(2), packed(3))
 }
+
+/// Broadcast terms per source element from which [`GpuKernels::expand_backward`] gives
+/// each source a 256-thread workgroup rather than one thread.
+const EXPAND_WIDE_TERMS: usize = 256;
 
 /// Run a movement operation with parameters
 fn movement_op(

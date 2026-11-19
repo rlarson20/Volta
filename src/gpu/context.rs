@@ -261,8 +261,11 @@ pub struct ComputePipelines {
     // Movement backward operations
     /// Backward of the `permute` movement op.
     pub permute_backward: wgpu::ComputePipeline,
-    /// Backward of the `expand` movement op.
+    /// Backward of the `expand` movement op, one thread per source element.
     pub expand_backward: wgpu::ComputePipeline,
+    /// Backward of the `expand` movement op, one workgroup per source element (many
+    /// broadcast terms per source).
+    pub expand_backward_wide: wgpu::ComputePipeline,
     /// Backward of the `pad` movement op.
     pub pad_backward: wgpu::ComputePipeline,
     /// Backward of the `shrink` movement op.
@@ -1094,6 +1097,11 @@ impl GpuContext {
                 &movement_backward_shader,
                 "expand_backward",
                 "Expand Backward Pipeline",
+            ),
+            expand_backward_wide: create_pipeline(
+                &movement_backward_shader,
+                "expand_backward_wide",
+                "Expand Backward Wide Pipeline",
             ),
             pad_backward: create_pipeline(
                 &movement_backward_shader,

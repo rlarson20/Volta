@@ -4,6 +4,7 @@ use crate::device_policy::kernel_failed;
 use crate::error::OrPanic;
 use crate::error::{Result, VoltaError};
 use crate::index::{fetch, slot};
+use crate::ops::reduce::pairwise_sum_by;
 use crate::real::{Bits, Real, dispatch_bits, dispatch_real};
 use crate::shape::{Axis, Shape, Strides};
 use crate::spec::PadValue;
@@ -553,26 +554,47 @@ impl MovementGradFn {
                     ))];
                 }
 
-                // CPU path: Sum gradient over dimensions that were expanded (broadcast)
-                let mut grad_data = vec![T::ZERO; self.original_shape.iter().product()];
-                let old_strides = self.original_shape.strides();
-                let old_strides = old_strides.truncate_rank();
+                // CPU path: each source element's gradient is the sum of the incoming
+                // gradient over the broadcast axes (the ones that grew from 1). It is
+                // summed pairwise per source element (#303): a sequential f32 chain stalls
+                // as the sum grows (S6), and every conv bias gradient is one such sum over
+                // batch x H x W.
+                let old_dims = self.original_shape.truncate_rank();
+                let new_strides = Strides::from_shape(new_shape);
+                let new_strides = new_strides.truncate_rank();
+                // (extent, stride in `out_grad`) of each broadcast axis, outermost first.
+                let broadcast: Vec<(usize, usize)> = (0..new_shape.len())
+                    .filter(|&j| fetch(old_dims, j) == 1 && fetch(new_shape, j) > 1)
+                    .map(|j| (fetch(new_shape, j), fetch(new_strides, j)))
+                    .collect();
+                let terms: usize = broadcast.iter().map(|&(n, _)| n).product();
+                // The offset in `out_grad` of the `k`-th term of a source's sum.
+                let offset = |k: usize| {
+                    let mut off = 0;
+                    let mut rem = k;
+                    for &(n, stride) in broadcast.iter().rev() {
+                        off += (rem % n) * stride;
+                        rem /= n;
+                    }
+                    off
+                };
 
                 let g_host = out_grad.data.host::<T>();
-                for i in 0..out_grad.data.len() {
-                    let mut old_idx = 0;
-                    let mut rem = i;
-                    for j in (0..new_shape.len()).rev() {
-                        let dim_size = fetch(new_shape, j);
-                        let coord = rem % dim_size;
-                        rem /= dim_size;
-                        // If this dimension was size 1, don't advance the index
-                        if self.original_shape.dim_at(j) != 1 {
-                            old_idx += coord * fetch(old_strides, j);
+                let old_numel: usize = old_dims.iter().product();
+                let grad_data: Vec<T> = (0..old_numel)
+                    .map(|src| {
+                        // The source's first term: its own coordinates in `new_shape`
+                        // (a broadcast axis's coordinate is 0).
+                        let mut base = 0;
+                        let mut rem = src;
+                        for j in (0..old_dims.len()).rev() {
+                            let dim = fetch(old_dims, j);
+                            base += (rem % dim) * fetch(new_strides, j);
+                            rem /= dim;
                         }
-                    }
-                    *slot(&mut grad_data, old_idx) += fetch(&g_host, i);
-                }
+                        pairwise_sum_by(terms, |k| fetch(&g_host, base + offset(k)))
+                    })
+                    .collect();
                 RawTensor::from_shape_compute(
                     out_grad.data.dtype(),
                     grad_data,
