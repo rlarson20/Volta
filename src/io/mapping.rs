@@ -3,7 +3,7 @@ use crate::error::{Result, VoltaError};
 use crate::index::span;
 use crate::io::{StateDict, TensorData};
 use crate::shape::fixed_dims;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// One queued edit of a [`StateDict`], applied by [`StateDictMapper::try_map`].
 pub type TransformationBox = Box<dyn Fn(&mut StateDict) -> Result<()>>;
@@ -209,8 +209,10 @@ impl StateDictMapper {
 
     /// Select only specific keys (for partial loading)
     ///
-    /// All other keys are removed from the state dict.
-    pub fn select_keys(mut self, keys: Vec<String>) -> Self {
+    /// All other keys are removed from the state dict. `keys` is anything that yields
+    /// names: `["fc1.weight", "fc1.bias"]`, a `Vec<String>`, an iterator.
+    pub fn select_keys<K: Into<String>>(mut self, keys: impl IntoIterator<Item = K>) -> Self {
+        let keys: BTreeSet<String> = keys.into_iter().map(Into::into).collect();
         self.transformations
             .push(Box::new(move |state: &mut StateDict| {
                 state.retain(|k, _| keys.contains(k));
@@ -221,8 +223,10 @@ impl StateDictMapper {
 
     /// Exclude specific keys
     ///
-    /// The specified keys are removed from the state dict.
-    pub fn exclude_keys(mut self, keys: Vec<String>) -> Self {
+    /// The specified keys are removed from the state dict. `keys` takes the same forms as
+    /// in [`Self::select_keys`].
+    pub fn exclude_keys<K: Into<String>>(mut self, keys: impl IntoIterator<Item = K>) -> Self {
+        let keys: BTreeSet<String> = keys.into_iter().map(Into::into).collect();
         self.transformations
             .push(Box::new(move |state: &mut StateDict| {
                 state.retain(|k, _| !keys.contains(k));
@@ -406,19 +410,21 @@ pub fn load_huggingface_weights(
 /// ```
 /// use volta::io::mapping::create_key_mapping;
 ///
-/// let mapper = create_key_mapping(vec![
+/// let mapper = create_key_mapping([
 ///     ("fc1.weight", "encoder.weight"),
 ///     ("fc1.bias", "encoder.bias"),
 ///     ("fc2.weight", "decoder.weight"),
 ///     ("fc2.bias", "decoder.bias"),
 /// ]);
 /// ```
-pub fn create_key_mapping(mappings: Vec<(&str, &str)>) -> StateDictMapper {
-    let mut mapper = StateDictMapper::new();
-    for (from, to) in mappings {
-        mapper = mapper.rename(from, to);
-    }
-    mapper
+pub fn create_key_mapping<F: Into<String>, T: Into<String>>(
+    mappings: impl IntoIterator<Item = (F, T)>,
+) -> StateDictMapper {
+    mappings
+        .into_iter()
+        .fold(StateDictMapper::new(), |mapper, (from, to)| {
+            mapper.rename(from, to)
+        })
 }
 
 /// Select one sub-module's entries from a state dict (for transfer learning).
@@ -576,8 +582,7 @@ mod tests {
             TensorData::from_f32(vec![3.0], vec![1]),
         );
 
-        let mapper =
-            StateDictMapper::new().select_keys(vec!["weight1".to_string(), "weight2".to_string()]);
+        let mapper = StateDictMapper::new().select_keys(["weight1", "weight2"]);
         let mapped = mapper.map(state);
 
         assert_eq!(mapped.len(), 2);
@@ -598,7 +603,7 @@ mod tests {
             TensorData::from_f32(vec![2.0], vec![1]),
         );
 
-        let mapper = StateDictMapper::new().exclude_keys(vec!["weight2".to_string()]);
+        let mapper = StateDictMapper::new().exclude_keys(["weight2"]);
         let mapped = mapper.map(state);
 
         assert_eq!(mapped.len(), 1);

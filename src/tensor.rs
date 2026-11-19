@@ -425,8 +425,10 @@ impl Tensor {
 
 /// The core tensor structure containing data and gradient tracking
 ///
-/// This is wrapped in `Rc<RefCell<>>` to create the public `Tensor` type.
-/// Fields:
+/// This is wrapped in `Rc<RefCell<>>` to create the public `Tensor` type. The type is
+/// public because constructors and ops are its associated functions
+/// (`RawTensor::new(..) -> Tensor`); its fields are crate-private, and `Tensor`'s methods
+/// (`shape()`, `data()`, `grad()`, `device()`, ...) read them from outside. Fields:
 /// - `data`: CPU: flat `Vec<f32>` of actual values (row-major order), GPU: `Arc<GpuBuffer>`
 /// - `shape`: dimensions, e.g. [batch, channels, height, width]
 /// - `grad`: accumulated gradient (Some if `requires_grad`, None otherwise)
@@ -436,19 +438,19 @@ impl Tensor {
 /// - `device`: where computation happens (CPU/GPU)
 pub struct RawTensor {
     /// Element storage (CPU bytes or a GPU buffer).
-    pub data: Storage,
+    pub(crate) data: Storage,
     /// Dimensions, e.g. `[B, C, H, W]`.
-    pub shape: Shape,
+    pub(crate) shape: Shape,
     /// Gradient with respect to `data`; `None` until one is accumulated.
-    pub grad: Option<Storage>,
+    pub(crate) grad: Option<Storage>,
     /// Whether gradients are tracked for this tensor.
-    pub requires_grad: bool,
+    pub(crate) requires_grad: bool,
     /// Backward function, present when this tensor is the result of an op.
     pub(crate) grad_fn: Option<GradFn>,
     /// Inputs this tensor was computed from (the graph's edges).
-    pub parents: Vec<Tensor>,
+    pub(crate) parents: Vec<Tensor>,
     /// Where `data` lives.
-    pub device: Device,
+    pub(crate) device: Device,
     /// Bumped by every in-place write to `data` (an optimizer step, `load_weight`, a dtype
     /// or device move), as PyTorch's version counter is. `edge()` records it for each input
     /// a backward pass reads, and backward panics if it has moved (S9).
@@ -951,22 +953,9 @@ impl RawTensor {
     /// and the CPU copy is no longer needed. Call this between benchmark groups
     /// or after training steps to reduce memory pressure.
     ///
-    /// For CPU tensors, this is a no-op.
-    ///
-    /// # Example
-    ///
-    /// From outside the crate this is reached through
-    /// `volta::gpu::invalidate_all_tensor_caches`:
-    ///
-    /// ```no_run
-    /// use volta::{Device, RawTensor, gpu::invalidate_all_tensor_caches};
-    ///
-    /// let t = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], false)
-    ///     .to_device(Device::gpu().expect("a GPU"));
-    /// let _ = t.data(); // Populates the CPU cache
-    /// invalidate_all_tensor_caches(&[&t]); // Releases the CPU copy
-    /// ```
-    pub fn invalidate_gpu_cache(&mut self) {
+    /// For CPU tensors, this is a no-op. The public entry point is
+    /// [`crate::gpu::invalidate_all_tensor_caches`].
+    pub(crate) fn invalidate_gpu_cache(&mut self) {
         self.data.invalidate_cpu_cache();
         if let Some(ref mut grad) = self.grad {
             grad.invalidate_cpu_cache();
@@ -2451,7 +2440,6 @@ impl Iterator for DataLoader {
 }
 
 // ===== PUBLIC API EXPORTS =====
-pub use RawTensor as new_tensor;
 
 // Tensor constructors
 /// Free-function form of [`RawTensor::zeros`].
@@ -2607,7 +2595,6 @@ mod tensor_tests {
             let results = [
                 ("try_zeros", RawTensor::try_zeros(shape)),
                 ("try_ones", RawTensor::try_ones(shape)),
-                ("try_empty", RawTensor::try_empty(shape)),
                 ("try_constant", RawTensor::try_constant(2.0, shape)),
                 ("try_rand", RawTensor::try_rand(shape)),
                 ("try_randn", RawTensor::try_randn(shape)),
@@ -2659,7 +2646,6 @@ mod tensor_tests {
         type Pair = (fn(&[usize]) -> Result<Tensor>, fn(&[usize]) -> Tensor);
         assert_eq!(RawTensor::try_zeros(&[2, 3]).unwrap().data(), vec![0.0; 6]);
         assert_eq!(RawTensor::try_ones(&[2, 3]).unwrap().data(), vec![1.0; 6]);
-        assert_eq!(RawTensor::try_empty(&[4]).unwrap().data(), vec![0.0; 4]);
         assert_eq!(
             RawTensor::try_constant(2.5, &[3]).unwrap().data(),
             vec![2.5; 3]

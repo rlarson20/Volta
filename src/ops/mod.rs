@@ -28,26 +28,6 @@ pub use ternary::TernaryOp;
 pub use unary::UnaryOp;
 
 impl RawTensor {
-    /// Create empty (zero-filled) tensor (fallible)
-    ///
-    /// # Errors
-    ///
-    /// Same as [`RawTensor::try_zeros`]
-    pub fn try_empty(shape: &[usize]) -> crate::Result<Tensor> {
-        Self::try_zeros(shape)
-    }
-
-    /// Create empty (zero-filled) tensor
-    ///
-    /// # Panics
-    ///
-    /// If `shape` is invalid. Use [`Self::try_empty`] to get an error instead.
-    #[must_use]
-    #[track_caller]
-    pub fn empty(shape: &[usize]) -> Tensor {
-        Self::try_empty(shape).or_panic("empty")
-    }
-
     /// Create tensor filled with constant value (fallible)
     ///
     /// # Errors

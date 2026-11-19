@@ -204,36 +204,22 @@ impl BufferPool {
     }
 
     /// Get statistics about pool usage
-    #[allow(dead_code)]
-    pub fn stats(&self) -> BufferPoolStats {
+    pub(crate) fn stats(&self) -> BufferPoolStats {
         let total = *self
             .total_count
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-        let bucket_stats: Vec<(usize, usize)> = self
-            .buckets
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .iter()
-            .map(|(&bucket, queue)| (Self::bucket_to_size(bucket), queue.len()))
-            .collect();
-
         BufferPoolStats {
             total_pooled: total,
-            buckets: bucket_stats,
         }
     }
 }
 
 /// Statistics about buffer pool usage
 #[derive(Debug)]
-#[allow(dead_code)]
-pub struct BufferPoolStats {
+pub(crate) struct BufferPoolStats {
     /// Total number of buffers currently in the pool
     pub total_pooled: usize,
-    /// Buffer counts per bucket (`bucket_size`, count)
-    pub buckets: Vec<(usize, usize)>,
 }
 
 #[cfg(test)]
