@@ -108,7 +108,7 @@ impl Module for TransformerBlock {
         state
     }
 
-    fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
+    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
         load_child(&mut self.norm1, "norm1.", state)?;
         load_child(&mut self.norm2, "norm2.", state)?;
         load_child(&mut self.ffn, "ffn.", state)?;

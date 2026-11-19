@@ -60,7 +60,7 @@ impl Module for PixelShuffle {
         StateDict::new()
     }
 
-    fn load_state_dict(&mut self, _state: &StateDict) -> crate::Result<()> {
+    fn load_state_dict_partial(&mut self, _state: &StateDict) -> crate::Result<()> {
         // No parameters to load
         Ok(())
     }

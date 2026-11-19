@@ -304,7 +304,7 @@ impl Module for MultiHeadAttention {
         state
     }
 
-    fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
+    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
         load_child(&mut self.q_proj, "q_proj.", state)?;
         load_child(&mut self.k_proj, "k_proj.", state)?;
         load_child(&mut self.v_proj, "v_proj.", state)?;

@@ -205,7 +205,8 @@ fn test_shrink_wrong_length_too_short() {
         | VoltaError::OpError(_)
         | VoltaError::StateShapeMismatch { .. }
         | VoltaError::StateDataLength { .. }
-        | VoltaError::StateKeyCollision { .. } => {
+        | VoltaError::StateKeyCollision { .. }
+        | VoltaError::StateKeyMismatch { .. } => {
             panic!("Expected InvalidParameter error, got {result:?}")
         }
     }
@@ -245,7 +246,8 @@ fn test_shrink_wrong_length_too_long() {
         | VoltaError::OpError(_)
         | VoltaError::StateShapeMismatch { .. }
         | VoltaError::StateDataLength { .. }
-        | VoltaError::StateKeyCollision { .. } => {
+        | VoltaError::StateKeyCollision { .. }
+        | VoltaError::StateKeyMismatch { .. } => {
             panic!("Expected InvalidParameter error, got {result:?}")
         }
     }
@@ -275,7 +277,8 @@ fn test_shrink_out_of_bounds_end() {
         | VoltaError::OpError(_)
         | VoltaError::StateShapeMismatch { .. }
         | VoltaError::StateDataLength { .. }
-        | VoltaError::StateKeyCollision { .. } => {
+        | VoltaError::StateKeyCollision { .. }
+        | VoltaError::StateKeyMismatch { .. } => {
             panic!("Expected DimensionOutOfBounds error, got {result:?}")
         }
     }
@@ -305,7 +308,8 @@ fn test_shrink_start_exceeds_dimension() {
         | VoltaError::OpError(_)
         | VoltaError::StateShapeMismatch { .. }
         | VoltaError::StateDataLength { .. }
-        | VoltaError::StateKeyCollision { .. } => {
+        | VoltaError::StateKeyCollision { .. }
+        | VoltaError::StateKeyMismatch { .. } => {
             panic!("Expected DimensionOutOfBounds error, got {result:?}")
         }
     }
@@ -341,7 +345,8 @@ fn test_shrink_invalid_range_order() {
         | VoltaError::OpError(_)
         | VoltaError::StateShapeMismatch { .. }
         | VoltaError::StateDataLength { .. }
-        | VoltaError::StateKeyCollision { .. } => {
+        | VoltaError::StateKeyCollision { .. }
+        | VoltaError::StateKeyMismatch { .. } => {
             panic!("Expected InvalidParameter error, got {result:?}")
         }
     }
@@ -377,7 +382,8 @@ fn test_shrink_empty_range() {
         | VoltaError::OpError(_)
         | VoltaError::StateShapeMismatch { .. }
         | VoltaError::StateDataLength { .. }
-        | VoltaError::StateKeyCollision { .. } => {
+        | VoltaError::StateKeyCollision { .. }
+        | VoltaError::StateKeyMismatch { .. } => {
             panic!("Expected InvalidParameter error, got {result:?}")
         }
     }
@@ -409,7 +415,8 @@ fn test_shrink_both_empty_ranges() {
         | VoltaError::OpError(_)
         | VoltaError::StateShapeMismatch { .. }
         | VoltaError::StateDataLength { .. }
-        | VoltaError::StateKeyCollision { .. } => {
+        | VoltaError::StateKeyCollision { .. }
+        | VoltaError::StateKeyMismatch { .. } => {
             panic!("Expected InvalidParameter error, got {result:?}")
         }
     }

@@ -431,8 +431,9 @@ pub fn create_key_mapping<F: Into<String>, T: Into<String>>(
 ///
 /// Keeps only the keys that start with `{prefix}.` and strips that prefix from them;
 /// every other key is dropped. `{"enc.w", "dec.w"}` with prefix `enc` becomes `{"w"}`.
-/// It transforms a [`StateDict`] and loads nothing; pass the result to
-/// [`crate::nn::Module::load_state_dict`].
+/// It transforms a [`StateDict`] and loads nothing; pass the result to the sub-module's
+/// [`crate::nn::Module::load_state_dict`] (strict), or to
+/// [`crate::nn::Module::load_state_dict_partial`] if it covers only part of it.
 #[must_use]
 pub fn load_partial(mut state: StateDict, prefix: &str) -> StateDict {
     let prefix_dot = format!("{prefix}.");
@@ -732,7 +733,10 @@ mod tests {
         let mut model = SequentialBuilder::new()
             .add_named("fc", Box::new(Linear::new(2, 2, true)))
             .build();
-        model.load_state_dict(&mapped).expect("mapped state loads");
+        // `emb.weight` has no layer here, so the strict load would refuse it.
+        model
+            .load_state_dict_partial(&mapped)
+            .expect("mapped state loads");
 
         // PyTorch: y = x @ W.T + b = [1*1 + -2*2 + 0.5, 1*3 + -2*4 - 0.5] = [-2.5, -5.5].
         // Loaded untransposed, the first output would be 1*1 + -2*3 + 0.5 = -4.5.

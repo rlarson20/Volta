@@ -280,7 +280,7 @@ macro_rules! batchnorm_module {
                 self.core.state_dict()
             }
 
-            fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
+            fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
                 self.core.load_state_dict(state)
             }
         }

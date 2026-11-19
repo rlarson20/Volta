@@ -180,7 +180,7 @@ impl Module for PositionalEncoding {
         }
     }
 
-    fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
+    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
         match &mut self.learned_embedding {
             Some(emb) => load_child(emb, "learned_embedding.", state),
             None => Ok(()),

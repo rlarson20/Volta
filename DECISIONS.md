@@ -820,6 +820,14 @@ A weight shared between layers (`l2.weight = l1.weight.clone()`) is one tensor. 
 
 **Consequence:** a new item in a core module needs a root `pub use`; a new item in a domain module needs a `pub use` in its module's `mod.rs`, and none at the root. Tests, examples, benches and the README import domain items by module (`use volta::nn::{Linear, Module}`). Breaking now, before `main`; it would be a major version after.
 
+### `Module::load_state_dict` is strict; the lenient form is `load_state_dict_partial` (#344)
+
+**Decision:** `Module::load_state_dict` is a provided method that checks the keys of `state` against the module's own `state_dict()` keys and returns `VoltaError::StateKeyMismatch { missing, unexpected }` before writing anything, then calls `Module::load_state_dict_partial`. `load_state_dict_partial` is the required method a layer implements, and keeps the old lenient behavior: unknown keys are ignored, parameters with no entry keep their values. `Sequential` overrides the strict check so a named layer's keys are expected under the prefix the partial load would read (its name, else its index). `io::load_state_dict_checked` stays lenient and returns the diff.
+
+**Why:** PyTorch's default is `strict=True`, and with the lenient default a typo in a key prefix, or an empty state dict, returned `Ok` and left the model at its random initialization (PA8, `docs/audits/2026-11-public-api.md`). Changing the default after `main` would be a silent behavior change for users, so it changes now. RJ chose strict-by-default with an explicitly named lenient form (2026-11-19). A `strict: bool` argument, as in PyTorch, was not taken: a bare `true`/`false` at the call site says less than the method name.
+
+**Consequence:** a custom `Module` implements `load_state_dict_partial`, not `load_state_dict` (breaking for external implementors). The strict check calls `state_dict()`, which copies every parameter once per load. Loading part of a model (only `gamma`/`beta` of a `BatchNorm`, a checkpoint with extra keys) uses `load_state_dict_partial`. Atomic loading (#65) builds on this.
+
 ## Concurrency and Async
 
 ### Stay synchronous

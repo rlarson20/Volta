@@ -133,7 +133,7 @@ impl Module for FeedForward {
         state
     }
 
-    fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
+    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
         load_child(&mut self.expand, "expand.", state)?;
         load_child(&mut self.contract, "contract.", state)
     }

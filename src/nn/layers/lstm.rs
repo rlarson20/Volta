@@ -147,7 +147,7 @@ impl Module for LSTMCell {
         state
     }
 
-    fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
+    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
         if let Some(w) = state.get("weight_ih") {
             self.weight_ih.load_weight("weight_ih", w)?;
         }
@@ -192,8 +192,8 @@ mod tests {
         fn state_dict(&self) -> StateDict {
             self.0.state_dict()
         }
-        fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
-            self.0.load_state_dict(state)
+        fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
+            self.0.load_state_dict_partial(state)
         }
     }
 

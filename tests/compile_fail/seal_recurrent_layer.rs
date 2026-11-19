@@ -1,5 +1,8 @@
 use volta::io::StateDict;
-use volta::{Tensor, nn::{Module, RecurrentLayer}};
+use volta::{
+    Tensor,
+    nn::{Module, RecurrentLayer},
+};
 
 struct Outsider;
 
@@ -10,7 +13,7 @@ impl Module for Outsider {
     fn state_dict(&self) -> StateDict {
         StateDict::new()
     }
-    fn load_state_dict(&mut self, _state: &StateDict) -> volta::Result<()> {
+    fn load_state_dict_partial(&mut self, _state: &StateDict) -> volta::Result<()> {
         Ok(())
     }
 }

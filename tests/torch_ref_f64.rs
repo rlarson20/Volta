@@ -277,7 +277,7 @@ fn batchnorm2d_matches_torch_in_f64() {
     let f = Fixture::load();
     let mut bn = BatchNorm2d::new(2);
     bn.to_dtype(DType::F64);
-    bn.load_state_dict(&state(&[
+    bn.load_state_dict_partial(&state(&[
         ("gamma", f.f32_exact("batchnorm.gamma"), vec![2]),
         ("beta", f.f32_exact("batchnorm.beta"), vec![2]),
     ]))

@@ -90,8 +90,35 @@ pub(crate) fn load_child<M: Module + ?Sized>(
         return Ok(());
     }
     child
-        .load_state_dict(&sub)
+        .load_state_dict_partial(&sub)
         .map_err(|e| e.with_key_prefix(prefix))
+}
+
+/// `Err(StateKeyMismatch)` unless the keys of `state` are exactly `expected`: the check
+/// a strict [`Module::load_state_dict`] makes before it writes anything.
+pub(crate) fn check_keys<'a>(
+    expected: impl IntoIterator<Item = &'a String>,
+    state: &StateDict,
+) -> crate::Result<()> {
+    let expected: std::collections::BTreeSet<&String> = expected.into_iter().collect();
+    let missing: Vec<String> = expected
+        .iter()
+        .filter(|k| !state.contains_key(k.as_str()))
+        .map(|k| (*k).clone())
+        .collect();
+    let unexpected: Vec<String> = state
+        .keys()
+        .filter(|k| !expected.contains(k))
+        .cloned()
+        .collect();
+    if missing.is_empty() && unexpected.is_empty() {
+        Ok(())
+    } else {
+        Err(crate::VoltaError::StateKeyMismatch {
+            missing,
+            unexpected,
+        })
+    }
 }
 
 /// Private supertrait that keeps [`RecurrentLayer`] implementable only inside
@@ -121,13 +148,39 @@ pub trait Module {
     /// entry keeps its parameter's dtype.
     fn state_dict(&self) -> StateDict;
 
-    /// Loads the entries of `state` that match this module's parameters.
+    /// Loads `state` into this module, strictly, as PyTorch's default `strict=True`.
+    ///
+    /// The keys of `state` must be exactly the keys of [`Self::state_dict`]: a missing
+    /// or unexpected key is an `Err` naming every such key, checked before anything is
+    /// written. A typo in a key prefix therefore fails instead of leaving the module at
+    /// its random initialization (#344). Each entry then loads as in
+    /// [`Self::load_state_dict_partial`]: it keeps the parameter's shape, device, and
+    /// `requires_grad`, and an entry in another dtype is cast to the parameter's.
+    ///
+    /// The key check calls [`Self::state_dict`], which copies every parameter once. For
+    /// a checkpoint that covers only part of the module, use
+    /// [`Self::load_state_dict_partial`], or [`crate::io::load_state_dict_checked`] to
+    /// get the diff as well.
+    ///
+    /// # Errors
+    ///
+    /// `VoltaError::StateKeyMismatch` if a key is missing or unexpected (nothing is
+    /// loaded then), and otherwise the errors of [`Self::load_state_dict_partial`].
+    fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
+        check_keys(self.state_dict().keys(), state)?;
+        self.load_state_dict_partial(state)
+    }
+
+    /// Loads the entries of `state` that match this module's parameters, leniently.
     ///
     /// Keys the module does not have are ignored, and parameters with no entry keep
     /// their values (use [`crate::io::load_state_dict_checked`] to see which). An entry
     /// that is present must fit: it keeps the parameter's shape, device, and
     /// `requires_grad`, and only the values change. An entry in another dtype is cast to
     /// the parameter's (following [`crate::storage::Storage::cast`]).
+    ///
+    /// This is the method a layer implements; [`Self::load_state_dict`] checks the keys
+    /// and then calls it.
     ///
     /// # Errors
     ///
@@ -138,7 +191,7 @@ pub trait Module {
     ///
     /// On `Err` the module may be partly loaded: entries before the bad one have
     /// already been written. Discard the module, or load into a fresh one.
-    fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()>;
+    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()>;
 
     /// Clears the gradient of every parameter.
     fn zero_grad(&mut self) {

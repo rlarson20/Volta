@@ -29,9 +29,9 @@ Every op ends in `edge()`, the only function that attaches `parents` and `grad_f
 ## Adding a new neural network layer
 
 1. Create `src/nn/layers/my_layer.rs` and declare it `pub(crate) mod my_layer;` in `src/nn/layers/mod.rs` and add it to the `pub use` lists there and in `src/nn/mod.rs`, so its one public path is `volta::nn::MyLayer` (no root re-export; DECISIONS.md, "One path per item; the root re-exports the core").
-2. Implement `Module` (`parameters`, `state_dict`, `load_state_dict`) and `Layer` (`forward`). `parameters()` returns every learnable tensor. Index input is an I64/I32 tensor through `Layer` (`Embedding`); carried state is a `RecurrentLayer` (`LSTMCell`), which is sealed.
+2. Implement `Module` (`parameters`, `state_dict`, `load_state_dict_partial`; the provided `load_state_dict` adds the strict key check) and `Layer` (`forward`). `parameters()` returns every learnable tensor. Index input is an I64/I32 tensor through `Layer` (`Embedding`); carried state is a `RecurrentLayer` (`LSTMCell`), which is sealed.
 3. Build the output from graph ops or `edge()`. A layer that holds a fixed non-parameter tensor overrides `Module::to_device` to move it, and builds constants with `x.constant_like(..)` so they land on the input's device.
-4. `load_state_dict` goes through `Tensor::load_weight`, which checks the shape and keeps the destination's device.
+4. `load_state_dict_partial` goes through `Tensor::load_weight`, which checks the shape and keeps the destination's device.
 5. Add an `assert_trainable!` test with its input from `crate::macros::trainable_input(&shape)`, plus value tests against a hand-computed or reference result.
 6. Add an example in `examples/` if the layer is complex. Examples must not route around a broken component; file the defect as a GitHub issue instead.
 

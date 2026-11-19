@@ -142,7 +142,8 @@ fn f16_batchnorm2d_large_batch_matches_torch() {
     let f = Fixture::load("stability");
     let mut bn = BatchNorm2d::new(1);
     bn.to_dtype(DType::F16);
-    bn.load_state_dict(&affine(&f, "batchnorm")).expect("load");
+    bn.load_state_dict_partial(&affine(&f, "batchnorm"))
+        .expect("load");
     let x = f16_leaf(&f, "batchnorm.x");
     let out = bn.forward(&x);
     let params = bn.parameters();
