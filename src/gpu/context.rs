@@ -186,7 +186,7 @@ pub struct ComputePipelines {
     /// Backward of `erf`: the input gradient.
     pub erf_backward: wgpu::ComputePipeline,
 
-    // Binary backward operations (same-shape only, legacy)
+    // Binary backward operations (same-shape inputs)
     /// Same-shape backward of `add` for the first operand.
     pub add_backward_a: wgpu::ComputePipeline,
     /// Same-shape backward of `add` for the second operand.
@@ -364,7 +364,9 @@ impl GpuContext {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: None, // We don't need a surface for compute
                 force_fallback_adapter: false,
-                apply_limit_buckets: false, // bucketing coarsens limits; we want the adapter's real ones
+                // Bucketing would coarsen the adapter's limits; the device requests the real
+                // buffer limits below (the other limits stay at wgpu's defaults).
+                apply_limit_buckets: false,
             })
             .await
             .map_err(|e| format!("No suitable GPU adapter found: {e}"))?;
