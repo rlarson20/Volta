@@ -33,10 +33,11 @@ var<workgroup> tile_b: array<f32, 256>;
 
 @compute @workgroup_size(16, 16)
 fn matmul_backward_a(
-    @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(workgroup_id) wg_id: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
     @builtin(local_invocation_id) local_id: vec3<u32>,
-    @builtin(workgroup_id) workgroup_id: vec3<u32>
 ) {
+    let global_id = tile_global_id(wg_id, num_wg, local_id, (params_a.k + 15u) / 16u);
     let row = global_id.y;  // Row in dA (also row in grad)
     let col = global_id.x;  // Col in dA (also row in B, which is col in B^T)
     let local_row = local_id.y;
@@ -102,10 +103,11 @@ fn matmul_backward_a(
 
 @compute @workgroup_size(16, 16)
 fn matmul_backward_b(
-    @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(workgroup_id) wg_id: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
     @builtin(local_invocation_id) local_id: vec3<u32>,
-    @builtin(workgroup_id) workgroup_id: vec3<u32>
 ) {
+    let global_id = tile_global_id(wg_id, num_wg, local_id, (params_b.n + 15u) / 16u);
     let row = global_id.y;  // Row in dB (also col in A, which is row in A^T)
     let col = global_id.x;  // Col in dB (also col in grad)
     let local_row = local_id.y;

@@ -291,6 +291,17 @@ fn flat_global_id(gid: vec3<u32>, num_wg: vec3<u32>) -> vec3<u32> {
     return vec3<u32>(gid.x + gid.y * num_wg.x * 256u, 0u, 0u);
 }
 
+// The (x, y) invocation of a 16x16 kernel launched as a flat list of tiles
+// (`kernels::Groups::Tiles`, #305): tile `t` covers x in `(t % tiles_x) * 16 ..+ 16` and y in
+// `(t / tiles_x) * 16 ..+ 16`. The list is spread over the dispatch's x and y like a flat
+// launch, so neither axis of the output is capped at 65535 * 16. Every invocation of a
+// workgroup gets the same tile, so workgroup memory and barriers work as on a 2-D grid.
+// Tiles past the end give y past the output; the kernel's bounds check skips them.
+fn tile_global_id(wg: vec3<u32>, num_wg: vec3<u32>, lid: vec3<u32>, tiles_x: u32) -> vec3<u32> {
+    let tile = wg.x + wg.y * num_wg.x;
+    return vec3<u32>((tile % tiles_x) * 16u + lid.x, (tile / tiles_x) * 16u + lid.y, 0u);
+}
+
 // bf16 bits -> f32, exactly.
 fn bf16_bits_to_f32(b: u32) -> f32 {
     return bitcast<f32>(b << 16u);

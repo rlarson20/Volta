@@ -16,7 +16,12 @@ fn coords_to_idx_4d(n: u32, c: u32, h: u32, w: u32) -> u32 {
 
 // Main col2im transformation
 @compute @workgroup_size(16, 16, 1)
-fn col2im_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn col2im_main(
+    @builtin(workgroup_id) wg_id: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+    @builtin(local_invocation_id) local_id: vec3<u32>,
+) {
+    let global_id = tile_global_id(wg_id, num_wg, local_id, (params.channels + 15u) / 16u);
     // Each thread handles one input position (b, c, h, w)
     let ch = global_id.x;
     let flat_spatial = global_id.y;

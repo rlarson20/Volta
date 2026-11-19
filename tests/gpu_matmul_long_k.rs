@@ -4,9 +4,10 @@
 //! kernel now sums each 16-wide tile into a partial and the partials pairwise, so the error
 //! grows with `log2(k)`. Each test contracts copies of `0.1f32` and compares with the exact
 //! sum in f64: `2^22` of them for the forward; 1,000,000 for the backward, whose long
-//! dimension is also a dimension of the forward's output, and a launch over more than
-//! 65535 * 16 output columns is past wgpu's dispatch limit (#305). Runs on any adapter;
-//! lavapipe in a cloud session.
+//! dimension is also a dimension of the forward's output. (That size predates the tiled
+//! launch of #305, which lifted the 65535 * 16 cap on an output axis;
+//! `gpu_dispatch_limit.rs` covers sizes past it.) Runs on any adapter; lavapipe in a cloud
+//! session.
 
 #![cfg(feature = "gpu")]
 
@@ -19,8 +20,8 @@ use volta::{Device, RawTensor};
 /// The forward's shared dimension: 2^22.
 const K: usize = 1 << 22;
 
-/// The backward tests' shared dimension, under the dispatch limit on the forward's
-/// output (#305). A single chain is about 1% off here.
+/// The backward tests' shared dimension, chosen under the old 65535 * 16 dispatch limit on
+/// the forward's output (#305, since lifted). A single chain is about 1% off here.
 const K_BWD: usize = 1_000_000;
 
 /// Relative error allowed against the exact sum: pairwise over 2^18 tile partials is a

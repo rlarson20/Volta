@@ -562,8 +562,11 @@ enum Groups {
     /// This many workgroups of a 256-wide 1-D kernel, spread over two dimensions past
     /// 65535 by [`dispatch_flat`].
     Flat(u32),
-    /// An explicit `(x, y, z)` grid.
-    Grid(u32, u32, u32),
+    /// `(x, y)` tiles of a 16x16 kernel that maps its workgroup to a tile with
+    /// `tile_global_id` (`shader_template`). The `x * y` tiles go out as a flat list, spread
+    /// over two dimensions like [`Groups::Flat`], so neither output axis is capped at
+    /// 65535 tiles (#305).
+    Tiles(u32, u32),
 }
 
 impl Groups {
@@ -628,7 +631,12 @@ fn run_passes(ctx: &GpuContext, label: &str, passes: &[Pass<'_>]) {
         pass.set_bind_group(0, &bind_group, &[]);
         match p.groups {
             Groups::Flat(n) => dispatch_flat(&mut pass, n),
-            Groups::Grid(x, y, z) => pass.dispatch_workgroups(x, y, z),
+            Groups::Tiles(x, y) => {
+                let Some(tiles) = x.checked_mul(y) else {
+                    panic!("GPU {label}: {x} x {y} tiles exceed u32")
+                };
+                dispatch_flat(&mut pass, tiles);
+            }
         }
     }
     ctx.queue().submit(Some(encoder.finish()));
@@ -1068,7 +1076,7 @@ impl GpuKernels {
             &[a, b, &result],
             bytemuck::bytes_of(&MatMulParams::new(m, k, n)),
             // One workgroup per 16x16 tile of the (m, n) output.
-            Groups::Grid(pack_u32(n).div_ceil(16), pack_u32(m).div_ceil(16), 1),
+            Groups::Tiles(pack_u32(n).div_ceil(16), pack_u32(m).div_ceil(16)),
         )?;
         Some(result)
     }
@@ -1114,7 +1122,7 @@ impl GpuKernels {
             &[grad, b, &result],
             bytemuck::bytes_of(&MatMulParams::new(m, k, n)),
             // One workgroup per 16x16 tile of the (m, k) output.
-            Groups::Grid(pack_u32(k).div_ceil(16), pack_u32(m).div_ceil(16), 1),
+            Groups::Tiles(pack_u32(k).div_ceil(16), pack_u32(m).div_ceil(16)),
         )?;
         Some(result)
     }
@@ -1160,7 +1168,7 @@ impl GpuKernels {
             &[a, grad, &result],
             bytemuck::bytes_of(&MatMulParams::new(m, k, n)),
             // One workgroup per 16x16 tile of the (k, n) output.
-            Groups::Grid(pack_u32(n).div_ceil(16), pack_u32(k).div_ceil(16), 1),
+            Groups::Tiles(pack_u32(n).div_ceil(16), pack_u32(k).div_ceil(16)),
         )?;
         Some(result)
     }
@@ -1793,10 +1801,9 @@ impl GpuKernels {
             &[col, &result],
             bytemuck::bytes_of(&WindowParams::new(spec)),
             // 16x16 workgroups: x over channels, y over batch * height * width.
-            Groups::Grid(
+            Groups::Tiles(
                 pack_u32(spec.channels).div_ceil(16),
                 pack_u32(image).div_ceil(16),
-                1,
             ),
         )?;
         Some(result)
@@ -1832,10 +1839,9 @@ impl GpuKernels {
             &[input, weight, &result],
             bytemuck::bytes_of(&ConvParams::new(spec)),
             // One thread per output pixel: x over output channels, y over batch * h_out * w_out.
-            Groups::Grid(
+            Groups::Tiles(
                 pack_u32(s.out_ch).div_ceil(16),
                 pack_u32(s.batch * s.out_h * s.out_w).div_ceil(16),
-                1,
             ),
         )?;
         Some(result)
@@ -1906,7 +1912,8 @@ impl GpuKernels {
             _padding: 0,
         };
 
-        // Workgroup grid (oc_tile, s_tile, tiles): one workgroup layer per tile.
+        // One 16x16 workgroup per (output-channel tile, spatial tile), so each output is
+        // computed once (#307: the old (16, 16, tiles) grid computed each up to 256 times).
         let num_oc_tiles = pack_u32(out_channels).div_ceil(oc_tile);
         let num_spatial_tiles = pack_u32(batch_size * h_out * w_out).div_ceil(s_tile);
         run_kernel(
@@ -1914,7 +1921,7 @@ impl GpuKernels {
             &ctx.pipelines_for(input.dtype()).igemm,
             &[input, weight, &result],
             bytemuck::bytes_of(&params),
-            Groups::Grid(oc_tile, s_tile, num_oc_tiles * num_spatial_tiles),
+            Groups::Tiles(num_oc_tiles, num_spatial_tiles),
         )?;
         Some(result)
     }
@@ -1949,10 +1956,9 @@ impl GpuKernels {
             &[out_grad, weight, &result],
             bytemuck::bytes_of(&ConvParams::new(spec)),
             // One thread per input-gradient element: x over input channels, y over batch * height * width.
-            Groups::Grid(
+            Groups::Tiles(
                 pack_u32(s.in_ch).div_ceil(16),
                 pack_u32(s.batch * s.in_h * s.in_w).div_ceil(16),
-                1,
             ),
         )?;
         Some(result)
@@ -1991,10 +1997,9 @@ impl GpuKernels {
             &[out_grad, input, &result],
             bytemuck::bytes_of(&ConvParams::new(spec)),
             // One thread per weight-gradient element: x over output channels, y over in_ch * kernel_h * kernel_w.
-            Groups::Grid(
+            Groups::Tiles(
                 pack_u32(s.out_ch).div_ceil(16),
                 pack_u32(s.in_ch * s.kernel_h * s.kernel_w).div_ceil(16),
-                1,
             ),
         )?;
         Some(result)
@@ -2029,10 +2034,9 @@ impl GpuKernels {
             &[out_grad, weight, &result],
             bytemuck::bytes_of(&ConvParams::new(spec)),
             // One thread per input-gradient element: x over input channels, y over batch * height * width.
-            Groups::Grid(
+            Groups::Tiles(
                 pack_u32(s.in_ch).div_ceil(16),
                 pack_u32(s.batch * s.in_h * s.in_w).div_ceil(16),
-                1,
             ),
         )?;
         Some(result)
@@ -2070,10 +2074,9 @@ impl GpuKernels {
             &[out_grad, input, &result],
             bytemuck::bytes_of(&ConvParams::new(spec)),
             // One thread per weight-gradient element: x over output channels, y over in_ch * kernel_h * kernel_w.
-            Groups::Grid(
+            Groups::Tiles(
                 pack_u32(s.out_ch).div_ceil(16),
                 pack_u32(s.in_ch * s.kernel_h * s.kernel_w).div_ceil(16),
-                1,
             ),
         )?;
         Some(result)

@@ -8,8 +8,11 @@
 
 @compute @workgroup_size(16, 16, 1)
 fn conv_backward_weight_main(
-    @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(workgroup_id) wg_id: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+    @builtin(local_invocation_id) local_id: vec3<u32>,
 ) {
+    let global_id = tile_global_id(wg_id, num_wg, local_id, (params.out_channels + 15u) / 16u);
     // Decode thread position
     let out_ch = global_id.x;
     let flat_kernel = global_id.y;
