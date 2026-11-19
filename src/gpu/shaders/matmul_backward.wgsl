@@ -42,7 +42,9 @@ fn matmul_backward_a(
     let local_row = local_id.y;
     let local_col = local_id.x;
 
-    var sum: f32 = 0.0;
+    // One partial per tile, summed pairwise across tiles (#319): a single running sum over
+    // all of k loses about k * 2^-24 relative, 4% at k = 2^22.
+    var acc: PairwiseSum;
 
     // Number of tiles along the N dimension (shared dimension of grad @ B^T)
     let num_tiles = (params_a.n + TILE_SIZE - 1u) / TILE_SIZE;
@@ -74,16 +76,18 @@ fn matmul_backward_a(
         workgroupBarrier();
 
         // Compute partial dot product
+        var partial: f32 = 0.0;
         for (var i: u32 = 0u; i < TILE_SIZE; i = i + 1u) {
-            sum = sum + tile_grad[local_row * TILE_SIZE + i] * tile_b[i * TILE_SIZE + local_col];
+            partial = partial + tile_grad[local_row * TILE_SIZE + i] * tile_b[i * TILE_SIZE + local_col];
         }
+        pairwise_push(&acc, partial);
 
         workgroupBarrier();
     }
 
     // Write result
     if (row < params_a.m && col < params_a.k) {
-        st_dA(row * params_a.k + col, sum);
+        st_dA(row * params_a.k + col, pairwise_total(&acc));
     }
 }
 
@@ -107,7 +111,9 @@ fn matmul_backward_b(
     let local_row = local_id.y;
     let local_col = local_id.x;
 
-    var sum: f32 = 0.0;
+    // One partial per tile, summed pairwise across tiles (#319): a single running sum over
+    // all of k loses about k * 2^-24 relative, 4% at k = 2^22.
+    var acc: PairwiseSum;
 
     // Number of tiles along the M dimension (shared dimension of A^T @ grad)
     let num_tiles = (params_b.m + TILE_SIZE - 1u) / TILE_SIZE;
@@ -138,16 +144,18 @@ fn matmul_backward_b(
         workgroupBarrier();
 
         // Compute partial dot product
+        var partial: f32 = 0.0;
         for (var i: u32 = 0u; i < TILE_SIZE; i = i + 1u) {
-            sum = sum + tile_a[local_row * TILE_SIZE + i] * tile_grad[i * TILE_SIZE + local_col];
+            partial = partial + tile_a[local_row * TILE_SIZE + i] * tile_grad[i * TILE_SIZE + local_col];
         }
+        pairwise_push(&acc, partial);
 
         workgroupBarrier();
     }
 
     // Write result
     if (row < params_b.k && col < params_b.n) {
-        st_dB(row * params_b.n + col, sum);
+        st_dB(row * params_b.n + col, pairwise_total(&acc));
     }
 }
 

@@ -329,6 +329,40 @@ fn max_grad_b(g: f32, a: f32, b: f32) -> f32 {
     if (a == b) { return g * 0.5; }
     return g;
 }
+// A streaming pairwise sum (#319): push terms one at a time, read the total at the end.
+// `levels[l]` holds the sum of a block of 2^l pushed terms whenever bit `l` of `count` is
+// set; a push merges equal-sized blocks like a binary counter's carries. Every term is
+// added into sums of comparable size, so the rounding error grows with log2(count), not
+// count, as in a recursive pairwise sum, with O(1) amortized work and 32 registers.
+struct PairwiseSum {
+    levels: array<f32, 32>,
+    count: u32,
+}
+
+fn pairwise_push(acc: ptr<function, PairwiseSum>, x: f32) {
+    var carry = x;
+    var n = (*acc).count;
+    var l = 0u;
+    while ((n & 1u) != 0u) {
+        carry = carry + (*acc).levels[l];
+        n = n >> 1u;
+        l = l + 1u;
+    }
+    (*acc).levels[l] = carry;
+    (*acc).count = (*acc).count + 1u;
+}
+
+// The sum of every pushed term: the occupied levels, smallest blocks first.
+fn pairwise_total(acc: ptr<function, PairwiseSum>) -> f32 {
+    var total = 0.0;
+    for (var l = 0u; l < 32u; l = l + 1u) {
+        if ((((*acc).count >> l) & 1u) != 0u) {
+            total = total + (*acc).levels[l];
+        }
+    }
+    return total;
+}
+
 // `n / d²` without forming `d²` or `1/d²`, either of which overflows or underflows f32
 // where the quotient is finite (#92: div's and recip's gradients at |d| > 1.8e19 or
 // < 1e-19). `n * (1/d) * (1/d)` is not enough: Metal compiles with fast math, which may
