@@ -150,7 +150,7 @@ fn cos_op(
     }
 }
 
-// erf, odd-symmetric, within a few f32 ulps of the CPU's `libm::erf` (S22).
+// erf, odd-symmetric, within an f32 ulp of the CPU's `libm::erff` (S22, #323).
 //
 // |x| < 1: the Maclaurin series erf(x) = 2/sqrt(pi) * x * sum (-z)^n / (n! (2n+1)), z = x^2,
 // whose coefficients are exact, so the result is relatively accurate down to zero (twelve
@@ -158,10 +158,16 @@ fn cos_op(
 // Abramowitz-Stegun 7.1.26 has an absolute error of 1.5e-7 whatever x is, which near zero
 // is the whole value (a relative error of 1e-4 at 1e-3, and 1 at 1e-8).
 //
-// |x| >= 1: Abramowitz-Stegun 7.1.26 (absolute error 1.5e-7). There erf(x) >= 0.84, so that
-// is a relative error under 1.8e-7, and exp(-x*x) underflows to 0 for large |x|, so the
-// result saturates at +/-1. The two pieces meet at 1 with a jump of at most 1.5e-7. A NaN
-// fails `a < 1.0` and comes out of the second piece as NaN.
+// |x| >= 1: erf = 1 - erfc, with erfc from the Chebyshev fit in Numerical Recipes (`erfcc`,
+// 2nd ed. 6.2), whose error is under 1.2e-7 *relative to erfc*. GELU's negative tail is
+// x/2 * (1 + erf(x / sqrt 2)), where 1 + erf is erfc of a small number: an absolute error in
+// erf there is a large relative error in GELU. Abramowitz-Stegun 7.1.26's absolute 1.5e-7
+// was 2 ulps of erf at -3/sqrt(2), 4.4e-5 relative in GELU(-3). Here erfc's error is under
+// 2e-8 at |x| = 1 (erfc = 0.157) and shrinks with it, under an ulp of erf, so erf is
+// within an ulp of `libm::erff` (tests/gpu_gelu_erf.rs; on lavapipe, at most 1 ulp over
+// 1 <= |x| < 6, and GELU(-3) is identical to the CPU's). exp(-a*a) underflows to 0 for large |x|,
+// so the result saturates at +/-1. A NaN fails `a < 1.0` and comes out of the second piece as
+// NaN.
 fn erf_approx(x: f32) -> f32 {
     let a = abs(x);
     var y: f32;
@@ -182,9 +188,19 @@ fn erf_approx(x: f32) -> f32 {
         series = series * z + 1.0;
         y = 1.1283791670955126 * a * series;
     } else {
-        let t = 1.0 / (1.0 + 0.3275911 * a);
-        let poly = ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t;
-        y = 1.0 - poly * exp(-a * a);
+        let t = 1.0 / (1.0 + 0.5 * a);
+        var p: f32 = 0.17087277;
+        p = p * t - 0.82215223;
+        p = p * t + 1.48851587;
+        p = p * t - 1.13520398;
+        p = p * t + 0.27886807;
+        p = p * t - 0.18628806;
+        p = p * t + 0.09678418;
+        p = p * t + 0.37409196;
+        p = p * t + 1.00002368;
+        p = p * t - 1.26551223;
+        let erfc = t * exp(p - a * a);
+        y = 1.0 - erfc;
     }
     return select(y, -y, x < 0.0);
 }
