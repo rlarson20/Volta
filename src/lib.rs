@@ -236,3 +236,9 @@ mod batchnorm_tests;
 #[cfg(test)]
 #[path = "lib_tests/f64_tests.rs"]
 mod f64_tests;
+
+// Kills the mutants `just mutants-core` found surviving (#389); `.cargo/mutants.toml` lists
+// the ones excluded instead.
+#[cfg(test)]
+#[path = "lib_tests/mutants_core_tests.rs"]
+mod mutants_core_tests;
