@@ -173,18 +173,18 @@ impl BatchNorm {
                 let m = T::from_f64(f64::from(self.momentum));
                 let n = T::from_usize(n);
 
-                let mut rm_guard = rm.host_mut::<T>();
-                let rm_host = &mut *rm_guard;
-                let mut rv_guard = rv.host_mut::<T>();
-                let rv_host = &mut *rv_guard;
-                for i in 0..self.num_features {
-                    let rm_val = fetch(rm_host, i);
-                    let bm_val = fetch(&bm_data, i);
-                    *slot(rm_host, i) = (1.0 - m).mul_add(rm_val, m * bm_val);
-                    let unbiased_var = fetch(&bv_data, i) * n / (n - 1.0);
-                    let rv_val = fetch(rv_host, i);
-                    *slot(rv_host, i) = (1.0 - m).mul_add(rv_val, m * unbiased_var);
-                }
+                rm.with_host_mut::<T, _>(|rm_host| {
+                    rv.with_host_mut::<T, _>(|rv_host| {
+                        for i in 0..self.num_features {
+                            let rm_val = fetch(rm_host, i);
+                            let bm_val = fetch(&bm_data, i);
+                            *slot(rm_host, i) = (1.0 - m).mul_add(rm_val, m * bm_val);
+                            let unbiased_var = fetch(&bv_data, i) * n / (n - 1.0);
+                            let rv_val = fetch(rv_host, i);
+                            *slot(rv_host, i) = (1.0 - m).mul_add(rv_val, m * unbiased_var);
+                        }
+                    });
+                });
                 });
             });
         });

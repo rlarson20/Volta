@@ -637,20 +637,28 @@ impl Storage {
         }
     }
 
-    /// Mutable host view of this CPU storage as `T`: in place for `T`'s own dtype. F16 and
-    /// BF16 storage (for `T = f32`) is decoded into an f32 copy that is rounded back into
-    /// this storage when the view drops, so an in-place update (an optimizer step, running
-    /// statistics) computes in f32 and rounds once, like every half op.
+    /// Run `f` on a mutable host view of this CPU storage as `T`, and return its result.
+    /// For `T`'s own dtype the view is the storage itself, updated in place. F16 and BF16
+    /// storage (for `T = f32`) is decoded into an f32 copy, and after `f` returns the copy
+    /// is rounded back into this storage in one explicit write, so an in-place update (an
+    /// optimizer step, running statistics) computes in f32 and rounds once, like every half
+    /// op. If `f` panics, a half storage is left as it was: the write is never reached, and
+    /// nothing runs in `Drop` during unwinding (#174).
     ///
     /// # Panics
     /// If the storage is not CPU storage of `T`'s dtype or (for `T = f32`) a half type.
     #[track_caller]
-    pub(crate) fn host_mut<T: crate::real::Real>(&mut self) -> HostMut<'_, T> {
+    pub(crate) fn with_host_mut<T: crate::real::Real, R>(
+        &mut self,
+        f: impl FnOnce(&mut [T]) -> R,
+    ) -> R {
         if self.dtype() == T::DTYPE {
-            HostMut::Native(self.as_host_mut::<T>().or_panic(""))
+            f(self.as_host_mut::<T>().or_panic(""))
         } else {
-            let wide = self.host::<T>().into_owned();
-            HostMut::Wide { wide, dst: self }
+            let mut wide = self.host::<T>().into_owned();
+            let out = f(&mut wide);
+            *self = Self::from_compute(self.dtype(), wide);
+            out
         }
     }
 
@@ -1011,50 +1019,10 @@ impl std::fmt::Debug for Storage {
     }
 }
 
-/// A mutable host view from [`Storage::host_mut`].
-pub(crate) enum HostMut<'a, T: crate::real::Real> {
-    /// The storage's own elements.
-    Native(&'a mut [T]),
-    /// A decoded f32 copy of half storage, rounded back into `dst` on drop.
-    Wide {
-        /// The decoded elements.
-        wide: Vec<T>,
-        /// The half storage they came from.
-        dst: &'a mut Storage,
-    },
-}
-
-impl<T: crate::real::Real> std::ops::Deref for HostMut<'_, T> {
-    type Target = [T];
-    fn deref(&self) -> &[T] {
-        match self {
-            Self::Native(s) => s,
-            Self::Wide { wide, .. } => wide,
-        }
-    }
-}
-
-impl<T: crate::real::Real> std::ops::DerefMut for HostMut<'_, T> {
-    fn deref_mut(&mut self) -> &mut [T] {
-        match self {
-            Self::Native(s) => s,
-            Self::Wide { wide, .. } => wide,
-        }
-    }
-}
-
-impl<T: crate::real::Real> Drop for HostMut<'_, T> {
-    fn drop(&mut self) {
-        if let Self::Wide { wide, dst } = self {
-            **dst = Storage::from_compute(dst.dtype(), std::mem::take(wide));
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::fetch;
+    use crate::index::{fetch, slot};
 
     #[test]
     fn test_storage_f32() {
@@ -1274,6 +1242,40 @@ mod tests {
         let gpu = Device::gpu().expect("adapter present");
         let result = std::panic::catch_unwind(|| Storage::from_typed(vec![1.0f64]).to_device(&gpu));
         assert!(result.is_err(), "f64 storage moved to the GPU");
+    }
+
+    /// #174: `with_host_mut` on half storage computes in f32 and rounds back once, after
+    /// the closure returns.
+    #[test]
+    fn with_host_mut_on_f16_rounds_back_after_the_closure() {
+        let mut st = Storage::from_typed(vec![half::f16::from_f32(1.0), half::f16::from_f32(2.0)]);
+        let seen = st.with_host_mut::<f32, _>(|buf| {
+            *slot(buf, 0) += 0.5;
+            *slot(buf, 1) *= 3.0;
+            buf.to_vec()
+        });
+        assert_eq!(seen, vec![1.5, 6.0]);
+        assert_eq!(st.dtype(), DType::F16);
+        assert_eq!(
+            st.as_host::<half::f16>().expect("f16"),
+            &[half::f16::from_f32(1.5), half::f16::from_f32(6.0)]
+        );
+    }
+
+    /// #174: a panic inside `with_host_mut` leaves half storage as it was; nothing is
+    /// written back during unwinding.
+    #[test]
+    fn with_host_mut_on_f16_writes_nothing_when_the_closure_panics() {
+        let before = vec![half::f16::from_f32(1.0), half::f16::from_f32(-2.0)];
+        let mut st = Storage::from_typed(before.clone());
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            st.with_host_mut::<f32, ()>(|buf| {
+                *slot(buf, 0) = 100.0;
+                panic!("mid-update");
+            });
+        }));
+        assert!(result.is_err());
+        assert_eq!(st.as_host::<half::f16>().expect("f16"), before.as_slice());
     }
 }
 
