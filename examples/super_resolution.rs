@@ -8,9 +8,8 @@
 //! Since Volta doesn't have image I/O yet, we use synthetic data to demonstrate
 //! the architecture and training process.
 
-use volta::{
-    Adam, Conv2d, Layer, Module, PixelShuffle, RawTensor, ReLU, Sequential, manual_seed, mse_loss,
-};
+use volta::nn::{Adam, Conv2d, Layer, Module, PixelShuffle, ReLU, Sequential};
+use volta::{RawTensor, manual_seed, mse_loss};
 
 fn main() {
     manual_seed(42);

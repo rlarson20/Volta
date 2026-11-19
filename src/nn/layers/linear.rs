@@ -78,7 +78,8 @@ impl Linear {
     ///
     /// # Example
     /// ```no_run
-    /// # use volta::{Linear, Device};
+    /// # use volta::nn::Linear;
+    /// # use volta::Device;
     /// # #[cfg(feature = "gpu")]
     /// # {
     /// let device = Device::gpu().expect("GPU required");

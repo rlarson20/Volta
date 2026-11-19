@@ -1,37 +1,37 @@
 /// `BatchNorm1d` and `BatchNorm2d`.
-pub mod batchnorm;
+pub(crate) mod batchnorm;
 /// `Conv2d` and its algorithm selection.
-pub mod conv;
+pub(crate) mod conv;
 /// `ConvTranspose2d`.
-pub mod conv_transpose;
+pub(crate) mod conv_transpose;
 /// `Dropout`.
-pub mod dropout;
+pub(crate) mod dropout;
 /// `Embedding`.
-pub mod embedding;
+pub(crate) mod embedding;
 /// `Flatten`.
-pub mod flatten;
+pub(crate) mod flatten;
 /// `GELU` activation.
-pub mod gelu;
+pub(crate) mod gelu;
 /// `LayerNorm`.
-pub mod layernorm;
+pub(crate) mod layernorm;
 /// `Linear`.
-pub mod linear;
+pub(crate) mod linear;
 /// `LSTMCell`.
-pub mod lstm;
+pub(crate) mod lstm;
 /// `MaxPool2d`.
-pub mod maxpool;
+pub(crate) mod maxpool;
 /// `PixelShuffle`.
-pub mod pixelshuffle;
+pub(crate) mod pixelshuffle;
 /// `ReLU` activation.
-pub mod relu;
+pub(crate) mod relu;
 /// `Sequential` container.
-pub mod sequential;
+pub(crate) mod sequential;
 /// `SequentialBuilder`.
-pub mod sequential_builder;
+pub(crate) mod sequential_builder;
 /// `Sigmoid` activation.
-pub mod sigmoid;
+pub(crate) mod sigmoid;
 /// `Tanh` activation.
-pub mod tanh;
+pub(crate) mod tanh;
 
 pub use batchnorm::{BatchNorm1d, BatchNorm2d};
 pub use conv::{Conv2d, ConvAlgo};

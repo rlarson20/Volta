@@ -1,5 +1,5 @@
 use volta::io::StateDict;
-use volta::{Module, RecurrentLayer, Tensor};
+use volta::{Tensor, nn::{Module, RecurrentLayer}};
 
 struct Outsider;
 

@@ -6,7 +6,9 @@
 mod torch_ref;
 
 use torch_ref::{Fixture, assert_close};
-use volta::{Adam, Muon, SGD, Storage, Tensor};
+use volta::Tensor;
+use volta::nn::{Adam, Muon, SGD};
+use volta::storage::Storage;
 
 /// Tolerance for plain arithmetic trajectories.
 const TOL: f32 = 1e-5;

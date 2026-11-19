@@ -1,23 +1,23 @@
 // Operation enums and trait implementations
 /// Elementwise binary ops.
-pub mod binary;
+pub(crate) mod binary;
 /// Elementwise comparisons (Bool results).
-pub mod compare;
-pub mod gpu_ops;
+pub(crate) mod compare;
+pub(crate) mod gpu_ops;
 /// Fused losses with their own gradient (binary cross entropy).
-pub mod loss;
+pub(crate) mod loss;
 /// Matrix multiplication.
-pub mod matmul;
+pub(crate) mod matmul;
 /// Tie and NaN rules of the max family, one per PyTorch op.
 pub(crate) mod max_rule;
 /// Movement ops (reshape, permute, expand, pad, shrink, stride).
-pub mod movement;
+pub(crate) mod movement;
 /// Reductions (sum, max, mean, and per-axis forms).
-pub mod reduce;
+pub(crate) mod reduce;
 /// Ternary ops (`mulacc`, `where_op`).
-pub mod ternary;
+pub(crate) mod ternary;
 /// Elementwise unary ops.
-pub mod unary;
+pub(crate) mod unary;
 
 // Re-export operation types
 pub use binary::BinaryOp;

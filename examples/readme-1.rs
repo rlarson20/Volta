@@ -1,9 +1,7 @@
 //! The first example in the README
-use volta::{
-    Adam, Sequential, io,
-    nn::{Layer, Linear, Module, ReLU},
-    tensor::{RawTensor, mse_loss},
-};
+use volta::io;
+use volta::nn::{Adam, Layer, Linear, Module, ReLU, Sequential};
+use volta::tensor::{RawTensor, mse_loss};
 
 fn main() {
     // 1. Define a simple model with named layers: 2 -> 8 -> 1

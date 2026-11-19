@@ -17,7 +17,7 @@ use crate::tensor::{RawTensor, Tensor};
 ///
 /// # Example
 /// ```no_run
-/// # use volta::LayerNorm;
+/// # use volta::nn::LayerNorm;
 /// // For 2D input (B, C): normalize over C
 /// let ln = LayerNorm::new(vec![64]);
 ///

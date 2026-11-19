@@ -4,17 +4,17 @@ use crate::io::StateDict;
 use crate::tensor::Tensor;
 
 /// Layers and containers.
-pub mod layers;
+pub(crate) mod layers;
 /// Optimizers.
-pub mod optim;
-pub mod transformer;
+pub(crate) mod optim;
+pub(crate) mod transformer;
 
 pub use layers::{
     BatchNorm1d, BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, Dropout, Embedding, Flatten, GELU,
     LSTMCell, LayerNorm, Linear, MaxPool2d, PixelShuffle, ReLU, Sequential, SequentialBuilder,
     Sigmoid, Tanh,
 };
-pub use optim::{Adam, Muon, SGD};
+pub use optim::{Adam, Muon, Optimizer, SGD};
 pub use transformer::{
     FeedForward, MultiHeadAttention, PositionalEncoding, PositionalEncodingType,
     ScaledDotProductAttention, TransformerBlock, causal_mask,
@@ -127,7 +127,7 @@ pub trait Module {
     /// their values (use [`crate::io::load_state_dict_checked`] to see which). An entry
     /// that is present must fit: it keeps the parameter's shape, device, and
     /// `requires_grad`, and only the values change. An entry in another dtype is cast to
-    /// the parameter's (following [`crate::Storage::cast`]).
+    /// the parameter's (following [`crate::storage::Storage::cast`]).
     ///
     /// # Errors
     ///
@@ -158,7 +158,8 @@ pub trait Module {
     ///
     /// # Example
     /// ```no_run
-    /// # use volta::{Linear, Module, Device};
+    /// # use volta::nn::{Linear, Module};
+    /// # use volta::Device;
     /// # #[cfg(feature = "gpu")]
     /// # {
     /// let mut layer = Linear::new(784, 128, true);
@@ -185,7 +186,7 @@ pub trait Module {
     }
 
     /// Converts every parameter, and its gradient, to `dtype` in place: PyTorch's
-    /// `module.to(dtype)` (`.double()`, `.half()`). Values follow [`crate::Storage::cast`],
+    /// `module.to(dtype)` (`.double()`, `.half()`). Values follow [`crate::storage::Storage::cast`],
     /// so f32 to f64 is exact. A layer holding a non-parameter tensor (`BatchNorm`'s running
     /// statistics, `PositionalEncoding`'s table) overrides this to convert it too, and a
     /// container (`Sequential`) forwards it to each child.

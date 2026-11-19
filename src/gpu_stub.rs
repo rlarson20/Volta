@@ -1,7 +1,7 @@
 //! The GPU control functions without the `gpu` feature (#342).
 //!
 //! Mounted as `volta::gpu` when the feature is off, so a portable program calls
-//! `volta::is_gpu_available()`, `volta::gpu_sync()` and the rest without a `cfg` of its own
+//! `volta::gpu::is_gpu_available()`, `volta::gpu::gpu_sync()` and the rest without a `cfg` of its own
 //! (the "gated real function plus a not-gpu stub" rule, `.claude/rules/gpu.md`). Each stub
 //! returns what the real function returns when no adapter was found, so a caller sees the
 //! same answer from a CPU-only build as from a GPU build on a machine with no GPU. Only the

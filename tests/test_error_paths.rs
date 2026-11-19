@@ -1,9 +1,10 @@
 //! Tests exercising all `VoltaError` variants through public APIs.
 
 use volta::Axis;
+use volta::RawTensor;
 use volta::dtype::DType;
 use volta::error::VoltaError;
-use volta::{RawTensor, Storage};
+use volta::storage::Storage;
 
 // ── ShapeDataMismatch ──────────────────────────────────────────────────
 

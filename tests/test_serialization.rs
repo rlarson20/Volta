@@ -2,9 +2,10 @@
 //!
 //! Each layer round-trips through safetensors, the only state-dict file format.
 //! Layers with optional bias are also tested in no-bias mode.
+use volta::RawTensor;
 use volta::io::{load_safetensors, save_safetensors};
+use volta::nn::{BatchNorm2d, ConvTranspose2d, LSTMCell};
 use volta::nn::{Layer, Module};
-use volta::{BatchNorm2d, ConvTranspose2d, LSTMCell, RawTensor};
 
 /// Helper: assert two state dicts have exactly the same keys and values.
 fn assert_state_dicts_equal(

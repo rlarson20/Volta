@@ -7,7 +7,9 @@
 #![cfg(feature = "gpu")]
 
 use volta::gpu::is_gpu_available;
-use volta::{Adam, Device, RawTensor, SGD, Storage, Tensor};
+use volta::nn::{Adam, SGD};
+use volta::storage::Storage;
+use volta::{Device, RawTensor, Tensor};
 
 const N: usize = 37;
 const STEPS: usize = 3;

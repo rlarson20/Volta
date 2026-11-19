@@ -1,7 +1,8 @@
 //! A weight shared between layers (#101): containers list it once, so an optimizer steps
 //! it once, and an optimizer handed it twice refuses.
+use volta::nn::{Adam, Muon, SGD};
 use volta::nn::{Layer, Linear, Module, Sequential};
-use volta::{Adam, Muon, RawTensor, SGD, Tensor, VoltaError};
+use volta::{RawTensor, Tensor, VoltaError};
 
 /// Two bias-free `Linear(2, 2)` layers sharing one weight, in a `Sequential`.
 fn tied_model() -> (Sequential, Tensor) {

@@ -7,7 +7,8 @@
 //! `ConvAlgo::Auto` picked changed the gradient by 4%. Direct and IGEMM now sum blocked
 //! pairwise. CPU only: the GPU kernels are separate and not changed here.
 
-use volta::{Conv2d, ConvAlgo, Module, RawTensor, ones};
+use volta::nn::{Conv2d, ConvAlgo, Module};
+use volta::{RawTensor, ones};
 
 /// Output positions: `16 * 512 * 512 = 2^22`.
 const SHAPE: [usize; 4] = [16, 1, 512, 512];

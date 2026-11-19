@@ -1,8 +1,9 @@
 //! H7: `load_state_dict` goes through `Tensor::load_weight`. A `Linear` state dict round-trips into a fresh layer with distinct, non-degenerate values and keeps its shape; a transposed shape or short data is rejected for `Linear`, and a wrong shape is rejected for `Embedding`. A rejected entry is an `Err` naming the key (a checkpoint is data from outside, not a programming error), also through a `Sequential`.
 //!
 //! Device preservation (a GPU destination stays on the GPU) is covered by `tensor::load_weight_tests` in `src/`.
+use volta::VoltaError;
 use volta::io::{StateDict, TensorData};
-use volta::{Embedding, Linear, Module, ReLU, Sequential, VoltaError};
+use volta::nn::{Embedding, Linear, Module, ReLU, Sequential};
 
 fn assert_same(a: &[f32], b: &[f32]) {
     assert_eq!(a.len(), b.len());

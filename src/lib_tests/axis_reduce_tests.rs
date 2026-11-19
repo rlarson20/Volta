@@ -1,6 +1,9 @@
 //! Axis reductions (`sum_dim`, `max_dim`, `mean_dim`) and `softmax`, values and gradients, plus the cross-entropy loss, dropout in train and eval mode, SGD weight decay, and an external-model loading test.
 
 use super::*;
+use crate::nn::{Dropout, SGD};
+use crate::nn::{Layer, Module};
+use crate::storage::Storage;
 
 #[test]
 fn test_sum_dim_basic() {

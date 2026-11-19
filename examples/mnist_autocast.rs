@@ -16,10 +16,9 @@
 use std::path::Path;
 use std::time::Instant;
 use volta::amp::autocast;
-use volta::{
-    Adam, DType, Layer, Linear, Module, RawTensor, ReLU, Sequential, Tensor, load_mnist_images,
-    load_mnist_labels,
-};
+use volta::data::{load_mnist_images, load_mnist_labels};
+use volta::nn::{Adam, Layer, Linear, Module, ReLU, Sequential};
+use volta::{DType, RawTensor, Tensor};
 
 /// Seeds per precision.
 const SEEDS: [u64; 5] = [1, 2, 3, 4, 5];

@@ -4,7 +4,8 @@
 //! f32 parameters, takes the issue's probe to 0.999, 0.998, 0.997 on both backends.
 
 use volta::error::VoltaError;
-use volta::{Adam, DType, Device, Linear, Module, RawTensor, Tensor};
+use volta::nn::{Adam, Linear, Module};
+use volta::{DType, Device, RawTensor, Tensor};
 
 /// The issue's probe parameter: `w = 1`, a leaf of `dtype` on `device`.
 fn probe_param(dtype: DType, device: Device) -> Tensor {
@@ -101,7 +102,7 @@ fn f32_probe_steps_by_lr_on_the_cpu() {
 #[cfg(feature = "gpu")]
 #[test]
 fn gpu_refuses_half_parameters_and_steps_the_f32_probe_by_lr() {
-    if !volta::is_gpu_available() {
+    if !volta::gpu::is_gpu_available() {
         return;
     }
     let gpu = Device::gpu().expect("an adapter");

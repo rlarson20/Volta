@@ -1,7 +1,8 @@
 //! Optimizers reject non-leaf parameters and accept (and skip) frozen leaves (#102).
 
 use volta::error::VoltaError;
-use volta::{Adam, Muon, RawTensor, SGD, Tensor};
+use volta::nn::{Adam, Muon, SGD};
+use volta::{RawTensor, Tensor};
 
 fn non_leaf() -> (Tensor, Tensor) {
     let w = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], true);

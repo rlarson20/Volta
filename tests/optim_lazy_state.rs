@@ -5,7 +5,9 @@
 //! Adam also counts steps per parameter; that trajectory is checked against PyTorch in
 //! `tests/torch_ref_optim.rs`.
 
-use volta::{Adam, DType, Linear, Module, Muon, Optimizer, SGD, Storage};
+use volta::DType;
+use volta::nn::{Adam, Linear, Module, Muon, Optimizer, SGD};
+use volta::storage::Storage;
 
 /// Builds an optimizer over a layer's parameters.
 type Build = fn(Vec<volta::Tensor>) -> Box<dyn Optimizer>;

@@ -8,8 +8,10 @@
 use std::collections::BTreeMap;
 use volta::io::mapping::StateDictMapper;
 use volta::io::{TensorData, load_safetensors, load_safetensors_raw};
+use volta::nn::{BatchNorm1d, Layer, Module, SGD};
 use volta::nn::{FeedForward, MultiHeadAttention, ScaledDotProductAttention, TransformerBlock};
-use volta::{BatchNorm1d, DataLoader, Layer, Module, RawTensor, SGD, Storage};
+use volta::storage::Storage;
+use volta::{DataLoader, RawTensor};
 
 /// Zero every tensor in `m` whose state-dict key contains one of `needles`.
 fn zero_matching(m: &mut impl Module, needles: &[&str]) {

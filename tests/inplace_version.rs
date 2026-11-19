@@ -2,7 +2,9 @@
 //! were rewritten, as PyTorch's version counter does, and leaves alone a graph whose ops
 //! don't read the rewritten tensor.
 
-use volta::{Adam, DType, Linear, Module, Muon, RawTensor, SGD, Storage, Tensor};
+use volta::nn::{Adam, Linear, Module, Muon, SGD};
+use volta::storage::Storage;
+use volta::{DType, RawTensor, Tensor};
 
 /// Panic text shared by every stale-graph case.
 const STALE: &str = "modified by an inplace operation";

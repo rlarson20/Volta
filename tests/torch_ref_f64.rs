@@ -7,10 +7,12 @@
 
 use std::collections::BTreeMap;
 use volta::io::{StateDict, TensorData, TypedTensorData, load_safetensors_raw};
-use volta::{
-    Adam, Axis, BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, DType, Embedding, Layer, LayerNorm,
-    Linear, MaxPool2d, Module, RawTensor, Storage, Tensor,
+use volta::nn::{
+    Adam, BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, Embedding, Layer, LayerNorm, Linear,
+    MaxPool2d, Module,
 };
+use volta::storage::Storage;
+use volta::{Axis, DType, RawTensor, Tensor};
 
 /// Relative tolerance, with an absolute floor of 1 on the scale.
 const TOL: f64 = 1e-10;

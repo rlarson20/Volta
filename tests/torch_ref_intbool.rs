@@ -7,8 +7,9 @@
 
 use std::collections::BTreeMap;
 use volta::io::{TypedTensorData, load_safetensors_raw};
+use volta::nn::{Embedding, Layer, Module};
 use volta::storage::Element;
-use volta::{Axis, DType, Embedding, Layer, Module, PadValue, RawTensor, Tensor};
+use volta::{Axis, DType, PadValue, RawTensor, Tensor};
 
 /// The `intbool` fixture group.
 struct Fixture(BTreeMap<String, TypedTensorData>);

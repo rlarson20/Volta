@@ -13,9 +13,10 @@
 mod torch_ref;
 
 use torch_ref::{Fixture, check_case, state_of, transpose};
+use volta::Tensor;
 use volta::io::StateDict;
+use volta::nn::Module;
 use volta::nn::{MultiHeadAttention, TransformerBlock};
-use volta::{Module, Tensor};
 
 /// Model width of every fixture case.
 const E: usize = 8;

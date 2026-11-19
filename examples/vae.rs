@@ -3,10 +3,10 @@
 //! Needs the MNIST training images in `data/mnist/`; it exits with download instructions if they are missing, rather than train on made-up data.
 #[path = "common/mnist.rs"]
 mod mnist;
-use volta::{
-    Linear, Module, ProgressBar, RawTensor, SGD, kl_divergence_gaussian, load_mnist_images,
-    mse_loss, randn_like,
-};
+use volta::data::load_mnist_images;
+use volta::nn::{Linear, Module, SGD};
+use volta::utils::ProgressBar;
+use volta::{RawTensor, kl_divergence_gaussian, mse_loss, randn_like};
 
 fn main() {
     println!("=== Variational Autoencoder (VAE) on MNIST ===\n");

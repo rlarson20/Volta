@@ -2,6 +2,8 @@
 
 use super::*;
 use crate::index::fetch;
+use crate::nn::Module;
+use crate::nn::{Layer, ReLU, Sigmoid, Tanh};
 
 #[test]
 fn relu_layer_forward_matches_op() {

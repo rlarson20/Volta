@@ -1,4 +1,3 @@
-use crate::Storage;
 use crate::autograd::{CastGradFn, GradFn, ToDeviceGradFn, edge};
 use crate::device::Device;
 use crate::device_policy::{Pass, on_gap};
@@ -13,8 +12,10 @@ use crate::ops::ternary::TernaryOp;
 use crate::ops::unary::UnaryOp;
 use crate::real::{Real, compute_dtype, dispatch_real};
 use crate::shape::{Axis, Shape};
-use crate::spec::PadValue;
+/// The fill value of [`Tensor::pad_with`].
+pub use crate::spec::PadValue;
 use crate::storage::Element;
+use crate::storage::Storage;
 use crate::{Result, VoltaError};
 use rand::RngExt;
 use rand::SeedableRng;
@@ -2925,7 +2926,7 @@ mod load_weight_tests {
     /// H7: loading into a GPU-resident tensor must keep it on the GPU with the new values.
     #[test]
     fn test_load_weight_preserves_gpu_storage() {
-        if !crate::is_gpu_available() {
+        if !crate::gpu::is_gpu_available() {
             eprintln!("SKIPPED: no GPU available");
             return;
         }

@@ -263,8 +263,9 @@ fn test_tensor_gpu_unary_relu_matches_cpu() {
 #[test]
 #[cfg(feature = "gpu")]
 fn test_tensor_gpu_mixed_device_binary_panics() {
+    use volta::Device;
     use volta::RawTensor;
-    use volta::{Device, is_gpu_available};
+    use volta::gpu::is_gpu_available;
 
     if !is_gpu_available() {
         return;

@@ -1,5 +1,7 @@
 //! Basic polynomial regression test
-use volta::{Layer, Linear, Module, ProgressBar, RawTensor, SGD, Sequential};
+use volta::RawTensor;
+use volta::nn::{Layer, Linear, Module, SGD, Sequential};
+use volta::utils::ProgressBar;
 
 fn main() {
     println!("=== Polynomial Regression Example ===\n");
@@ -25,9 +27,9 @@ fn main() {
     // Input(1) -> Hidden(32) -> Output(1)
     let model = Sequential::new(vec![
         Box::new(Linear::new(1, 32, true)),
-        Box::new(volta::ReLU),
+        Box::new(volta::nn::ReLU),
         Box::new(Linear::new(32, 32, true)),
-        Box::new(volta::ReLU),
+        Box::new(volta::nn::ReLU),
         Box::new(Linear::new(32, 1, true)),
     ]);
 

@@ -6,7 +6,9 @@
 //! `src/lib_tests/f64_tests.rs`, f16/bf16 against torch in `tests/torch_ref_half.rs`.
 
 use half::{bf16, f16};
-use volta::{Conv2d, DType, RawTensor, SGD, Storage, Tensor, VoltaError};
+use volta::nn::{Conv2d, SGD};
+use volta::storage::Storage;
+use volta::{DType, RawTensor, Tensor, VoltaError};
 
 /// Each dtype's tensor reports its dtype, and `data()` decodes it to f32.
 #[test]
@@ -452,7 +454,7 @@ fn to_vec_as_refuses_another_dtype() {
 /// gradient reaches the embedding table.
 #[test]
 fn embedding_in_sequential_trains_with_class_index_targets() {
-    use volta::{Adam, Embedding, Layer, Linear, Module, Sequential};
+    use volta::nn::{Adam, Embedding, Layer, Linear, Module, Sequential};
     volta::manual_seed(7);
     let model = Sequential::new(vec![
         Box::new(Embedding::new(8, 6)),

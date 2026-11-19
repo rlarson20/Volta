@@ -26,7 +26,7 @@ use crate::tensor::Tensor;
 ///
 /// # Example
 /// ```no_run
-/// # use volta::nn::transformer::MultiHeadAttention;
+/// # use volta::nn::MultiHeadAttention;
 /// let mha = MultiHeadAttention::new(512, 8, 0.1);
 /// ```
 pub struct MultiHeadAttention {

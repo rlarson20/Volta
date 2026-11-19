@@ -8,6 +8,8 @@
 use super::*;
 use crate::autograd::no_grad;
 use crate::ops::ReduceOp;
+use crate::ops::{BinaryOp, UnaryOp};
+use crate::storage::Storage;
 use crate::tensor::manual_seed;
 
 /// Relative tolerance of the f64 gradient checks.

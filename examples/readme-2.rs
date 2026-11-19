@@ -1,6 +1,6 @@
 //! The second README example: one `Adam` training step of a small `Conv2d` + `MaxPool2d` + `Linear` classifier on random data, built with `Sequential`.
+use volta::nn::{Adam, Conv2d, Flatten, Linear, MaxPool2d, ReLU, Sequential};
 use volta::nn::{Layer, Module};
-use volta::{Adam, Conv2d, Flatten, Linear, MaxPool2d, ReLU, Sequential};
 fn main() {
     // 1. Define Model
     let model = Sequential::new(vec![

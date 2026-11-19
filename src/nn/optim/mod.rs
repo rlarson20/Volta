@@ -1,9 +1,9 @@
 /// Adam optimizer.
-pub mod adam;
+pub(crate) mod adam;
 /// Muon optimizer.
-pub mod muon;
+pub(crate) mod muon;
 /// SGD optimizer.
-pub mod sgd;
+pub(crate) mod sgd;
 
 pub use adam::Adam;
 pub use muon::Muon;
@@ -14,9 +14,9 @@ use crate::Tensor;
 /// Zeroed optimizer state shaped like `p`'s data, in its current dtype and on its current
 /// device. Called on a parameter's first step, not at construction, so a model converted
 /// with `to_device` or `to_dtype` before then is stepped in its new device and dtype.
-pub(crate) fn zeros_like(p: &crate::RawTensor) -> crate::Storage {
+pub(crate) fn zeros_like(p: &crate::RawTensor) -> crate::storage::Storage {
     // In the parameter's dtype on its device (a no-op cast for f32).
-    crate::Storage::new_zeros(p.data.len(), &p.device).cast(p.data.dtype())
+    crate::storage::Storage::new_zeros(p.data.len(), &p.device).cast(p.data.dtype())
 }
 
 /// Panics unless every parameter in `params` that has a gradient has exactly one gradient

@@ -9,7 +9,8 @@
 //! - **Inference**: Using the trained model to make predictions.
 //! - **Persistence**: Saving and loading the weights of a trained layer.
 
-use volta::{Adam, Layer, Linear, Module, RawTensor, ReLU, Sequential, Tensor, mse_loss};
+use volta::nn::{Adam, Layer, Linear, Module, ReLU, Sequential};
+use volta::{RawTensor, Tensor, mse_loss};
 
 fn main() {
     println!("--- Volta Showcase: Solving XOR with an MLP ---");

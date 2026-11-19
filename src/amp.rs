@@ -143,7 +143,8 @@ enum Stage {
 ///
 /// ```
 /// use volta::amp::{GradScaler, autocast};
-/// use volta::{DType, Layer, Linear, Module, RawTensor, SGD};
+/// use volta::{DType, RawTensor};
+/// use volta::nn::{Layer, Linear, Module, SGD};
 ///
 /// volta::manual_seed(0);
 /// let model = Linear::new(4, 2, true);

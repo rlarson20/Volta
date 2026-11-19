@@ -2,6 +2,10 @@
 
 use super::*;
 #[cfg(feature = "gpu")]
+use crate::gpu::is_gpu_available;
+#[cfg(feature = "gpu")]
+use crate::storage::Storage;
+#[cfg(feature = "gpu")]
 use approx::assert_abs_diff_eq;
 
 /// Run `f` under `DevicePolicy::PreferGpu` and assert that the ops it ran on the CPU

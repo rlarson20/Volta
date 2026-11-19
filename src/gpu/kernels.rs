@@ -2540,9 +2540,9 @@ mod direct_kernel_tests {
 #[cfg(test)]
 mod muon_tests {
     use super::{GpuBuffer, GpuKernels};
-    use crate::Muon;
     use crate::gpu;
     use crate::index::fetch;
+    use crate::nn::Muon;
 
     const COEFFS: [f32; 3] = [3.4445, -4.7750, 2.0315];
     const EPS: f32 = 1e-7;

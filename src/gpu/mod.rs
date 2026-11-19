@@ -66,7 +66,8 @@ pub fn is_gpu_available() -> bool {
 /// # Example
 ///
 /// ```no_run
-/// use volta::{Device, gpu_sync, randn};
+/// use volta::{Device, randn};
+/// use volta::gpu::gpu_sync;
 ///
 /// let tensor = randn(&[64, 64]).to_device(Device::gpu().expect("a GPU"));
 /// // Run many GPU operations
@@ -94,7 +95,8 @@ pub fn gpu_sync() -> bool {
 /// # Example
 ///
 /// ```no_run
-/// use volta::{Device, gpu_pending_count, randn};
+/// use volta::{Device, randn};
+/// use volta::gpu::gpu_pending_count;
 ///
 /// let t = randn(&[64, 64]).to_device(Device::gpu().expect("a GPU"));
 /// let _ = t.relu();
@@ -129,7 +131,7 @@ pub fn gpu_sync_threshold() -> u32 {
 /// # Example
 ///
 /// ```no_run
-/// use volta::gpu_cleanup;
+/// use volta::gpu::gpu_cleanup;
 ///
 /// // After a batch of GPU operations
 /// gpu_cleanup();
@@ -163,7 +165,7 @@ pub fn gpu_cleanup() -> bool {
 /// # Example
 ///
 /// ```no_run
-/// use volta::gpu_compact;
+/// use volta::gpu::gpu_compact;
 ///
 /// // After a heavy benchmark group
 /// gpu_compact();
@@ -215,7 +217,7 @@ pub fn gpu_compact() -> bool {
 /// # Example
 ///
 /// ```no_run
-/// use volta::gpu_pool_stats;
+/// use volta::gpu::gpu_pool_stats;
 ///
 /// if let Some((buffers, staging)) = gpu_pool_stats() {
 ///     println!("Pooled buffers: {}, Staging buffers: {}", buffers, staging);

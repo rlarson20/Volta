@@ -139,11 +139,9 @@ Criterion benchmarks run through `just bench` (CPU) and `just bench-gpu`. GPU re
 Here's how to define a simple Multi-Layer Perceptron (MLP) with named layers, train it on synthetic data, and save the model.
 
 ```rust,no_run
-use volta::{
-    Adam, Sequential, io,
-    nn::{Layer, Linear, Module, ReLU},
-    tensor::{RawTensor, mse_loss},
-};
+use volta::nn::{Adam, Layer, Linear, Module, ReLU, Sequential};
+use volta::io;
+use volta::tensor::{RawTensor, mse_loss};
 
 fn main() {
     // 1. Define a simple model with named layers: 2 -> 8 -> 1
@@ -200,8 +198,7 @@ fn main() {
 The following utilizes the current API to define a training-ready CNN.
 
 ```rust
-use volta::{Sequential, Conv2d, MaxPool2d, Flatten, Linear, ReLU, Adam};
-use volta::nn::{Layer, Module};
+use volta::nn::{Adam, Conv2d, Flatten, Layer, Linear, MaxPool2d, Module, ReLU, Sequential};
 
 fn main() {
     // 1. Define Model
@@ -237,10 +234,9 @@ fn main() {
 Volta can load weights from PyTorch, HuggingFace, and other frameworks using SafeTensors format with automatic weight mapping and transposition.
 
 ```rust,no_run
-use volta::{
-    Layer, Linear, Module, ReLU, Sequential,
-    io::{load_safetensors, mapping::StateDictMapper},
-};
+use volta::nn::{Layer, Linear, Module, ReLU, Sequential};
+use volta::io::load_safetensors;
+use volta::io::mapping::StateDictMapper;
 
 fn main() {
     // 1. Build matching architecture with named layers
