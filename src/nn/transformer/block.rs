@@ -244,4 +244,27 @@ mod tests {
             "causal masking had no effect, so attention is not being applied"
         );
     }
+
+    /// #123: the input gradient through both pre-LN sublayers and residuals, by finite
+    /// differences in f64 under a random weighted loss, with and without the causal mask.
+    #[test]
+    fn test_block_input_gradient_matches_finite_differences() {
+        for causal in [false, true] {
+            crate::tensor::manual_seed(0xB10C);
+            let mut block = TransformerBlock::new(4, 2, 2, 0.0);
+            block.to_dtype(crate::DType::F64);
+            let x = crate::nn::transformer::f64_operand(&[2, 3, 4], true);
+            let w = crate::nn::transformer::f64_operand(&[2, 3, 4], false);
+            let (max, mean, ok) = RawTensor::check_gradients(
+                &x,
+                |t| block.forward(t, causal).elem_mul(&w).sum(),
+                1e-6,
+                1e-6,
+            );
+            assert!(
+                ok,
+                "TransformerBlock input gradient (causal={causal}): max={max:.3e} mean={mean:.3e}"
+            );
+        }
+    }
 }

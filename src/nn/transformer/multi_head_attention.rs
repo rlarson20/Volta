@@ -602,4 +602,27 @@ mod tests {
             "MHA masked grad wrt x failed: max={max:.3e} mean={mean:.3e}"
         );
     }
+
+    /// #123: self-attention's input gradient, where `x` feeds the query, key and value
+    /// projections at once, by finite differences in f64 under a random weighted loss.
+    #[test]
+    fn test_mha_self_attention_input_gradient_matches_finite_differences() {
+        for causal in [false, true] {
+            crate::tensor::manual_seed(0x5E1F);
+            let mut mha = MultiHeadAttention::new(4, 2, 0.0);
+            mha.to_dtype(crate::DType::F64);
+            let x = operand(&[2, 3, 4], true);
+            let w = operand(&[2, 3, 4], false);
+            let (max, mean, ok) = RawTensor::check_gradients(
+                &x,
+                |t| mha.forward(t, causal, None).elem_mul(&w).sum(),
+                1e-6,
+                1e-6,
+            );
+            assert!(
+                ok,
+                "MHA self-attention input gradient (causal={causal}): max={max:.3e} mean={mean:.3e}"
+            );
+        }
+    }
 }

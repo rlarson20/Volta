@@ -2096,31 +2096,43 @@ mod conv2d_tests {
         );
     }
 
+    /// #123: Direct's bias gradient by value. Each output channel adds its bias at every
+    /// output position, so under the loss `sum(y * w)` the bias gradient of channel `co`
+    /// is the sum of `w` over that channel's positions. Batch 2, so the batch sum counts.
+    /// (Direct's input gradient has its own `check_gradients` tests, and its weight
+    /// gradient is compared with im2col's in `test_direct_conv_gradient_match_im2col`.)
     #[test]
-    fn test_direct_conv_backward_flow() {
-        // Test that gradients flow through direct conv
-        let mut conv = Conv2d::new(2, 4, 3, 1, 1, true);
+    fn test_direct_conv_bias_gradient_sums_the_upstream_gradient() {
+        crate::tensor::manual_seed(0x0123);
+        let mut conv = Conv2d::new(2, 3, 3, 2, 1, true);
         conv.set_algo(ConvAlgo::Direct);
-
-        let x = RawTensor::randn(&[1, 2, 6, 6]);
-        x.set_requires_grad(true);
-
+        let x = RawTensor::randn(&[2, 2, 5, 4]);
         let y = conv.forward(&x);
-        let loss = y.sum();
-        loss.into_loss().expect("scalar loss").backward();
+        let out_dims = y.shape();
+        let [batch, out_ch, oh, ow] = crate::shape::fixed_dims::<4>(out_dims.truncate_rank());
+        let w = RawTensor::randn(&[batch, out_ch, oh, ow]);
+        y.elem_mul(&w)
+            .sum()
+            .into_loss()
+            .expect("scalar loss")
+            .backward();
 
-        // Check that input has gradients
-        assert!(x.grad().is_some(), "Input should have gradients");
-
-        // Check that weights have gradients
-        assert!(
-            conv.weight.grad().is_some(),
-            "Weights should have gradients"
-        );
-
-        // Check that bias has gradients
-        if let Some(ref b) = conv.bias {
-            assert!(b.grad().is_some(), "Bias should have gradients");
+        let w = w.data();
+        let got = conv
+            .bias
+            .as_ref()
+            .and_then(Tensor::grad)
+            .expect("bias grad");
+        assert_eq!(got.len(), out_ch);
+        for (co, g) in got.iter().enumerate() {
+            let e: f64 = (0..batch)
+                .flat_map(|b| (0..oh * ow).map(move |p| ((b * out_ch + co) * oh * ow) + p))
+                .map(|i| f64::from(fetch(&w, i)))
+                .sum();
+            assert!(
+                (f64::from(*g) - e).abs() < 1e-4,
+                "bias[{co}]: got {g}, expected {e}"
+            );
         }
     }
 
@@ -2244,26 +2256,44 @@ mod conv2d_tests {
         }
     }
 
+    /// #123: on a small CPU input that requires grad, `Auto` picks `Direct`, and its
+    /// output and every gradient are bit-for-bit those of an explicit `Direct` layer with
+    /// the same weights (which the Direct gradient checks cover).
     #[test]
     fn test_conv2d_auto_selects_direct_with_gradients() {
-        // Test that auto-selection can now choose Direct even with gradients
-        let mut conv = Conv2d::new(2, 4, 3, 1, 0, true);
-        conv.set_algo(ConvAlgo::Auto);
+        assert_eq!(select((1, 2, 4, 4), (3, 3), 1, 0, false), ConvAlgo::Direct);
 
+        crate::tensor::manual_seed(0xA070);
+        let mut auto = Conv2d::new(2, 4, 3, 1, 0, true);
+        auto.set_algo(ConvAlgo::Auto);
+        let mut direct = Conv2d::new(2, 4, 3, 1, 0, true);
+        direct.set_algo(ConvAlgo::Direct);
+        direct
+            .load_state_dict(&auto.state_dict())
+            .expect("same shapes");
         let x = RawTensor::randn(&[1, 2, 4, 4]);
-        x.set_requires_grad(true);
+        let w = RawTensor::randn(&[1, 4, 2, 2]);
 
-        // Should now use Direct (small input, gradients OK)
-        let y = conv.forward(&x);
-        let loss = y.sum();
-        loss.into_loss().expect("scalar loss").backward();
-
-        // Verify gradients exist
-        assert!(x.grad().is_some(), "Input should have gradients");
-        assert!(
-            conv.weight.grad().is_some(),
-            "Weights should have gradients"
-        );
+        let run = |conv: &Conv2d| {
+            let x = x.detach();
+            x.set_requires_grad(true);
+            let y = conv.forward(&x);
+            y.elem_mul(&w)
+                .sum()
+                .into_loss()
+                .expect("scalar loss")
+                .backward();
+            (
+                y.data(),
+                x.grad().expect("input grad"),
+                conv.weight.grad().expect("weight grad"),
+                conv.bias
+                    .as_ref()
+                    .and_then(Tensor::grad)
+                    .expect("bias grad"),
+            )
+        };
+        assert_eq!(run(&auto), run(&direct));
     }
 
     #[test]
@@ -2929,31 +2959,13 @@ mod conv2d_gpu_tests {
         Parity::new(4, 3, [1, 2, 8, 8]).padding(1).run("forward");
     }
 
+    /// #123: the GPU's input, weight and bias gradients match the CPU's (which the CPU
+    /// gradient checks cover) under a random weighted loss, with `Auto` selection.
     #[test]
-    fn test_conv2d_gpu_backward_flow() {
-        if Device::gpu().is_none() {
-            return;
-        }
-
-        let device = Device::gpu().unwrap();
-
-        let conv = Conv2d::new_on_device(2, 4, 3, 1, 0, true, device.clone());
-        let x = RawTensor::randn(&[1, 2, 5, 5]).to_device(device);
-        x.set_requires_grad(true);
-
-        let y = conv.forward(&x);
-        let loss = y.sum();
-        loss.into_loss().expect("scalar loss").backward();
-
-        // Check that gradients exist
-        assert!(x.grad().is_some(), "Input should have gradients");
-        assert!(
-            conv.weight.grad().is_some(),
-            "Weights should have gradients"
-        );
-        if let Some(ref b) = conv.bias {
-            assert!(b.grad().is_some(), "Bias should have gradients");
-        }
+    fn test_conv2d_gpu_backward_matches_cpu() {
+        Parity::new(4, 3, [1, 2, 5, 5])
+            .with_backward()
+            .run("auto backward");
     }
 
     #[test]
@@ -3199,34 +3211,14 @@ mod conv2d_gpu_tests {
         }
     }
 
+    /// #123: as `test_conv2d_gpu_backward_matches_cpu`, for the Direct algorithm.
     #[test]
-    fn test_conv2d_gpu_direct_conv_backward_flow() {
-        if Device::gpu().is_none() {
-            return;
-        }
-
-        let device = Device::gpu().unwrap();
-
-        let mut conv = Conv2d::new_on_device(2, 4, 3, 1, 1, true, device.clone());
-        conv.set_algo(ConvAlgo::Direct);
-
-        let x = RawTensor::randn(&[1, 2, 8, 8]).to_device(device);
-        x.set_requires_grad(true);
-
-        let y = conv.forward(&x);
-        let loss = y.sum();
-        loss.into_loss().expect("scalar loss").backward();
-
-        // Gradients should exist (computed on CPU after GPU forward)
-        assert!(x.grad().is_some(), "Input should have gradients");
-        assert!(
-            conv.weight.grad().is_some(),
-            "Weights should have gradients"
-        );
-        assert!(
-            conv.bias.as_ref().unwrap().grad().is_some(),
-            "Bias should have gradients"
-        );
+    fn test_conv2d_gpu_direct_conv_backward_matches_cpu() {
+        Parity::new(4, 3, [1, 2, 8, 8])
+            .padding(1)
+            .algo(ConvAlgo::Direct)
+            .with_backward()
+            .run("direct backward");
     }
 
     #[test]

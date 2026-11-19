@@ -83,13 +83,6 @@ mod tests {
     use approx::assert_relative_eq;
 
     #[test]
-    fn test_gelu_creation() {
-        let gelu = GELU::new();
-        // GELU is a zero-sized type, just verify it can be created
-        let _ = gelu.forward(&RawTensor::new(vec![0.0], &[1], false));
-    }
-
-    #[test]
     fn test_gelu_default() {
         // GELU(0) = 0 * Phi(0) = 0, exactly, for the unit struct and for `new()`.
         let x = RawTensor::new(vec![0.0], &[1], false);
