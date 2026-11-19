@@ -2,12 +2,14 @@
 # most a few PRs instead of one per crate. Every PR that touches Cargo.toml or Cargo.lock also
 # runs `cargo deny` (audit.yml).
 #
-# github-actions keeps the SHA-pinned actions in .github/workflows current. It cannot bump
-# `dtolnay/rust-toolchain@<sha> # master` (no version tag to follow): update that pin by hand.
+# github-actions keeps the SHA-pinned actions in .github/workflows and the local composite
+# action .github/actions/setup-rust current. It cannot bump
+# `dtolnay/rust-toolchain@<sha> # master` (no version tag to follow): update that pin by hand,
+# in .github/actions/setup-rust/action.yml, its only copy (#258).
 version: 2
 updates:
   - package-ecosystem: github-actions
-    directory: /
+    directories: [/, /.github/actions/setup-rust]
     target-branch: improvements
     schedule:
       interval: weekly

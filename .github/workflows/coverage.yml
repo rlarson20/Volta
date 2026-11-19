@@ -3,7 +3,17 @@ on:
   # A signal, not a gate: it is not a required check, and no threshold fails it. It posts
   # line/region coverage on the CPU lane to the job summary, so a PR that drops coverage on the
   # autograd core shows it. Gate on a number only once a baseline exists (#154).
+  # PRs that can't change coverage (docs, workflows, examples) skip it (#258); the push to
+  # improvements always runs, so the baseline stays current.
   pull_request:
+    paths:
+      - src/**
+      - tests/**
+      - Cargo.toml
+      - Cargo.lock
+      - justfile
+      - .github/workflows/coverage.yml
+      - .github/actions/setup-rust/**
   push:
     branches: [improvements]
   workflow_dispatch:
@@ -21,15 +31,12 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+      - uses: ./.github/actions/setup-rust
         with:
           toolchain: stable
           # rust-src: tests/compile_fail's pinned stderr quotes libcore source.
           components: llvm-tools-preview, rust-src
-      - uses: taiki-e/install-action@4a76afe23f9e08d2d9550fb56e556444e8611d21 # v2
-        with:
-          tool: cargo-llvm-cov,just
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+          tools: cargo-llvm-cov,just
 
       - name: Coverage (no default features)
         run: just coverage-cpu | tee coverage.txt
