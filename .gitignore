@@ -17,3 +17,7 @@ minigrad-react/
 
 #mutants output
 mutants.out/
+
+# Nix / direnv
+.direnv/
+result

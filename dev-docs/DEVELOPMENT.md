@@ -75,3 +75,19 @@ A new example joins the set when it needs no downloaded data and runs in seconds
 `just serve-docs` (`scripts/serve_docs.py`, standard library only, needs `uv`) runs `cargo doc --no-deps`, copies `target/doc` to a snapshot under `target/doc-serve/`, and serves it on every interface at port 7447, logging the link to open (`http://<hostname>:7447/volta/`, which other devices on the tailnet or LAN can reach). Pass flags through the recipe: `just serve-docs --port 9000 --features gpu,accelerate`. `--rebuild-every <seconds>` rebuilds in the background (with `--pull`, after `git pull --ff-only`) and swaps to the new snapshot only when the build succeeds, so a failed build keeps the last good docs up. `--no-build` serves the latest snapshot without building. Arguments after `--` go to `cargo doc`.
 
 It has no auth or TLS, so the host firewall decides who can reach it. On NixOS, open the port only on Tailscale: `networking.firewall.interfaces.tailscale0.allowedTCPPorts = [ 7447 ];`. `--host 127.0.0.1` limits it to the machine itself.
+
+## Nix dev shell
+
+`flake.nix` gives a dev shell with everything the justfile calls, for a NixOS machine or any host with Nix. Enter it with `nix develop`, or `direnv allow` once (the committed `.envrc` is `use flake`). It is a convenience, not part of CI: GitHub Actions installs its own toolchains, and `flake.lock` pins this shell's separately (`nix flake update` moves it).
+
+| Shell | What it has | For |
+| --- | --- | --- |
+| `default` | Stable Rust from fenix (clippy, rustfmt, rust-analyzer, llvm-tools, the `wasm32-unknown-unknown` and `aarch64-apple-darwin` std), sccache as `RUSTC_WRAPPER`, `just`, `uv` with Nix's Python 3.12, `pre-commit`, `gh`, `git-cliff`, `bacon`, the cargo tools (`hack`, `llvm-cov`, `mutants`, `deny`, `machete`, `expand`, `bloat`), and, on Linux, unwrapped clang | Everything on the CPU: `just ci`'s checks, `just serve-docs`, `just torch-fixtures`, `just wasm-check`, `just macos-cross` |
+| `.#gpu` (Linux) | `default` plus the Vulkan loader and Mesa's lavapipe (software Vulkan), added beside any driver NixOS provides | `VOLTA_REQUIRE_GPU=1 just test-gpu` without a GPU, as the CI lavapipe lane runs it |
+| `.#msrv` | Rust 1.89.0 (Cargo.toml's `rust-version`) and `just` | Reproducing a failure in CI's `1.89` lane: `nix develop .#msrv -c cargo test` |
+
+What it does not cover:
+
+- **rustup.** The toolchain comes from Nix, so `cargo +<toolchain>` does not work. `just miri` and `just asan` need `cargo +nightly-…` and still need rustup. The `*-if-available` recipes in `just ci` detect a target with `rustup target list`, so inside this shell they print "skipped" even though the targets are installed; run `just wasm-check` and `just macos-cross` directly.
+- **macOS.** The flake evaluates for `aarch64-darwin`, but the shell has not been built on a Mac; Metal and Accelerate there are untested through Nix.
+- **NixOS firewall.** `just serve-docs` still needs port 7447 open on `tailscale0` ("Serving the built docs").
