@@ -27,7 +27,7 @@ pub enum PositionalEncodingType {
 ///
 /// # Example
 /// ```no_run
-/// # use volta::nn::transformer::{PositionalEncoding, PositionalEncodingType};
+/// # use volta::nn::{PositionalEncoding, PositionalEncodingType};
 /// # use volta::Device;
 /// let pos_enc = PositionalEncoding::new(512, 1024, PositionalEncodingType::Sinusoidal);
 /// ```
@@ -36,7 +36,7 @@ pub enum PositionalEncodingType {
 /// learned weight (a [`crate::Tensor`] handle) instead of copying it (#108).
 ///
 /// ```compile_fail
-/// use volta::nn::transformer::{PositionalEncoding, PositionalEncodingType};
+/// use volta::nn::{PositionalEncoding, PositionalEncodingType};
 /// let p = PositionalEncoding::new(4, 4, PositionalEncodingType::Learned);
 /// let _copy = p.clone();
 /// ```

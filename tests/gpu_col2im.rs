@@ -12,7 +12,8 @@
 mod common;
 
 use common::{assert_close, gpu_device, gpu_leaf, skip_if_no_gpu};
-use volta::{Conv2d, ConvAlgo, Device, Module, RawTensor, manual_seed};
+use volta::nn::{Conv2d, ConvAlgo, Module};
+use volta::{Device, RawTensor, manual_seed};
 
 /// Input-gradient parity for an Im2col `Conv2d` with these settings, under a randomly
 /// weighted loss so no gradient is uniform.

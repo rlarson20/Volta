@@ -9,7 +9,9 @@
 #![cfg(feature = "gpu")]
 
 use volta::gpu::is_gpu_available;
-use volta::{Device, Muon, RawTensor, Storage, Tensor, manual_seed, randn};
+use volta::nn::Muon;
+use volta::storage::Storage;
+use volta::{Device, RawTensor, Tensor, manual_seed, randn};
 
 /// Steps per run; each gets its own gradient, so momentum carries real history.
 const STEPS: usize = 3;

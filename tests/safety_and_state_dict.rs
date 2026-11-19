@@ -2,6 +2,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 use volta::io::{StateDict, TensorData, load_state_dict_checked};
+use volta::nn::{Layer, Linear, Module, ReLU, Sequential};
 use volta::*;
 
 struct CountingModule {

@@ -1,6 +1,8 @@
 //! `Dropout`: `p` of 0 and 1, eval-mode passthrough, shape, and mean preservation.
 
 use super::*;
+use crate::nn::Module;
+use crate::nn::{Dropout, Layer};
 
 #[test]
 fn p_zero_is_identity() {

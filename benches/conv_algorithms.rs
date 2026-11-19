@@ -12,7 +12,8 @@
 use criterion::measurement::WallTime;
 use criterion::{BenchmarkGroup, BenchmarkId, Criterion, criterion_main};
 use std::hint::black_box;
-use volta::{Conv2d, ConvAlgo, RawTensor, Tensor};
+use volta::nn::{Conv2d, ConvAlgo};
+use volta::{RawTensor, Tensor};
 
 /// Generate a random 4D tensor (batch, channels, height, width)
 fn random_tensor_4d(batch: usize, channels: usize, height: usize, width: usize) -> Tensor {

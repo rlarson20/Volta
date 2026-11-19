@@ -7,9 +7,9 @@
 //! - Full training loop staying on GPU
 //! - Performance comparison with CPU training
 use std::time::Instant;
+use volta::nn::{Adam, Layer, Linear, Module, ReLU, Sequential};
 use volta::{
-    Adam, Device, DevicePolicy, Layer, Linear, Module, RawTensor, ReLU, Sequential, Tensor,
-    mse_loss, take_fallback_events, with_device_policy,
+    Device, DevicePolicy, RawTensor, Tensor, mse_loss, take_fallback_events, with_device_policy,
 };
 
 fn main() {

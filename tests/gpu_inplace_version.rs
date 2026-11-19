@@ -8,7 +8,9 @@
 #![cfg(feature = "gpu")]
 
 use volta::gpu::is_gpu_available;
-use volta::{Adam, Device, Muon, RawTensor, SGD, Storage, Tensor};
+use volta::nn::{Adam, Muon, SGD};
+use volta::storage::Storage;
+use volta::{Device, RawTensor, Tensor};
 
 /// Skip (returning `true`) when there is no GPU; otherwise print the marker for `name`.
 fn skip_or_mark(name: &str) -> bool {

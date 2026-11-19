@@ -13,11 +13,13 @@
 use half::{bf16, f16};
 use std::collections::BTreeMap;
 use volta::io::{StateDict, TensorData, TypedTensorData, load_safetensors_raw};
-use volta::storage::Element;
-use volta::{
-    Axis, BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, DType, Embedding, Layer, LayerNorm,
-    Linear, MaxPool2d, Module, RawTensor, SGD, Storage, Tensor,
+use volta::nn::{
+    BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, Embedding, Layer, LayerNorm, Linear, MaxPool2d,
+    Module, SGD,
 };
+use volta::storage::Element;
+use volta::storage::Storage;
+use volta::{Axis, DType, RawTensor, Tensor};
 
 /// A half type under test.
 trait Half: Element + PartialEq + std::fmt::Debug {

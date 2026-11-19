@@ -9,7 +9,7 @@ use volta::{Device, RawTensor, Tensor};
 #[cfg(feature = "gpu")]
 use volta::gpu::invalidate_all_tensor_caches;
 #[cfg(feature = "gpu")]
-use volta::{
+use volta::gpu::{
     gpu_compact, gpu_pending_count, gpu_pool_stats, gpu_sync, gpu_sync_threshold, is_gpu_available,
 };
 

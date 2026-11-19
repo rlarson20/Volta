@@ -15,7 +15,8 @@
 mod common;
 
 use common::{assert_close, gpu_device, gpu_leaf, make_input, skip_if_no_gpu};
-use volta::{Conv2d, ConvAlgo, Device, Module, RawTensor, Tensor, manual_seed};
+use volta::nn::{Conv2d, ConvAlgo, Module};
+use volta::{Device, RawTensor, Tensor, manual_seed};
 
 /// One more than the widest axis the old grid could launch (65535 tiles of 16).
 const PAST_LIMIT: usize = 65_535 * 16 + 1;

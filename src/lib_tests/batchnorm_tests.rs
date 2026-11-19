@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::index::fetch;
+use crate::nn::{BatchNorm1d, BatchNorm2d, Layer, Module};
 use approx::assert_relative_eq;
 
 fn running_stats(state: &io::StateDict) -> (Vec<f32>, Vec<f32>) {

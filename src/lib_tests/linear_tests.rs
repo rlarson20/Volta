@@ -1,6 +1,9 @@
 //! `Linear`: shapes, bias, forward value, input gradient, and trainability.
 
 use super::*;
+use crate::nn::Linear;
+use crate::nn::Module;
+use crate::storage::Storage;
 
 #[test]
 fn weight_shape_and_bias_present() {

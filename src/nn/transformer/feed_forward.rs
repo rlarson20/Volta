@@ -22,7 +22,7 @@ use crate::tensor::Tensor;
 ///
 /// # Example
 /// ```no_run
-/// # use volta::nn::transformer::FeedForward;
+/// # use volta::nn::FeedForward;
 /// let ffn = FeedForward::new(512, 4, 0.1);
 /// ```
 pub struct FeedForward {

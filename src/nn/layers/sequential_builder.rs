@@ -6,7 +6,7 @@ use crate::nn::{Layer, Sequential};
 /// # Examples
 ///
 /// ```
-/// use volta::nn::layers::{Sequential, SequentialBuilder, Linear, ReLU};
+/// use volta::nn::{Sequential, SequentialBuilder, Linear, ReLU};
 ///
 /// // Create a Sequential with named layers
 /// let model = Sequential::builder()

@@ -325,8 +325,8 @@ impl Muon {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Storage;
     use crate::index::fetch;
+    use crate::storage::Storage;
 
     /// A seeded random `rows × cols` matrix as a flat row-major vector.
     fn random_matrix(rows: usize, cols: usize) -> Vec<f32> {

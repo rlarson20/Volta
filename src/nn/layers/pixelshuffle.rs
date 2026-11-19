@@ -18,7 +18,8 @@ use crate::tensor::Tensor;
 ///
 /// # Examples
 /// ```
-/// use volta::{RawTensor, PixelShuffle, nn::Layer};
+/// use volta::RawTensor;
+/// use volta::nn::{PixelShuffle, Layer};
 ///
 /// let layer = PixelShuffle::new(2);
 /// let input = RawTensor::randn(&[1, 12, 4, 4]);  // 3 channels * 4

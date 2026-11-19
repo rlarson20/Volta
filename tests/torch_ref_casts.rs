@@ -5,8 +5,9 @@
 //! which Volta refuses.
 
 use half::{bf16, f16};
+use volta::DType;
 use volta::io::load_safetensors_raw;
-use volta::{DType, Storage};
+use volta::storage::Storage;
 
 /// Path of the cast fixture.
 const FIXTURE: &str = concat!(

@@ -2,10 +2,10 @@
 //!
 //! Without that test-data file it only runs a demo inference, which shows the model runs, not that it is right; the summary says which of the two happened. A mismatch beyond [`LOGIT_TOLERANCE`] exits with status 1.
 use std::path::Path;
-use volta::{
-    Layer, Linear, Module, RawTensor, ReLU, Sequential,
-    io::{load_safetensors, mapping::StateDictMapper},
-};
+use volta::RawTensor;
+use volta::io::load_safetensors;
+use volta::io::mapping::StateDictMapper;
+use volta::nn::{Layer, Linear, Module, ReLU, Sequential};
 
 /// Largest `|volta - pytorch|` accepted on any output logit. Both sides are f32 and the
 /// first layer sums 784 products in a different order, so they agree to a few 1e-7 (measured

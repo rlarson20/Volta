@@ -1,6 +1,11 @@
 //! Broadcasting, gradient checks across ops, batched matmul, and a spread of layers (`LayerNorm`, `PixelShuffle`, `Embedding`, `BatchNorm1d`, `Sequential`), plus `DataLoader` and `Adam`.
 
 use super::*;
+use crate::nn::{
+    Adam, BatchNorm1d, BatchNorm2d, Embedding, LayerNorm, Linear, PixelShuffle, ReLU, SGD,
+    Sequential,
+};
+use crate::nn::{Layer, Module};
 // ===== NEURAL NETWORK LAYER TEST =====
 
 #[test]

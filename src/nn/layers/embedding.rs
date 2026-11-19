@@ -26,7 +26,8 @@ use rand::RngExt;
 ///
 /// # Examples
 /// ```
-/// use volta::{Embedding, Layer, RawTensor};
+/// use volta::nn::{Embedding, Layer};
+/// use volta::RawTensor;
 ///
 /// let embedding = Embedding::new(100, 32); // 100 vocab, 32-dim embeddings
 /// let indices = RawTensor::from_typed(vec![5i64, 12, 7, 0, 1, 2], &[2, 3]);
@@ -39,7 +40,7 @@ use rand::RngExt;
 /// explicitly through the `weight` field.
 ///
 /// ```compile_fail
-/// let e = volta::Embedding::new(10, 4);
+/// let e = volta::nn::Embedding::new(10, 4);
 /// let _copy = e.clone();
 /// ```
 #[derive(Debug)]

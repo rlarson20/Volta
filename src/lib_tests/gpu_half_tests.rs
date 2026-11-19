@@ -8,13 +8,13 @@
 #![cfg(feature = "gpu")]
 
 use crate::amp::autocast;
+use crate::gpu::is_gpu_available;
 use crate::gpu::set_f16_emulation;
+use crate::nn::{Conv2d, ConvAlgo, Linear, Muon, ReLU, SGD, Sequential};
 use crate::nn::{Layer, Module};
 use crate::ops::{BinaryOp, UnaryOp};
-use crate::{
-    Axis, Conv2d, ConvAlgo, DType, Device, Linear, Muon, PadValue, RawTensor, ReLU, SGD,
-    Sequential, Storage, Tensor, is_gpu_available,
-};
+use crate::storage::Storage;
+use crate::{Axis, DType, Device, PadValue, RawTensor, Tensor};
 use std::sync::{Mutex, MutexGuard};
 
 /// A tensor op under test.

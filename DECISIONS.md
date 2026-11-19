@@ -792,6 +792,16 @@ A weight shared between layers (`l2.weight = l1.weight.clone()`) is one tensor. 
 
 **Rejected for now:** f32 optimizer state for half parameters. It is the fuller fix, but it touches SGD, Muon and the GPU optimizer kernel and overlaps f32 master weights, so it is tracked on #76. SGD and Muon still step half parameters (their state has no squared term to underflow). The `half` torch fixture and `gpu_half_optimizers_match_cpu` no longer run Adam.
 
+## Public API
+
+### One path per item; the root re-exports the core (#341)
+
+**Decision:** every public item has one canonical path, in the module that owns it, and at most one root re-export. Leaf modules are private (`pub(crate)` where other modules need their internals): `nn::layers::conv` is not a path, `nn::Conv2d` is. The root re-exports every public item of the eight core modules, `tensor`, `autograd`, `amp`, `dtype`, `device`, `device_policy`, `shape` and `error`, and nothing else. The domain modules are reached only through their module: `nn` (every layer, container, transformer block, optimizer and the `Layer`/`Module`/`Optimizer`/`RecurrentLayer` traits, flat), `ops` (the op enums), `data`, `io` (plus `io::mapping`), `utils`, `storage` and `gpu`. So `volta::Tensor`, `volta::no_grad` and `volta::nn::Conv2d`, as in `torch.Tensor`, `torch.no_grad` and `torch.nn.Conv2d`. `PadValue` lives in the private `spec` module, so `tensor` re-exports it as its canonical path. `assert_trainable!` is `#[macro_export]` and so sits at the root regardless (#145 makes it internal).
+
+**Why:** the audit (PA4, rustdoc JSON at `ebbd683`) counted 290 public paths for 123 definitions: every layer was reachable four ways, and the root held every layer but no transformer type, `autocast` but not `no_grad`, five op enums but not `CmpOp`. Every path is semver surface, so moving `conv.rs` was a breaking change. The root rule is one sentence that a reviewer can check against `lib.rs`; the alternatives ("everything a README example imports", or core plus every `nn` item) either move with the README or make the root as large as `nn`. After the change the same walk counts 171 paths for the 123 definitions, and none has more than two. RJ chose the core-only rule (2026-11-19).
+
+**Consequence:** a new item in a core module needs a root `pub use`; a new item in a domain module needs a `pub use` in its module's `mod.rs`, and none at the root. Tests, examples, benches and the README import domain items by module (`use volta::nn::{Linear, Module}`). Breaking now, before `main`; it would be a major version after.
+
 ## Concurrency and Async
 
 ### Stay synchronous

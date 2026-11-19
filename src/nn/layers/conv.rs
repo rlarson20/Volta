@@ -1,4 +1,3 @@
-use crate::Storage;
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::device_policy::kernel_failed;
@@ -12,6 +11,7 @@ use crate::real::{Real, compute_dtype, dispatch_real};
 use crate::shape::Axis;
 use crate::shape::Shape;
 use crate::spec::{Conv2dSpec, PadValue, Window2dSpec};
+use crate::storage::Storage;
 use crate::tensor::{RawTensor, Tensor};
 
 /// Algorithm to use for convolution
@@ -706,7 +706,8 @@ impl Conv2d {
     ///
     /// # Example
     /// ```no_run
-    /// # use volta::{Conv2d, Device};
+    /// # use volta::nn::Conv2d;
+    /// # use volta::Device;
     /// # #[cfg(feature = "gpu")]
     /// # {
     /// let device = Device::gpu().expect("GPU required");
@@ -753,8 +754,8 @@ impl Conv2d {
     ///
     /// # Example
     /// ```no_run
-    /// # use volta::Conv2d;
-    /// # use volta::nn::layers::conv::ConvAlgo;
+    /// # use volta::nn::Conv2d;
+    /// # use volta::nn::ConvAlgo;
     /// let mut conv = Conv2d::new(3, 16, 3, 1, 1, true);
     /// conv.set_algo(ConvAlgo::Direct);  // Force direct convolution
     /// ```

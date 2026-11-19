@@ -12,9 +12,10 @@
 mod torch_ref;
 
 use torch_ref::{Fixture, TOL_BWD, TOL_FWD, assert_close, grad_of};
+use volta::RawTensor;
 use volta::io::StateDict;
+use volta::nn::Module;
 use volta::nn::{LSTMCell, RecurrentLayer};
-use volta::{Module, RawTensor};
 
 /// Input width of the fixture cell.
 const I: usize = 3;

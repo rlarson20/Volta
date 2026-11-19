@@ -1,5 +1,7 @@
 //! Time-sequence prediction: an `LSTMCell` (1 input, 32 hidden units) followed by a `Linear` output layer, trained with `SGD` with momentum on sine-wave sequences, then tested on a held-out prediction.
-use volta::{LSTMCell, Module, ProgressBar, RawTensor, RecurrentLayer, SGD};
+use volta::RawTensor;
+use volta::nn::{LSTMCell, Module, RecurrentLayer, SGD};
+use volta::utils::ProgressBar;
 
 fn main() {
     println!("=== Time Sequence Prediction with LSTM ===\n");
@@ -27,7 +29,7 @@ fn main() {
 
     // Build model: LSTM with 1 input, 32 hidden units, 1 output
     let lstm = LSTMCell::new(1, 32, true);
-    let output_layer = volta::Linear::new(32, 1, true);
+    let output_layer = volta::nn::Linear::new(32, 1, true);
 
     let mut lstm_params = lstm.parameters();
     lstm_params.extend(output_layer.parameters());

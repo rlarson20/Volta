@@ -8,12 +8,14 @@
 
 #[cfg(feature = "gpu")]
 use volta::Device;
-use volta::{DType, RawTensor, SGD, Storage};
+use volta::nn::SGD;
+use volta::storage::Storage;
+use volta::{DType, RawTensor};
 
 /// The GPU, or `None` (and a `GPU-SKIPPED` line) without one; prints `GPU-RAN` otherwise.
 #[cfg(feature = "gpu")]
 fn gpu_or_skip(name: &str) -> Option<Device> {
-    let gpu = Device::gpu().filter(|_| volta::is_gpu_available());
+    let gpu = Device::gpu().filter(|_| volta::gpu::is_gpu_available());
     if gpu.is_some() {
         println!("GPU-RAN {name}");
     } else {
@@ -29,7 +31,8 @@ fn gpu_or_skip(name: &str) -> Option<Device> {
 #[cfg(feature = "gpu")]
 #[test]
 fn conv_transpose2d_with_bias_runs_on_the_gpu_under_prefer_gpu() {
-    use volta::{ConvTranspose2d, DevicePolicy, Layer, Module, with_device_policy};
+    use volta::nn::{ConvTranspose2d, Layer, Module};
+    use volta::{DevicePolicy, with_device_policy};
     let Some(gpu) = gpu_or_skip("conv_transpose2d_with_bias_runs_on_the_gpu_under_prefer_gpu")
     else {
         return;
@@ -57,8 +60,8 @@ fn conv_transpose2d_with_bias_runs_on_the_gpu_under_prefer_gpu() {
 #[cfg(feature = "gpu")]
 #[test]
 fn sequential_to_device_moves_child_buffers() {
+    use volta::nn::{Layer, Module, Sequential};
     use volta::nn::{PositionalEncoding, PositionalEncodingType};
-    use volta::{Layer, Module, Sequential};
     let Some(gpu) = gpu_or_skip("sequential_to_device_moves_child_buffers") else {
         return;
     };
@@ -143,7 +146,8 @@ fn grad_scaler_refuses_f16_gradients() {
 /// allocated; valid ones build.
 #[test]
 fn optimizers_validate_hyperparameters_like_torch() {
-    use volta::{Adam, Muon, VoltaError};
+    use volta::VoltaError;
+    use volta::nn::{Adam, Muon};
     let p = || vec![RawTensor::new(vec![1.0], &[1], true)];
     let msg = |r: volta::Result<()>| match r {
         Err(VoltaError::InvalidParameter(m)) => m,

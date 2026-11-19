@@ -8,7 +8,8 @@
 //! read before it was written, or ops run out of order, shows up as a value mismatch.
 #[cfg(feature = "gpu")]
 mod gpu_stress_tests {
-    use volta::{Device, RawTensor, Tensor, gpu, gpu_pending_count, gpu_sync, gpu_sync_threshold};
+    use volta::gpu::{gpu_pending_count, gpu_sync, gpu_sync_threshold};
+    use volta::{Device, RawTensor, Tensor, gpu};
 
     /// Serializes this module's tests: they read and assert the process-wide
     /// pending-submission counter, which any test running in parallel moves.

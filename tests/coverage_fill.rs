@@ -4,11 +4,10 @@
 //! path among them, per the comment in its test). It is a catch-all, not a category: put a new
 //! test in the file for its layer, optimizer or storage type (for example
 //! `tests/test_optimizers.rs`), not here.
-use volta::{Dropout, Flatten, Layer};
-use volta::{
-    RawTensor, Storage, Tensor, check_gradients_simple, manual_seed,
-    nn::{BatchNorm2d, SGD},
-};
+use volta::nn::{BatchNorm2d, SGD};
+use volta::nn::{Dropout, Flatten, Layer};
+use volta::storage::Storage;
+use volta::{RawTensor, Tensor, check_gradients_simple, manual_seed};
 
 #[test]
 fn test_batchnorm_gradient_check() {

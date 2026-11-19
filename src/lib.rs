@@ -37,22 +37,6 @@ pub mod shape;
 pub(crate) mod spec;
 pub mod storage;
 
-pub use autograd::ScalarLoss;
-pub use dtype::{DType, DTypePolicy, DTypePolicyGuard, dtype_policy, with_dtype_policy};
-pub use error::{Result, VoltaError};
-pub use shape::{Axis, Shape, Strides};
-pub use spec::PadValue;
-pub use storage::Storage;
-
-#[cfg(feature = "gpu")]
-pub use gpu::GpuBuffer;
-// The control functions exist in every build: without `gpu`, `gpu` is the stub module and
-// each returns its no-GPU answer (#342).
-pub use gpu::{
-    gpu_cleanup, gpu_compact, gpu_pending_count, gpu_pool_stats, gpu_sync, gpu_sync_threshold,
-    is_gpu_available,
-};
-
 /// Automatic mixed precision: `autocast` and `GradScaler`.
 pub mod amp;
 /// Reverse-mode automatic differentiation: the graph edges and `backward`.
@@ -75,39 +59,31 @@ pub mod tensor;
 /// Small utilities (progress reporting).
 pub mod utils;
 
-// Re-export main types for easy access
-pub use amp::{GradScaler, autocast};
+// ===== ROOT RE-EXPORTS (#341; DECISIONS.md, "One path per item; the root re-exports the core") =====
+//
+// Every public item has one canonical path, in the module that owns it, and at most one root
+// re-export. The root re-exports every public item of the eight core modules (`tensor`,
+// `autograd`, `amp`, `dtype`, `device`, `device_policy`, `shape`, `error`) and nothing
+// else. The domain modules are reached through their module only, with private leaf
+// modules: `nn` (layers, containers, transformer blocks, optimizers), `ops` (op enums),
+// `data`, `io` (and `io::mapping`), `utils`, `storage`, `gpu`. So `volta::Tensor` and
+// `volta::nn::Conv2d`, as in `torch.Tensor` and `torch.nn.Conv2d`.
+
+pub use amp::{AutocastGuard, GradScaler, autocast, autocast_dtype};
+pub use autograd::{NoGradGuard, ScalarLoss, no_grad};
 pub use device::Device;
 pub use device_policy::{
-    DevicePolicy, DevicePolicyGuard, FallbackEvent, Pass, device_policy, take_fallback_events,
-    with_device_policy,
+    DevicePolicy, DevicePolicyGuard, FallbackEvent, MAX_FALLBACK_EVENTS, Pass, device_policy,
+    take_fallback_events, with_device_policy,
 };
-pub use nn::layers::Dropout;
-pub use nn::layers::flatten::Flatten;
-pub use nn::optim::Optimizer;
-pub use nn::{
-    Adam, BatchNorm1d, BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, Embedding, GELU, LSTMCell,
-    Layer, LayerNorm, Linear, MaxPool2d, Module, Muon, PixelShuffle, ReLU, RecurrentLayer, SGD,
-    Sequential, SequentialBuilder, Sigmoid, Tanh,
-};
-pub use tensor::{RawTensor, Tensor};
-
-// Main entry points
-
+pub use dtype::{DType, DTypePolicy, DTypePolicyGuard, dtype_policy, with_dtype_policy};
+pub use error::{Result, VoltaError};
+pub use shape::{Axis, MAX_NUMEL, Shape, Strides};
 pub use tensor::{
-    DataLoader, bce_loss, bce_with_logits_loss, check_gradients, check_gradients_simple,
-    cross_entropy_loss, kl_divergence_gaussian, manual_seed, max_dim, mse_loss, nll_loss, ones,
-    rand, randn, randn_like, softmax, sum_dim, zeros,
+    DataLoader, PadValue, RawTensor, Tensor, bce_loss, bce_with_logits_loss, check_gradients,
+    check_gradients_simple, cross_entropy_loss, kl_divergence_gaussian, manual_seed, max_dim,
+    mse_loss, nll_loss, ones, rand, randn, randn_like, softmax, sum_dim, zeros,
 };
-
-pub use data::{load_mnist_images, load_mnist_labels, normalize, to_one_hot, try_normalize};
-pub use io::{
-    TypedTensorData, load_safetensors, load_safetensors_raw, load_safetensors_with_mapping,
-    mapping, save_safetensors, save_safetensors_typed,
-};
-pub use utils::ProgressBar;
-
-pub use ops::{BinaryOp, MovementOp, ReduceOp, TernaryOp, UnaryOp};
 
 /// The README's Rust snippets, compiled as doctests so they keep up with the public API (S23).
 /// Exists only under `cargo test --doc`.

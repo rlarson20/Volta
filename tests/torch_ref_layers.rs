@@ -9,8 +9,9 @@
 mod torch_ref;
 
 use torch_ref::{Fixture, check_case, state_of, transpose};
-use volta::{
-    Axis, BatchNorm2d, Conv2d, ConvTranspose2d, GELU, Layer, LayerNorm, Linear, MaxPool2d, Module,
+use volta::Axis;
+use volta::nn::{
+    BatchNorm2d, Conv2d, ConvTranspose2d, GELU, Layer, LayerNorm, Linear, MaxPool2d, Module,
     PixelShuffle,
 };
 

@@ -1,6 +1,7 @@
 //! `Adam` and `SGD` against hand-computed updates: Adam bias correction, moment accumulation over several steps, and weight decay; SGD without momentum and with weight decay; and convergence of both on a convex problem.
+use volta::RawTensor;
 use volta::nn::{Adam, SGD};
-use volta::{RawTensor, Storage};
+use volta::storage::Storage;
 
 /// Helper: read the first (scalar) value from a tensor.
 fn scalar(t: &volta::Tensor) -> f32 {

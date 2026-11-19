@@ -112,7 +112,7 @@ fn int_to_float_cast_has_values_and_no_gradient() {
 fn same_dtype_returns_the_same_tensor() {
     let x = RawTensor::new(vec![1.0, 2.0], &[2], true);
     let same = x.to_dtype(DType::F32);
-    same.set_grad(volta::Storage::cpu(vec![5.0, 6.0]));
+    same.set_grad(volta::storage::Storage::cpu(vec![5.0, 6.0]));
     assert_eq!(x.grad().expect("shared"), vec![5.0, 6.0]);
 }
 

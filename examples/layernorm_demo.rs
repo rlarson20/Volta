@@ -1,6 +1,6 @@
 //! `LayerNorm` demonstration: a 2-D `(B, C)` input, a transformer-style 3-D `(B, T, C)` input, and a gradient-flow check that backprop through an unevenly weighted loss gives the input, `gamma`, and `beta` nonzero gradients.
 use volta::RawTensor;
-use volta::{Layer, LayerNorm, Module};
+use volta::nn::{Layer, LayerNorm, Module};
 
 fn main() {
     println!("=== LayerNorm Demonstration ===\n");

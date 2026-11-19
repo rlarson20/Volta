@@ -5,9 +5,10 @@
 //! `gpu` and pins each stub's answer: what the real function returns when no adapter was
 //! found.
 
-use volta::{
-    RawTensor, gpu_cleanup, gpu_compact, gpu_pending_count, gpu_pool_stats, gpu_sync,
-    gpu_sync_threshold, is_gpu_available,
+use volta::RawTensor;
+use volta::gpu::{
+    gpu_cleanup, gpu_compact, gpu_pending_count, gpu_pool_stats, gpu_sync, gpu_sync_threshold,
+    is_gpu_available,
 };
 
 /// Every function is callable through the same paths in every build.

@@ -1,9 +1,10 @@
 //! Containers save each child's entries under a prefix and load them back from it (#119):
 //! `Sequential` by name or index, the transformer layers by field name, nested.
 
+use volta::VoltaError;
 use volta::io::{StateDict, TensorData};
 use volta::nn::TransformerBlock;
-use volta::{Linear, Module, ReLU, Sequential, VoltaError};
+use volta::nn::{Linear, Module, ReLU, Sequential};
 
 /// The values of the `key` entry, which must be f32.
 fn values(state: &StateDict, key: &str) -> Vec<f32> {

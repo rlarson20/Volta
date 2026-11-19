@@ -8,10 +8,10 @@
 //! The number of epochs is the optional first argument (default 5): `cargo run --release --example dcgan -- 1`.
 #[path = "common/mnist.rs"]
 mod mnist;
-use volta::{
-    Adam, Conv2d, ConvTranspose2d, Flatten, Layer, Linear, Module, ProgressBar, RawTensor, Tanh,
-    Tensor, bce_with_logits_loss, load_mnist_images, normalize, randn,
-};
+use volta::data::{load_mnist_images, normalize};
+use volta::nn::{Adam, Conv2d, ConvTranspose2d, Flatten, Layer, Linear, Module, Tanh};
+use volta::utils::ProgressBar;
+use volta::{RawTensor, Tensor, bce_with_logits_loss, randn};
 
 // Generator: noise -> fake images
 /// Generator: latent noise to a fake 28x28 image.

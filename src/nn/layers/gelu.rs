@@ -22,8 +22,8 @@ use crate::tensor::Tensor;
 ///
 /// # Example
 /// ```
-/// # use volta::GELU;
-/// # use volta::Layer;
+/// # use volta::nn::GELU;
+/// # use volta::nn::Layer;
 /// # use volta::RawTensor;
 /// let gelu = GELU::new();
 /// let x = RawTensor::new(vec![1.0, -1.0, 0.0], &[3], false);

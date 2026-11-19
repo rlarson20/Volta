@@ -8,7 +8,8 @@
 use criterion::measurement::WallTime;
 use criterion::{BenchmarkGroup, Criterion, criterion_main};
 use std::hint::black_box;
-use volta::{Conv2d, Layer, Linear, MaxPool2d, RawTensor, ReLU, Sequential, Tensor};
+use volta::nn::{Conv2d, Layer, Linear, MaxPool2d, ReLU, Sequential};
+use volta::{RawTensor, Tensor};
 
 /// Generate a random tensor of the given size
 fn random_tensor(size: usize) -> Tensor {

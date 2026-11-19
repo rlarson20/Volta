@@ -4,7 +4,7 @@
 //! match naming it broke CPU-only builds and one without it broke when any crate in the
 //! build turned `gpu` on.
 
-use volta::Storage;
+use volta::storage::Storage;
 
 /// Where `s` lives, by its variant.
 fn kind(s: &Storage) -> &'static str {

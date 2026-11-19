@@ -17,16 +17,12 @@
 // A shape panic there would silently corrupt the graph on some code paths.
 
 use std::collections::HashMap;
-use volta::{
-    Adam, Embedding, LayerNorm, RawTensor,
-    nn::{
-        Layer, Module,
-        transformer::{
-            FeedForward, MultiHeadAttention, PositionalEncoding, PositionalEncodingType,
-        },
-    },
-    tensor::cross_entropy_loss,
+use volta::RawTensor;
+use volta::nn::{
+    Adam, Embedding, FeedForward, Layer, LayerNorm, Module, MultiHeadAttention, PositionalEncoding,
+    PositionalEncodingType,
 };
+use volta::tensor::cross_entropy_loss;
 
 // ===== Vocabulary =====
 

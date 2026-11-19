@@ -13,11 +13,12 @@
 use std::collections::BTreeMap;
 use volta::amp::autocast;
 use volta::io::{StateDict, TensorData, TypedTensorData, load_safetensors_raw};
-use volta::storage::Element;
-use volta::{
-    BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, DType, Layer, LayerNorm, Linear, Module,
-    RawTensor, ReLU, Sequential, Tensor,
+use volta::nn::{
+    BatchNorm2d, Conv2d, ConvAlgo, ConvTranspose2d, Layer, LayerNorm, Linear, Module, ReLU,
+    Sequential,
 };
+use volta::storage::Element;
+use volta::{DType, RawTensor, Tensor};
 
 /// The low dtypes under test: fixture prefix, dtype, machine epsilon.
 const LOW: [(&str, DType, f64); 2] = [
@@ -59,7 +60,7 @@ impl Fixture {
     }
 
     /// The storage and shape under `name`.
-    fn get(&self, name: &str) -> (volta::Storage, Vec<usize>) {
+    fn get(&self, name: &str) -> (volta::storage::Storage, Vec<usize>) {
         let t = self
             .0
             .get(name)

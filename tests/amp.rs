@@ -6,10 +6,9 @@
 //! `tests/torch_ref_autocast.rs`.
 
 use volta::amp::{GradScaler, autocast, autocast_dtype};
-use volta::{
-    Axis, Conv2d, ConvTranspose2d, DType, Layer, Linear, MaxPool2d, Module, Optimizer, RawTensor,
-    ReLU, SGD, Storage, Tensor,
-};
+use volta::nn::{Conv2d, ConvTranspose2d, Layer, Linear, MaxPool2d, Module, Optimizer, ReLU, SGD};
+use volta::storage::Storage;
+use volta::{Axis, DType, RawTensor, Tensor};
 
 /// A seeded f32 tensor of `shape`.
 fn randn(shape: &[usize]) -> Tensor {
@@ -43,12 +42,12 @@ fn op_dtypes(low: DType) {
         ("half + f32", h.add(&x), DType::F32),
         (
             "LayerNorm(half, f32 params)",
-            volta::LayerNorm::new(vec![8]).forward(&h),
+            volta::nn::LayerNorm::new(vec![8]).forward(&h),
             low,
         ),
         (
             "BatchNorm1d(half, f32 params)",
-            volta::BatchNorm1d::new(8).forward(&h),
+            volta::nn::BatchNorm1d::new(8).forward(&h),
             low,
         ),
         (
@@ -94,7 +93,7 @@ fn f16_autocast_op_dtypes_match_torch_cpu() {
 #[test]
 fn f32_parameters_get_f32_gradients_under_autocast() {
     volta::manual_seed(4);
-    let model = volta::Sequential::new(vec![
+    let model = volta::nn::Sequential::new(vec![
         Box::new(Linear::new(8, 16, true)),
         Box::new(ReLU),
         Box::new(Linear::new(16, 3, true)),
@@ -333,7 +332,7 @@ fn grad_scaler_update_needs_a_step() {
 #[test]
 fn optimizer_trait_exposes_parameters() {
     let p = RawTensor::new(vec![1.0], &[1], true);
-    let opt = volta::Adam::new(vec![p.clone()], 0.1, (0.9, 0.999), 1e-8, 0.0);
+    let opt = volta::nn::Adam::new(vec![p.clone()], 0.1, (0.9, 0.999), 1e-8, 0.0);
     let params = Optimizer::parameters(&opt);
     assert_eq!(params.len(), 1);
     assert_eq!(params[0].data(), p.data());
@@ -346,11 +345,11 @@ fn optimizer_trait_exposes_parameters() {
 fn strict_policy_and_autocast_run_through_norm_layers() {
     volta::manual_seed(6);
     let _strict = volta::with_dtype_policy(volta::DTypePolicy::Strict);
-    let model = volta::Sequential::new(vec![
+    let model = volta::nn::Sequential::new(vec![
         Box::new(Linear::new(4, 6, true)),
-        Box::new(volta::LayerNorm::new(vec![6])),
+        Box::new(volta::nn::LayerNorm::new(vec![6])),
         Box::new(ReLU),
-        Box::new(volta::BatchNorm1d::new(6)),
+        Box::new(volta::nn::BatchNorm1d::new(6)),
         Box::new(Linear::new(6, 3, true)),
     ]);
     let x = randn(&[5, 4]);
@@ -372,7 +371,7 @@ fn strict_policy_and_autocast_run_through_norm_layers() {
 fn norm_mixed_rule_is_only_half_input_f32_params() {
     let x = randn(&[2, 4]).to_dtype(DType::F64);
     assert_eq!(
-        volta::LayerNorm::new(vec![4]).forward(&x).dtype(),
+        volta::nn::LayerNorm::new(vec![4]).forward(&x).dtype(),
         DType::F64
     );
 }

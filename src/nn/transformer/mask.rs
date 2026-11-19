@@ -16,7 +16,7 @@ use crate::tensor::{RawTensor, Tensor};
 ///
 /// # Example
 /// ```no_run
-/// # use volta::nn::transformer::causal_mask;
+/// # use volta::nn::causal_mask;
 /// # use volta::Device;
 /// let mask = causal_mask(4, Device::CPU);
 /// // mask = [[0, -inf, -inf, -inf],

@@ -12,7 +12,8 @@
 use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use volta::io::{TypedTensorData, load_safetensors_raw};
-use volta::{DType, RawTensor, Storage, Tensor};
+use volta::storage::Storage;
+use volta::{DType, RawTensor, Tensor};
 
 /// Volta's dtypes, in the generator's order and naming.
 const DTYPES: [(&str, DType); 8] = [

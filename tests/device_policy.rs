@@ -13,13 +13,16 @@ use common::{
     gpu_device, gpu_leaf, skip_if_no_gpu,
 };
 use volta::Axis;
+use volta::nn::{
+    BatchNorm1d, BatchNorm2d, ConvTranspose2d, Dropout, Embedding, GELU, LSTMCell, Layer,
+    LayerNorm, Linear, Module, RecurrentLayer,
+};
 use volta::nn::{MultiHeadAttention, PositionalEncoding, PositionalEncodingType};
+use volta::storage::Storage;
 use volta::{
-    BatchNorm1d, BatchNorm2d, ConvTranspose2d, Device, DevicePolicy, Dropout, Embedding,
-    FallbackEvent, GELU, LSTMCell, Layer, LayerNorm, Linear, Module, PadValue, Pass, RawTensor,
-    RecurrentLayer, Storage, Tensor, bce_loss, bce_with_logits_loss, cross_entropy_loss,
-    kl_divergence_gaussian, manual_seed, mse_loss, nll_loss, take_fallback_events,
-    with_device_policy,
+    Device, DevicePolicy, FallbackEvent, PadValue, Pass, RawTensor, Tensor, bce_loss,
+    bce_with_logits_loss, cross_entropy_loss, kl_divergence_gaussian, manual_seed, mse_loss,
+    nll_loss, take_fallback_events, with_device_policy,
 };
 
 /// `to_device` is differentiable (PyTorch's `.to()`): a leaf moved to the GPU and used in
@@ -94,7 +97,7 @@ fn new_on_device_parameters_are_gpu_leaves() {
         return;
     }
     let linear = Linear::new_on_device(3, 2, true, gpu_device());
-    let conv = volta::Conv2d::new_on_device(1, 2, 3, 1, 0, true, gpu_device());
+    let conv = volta::nn::Conv2d::new_on_device(1, 2, 3, 1, 0, true, gpu_device());
     for p in linear.parameters().iter().chain(&conv.parameters()) {
         assert!(p.device().is_gpu());
         // Panics on a non-leaf.

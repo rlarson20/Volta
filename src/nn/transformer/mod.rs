@@ -8,17 +8,17 @@
 //! - Causal masks for autoregressive models
 
 /// Scaled dot-product attention.
-pub mod attention;
+pub(crate) mod attention;
 /// `TransformerBlock`.
-pub mod block;
+pub(crate) mod block;
 /// Position-wise feed-forward network.
-pub mod feed_forward;
+pub(crate) mod feed_forward;
 /// Attention masks.
-pub mod mask;
+pub(crate) mod mask;
 /// Multi-head attention.
-pub mod multi_head_attention;
+pub(crate) mod multi_head_attention;
 /// Positional encodings.
-pub mod positional_encoding;
+pub(crate) mod positional_encoding;
 
 pub use attention::ScaledDotProductAttention;
 pub use block::TransformerBlock;

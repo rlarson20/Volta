@@ -9,7 +9,8 @@ mod torch_ref;
 use half::f16;
 use torch_ref::Fixture;
 use volta::io::{StateDict, TensorData};
-use volta::{Axis, BatchNorm2d, DType, Layer, LayerNorm, Module, RawTensor, Tensor};
+use volta::nn::{BatchNorm2d, Layer, LayerNorm, Module};
+use volta::{Axis, DType, RawTensor, Tensor};
 
 /// f16 machine epsilon.
 const F16_EPS: f64 = 1.0 / 1024.0;

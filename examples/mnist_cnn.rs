@@ -4,10 +4,12 @@
 #[path = "common/mnist.rs"]
 mod mnist;
 use std::path::Path;
-use volta::{
-    Conv2d, DataLoader, Dropout, Flatten, Layer, Linear, MaxPool2d, Module, ProgressBar, RawTensor,
-    ReLU, SGD, Sequential, load_mnist_images, load_mnist_labels, to_one_hot,
+use volta::data::{load_mnist_images, load_mnist_labels, to_one_hot};
+use volta::nn::{
+    Conv2d, Dropout, Flatten, Layer, Linear, MaxPool2d, Module, ReLU, SGD, Sequential,
 };
+use volta::utils::ProgressBar;
+use volta::{DataLoader, RawTensor};
 
 fn main() {
     println!("=== MNIST CNN Training ===\n");

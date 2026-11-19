@@ -9,10 +9,10 @@
 #[path = "common/mnist.rs"]
 mod mnist;
 use std::path::Path;
-use volta::{
-    Adam, BatchNorm1d, DataLoader, LSTMCell, Layer, Linear, Module, ProgressBar, RawTensor,
-    RecurrentLayer, load_mnist_images, load_mnist_labels, to_one_hot,
-};
+use volta::data::{load_mnist_images, load_mnist_labels, to_one_hot};
+use volta::nn::{Adam, BatchNorm1d, LSTMCell, Layer, Linear, Module, RecurrentLayer};
+use volta::utils::ProgressBar;
+use volta::{DataLoader, RawTensor};
 
 /// Extract a single timestep from a batched sequence tensor.
 ///

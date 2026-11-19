@@ -22,8 +22,9 @@ use crate::tensor::Tensor;
 ///
 /// # Example
 /// ```no_run
-/// # use volta::nn::transformer::ScaledDotProductAttention;
-/// # use volta::{RawTensor, Module};
+/// # use volta::nn::ScaledDotProductAttention;
+/// # use volta::RawTensor;
+/// # use volta::nn::Module;
 /// # use volta::Device;
 /// let attention = ScaledDotProductAttention::new();
 /// let query = RawTensor::new(vec![0.0; 128], &[2, 4, 16], false);

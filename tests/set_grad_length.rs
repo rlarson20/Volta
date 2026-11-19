@@ -6,7 +6,9 @@
 //! the error, then steps SGD or Adam and checks the parameter is untouched (no gradient was
 //! stored). The GPU case runs when an adapter is available.
 
-use volta::{Adam, Device, RawTensor, SGD, Storage, Tensor, VoltaError};
+use volta::nn::{Adam, SGD};
+use volta::storage::Storage;
+use volta::{Device, RawTensor, Tensor, VoltaError};
 
 /// A 4-element parameter of ones that tracks gradients.
 fn param() -> Tensor {

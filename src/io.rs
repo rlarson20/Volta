@@ -576,8 +576,9 @@ pub fn load_safetensors_with_mapping<P: AsRef<Path>>(
 #[cfg(test)]
 mod io_tests {
     use super::*;
+    use crate::RawTensor;
     use crate::nn::Module;
-    use crate::{Linear, RawTensor, ReLU, Sequential};
+    use crate::nn::{Linear, ReLU, Sequential};
 
     /// A temp-file path unique to this process, removed on drop (also when the test
     /// fails). A fixed name would race with another test process running at once.

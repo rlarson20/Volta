@@ -25,7 +25,7 @@ use crate::tensor::Tensor;
 ///
 /// # Example
 /// ```no_run
-/// # use volta::nn::transformer::TransformerBlock;
+/// # use volta::nn::TransformerBlock;
 /// let block = TransformerBlock::new(512, 8, 4, 0.1);
 /// ```
 pub struct TransformerBlock {
