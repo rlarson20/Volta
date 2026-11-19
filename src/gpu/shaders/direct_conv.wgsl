@@ -8,7 +8,12 @@
 @group(0) @binding(3) var<uniform> params: ConvParams;
 
 @compute @workgroup_size(16, 16, 1)
-fn direct_conv_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn direct_conv_main(
+    @builtin(workgroup_id) wg_id: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+    @builtin(local_invocation_id) local_id: vec3<u32>,
+) {
+    let global_id = tile_global_id(wg_id, num_wg, local_id, (params.out_channels + 15u) / 16u);
     let batch_size = params.batch_size;
     let in_channels = params.in_channels;
     let out_channels = params.out_channels;
@@ -26,7 +31,6 @@ fn direct_conv_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Decode global_id to (batch, out_ch, h_out, w_out)
     // global_id.x = out_channel
     // global_id.y = batch * h_out * w_out (flattened)
-    // global_id.z = unused (workgroup z dimension)
 
     let oc = global_id.x;
     if (oc >= out_channels) {
