@@ -100,10 +100,35 @@ impl HostBuf {
 }
 
 /// Sealing for [`Element`]: only the eight dtypes' Rust types implement it.
+///
+/// `Sealed` also carries the host-buffer plumbing (#340). Its methods take an [`Internal`]
+/// token that only this crate can build, so although a bound `T: Element` lets other crates
+/// name `T::view`, they cannot call it.
+///
+/// [`Internal`]: sealed::Internal
 mod sealed {
+    use super::{Arc, HostBuf};
+
+    /// A value only this crate can build: the private field keeps other crates from
+    /// constructing one, so they cannot call the methods that take it.
+    #[derive(Clone, Copy)]
+    pub struct Internal(());
+
+    /// The one `Internal` value.
+    pub(crate) const INTERNAL: Internal = Internal(());
+
     /// Not nameable outside this module.
-    pub trait Sealed {}
+    pub trait Sealed: Sized {
+        /// Borrow `buf` as `[Self]` if it holds this type.
+        fn view(buf: &HostBuf, _: Internal) -> Option<&[Self]>;
+        /// Borrow `buf` mutably as `[Self]`, copying it first if it is shared.
+        fn view_mut(buf: &mut HostBuf, _: Internal) -> Option<&mut [Self]>;
+        /// Wrap a buffer of this type.
+        fn wrap(data: Arc<[Self]>, _: Internal) -> HostBuf;
+    }
 }
+
+use sealed::{INTERNAL, Sealed as _};
 
 /// A Rust type that is the element type of one [`DType`].
 ///
@@ -111,12 +136,6 @@ mod sealed {
 pub trait Element: sealed::Sealed + Copy + Send + Sync + 'static {
     /// The dtype this type stores.
     const DTYPE: DType;
-    /// Borrow `buf` as `[Self]` if it holds this type.
-    fn view(buf: &HostBuf) -> Option<&[Self]>;
-    /// Borrow `buf` mutably as `[Self]`, copying it first if it is shared.
-    fn view_mut(buf: &mut HostBuf) -> Option<&mut [Self]>;
-    /// Wrap a buffer of this type.
-    fn wrap(data: Arc<[Self]>) -> HostBuf;
 }
 
 /// Implements [`Element`] for one type and its `HostBuf` variant. `others` lists every
@@ -125,24 +144,25 @@ pub trait Element: sealed::Sealed + Copy + Send + Sync + 'static {
 /// unreachable pattern, which the lints reject.
 macro_rules! element {
     ($t:ty, $variant:ident, others: $($other:ident)|+) => {
-        impl sealed::Sealed for $t {}
-        impl Element for $t {
-            const DTYPE: DType = DType::$variant;
-            fn view(buf: &HostBuf) -> Option<&[Self]> {
+        impl sealed::Sealed for $t {
+            fn view(buf: &HostBuf, _: sealed::Internal) -> Option<&[Self]> {
                 match buf {
                     HostBuf::$variant(d) => Some(d),
                     $(HostBuf::$other(_))|+ => None,
                 }
             }
-            fn view_mut(buf: &mut HostBuf) -> Option<&mut [Self]> {
+            fn view_mut(buf: &mut HostBuf, _: sealed::Internal) -> Option<&mut [Self]> {
                 match buf {
                     HostBuf::$variant(d) => Some(Arc::make_mut(d)),
                     $(HostBuf::$other(_))|+ => None,
                 }
             }
-            fn wrap(data: Arc<[Self]>) -> HostBuf {
+            fn wrap(data: Arc<[Self]>, _: sealed::Internal) -> HostBuf {
                 HostBuf::$variant(data)
             }
+        }
+        impl Element for $t {
+            const DTYPE: DType = DType::$variant;
         }
     };
 }
@@ -160,6 +180,14 @@ element!(bool, Bool, others: F16 | BF16 | F32 | F64 | I32 | I64 | U8);
 ///
 /// This enum allows tensors to store their data either on CPU (a typed [`HostBuf`]) or on
 /// GPU (a `GpuBuffer` of F32, F16, BF16 or Bool).
+///
+/// `#[non_exhaustive]`, with the same two variants with and without the `gpu` feature
+/// (#340): a `match` outside this crate needs a wildcard arm, so it compiles the same
+/// whichever features the build turns on. Without `gpu` the `Gpu` variant cannot be
+/// built. Its payload can be matched (`Storage::Gpu(_)`) but not named or used; read
+/// storage through the methods (`dtype`, `len`,
+/// `is_gpu`, `as_host`, `to_host_f32`, `to_device`).
+#[non_exhaustive]
 pub enum Storage {
     /// CPU storage: a typed, shared, copy-on-write buffer.
     Cpu(HostBuf),
@@ -169,38 +197,55 @@ pub enum Storage {
     /// Shared like the CPU variant: `clone` bumps a refcount, and the only write path is
     /// `Storage::gpu_buffer_mut`, which copies the buffer first if it is shared. So a
     /// shared buffer never changes, and the host copy cached beside it never goes stale.
-    #[cfg(feature = "gpu")]
+    /// Present without the `gpu` feature too, but never built there.
     Gpu(Arc<GpuStorage>),
 }
 
-/// The shared half of GPU [`Storage`]: the device buffer and its lazily read host copy.
-///
-/// The host copy is a write-once cell. It is filled by the first host read and dropped only
-/// by a writer that holds the sole reference, so a reference into it cannot outlive a change.
-#[cfg(feature = "gpu")]
-pub struct GpuStorage {
-    /// The device buffer.
-    buffer: GpuBuffer,
-    /// Host copy in the buffer's dtype, filled by the first host read.
-    host: OnceLock<HostBuf>,
-}
+/// The payload of [`Storage::Gpu`]. A private module holding a `pub` type: other crates can
+/// match `Storage::Gpu(_)` but cannot name, build or use what it holds (#340).
+mod gpu_shared {
+    #[cfg(feature = "gpu")]
+    use super::{GpuBuffer, HostBuf, OnceLock};
 
-#[cfg(feature = "gpu")]
-impl GpuStorage {
-    /// Wraps `buffer` with an empty host copy.
-    fn new(buffer: GpuBuffer) -> Self {
-        Self {
-            buffer,
-            host: OnceLock::new(),
+    /// The shared half of GPU [`Storage`](super::Storage): the device buffer and its lazily
+    /// read host copy.
+    ///
+    /// The host copy is a write-once cell. It is filled by the first host read and dropped
+    /// only by a writer that holds the sole reference, so a reference into it cannot outlive
+    /// a change.
+    #[cfg(feature = "gpu")]
+    pub struct GpuStorage {
+        /// The device buffer.
+        pub(super) buffer: GpuBuffer,
+        /// Host copy in the buffer's dtype, filled by the first host read.
+        pub(super) host: OnceLock<HostBuf>,
+    }
+
+    #[cfg(feature = "gpu")]
+    impl GpuStorage {
+        /// Wraps `buffer` with an empty host copy.
+        pub(super) fn new(buffer: GpuBuffer) -> Self {
+            Self {
+                buffer,
+                host: OnceLock::new(),
+            }
         }
     }
+
+    /// Without the `gpu` feature there is no GPU storage: [`Storage::Gpu`](super::Storage::Gpu)
+    /// exists, so `Storage` has one variant set in every build (#340), but this type has no
+    /// values, so it is never built. Matches inside the crate handle the variant with
+    /// `match **never {}`.
+    #[cfg(not(feature = "gpu"))]
+    pub enum GpuStorage {}
 }
+
+use gpu_shared::GpuStorage;
 
 impl Clone for Storage {
     fn clone(&self) -> Self {
         match self {
             Self::Cpu(buf) => Self::Cpu(buf.clone()),
-            #[cfg(feature = "gpu")]
             Self::Gpu(shared) => Self::Gpu(Arc::clone(shared)),
         }
     }
@@ -307,7 +352,7 @@ impl Storage {
     /// CPU storage from data of any [`Element`] type; the dtype follows `T`.
     #[must_use]
     pub fn from_typed<T: Element>(data: Vec<T>) -> Self {
-        Self::Cpu(T::wrap(Arc::from(data)))
+        Self::Cpu(T::wrap(Arc::from(data), INTERNAL))
     }
 
     /// CPU storage decoded from native-endian bytes (panicking form of
@@ -407,6 +452,8 @@ impl Storage {
             Self::Cpu(buf) => buf.dtype(),
             #[cfg(feature = "gpu")]
             Self::Gpu(shared) => shared.buffer.dtype(),
+            #[cfg(not(feature = "gpu"))]
+            Self::Gpu(never) => match **never {},
         }
     }
 
@@ -417,6 +464,8 @@ impl Storage {
             Self::Cpu(buf) => buf,
             #[cfg(feature = "gpu")]
             Self::Gpu(shared) => shared.host.get_or_init(|| shared.buffer.to_host()),
+            #[cfg(not(feature = "gpu"))]
+            Self::Gpu(never) => match **never {},
         }
     }
 
@@ -465,11 +514,10 @@ impl Storage {
     /// `DTypeMismatch` if the dtype is not `T`'s.
     pub fn as_host<T: Element>(&self) -> Result<&[T], VoltaError> {
         match self {
-            Self::Cpu(buf) => T::view(buf).ok_or(VoltaError::DTypeMismatch {
+            Self::Cpu(buf) => T::view(buf, INTERNAL).ok_or(VoltaError::DTypeMismatch {
                 expected: T::DTYPE,
                 actual: buf.dtype(),
             }),
-            #[cfg(feature = "gpu")]
             Self::Gpu(_) => Err(VoltaError::DeviceError(
                 "as_host on GPU storage; use to_host_f32 for an explicit transfer".to_string(),
             )),
@@ -490,12 +538,11 @@ impl Storage {
         match self {
             Self::Cpu(buf) => {
                 let actual = buf.dtype();
-                T::view_mut(buf).ok_or(VoltaError::DTypeMismatch {
+                T::view_mut(buf, INTERNAL).ok_or(VoltaError::DTypeMismatch {
                     expected: T::DTYPE,
                     actual,
                 })
             }
-            #[cfg(feature = "gpu")]
             Self::Gpu(_) => Err(VoltaError::DeviceError(
                 "as_host_mut on GPU storage; GPU storage has no host write path".to_string(),
             )),
@@ -534,7 +581,7 @@ impl Storage {
     #[track_caller]
     pub fn to_host_f32(&self) -> &[f32] {
         let buf = self.host_buf();
-        f32::view(buf).unwrap_or_else(|| {
+        f32::view(buf, INTERNAL).unwrap_or_else(|| {
             panic!(
                 "{}",
                 VoltaError::DTypeMismatch {
@@ -564,7 +611,7 @@ impl Storage {
             (DType::F32, HostBuf::BF16(d)) => {
                 Cow::Owned(d.iter().map(|x| T::from_f64(x.to_f64())).collect())
             }
-            (_, buf) => Cow::Borrowed(T::view(buf).unwrap_or_else(|| {
+            (_, buf) => Cow::Borrowed(T::view(buf, INTERNAL).unwrap_or_else(|| {
                 panic!(
                     "{}",
                     VoltaError::DTypeMismatch {
@@ -737,6 +784,8 @@ impl Storage {
             Self::Cpu(buf) => buf.len(),
             #[cfg(feature = "gpu")]
             Self::Gpu(shared) => shared.buffer.len(),
+            #[cfg(not(feature = "gpu"))]
+            Self::Gpu(never) => match **never {},
         }
     }
 
@@ -751,7 +800,6 @@ impl Storage {
     pub const fn is_gpu(&self) -> bool {
         match self {
             Self::Cpu(_) => false,
-            #[cfg(feature = "gpu")]
             Self::Gpu(_) => true,
         }
     }
@@ -788,7 +836,6 @@ impl Storage {
             Device::CPU => match self {
                 // Already host memory: share the buffer.
                 Self::Cpu(_) => self.clone(),
-                #[cfg(feature = "gpu")]
                 Self::Gpu(_) => Self::Cpu(self.host_buf().clone()),
             },
             Device::GPU(_) => {
@@ -828,10 +875,11 @@ impl Storage {
         }
     }
 
-    /// Get the GPU buffer if this is GPU storage
+    /// Get the GPU buffer if this is GPU storage. Internal (#326): the buffer's `wgpu`
+    /// handle can `destroy()` a buffer the pool would hand to an unrelated tensor.
     #[cfg(feature = "gpu")]
     #[must_use]
-    pub fn gpu_buffer(&self) -> Option<&GpuBuffer> {
+    pub(crate) fn gpu_buffer(&self) -> Option<&GpuBuffer> {
         match self {
             Self::Gpu(shared) => Some(&shared.buffer),
             Self::Cpu(_) => None,
@@ -922,6 +970,8 @@ impl std::fmt::Debug for Storage {
                     shared.buffer.dtype()
                 )
             }
+            #[cfg(not(feature = "gpu"))]
+            Self::Gpu(never) => match **never {},
         }
     }
 }
