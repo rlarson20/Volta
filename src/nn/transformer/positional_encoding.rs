@@ -522,7 +522,7 @@ mod tests {
     fn test_learned_encoding_assert_trainable() {
         let pe = PositionalEncoding::new(8, 16, PositionalEncodingType::Learned);
         let x = crate::macros::trainable_input(&[2, 4, 8]);
-        crate::assert_trainable!(pe, x);
+        crate::macros::assert_trainable!(pe, x);
     }
 
     #[test]

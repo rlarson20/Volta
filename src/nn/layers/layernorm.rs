@@ -198,6 +198,6 @@ mod tests {
     fn test_layernorm_assert_trainable() {
         let ln = LayerNorm::new(vec![4]);
         let x = crate::macros::trainable_input(&[2, 4]);
-        crate::assert_trainable!(ln, x);
+        crate::macros::assert_trainable!(ln, x);
     }
 }

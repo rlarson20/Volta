@@ -132,7 +132,7 @@ fn bn1d_assert_trainable_all_params_get_gradient() {
         &[4, 3],
         true,
     );
-    crate::assert_trainable!(layer, x);
+    crate::macros::assert_trainable!(layer, x);
 }
 
 // ---- BatchNorm2d ----
@@ -193,7 +193,7 @@ fn bn2d_gradcheck_input() {
 fn bn2d_assert_trainable_all_params_get_gradient() {
     let layer = BatchNorm2d::new(2);
     let x = crate::macros::trainable_input(&[2, 2, 2, 2]);
-    crate::assert_trainable!(layer, x);
+    crate::macros::assert_trainable!(layer, x);
 }
 
 // ---- one value per channel (S12) ----

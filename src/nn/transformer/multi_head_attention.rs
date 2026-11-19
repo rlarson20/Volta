@@ -361,7 +361,7 @@ mod tests {
     fn test_mha_assert_trainable() {
         let mha = MultiHeadAttention::new(16, 2, 0.0);
         let x = crate::macros::trainable_input(&[2, 3, 16]);
-        crate::assert_trainable!(mha, x);
+        crate::macros::assert_trainable!(mha, x);
     }
 
     /// One gradient check: the input's name, the input, and the loss as a function of it.

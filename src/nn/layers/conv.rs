@@ -1442,7 +1442,7 @@ mod conv2d_tests {
         let x = RawTensor::randn(&[1, 2, 5, 5]);
         x.set_requires_grad(true);
 
-        crate::assert_trainable!(conv, x);
+        crate::macros::assert_trainable!(conv, x);
     }
 
     #[test]

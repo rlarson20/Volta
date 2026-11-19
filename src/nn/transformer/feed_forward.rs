@@ -250,6 +250,6 @@ mod tests {
     fn test_ffn_assert_trainable() {
         let ffn = FeedForward::new(16, 2, 0.0);
         let x = crate::macros::trainable_input(&[2, 3, 16]);
-        crate::assert_trainable!(ffn, x);
+        crate::macros::assert_trainable!(ffn, x);
     }
 }
