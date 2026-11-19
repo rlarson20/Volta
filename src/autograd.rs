@@ -145,7 +145,7 @@ impl GradFn {
             Self::Sum(_) => "Sum".to_string(),
             Self::MaxReduce(_) => "MaxReduce".to_string(),
             Self::Mean(_) => "Mean".to_string(),
-            Self::SumDim(_) => "SumDim".to_string(),
+            Self::SumDim(g) => g.name().to_string(),
             Self::MaxDim(_) => "MaxDim".to_string(),
             Self::MulAcc(_) => "MulAcc".to_string(),
             Self::Where(_) => "Where".to_string(),

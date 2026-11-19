@@ -20,22 +20,28 @@ pub use transformer::{
     ScaledDotProductAttention, TransformerBlock, causal_mask,
 };
 
-/// PyTorch's mixed-dtype rule for the norm layers (audit A5): a half (f16/bf16) input
-/// with f32 parameters is normalized in f32 and returned in the input's dtype, so a norm
-/// under `amp::autocast` keeps the activations low, and its parameters keep f32 gradients.
-/// The casts are explicit graph nodes, so `DTypePolicy::Strict` accepts them. Any other
-/// pair goes straight to `f`, which promotes or refuses as usual.
+/// PyTorch's mixed-dtype rule for the norm layers (audit A5, #316): a half (f16/bf16)
+/// input whose parameters are f32 or the input's own dtype is normalized in f32 and
+/// returned in the input's dtype. Under `amp::autocast` the activations stay low and the
+/// f32 parameters keep f32 gradients; with half parameters (`Module::to_dtype`) the
+/// statistics are still taken in f32, as PyTorch's half norm kernels accumulate in f32,
+/// so a variance whose sum passes f16's 65504 does not overflow.
+///
+/// `f` gets the input in the dtype to compute in, and that dtype: the layer casts its
+/// parameters (and running statistics) to it. The casts are explicit graph nodes, so
+/// `DTypePolicy::Strict` accepts them and half parameters get half gradients. Any other
+/// pair goes to `f` with the parameters' dtype, which promotes or refuses as usual.
 pub(crate) fn norm_mixed(
     x: &Tensor,
     param: crate::DType,
-    f: impl FnOnce(&Tensor) -> Tensor,
+    f: impl FnOnce(&Tensor, crate::DType) -> Tensor,
 ) -> Tensor {
     use crate::DType;
     let d = x.dtype();
-    if matches!(d, DType::F16 | DType::BF16) && param == DType::F32 {
-        f(&x.to_dtype(DType::F32)).to_dtype(d)
+    if matches!(d, DType::F16 | DType::BF16) && (param == DType::F32 || param == d) {
+        f(&x.to_dtype(DType::F32), DType::F32).to_dtype(d)
     } else {
-        f(x)
+        f(x, param)
     }
 }
 

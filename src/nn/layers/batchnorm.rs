@@ -54,15 +54,15 @@ impl BatchNorm {
         }
     }
 
-    /// Panics unless `x` has the parameters' dtype, naming `layer`. One rule in training
-    /// and evaluation mode, checked before any computation (#104), as PyTorch refuses an
-    /// f64 input to an f32 `BatchNorm`. A half input with f32 parameters never gets here:
-    /// [`crate::nn::norm_mixed`] casts it to f32 first.
+    /// Panics unless `x` has `dtype`, the dtype [`crate::nn::norm_mixed`] computes in,
+    /// naming `layer`. That is the parameters' dtype except for a half input, which
+    /// `norm_mixed` casts to f32 first. One rule in training and evaluation mode, checked
+    /// before any computation (#104), as PyTorch refuses an f64 input to an f32 `BatchNorm`.
     #[track_caller]
-    fn check_dtype(&self, layer: &str, x: &Tensor) {
+    fn check_dtype(&self, layer: &str, x: &Tensor, dtype: crate::DType) {
         let (input, param) = (x.dtype(), self.gamma.dtype());
         assert!(
-            input == param,
+            input == dtype,
             "{layer}: input is {input}, parameters are {param}; this layer needs one dtype, as \
              in PyTorch: cast the input with to_dtype, or the layer with Module::to_dtype"
         );
@@ -116,8 +116,9 @@ impl BatchNorm {
     /// Normalizes `x`, a 2-D tensor whose `channel_axis` has the `C` channels and whose
     /// other axis has every value of a channel (`n` of them), then scales and shifts it.
     /// In training mode this uses the batch statistics and updates the running ones; the
-    /// caller has checked `n > 1` there.
-    fn normalize(&self, x: &Tensor, channel_axis: Axis, n: usize) -> Tensor {
+    /// caller has checked `n > 1` there. `x` is in `dtype`, which the parameters and the
+    /// running statistics are cast to ([`crate::nn::norm_mixed`]).
+    fn normalize(&self, x: &Tensor, channel_axis: Axis, n: usize, dtype: crate::DType) -> Tensor {
         let c = self.num_features;
         // Per-channel statistics keep the reduced axis, so they broadcast against `x`.
         let (reduce, stat_dims) = if channel_axis == Axis(0) {
@@ -137,7 +138,12 @@ impl BatchNorm {
             // Running stats are host-side layer state (updated in place in training), so
             // copy them onto the input's device, in their own dtype: `constant_like(..,
             // data())` would round f64 stats to f32.
-            let stat = |t: &Tensor| t.detach().reshape(&stat_dims).to_device(x.device());
+            let stat = |t: &Tensor| {
+                t.detach()
+                    .reshape(&stat_dims)
+                    .to_device(x.device())
+                    .to_dtype(dtype)
+            };
             (stat(&self.running_mean), stat(&self.running_var))
         };
 
@@ -146,8 +152,8 @@ impl BatchNorm {
         let eps_tensor = x.constant_like(vec![self.eps], &[1]);
         let x_norm = diff.div(&var.add(&eps_tensor).sqrt());
         x_norm
-            .elem_mul(&self.gamma.reshape(&stat_dims))
-            .add(&self.beta.reshape(&stat_dims))
+            .elem_mul(&self.gamma.to_dtype(dtype).reshape(&stat_dims))
+            .add(&self.beta.to_dtype(dtype).reshape(&stat_dims))
     }
 
     /// `running = (1 - momentum) * running + momentum * batch`, with Bessel's correction
@@ -190,9 +196,12 @@ impl BatchNorm {
 ///
 /// `forward` panics if the input is not 4D, its channel count is not `num_features`, its
 /// dtype is not the parameters' (in either mode; a half input with f32 parameters is the
-/// exception, normalized in f32), or, in training mode, it has one value per channel
+/// exception), or, in training mode, it has one value per channel
 /// (`B * H * W == 1`), as PyTorch raises. The running statistics are untouched by a
 /// rejected batch.
+///
+/// A half (f16/bf16) input is normalized in f32 and returned in its own dtype, with f32
+/// or half parameters, as PyTorch's half kernels accumulate in f32.
 pub struct BatchNorm2d {
     /// Parameters, running statistics and mode.
     core: BatchNorm,
@@ -223,8 +232,11 @@ impl BatchNorm2d {
 ///
 /// `forward` panics if the input is not 2D, its feature count is not `num_features`, its
 /// dtype is not the parameters' (in either mode; a half input with f32 parameters is the
-/// exception, normalized in f32), or, in training mode, the batch has one sample (as
+/// exception), or, in training mode, the batch has one sample (as
 /// PyTorch raises). The running statistics are untouched by a rejected batch.
+///
+/// A half (f16/bf16) input is normalized in f32 and returned in its own dtype, with f32
+/// or half parameters, as PyTorch's half kernels accumulate in f32.
 pub struct BatchNorm1d {
     /// Parameters, running statistics and mode.
     core: BatchNorm,
@@ -274,9 +286,11 @@ macro_rules! batchnorm_module {
 
         impl Layer for $layer {
             fn forward(&self, x: &Tensor) -> Tensor {
-                // A half input with f32 parameters normalizes in f32 and returns the
-                // input's dtype, as PyTorch's norm kernels do (audit A5).
-                crate::nn::norm_mixed(x, self.core.gamma.dtype(), |x| self.forward_in(x))
+                // A half input normalizes in f32 and returns the input's dtype, as
+                // PyTorch's norm kernels do (audit A5, #316).
+                crate::nn::norm_mixed(x, self.core.gamma.dtype(), |x, dtype| {
+                    self.forward_in(x, dtype)
+                })
             }
         }
     };
@@ -286,10 +300,10 @@ batchnorm_module!(BatchNorm2d);
 batchnorm_module!(BatchNorm1d);
 
 impl BatchNorm2d {
-    /// The forward pass with `x` already in the parameters' dtype (or another dtype pair
-    /// [`crate::nn::norm_mixed`] leaves alone, which panics here).
-    fn forward_in(&self, x: &Tensor) -> Tensor {
-        self.core.check_dtype("BatchNorm2d", x);
+    /// The forward pass with `x` already in `dtype`, the dtype to compute in
+    /// ([`crate::nn::norm_mixed`]; any other input dtype panics here).
+    fn forward_in(&self, x: &Tensor, dtype: crate::DType) -> Tensor {
+        self.core.check_dtype("BatchNorm2d", x, dtype);
         let c = self.core.num_features;
         let x_borrow = x.borrow();
         assert_eq!(
@@ -311,7 +325,7 @@ impl BatchNorm2d {
         let x_flat = x
             .permute(&[Axis(1), Axis(0), Axis(2), Axis(3)])
             .reshape(&[c, num_pixels]);
-        let out_flat = self.core.normalize(&x_flat, Axis(0), num_pixels);
+        let out_flat = self.core.normalize(&x_flat, Axis(0), num_pixels, dtype);
 
         // Back: (C, B*H*W) -> (C, B, H, W) -> (B, C, H, W)
         out_flat
@@ -321,10 +335,10 @@ impl BatchNorm2d {
 }
 
 impl BatchNorm1d {
-    /// The forward pass with `x` already in the parameters' dtype (or another dtype pair
-    /// [`crate::nn::norm_mixed`] leaves alone, which panics here).
-    fn forward_in(&self, x: &Tensor) -> Tensor {
-        self.core.check_dtype("BatchNorm1d", x);
+    /// The forward pass with `x` already in `dtype`, the dtype to compute in
+    /// ([`crate::nn::norm_mixed`]; any other input dtype panics here).
+    fn forward_in(&self, x: &Tensor, dtype: crate::DType) -> Tensor {
+        self.core.check_dtype("BatchNorm1d", x, dtype);
         let x_borrow = x.borrow();
         assert_eq!(
             x_borrow.shape.rank(),
@@ -345,7 +359,7 @@ impl BatchNorm1d {
         drop(x_borrow);
 
         // Already (B, C): statistics per feature over the batch axis.
-        self.core.normalize(x, Axis(1), batch_size)
+        self.core.normalize(x, Axis(1), batch_size, dtype)
     }
 }
 

@@ -972,7 +972,67 @@ def group_extra():
 
     save("extra", t)
 
-GROUPS = {"ops": group_ops, "reductions": group_reductions, "optim": group_optim, "layers": group_layers, "transformer": group_transformer, "lstm": group_lstm, "dtypes": group_dtypes, "casts": group_casts, "f64": group_f64, "half": group_half, "intbool": group_intbool, "promotion": group_promotion, "autocast": group_autocast, "extra": group_extra}
+def group_stability():
+    """#315/#316: `log_softmax` at large logits (f32), and f16 `BatchNorm2d` and
+    `LayerNorm` whose sums of squares pass f16's 65504 (torch's half norm kernels
+    accumulate in f32). Each case stores the input, output, a weighting `w` and the
+    gradients of sum(out * w). The f16 norms also store `<name>.f64.*`: the same case
+    computed in float64 from the same f16 values, because torch's f16 gamma gradient
+    rounds the normalized input to f16 first (1% off on `layernorm`). Stored in native
+    dtypes.
+    """
+    torch.manual_seed(SEED)
+    F = torch.nn.functional
+    t = {}
+
+    def record(name, out, inputs):
+        w = torch.randn(out.shape).to(out.dtype)
+        names = list(inputs)
+        grads = torch.autograd.grad((out * w).sum(), [inputs[n] for n in names])
+        t[f"{name}.out"] = out
+        t[f"{name}.w"] = w
+        for n, g in zip(names, grads):
+            t[f"{name}.grad_{n}"] = g
+
+    def reference(name, f, x, g, b):
+        x, g, b = (v.detach().double().requires_grad_(True) for v in (x, g, b))
+        out = f(x, g, b)
+        grads = torch.autograd.grad((out * t[f"{name}.w"].double()).sum(), [x, g, b])
+        t[f"{name}.f64.out"] = out
+        for n, gr in zip(["x", "gamma", "beta"], grads):
+            t[f"{name}.f64.grad_{n}"] = gr
+
+    # #315: rows whose largest logit has an ulp of 6e-5 to 1e-3.
+    for i, row in enumerate([[1000.0, 1000.0], [10000.5, 10000.0, 9999.0], [-3000.25, -3000.0, -2999.5]]):
+        x = torch.tensor([row], dtype=torch.float32, requires_grad=True)
+        t[f"log_softmax{i}.x"] = x
+        record(f"log_softmax{i}", torch.log_softmax(x, 1), {"x": x})
+
+    # #316: BatchNorm2d on 64x1x32x32 with variance about 3 (65536 * 3 > 65504).
+    h = torch.float16
+    x = (torch.randn(64, 1, 32, 32) * 3**0.5).to(h).requires_grad_(True)
+    g = (torch.rand(1) + 0.5).to(h).requires_grad_(True)
+    b = torch.randn(1).to(h).requires_grad_(True)
+    t.update({"batchnorm.x": x, "batchnorm.gamma": g, "batchnorm.beta": b})
+    record("batchnorm", F.batch_norm(x, None, None, g, b, training=True, eps=1e-5), {"x": x, "gamma": g, "beta": b})
+    reference("batchnorm", lambda x, g, b: F.batch_norm(x, None, None, g, b, training=True, eps=1e-5), x, g, b)
+
+    # #316: LayerNorm(1024) on rows 100 + 0.01 i (sum about 105000).
+    x = (100 + 0.01 * torch.arange(1024.0)).reshape(1, 1024)
+    x = torch.cat([x, x.flip(1)]).to(h).requires_grad_(True)
+    g = (torch.rand(1024) + 0.5).to(h).requires_grad_(True)
+    b = torch.randn(1024).to(h).requires_grad_(True)
+    t.update({"layernorm.x": x, "layernorm.gamma": g, "layernorm.beta": b})
+    record("layernorm", F.layer_norm(x, (1024,), g, b, 1e-5), {"x": x, "gamma": g, "beta": b})
+    reference("layernorm", lambda x, g, b: F.layer_norm(x, (1024,), g, b, 1e-5), x, g, b)
+
+    OUT.mkdir(parents=True, exist_ok=True)
+    meta = {"info": f"torch={torch.__version__};seed={SEED};group=stability"}
+    save_file({k: v.detach().clone().contiguous() for k, v in t.items()}, OUT / "stability.safetensors", metadata=meta)
+    print(f"wrote stability: {len(t)} tensors")
+
+
+GROUPS = {"ops": group_ops, "reductions": group_reductions, "optim": group_optim, "layers": group_layers, "transformer": group_transformer, "lstm": group_lstm, "dtypes": group_dtypes, "casts": group_casts, "f64": group_f64, "half": group_half, "intbool": group_intbool, "promotion": group_promotion, "autocast": group_autocast, "extra": group_extra, "stability": group_stability}
 
 if __name__ == "__main__":
     wanted = sys.argv[1:] or list(GROUPS)
