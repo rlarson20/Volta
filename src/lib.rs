@@ -1,17 +1,58 @@
 //! # Volta
 //!
-//! A minimal automatic differentiation library implementing PyTorch-like tensor operations
-//! from scratch in pure Rust. This library provides:
-//! - Dynamic computation graphs for automatic differentiation
-//! - Broadcasting support for tensor operations
-//! - Common neural network operations (matmul, activations, etc.)
-//! - Numerical gradient checking for validation
+//! A PyTorch-style tensor and reverse-mode automatic differentiation library in pure Rust,
+//! written to show how an autograd engine works rather than to be fast.
 //!
-//! ## Architecture
+//! ```
+//! use volta::RawTensor;
 //!
-//! The library uses reference-counted interior mutability (`Rc<RefCell<RawTensor>>`) to build
-//! dynamic computation graphs. Each tensor operation creates new tensors and stores gradient
-//! functions that know how to backpropagate through that operation.
+//! // A leaf that tracks gradients, an op, and backward from the scalar loss.
+//! let x = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], true);
+//! let loss = x.elem_mul(&x).sum(); // sum(x^2)
+//! loss.into_loss().expect("a tracked scalar").backward();
+//! assert_eq!(x.grad(), Some(vec![2.0, 4.0, 6.0])); // d/dx = 2x
+//! ```
+//!
+//! ## What it has
+//!
+//! - **Tensors and autograd** ([`tensor`], [`autograd`]): [`Tensor`] is a shared handle
+//!   (`Rc<RefCell<RawTensor>>`). Each op records its inputs and a backward function, so
+//!   the graph is built as the program runs; [`Tensor::into_loss`] checks that a tensor is
+//!   a tracked scalar and [`ScalarLoss::backward`] accumulates gradients into the leaves.
+//!   Elementwise ops broadcast NumPy-style. [`no_grad`] turns recording off for a scope.
+//! - **Dtypes** ([`dtype`]): storage holds f16, bf16, f32, f64, i32, i64, u8 or bool.
+//!   Arithmetic runs in f32, f64, f16 or bf16 on the CPU and in f32, f16 or bf16 on the
+//!   GPU; integer and bool tensors compare and convert but have no arithmetic.
+//!   Mixed dtypes promote as in PyTorch, or panic under [`DTypePolicy::Strict`].
+//! - **Mixed precision** ([`amp`]): inside [`autocast`], matmul, `Linear` and the
+//!   convolutions run in f16 or bf16 while parameters stay f32, and the losses run in f32.
+//!   [`GradScaler`] scales an f16 loss so small gradients don't underflow, and skips a step
+//!   whose gradients hold an inf or NaN.
+//! - **Devices** ([`device`], [`device_policy`](mod@device_policy), [`gpu`]): [`Device::CPU`], and with the
+//!   `gpu` feature a wgpu device from [`Device::gpu`]. An op with no GPU kernel panics on
+//!   a GPU input by default; [`DevicePolicy::PreferGpu`] runs it on the CPU instead and
+//!   records a [`FallbackEvent`].
+//! - **Neural networks** ([`nn`]): layers (`Linear`, `Conv2d`, `ConvTranspose2d`,
+//!   `MaxPool2d`, `Embedding`, `LSTMCell`, `LayerNorm`, `BatchNorm1d`/`2d`, `Dropout`,
+//!   activations, ...), the `Sequential` container, transformer blocks, and the `SGD`,
+//!   `Adam` and `Muon` optimizers. Losses are functions in [`tensor`]
+//!   ([`tensor::mse_loss`], [`tensor::cross_entropy_loss`], ...).
+//! - **Weights** ([`io`]): save and load state dicts as `SafeTensors`, and remap keys and
+//!   transpose weights to load PyTorch or Hugging Face checkpoints ([`io::mapping`]).
+//! - **Data** ([`data`]): MNIST loading and transforms; [`tensor::DataLoader`] batches.
+//! - **Gradient checking**: [`check_gradients`] compares backward against central
+//!   finite differences.
+//!
+//! ## Features
+//!
+//! Both are on by default.
+//!
+//! - `gpu`: the GPU backend, on [wgpu](https://wgpu.rs). Without it, [`gpu`] is a stub whose
+//!   functions report no GPU, and [`Device::gpu`] returns `None`.
+//! - `accelerate`: CPU matmul through Apple's Accelerate framework on macOS; no effect
+//!   on other platforms.
+//!
+//! For a CPU-only build: `volta = { version = "..", default-features = false }`.
 // A library must not write to stdout/stderr unprompted — diagnostics go through
 // the `log` facade. Scoped to non-test builds of the library crate: examples and
 // integration tests are separate crates (unaffected), and unit-test modules may

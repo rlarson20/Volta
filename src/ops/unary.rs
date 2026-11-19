@@ -143,6 +143,9 @@ impl RawTensor {
     ///
     /// This is the unified implementation for all unary ops.
     /// Creates a new tensor and sets up gradient tracking if needed.
+    ///
+    /// # Panics
+    /// If the dtype is not a float (integer and bool tensors have no unary kernels).
     #[must_use]
     pub fn unary_op(t: &Tensor, op: UnaryOp) -> Tensor {
         let dtype = compute_dtype(|| UnaryGradFn { op }.op_name(), &[t.dtype()]);
