@@ -1,8 +1,12 @@
-/// Test helper that checks a model's parameters receive gradients.
+/// Test helper that checks a model's parameters receive gradients. Test builds only, and
+/// not exported (#145): call it as `crate::macros::assert_trainable!`.
+#[cfg(test)]
 mod assert_trainable;
 /// The `define_ops!` macro that generates the unary and binary op families.
 mod define_ops;
 
+#[cfg(test)]
+pub(crate) use assert_trainable::assert_trainable;
 pub(crate) use define_ops::define_ops;
 
 /// Seeded `N(0, 1)` input with `requires_grad = true`, for [`assert_trainable!`].

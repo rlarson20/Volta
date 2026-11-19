@@ -1112,7 +1112,7 @@ mod tests {
     fn test_conv_transpose2d_assert_trainable() {
         let conv = ConvTranspose2d::new(2, 4, 3, 1, 0, true);
         let x = crate::macros::trainable_input(&[1, 2, 5, 5]);
-        crate::assert_trainable!(conv, x);
+        crate::macros::assert_trainable!(conv, x);
     }
 
     /// Runs `conv.forward(x)` and returns the panic message, failing if it does not panic.

@@ -209,7 +209,7 @@ mod tests {
     fn test_lstmcell_assert_trainable() {
         let cell = TwoSteps(LSTMCell::new(4, 8, true));
         let x = crate::macros::trainable_input(&[2, 4]);
-        crate::assert_trainable!(cell, x);
+        crate::macros::assert_trainable!(cell, x);
     }
 
     /// Finite-difference check of one step's gradient with respect to `x`, `h`, and `c`, from a

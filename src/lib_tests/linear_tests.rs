@@ -92,5 +92,5 @@ fn backward_gradcheck_input() {
 fn assert_trainable_all_params_get_gradient() {
     let layer = Linear::new(4, 3, true);
     let x = crate::macros::trainable_input(&[2, 4]);
-    crate::assert_trainable!(layer, x);
+    crate::macros::assert_trainable!(layer, x);
 }

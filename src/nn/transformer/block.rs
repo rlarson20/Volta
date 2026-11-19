@@ -195,7 +195,7 @@ mod tests {
         // Covers every parameter: norm1, attention's q/k/v/out projections, norm2, ffn.
         let block = TransformerBlock::new(16, 2, 2, 0.0);
         let x = crate::macros::trainable_input(&[2, 3, 16]);
-        crate::assert_trainable!(block, x);
+        crate::macros::assert_trainable!(block, x);
     }
 
     #[test]

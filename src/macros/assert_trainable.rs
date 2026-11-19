@@ -5,7 +5,7 @@
 /// bugs from Part I (ADDENDUM.md §5.3): a layer whose output is silently disconnected
 /// from a parameter's autograd graph looks fine at a glance but never trains.
 ///
-/// `$input` must be non-degenerate — use `crate::macros::trainable_input`. Constant
+/// `$input` must be non-degenerate — use [`trainable_input`](super::trainable_input). Constant
 /// inputs make tokens/features identical, which zeroes gradients mathematically for
 /// normalization and attention layers (`LayerNorm` gamma, attention Q/K projections).
 ///
@@ -17,7 +17,6 @@
 ///   `Layer::forward`. Inherent methods always win over trait methods in
 ///   `.method()` resolution regardless of arity, so plain `$layer.forward(&$input)`
 ///   would resolve to the wrong one and fail to compile for those layers.
-#[macro_export]
 macro_rules! assert_trainable {
     ($layer:expr, $input:expr) => {{
         let output = <_ as $crate::nn::Layer>::forward(&$layer, &$input);
@@ -47,3 +46,6 @@ macro_rules! assert_trainable {
         }
     }};
 }
+
+/// Crate-internal (#145): a test helper, not public API.
+pub(crate) use assert_trainable;
