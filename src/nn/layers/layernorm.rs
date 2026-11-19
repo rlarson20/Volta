@@ -107,16 +107,16 @@ impl Module for LayerNorm {
 
 impl Layer for LayerNorm {
     fn forward(&self, x: &Tensor) -> Tensor {
-        // A half input with f32 parameters normalizes in f32 and returns the input's
-        // dtype, as PyTorch's norm kernels do (audit A5).
-        crate::nn::norm_mixed(x, self.gamma.dtype(), |x| self.forward_in(x))
+        // A half input normalizes in f32 and returns the input's dtype, as PyTorch's
+        // norm kernels do (audit A5, #316).
+        crate::nn::norm_mixed(x, self.gamma.dtype(), |x, dtype| self.forward_in(x, dtype))
     }
 }
 
 impl LayerNorm {
-    /// The forward pass with `x` already in the parameters' dtype (or another dtype pair
-    /// [`crate::nn::norm_mixed`] leaves alone).
-    fn forward_in(&self, x: &Tensor) -> Tensor {
+    /// The forward pass with `x` already in `dtype`, the dtype to compute in, which the
+    /// parameters are cast to ([`crate::nn::norm_mixed`]).
+    fn forward_in(&self, x: &Tensor, dtype: crate::DType) -> Tensor {
         let input_shape = x.borrow().shape.clone();
         let input_rank = input_shape.rank();
 
@@ -165,8 +165,8 @@ impl LayerNorm {
         let x_norm = diff.div(&denom); // (leading_dims, trailing_dims)
 
         // Reshape gamma and beta to broadcast correctly
-        let gamma_reshaped = self.gamma.reshape(&[1, trailing_dims]);
-        let beta_reshaped = self.beta.reshape(&[1, trailing_dims]);
+        let gamma_reshaped = self.gamma.to_dtype(dtype).reshape(&[1, trailing_dims]);
+        let beta_reshaped = self.beta.to_dtype(dtype).reshape(&[1, trailing_dims]);
 
         // Scale and shift: gamma * x_norm + beta
         let out = x_norm.elem_mul(&gamma_reshaped).add(&beta_reshaped);

@@ -1218,9 +1218,16 @@ pub(crate) struct SumDimGradFn {
     dim: usize,
     /// Whether the summed axis was kept with size 1.
     keepdim: bool,
+    /// Whether the sum was divided by the axis length (`mean_dim`).
+    mean: bool,
 }
 
 impl SumDimGradFn {
+    /// The op's name: `MeanDim` for `mean_dim`, else `SumDim`.
+    pub(crate) fn name(&self) -> &'static str {
+        if self.mean { "MeanDim" } else { "SumDim" }
+    }
+
     /// Broadcasts `out_grad` back along the summed axis.
     pub(crate) fn backward(
         &self,
@@ -1246,6 +1253,11 @@ impl SumDimGradFn {
         // Each output element contributed to by input_shape[dim] elements
         let size = self.input_shape.numel();
         let mut result = vec![T::ZERO; size];
+        let divisor = T::from_usize(if self.mean {
+            self.input_shape.dim_at(self.dim)
+        } else {
+            1
+        });
 
         let grad_strides = expanded_shape.strides();
         let grad_strides = grad_strides.truncate_rank();
@@ -1268,7 +1280,7 @@ impl SumDimGradFn {
                 .zip(grad_strides)
                 .map(|(c, s)| c * s)
                 .sum();
-            *slot(&mut result, i) = fetch(&grad_data, grad_idx);
+            *slot(&mut result, i) = fetch(&grad_data, grad_idx) / divisor;
         }
 
         vec![Some(RawTensor::from_shape_compute(
@@ -1364,13 +1376,22 @@ impl RawTensor {
     ///
     /// Returns `VoltaError::DimensionOutOfBounds` if dim is >= tensor rank
     pub fn try_sum_dim(self_t: &Tensor, dim: Axis, keepdim: bool) -> Result<Tensor> {
-        let dtype = compute_dtype(|| "SumDim".to_string(), &[self_t.dtype()]);
+        Self::reduce_dim(self_t, dim, keepdim, false)
+    }
+
+    /// `sum_dim`, or with `mean` the sum divided by the axis length, both in one pass:
+    /// each output is computed in the compute type (f32 for a half tensor) and rounded to
+    /// the input's dtype once, so a half mean does not overflow where its sum would (#316).
+    fn reduce_dim(self_t: &Tensor, dim: Axis, keepdim: bool, mean: bool) -> Result<Tensor> {
+        let op = if mean { "MeanDim" } else { "SumDim" };
+        let dtype = compute_dtype(|| op.to_string(), &[self_t.dtype()]);
         let (data, shape) = {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone())
         };
 
         let dim_size = shape.dim(dim)?;
+        let divisor = if mean { dim_size } else { 1 };
         let dim = dim.0;
         let out_shape = shape.with_dim(dim, 1); // intermediate shape before squeeze
         let out_size = out_shape.numel();
@@ -1384,6 +1405,7 @@ impl RawTensor {
         let storage = dispatch_real!(dtype, T => {
             let mut result = vec![T::ZERO; out_size];
             let data = data.host::<T>();
+            let divisor = T::from_usize(divisor);
             for outer in 0..outer_size {
                 for inner in 0..inner_size {
                     let out_idx = outer * inner_size + inner;
@@ -1391,7 +1413,7 @@ impl RawTensor {
                     let sum = pairwise_sum_by(dim_size, |k| {
                         fetch(&data, outer * dim_size * inner_size + k * inner_size + inner)
                     });
-                    *slot(&mut result, out_idx) = sum;
+                    *slot(&mut result, out_idx) = sum / divisor;
                 }
             }
             Storage::from_compute(dtype, result)
@@ -1415,6 +1437,7 @@ impl RawTensor {
                 input_shape: shape,
                 dim,
                 keepdim,
+                mean,
             }),
         ))
     }
@@ -1614,24 +1637,23 @@ impl RawTensor {
         let exp_x = shifted.exp();
         let sum_exp = Self::sum_dim(&exp_x, dim, true);
         let log_sum = sum_exp.log();
-        let log_sum_plus_max = log_sum.add(&max);
-        self_t.sub(&log_sum_plus_max)
+        // `shifted - log_sum`, not `x - (log_sum + max)`: adding `max` back rounds `log_sum`
+        // to the spacing of `max`, an error up to half an ulp of the largest logit (#315).
+        shifted.sub(&log_sum)
     }
 
-    /// Mean along a specific axis
+    /// Mean along a specific axis.
     ///
-    /// Implemented as `sum_dim(dim)` / size(dim)
+    /// One op, as `mean` is: each mean is the pairwise sum divided by the axis length
+    /// before it is rounded, so a half tensor's mean does not overflow where its sum
+    /// would (#316). The gradient is `out_grad / n`, broadcast along the axis.
     ///
     /// # Panics
     /// If `dim` is not less than the tensor's rank, or the dtype is not a float.
     #[must_use]
     #[track_caller]
     pub fn mean_dim(self_t: &Tensor, dim: Axis, keepdim: bool) -> Tensor {
-        let shape = self_t.borrow().shape.clone();
-
-        let n = shape.dim(dim).or_panic("mean_dim") as f32;
-        let sum = Self::sum_dim(self_t, dim, keepdim);
-        sum.div(&self_t.constant_like(vec![n], &[1]))
+        Self::reduce_dim(self_t, dim, keepdim, true).or_panic("mean_dim")
     }
 }
 

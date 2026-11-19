@@ -58,7 +58,7 @@ fn sum_dim_no_keepdim_parity() {
 
 #[test]
 fn mean_dim_keepdim_parity() {
-    expect_gaps(&["Binary(Div)", "SumDim"], || {
+    expect_gaps(&["MeanDim"], || {
         assert_reduce_parity(
             "mean_dim keepdim",
             |t| t.mean_dim(Axis(1), true),
@@ -70,7 +70,7 @@ fn mean_dim_keepdim_parity() {
 
 #[test]
 fn mean_dim_no_keepdim_parity() {
-    expect_gaps(&["Binary(Div)", "SumDim"], || {
+    expect_gaps(&["MeanDim"], || {
         assert_reduce_parity(
             "mean_dim",
             |t| t.mean_dim(Axis(0), false),
