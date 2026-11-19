@@ -34,7 +34,7 @@ struct AdamState {
 
 impl AdamState {
     /// Zeroed state in `p`'s current dtype and device.
-    fn new(p: &crate::RawTensor) -> Self {
+    fn new(p: &Tensor) -> Self {
         Self {
             m: super::zeros_like(p),
             v: super::zeros_like(p),
@@ -174,21 +174,16 @@ impl Adam {
         use crate::gpu::OptimizerStepParams;
 
         let param = self.params.get(i).expect("Adam: a parameter per index");
-        let mut p = param.borrow_mut();
-
-        let grad = match &p.grad {
-            Some(g) => g.clone(),
-            None => return,
+        let Some(grad) = param.grad_storage() else {
+            return;
         };
-        // The step rewrites the parameter in place (S9).
-        p.bump_version();
 
         // Allocated here on the parameter's first step, on its current device.
         let state = self
             .state
             .get_mut(i)
             .expect("Adam: state slot per parameter")
-            .get_or_insert_with(|| AdamState::new(&p));
+            .get_or_insert_with(|| AdamState::new(param));
         state.step += 1;
         let (m_hat_scale, v_hat_scale) = bias_correction_scales(self.betas, state.step);
         let (m_state, v_state) = (&mut state.m, &mut state.v);
@@ -210,88 +205,91 @@ impl Adam {
             v_hat_scale: v_hat_scale as f32,
         };
 
-        // Updates params, m and v in place. `gpu_optimizer_step` unshares each buffer first
-        // and drops its host copy, so snapshots and later reads stay correct.
-        crate::RawTensor::gpu_optimizer_step(&mut p.data, &grad, m_state, v_state, &opt_params)
+        // Updates params, m and v in place, bumping the parameter's version (S9).
+        // `gpu_optimizer_step` unshares each buffer first and drops its host copy, so
+        // snapshots and later reads stay correct.
+        param
+            .update_data(|data| {
+                crate::RawTensor::gpu_optimizer_step(data, &grad, m_state, v_state, &opt_params)
+            })
             .expect("GPU Adam step failed: the parameter was not updated");
     }
 
     /// CPU update for a single parameter
     fn step_cpu_param(&mut self, i: usize) {
         let param = self.params.get(i).expect("Adam: a parameter per index");
-        let mut p = param.borrow_mut();
-
-        let grad = match &p.grad {
-            Some(g) => g.clone(),
-            None => return,
+        let Some(grad) = param.grad_storage() else {
+            return;
         };
-        // The step rewrites the parameter in place (S9).
-        p.bump_version();
 
-        let dtype = p.data.dtype();
-        dispatch_real!(dtype, T => {
-        let lr = T::from_f64(f64::from(self.lr));
-        let eps = T::from_f64(f64::from(self.eps));
-        let weight_decay = T::from_f64(f64::from(self.weight_decay));
-        let (beta1, beta2) = (
-            T::from_f64(f64::from(self.betas.0)),
-            T::from_f64(f64::from(self.betas.1)),
-        );
-        // Apply weight decay to gradient
-        let mut active_grad = grad;
-        if self.weight_decay != 0.0 {
-            for (g, theta) in active_grad
-                .host_mut::<T>()
-                .iter_mut()
-                .zip(p.data.host::<T>().iter())
-            {
-                *g += weight_decay * *theta;
-            }
-        }
-
-        // Allocated here on the parameter's first step, in its current dtype.
+        let dtype = param.dtype();
+        // Allocated here on the parameter's first step, in its current dtype; before the
+        // update, which holds the parameter mutably.
         let state = self
             .state
             .get_mut(i)
             .expect("Adam: state slot per parameter")
-            .get_or_insert_with(|| AdamState::new(&p));
-        state.step += 1;
-        let step = state.step;
-        for s in [&state.m, &state.v] {
-            assert_eq!(
-                s.dtype(),
-                dtype,
-                "Adam state dtype; convert the model before the optimizer's first step"
+            .get_or_insert_with(|| AdamState::new(param));
+        // The step rewrites the parameter in place (S9; `update_data` bumps the version).
+        param.update_data(|data| {
+            dispatch_real!(dtype, T => {
+            let lr = T::from_f64(f64::from(self.lr));
+            let eps = T::from_f64(f64::from(self.eps));
+            let weight_decay = T::from_f64(f64::from(self.weight_decay));
+            let (beta1, beta2) = (
+                T::from_f64(f64::from(self.betas.0)),
+                T::from_f64(f64::from(self.betas.1)),
             );
-        }
-        let (mut m_guard, mut v_guard) = (state.m.host_mut::<T>(), state.v.host_mut::<T>());
-        let (m_slice, v_slice) = (&mut *m_guard, &mut *v_guard);
+            // Apply weight decay to gradient
+            let mut active_grad = grad;
+            if self.weight_decay != 0.0 {
+                for (g, theta) in active_grad
+                    .host_mut::<T>()
+                    .iter_mut()
+                    .zip(data.host::<T>().iter())
+                {
+                    *g += weight_decay * *theta;
+                }
+            }
 
-        // Update biased moments
-        let g_host = active_grad.host::<T>();
-        for j in 0..g_host.len() {
-            let m_val = fetch(m_slice, j);
-            let g_val = fetch(&g_host, j);
-            *slot(m_slice, j) = beta1.mul_add(m_val, (1.0 - beta1) * g_val);
-            let v_val = fetch(v_slice, j);
-            *slot(v_slice, j) = beta2
-                .mul_add(v_val, (1.0 - beta2) * g_val.powi(2));
-        }
+            state.step += 1;
+            let step = state.step;
+            for s in [&state.m, &state.v] {
+                assert_eq!(
+                    s.dtype(),
+                    dtype,
+                    "Adam state dtype; convert the model before the optimizer's first step"
+                );
+            }
+            let (mut m_guard, mut v_guard) = (state.m.host_mut::<T>(), state.v.host_mut::<T>());
+            let (m_slice, v_slice) = (&mut *m_guard, &mut *v_guard);
 
-        // Bias correction, the same f64 scales the GPU kernel gets (#304)
-        let (m_hat_scale, v_hat_scale) = bias_correction_scales(self.betas, step);
-        let (m_hat_scale, v_hat_scale) = (T::from_f64(m_hat_scale), T::from_f64(v_hat_scale));
+            // Update biased moments
+            let g_host = active_grad.host::<T>();
+            for j in 0..g_host.len() {
+                let m_val = fetch(m_slice, j);
+                let g_val = fetch(&g_host, j);
+                *slot(m_slice, j) = beta1.mul_add(m_val, (1.0 - beta1) * g_val);
+                let v_val = fetch(v_slice, j);
+                *slot(v_slice, j) = beta2
+                    .mul_add(v_val, (1.0 - beta2) * g_val.powi(2));
+            }
 
-        // Update parameters
-        let mut p_guard = p.data.host_mut::<T>();
-        let p_data = &mut *p_guard;
-        for j in 0..p_data.len() {
-            let m_val = fetch(m_slice, j);
-            let v_val = fetch(v_slice, j);
-            let m_hat = m_val * m_hat_scale;
-            let v_hat = v_val * v_hat_scale;
-            *slot(p_data, j) -= lr * m_hat / (v_hat.sqrt() + eps);
-        }
+            // Bias correction, the same f64 scales the GPU kernel gets (#304)
+            let (m_hat_scale, v_hat_scale) = bias_correction_scales(self.betas, step);
+            let (m_hat_scale, v_hat_scale) = (T::from_f64(m_hat_scale), T::from_f64(v_hat_scale));
+
+            // Update parameters
+            let mut p_guard = data.host_mut::<T>();
+            let p_data = &mut *p_guard;
+            for j in 0..p_data.len() {
+                let m_val = fetch(m_slice, j);
+                let v_val = fetch(v_slice, j);
+                let m_hat = m_val * m_hat_scale;
+                let v_hat = v_val * v_hat_scale;
+                *slot(p_data, j) -= lr * m_hat / (v_hat.sqrt() + eps);
+            }
+            });
         });
     }
 }

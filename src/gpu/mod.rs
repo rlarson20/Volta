@@ -273,6 +273,6 @@ pub fn gpu_pool_stats() -> Option<(usize, usize)> {
 /// ```
 pub fn invalidate_all_tensor_caches(tensors: &[&crate::Tensor]) {
     for tensor in tensors {
-        tensor.borrow_mut().invalidate_gpu_cache();
+        tensor.invalidate_gpu_cache();
     }
 }

@@ -222,21 +222,19 @@ impl Muon {
         }
         super::assert_grad_lens("Muon", &self.params);
         for (param, velocity) in self.params.iter().zip(self.velocity.iter_mut()) {
-            let mut p = param.borrow_mut();
-            let Some(grad) = p.grad.clone() else {
+            let Some(grad) = param.grad_storage() else {
                 continue;
             };
-            // The step rewrites the parameter in place (S9).
-            p.bump_version();
             // Allocated on the parameter's first step, on its current device and dtype.
-            let velocity = velocity.get_or_insert_with(|| super::zeros_like(&p));
+            let velocity = velocity.get_or_insert_with(|| super::zeros_like(param));
 
             // The matrix view: [dim0, everything else]. A vector is (n, 1) and a scalar
             // is (1, 1).
-            let (rows, cols) = match p.shape.rank() {
+            let shape = param.shape();
+            let (rows, cols) = match shape.rank() {
                 0 => (1, 1),
-                1 => (p.shape.dim_at(0), 1),
-                _ => (p.shape.dim_at(0), p.shape.numel_from(1)),
+                1 => (shape.dim_at(0), 1),
+                _ => (shape.dim_at(0), shape.numel_from(1)),
             };
 
             // Only a real matrix is orthogonalized and shape-scaled.
@@ -260,63 +258,66 @@ impl Muon {
                 coeffs: [NS_A, NS_B, NS_C],
                 eps: NS_EPS,
             };
-            step.validate(p.data.len());
+            step.validate(param.borrow().data.len());
+            let on_gpu = param.device().is_gpu();
 
-            if p.device.is_gpu() {
-                RawTensor::gpu_muon_step(&mut p.data, &grad, velocity, &step)
-                    .expect("GPU Muon step failed: the parameter was not updated");
-                continue;
-            }
+            // The step rewrites the parameter in place (S9; `update_data` bumps the version).
+            param.update_data(|data| {
+                if on_gpu {
+                    RawTensor::gpu_muon_step(data, &grad, velocity, &step)
+                        .expect("GPU Muon step failed: the parameter was not updated");
+                    return;
+                }
 
-            dispatch_real!(p.data.dtype(), T => {
-            let widen = |v: f32| T::from_f64(f64::from(v));
-            let (lr, momentum, scale, eps) =
-                (widen(step.lr), widen(step.momentum), widen(step.scale), widen(step.eps));
-            let coeffs = step.coeffs.map(widen);
-            let grad = grad.host::<T>();
-            assert_eq!(
-                velocity.dtype(),
-                p.data.dtype(),
-                "Muon velocity dtype; convert the model before the optimizer's first step"
-            );
-            let mut velocity = velocity.host_mut::<T>();
-
-            // v ← momentum·v + g
-            for (v, &g) in velocity.iter_mut().zip(grad.iter()) {
-                *v = momentum.mul_add(*v, g);
-            }
-
-            // Nesterov looks one momentum step ahead: update = momentum·v + g
-            let mut update: Vec<T> = if step.nesterov {
-                velocity
-                    .iter()
-                    .zip(grad.iter())
-                    .map(|(&v, &g)| momentum * v + g)
-                    .collect()
-            } else {
-                velocity.to_vec()
-            };
-
-            if step.orthogonalize {
-                Self::newton_schulz_with(
-                    &mut update,
-                    step.rows,
-                    step.cols,
-                    step.ns_steps,
-                    coeffs,
-                    eps,
+                dispatch_real!(data.dtype(), T => {
+                let widen = |v: f32| T::from_f64(f64::from(v));
+                let (lr, momentum, scale, eps) =
+                    (widen(step.lr), widen(step.momentum), widen(step.scale), widen(step.eps));
+                let coeffs = step.coeffs.map(widen);
+                let grad = grad.host::<T>();
+                assert_eq!(
+                    velocity.dtype(),
+                    data.dtype(),
+                    "Muon velocity dtype; convert the model before the optimizer's first step"
                 );
-            }
+                let mut velocity = velocity.host_mut::<T>();
 
-            // w -= lr · scale · update
-            for (w, u) in p
-                .data
-                .host_mut::<T>()
-                .iter_mut()
-                .zip(&update)
-            {
-                *w -= lr * scale * *u;
-            }
+                // v ← momentum·v + g
+                for (v, &g) in velocity.iter_mut().zip(grad.iter()) {
+                    *v = momentum.mul_add(*v, g);
+                }
+
+                // Nesterov looks one momentum step ahead: update = momentum·v + g
+                let mut update: Vec<T> = if step.nesterov {
+                    velocity
+                        .iter()
+                        .zip(grad.iter())
+                        .map(|(&v, &g)| momentum * v + g)
+                        .collect()
+                } else {
+                    velocity.to_vec()
+                };
+
+                if step.orthogonalize {
+                    Self::newton_schulz_with(
+                        &mut update,
+                        step.rows,
+                        step.cols,
+                        step.ns_steps,
+                        coeffs,
+                        eps,
+                    );
+                }
+
+                // w -= lr · scale · update
+                for (w, u) in data
+                    .host_mut::<T>()
+                    .iter_mut()
+                    .zip(&update)
+                {
+                    *w -= lr * scale * *u;
+                }
+                });
             });
         }
     }

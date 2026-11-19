@@ -33,17 +33,16 @@ fn forward_shape_with_bias() {
 fn forward_value_with_known_weights() {
     // Build a deterministic Linear: y = xW + b with shape (1,2) input,
     // (2,3) weight, (3,) bias.
-    let mut layer = Linear::new(2, 3, true);
+    let layer = Linear::new(2, 3, true);
     // Override randomly initialized weights with known values.
-    {
-        let mut w = layer.weight.borrow_mut();
-        w.data = Storage::cpu(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-    }
-    {
-        let bias = layer.bias.as_mut().unwrap();
-        let mut b = bias.borrow_mut();
-        b.data = Storage::cpu(vec![10.0, 20.0, 30.0]);
-    }
+    layer
+        .weight
+        .replace_data(Storage::cpu(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
+    layer
+        .bias
+        .as_ref()
+        .unwrap()
+        .replace_data(Storage::cpu(vec![10.0, 20.0, 30.0]));
     let x = RawTensor::new(vec![1.0, 1.0], &[1, 2], false);
     let y = layer.forward(&x);
     // x @ W = [1*1+1*4, 1*2+1*5, 1*3+1*6] = [5, 7, 9]; + bias = [15, 27, 39]

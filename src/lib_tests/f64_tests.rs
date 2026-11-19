@@ -342,8 +342,9 @@ fn param_gradcheck(param: &Tensor, loss: impl Fn() -> Tensor) -> f64 {
     let analytic = grad.as_host::<f64>().expect("f64").to_vec();
     let _no_grad = no_grad();
     let nudge = |i: usize, delta: f64| {
-        let mut p = param.borrow_mut();
-        *crate::index::slot(p.data.as_host_mut::<f64>().expect("f64 param"), i) += delta;
+        param.update_data(|data| {
+            *crate::index::slot(data.as_host_mut::<f64>().expect("f64 param"), i) += delta;
+        });
     };
     let mut max_err: f64 = 0.0;
     for (i, &a) in analytic.iter().enumerate() {

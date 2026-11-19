@@ -170,18 +170,9 @@ pub trait Module {
     /// ```
     fn to_device(&mut self, device: Device) {
         for param in self.parameters() {
-            {
-                let mut p = param.borrow_mut();
-                // `Storage::to_device` panics when the GPU is unavailable rather than
-                // leaving the data on the CPU under a GPU label.
-                p.data = p.data.to_device(&device);
-                p.bump_version();
-                p.device = device.clone();
-            }
-            // `set_grad` moves an existing gradient onto the parameter's new device.
-            if let Some(g) = param.grad_storage() {
-                param.set_grad(g);
-            }
+            // Moves the data and any gradient. `Storage::to_device` panics when the GPU is
+            // unavailable rather than leaving the data on the CPU under a GPU label.
+            param.move_to_device(&device);
         }
     }
 
