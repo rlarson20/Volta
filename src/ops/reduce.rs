@@ -231,6 +231,7 @@ impl RawTensor {
     /// If the input's dtype is not a float (integer and bool tensors have no reduction
     /// kernel), or a GPU reduction kernel fails.
     #[must_use]
+    #[track_caller]
     pub fn reduce_op(self_t: &Tensor, op: ReduceOp) -> Tensor {
         let dtype = compute_dtype(|| format!("{op:?}"), &[self_t.dtype()]);
         let (data, shape, device) = {

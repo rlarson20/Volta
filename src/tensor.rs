@@ -1974,6 +1974,7 @@ impl Tensor {
     /// different devices, the promoted dtype is not a float, or the dtypes differ under
     /// [`DTypePolicy::Strict`](crate::DTypePolicy::Strict).
     #[must_use]
+    #[track_caller]
     pub fn add(&self, other: &Self) -> Self {
         RawTensor::binary_op(self, other, BinaryOp::Add)
     }
@@ -1985,6 +1986,7 @@ impl Tensor {
     /// different devices, the promoted dtype is not a float, or the dtypes differ under
     /// [`DTypePolicy::Strict`](crate::DTypePolicy::Strict).
     #[must_use]
+    #[track_caller]
     pub fn sub(&self, other: &Self) -> Self {
         RawTensor::binary_op(self, other, BinaryOp::Sub)
     }
@@ -1996,6 +1998,7 @@ impl Tensor {
     /// different devices, the promoted dtype is not a float, or the dtypes differ under
     /// [`DTypePolicy::Strict`](crate::DTypePolicy::Strict).
     #[must_use]
+    #[track_caller]
     pub fn elem_mul(&self, other: &Self) -> Self {
         RawTensor::binary_op(self, other, BinaryOp::Mul)
     }
@@ -2007,6 +2010,7 @@ impl Tensor {
     /// different devices, the promoted dtype is not a float, or the dtypes differ under
     /// [`DTypePolicy::Strict`](crate::DTypePolicy::Strict).
     #[must_use]
+    #[track_caller]
     pub fn div(&self, other: &Self) -> Self {
         RawTensor::binary_op(self, other, BinaryOp::Div)
     }
@@ -2019,6 +2023,7 @@ impl Tensor {
     /// different devices, the promoted dtype is not a float, or the dtypes differ under
     /// [`DTypePolicy::Strict`](crate::DTypePolicy::Strict).
     #[must_use]
+    #[track_caller]
     pub fn max_elem(&self, other: &Self) -> Self {
         RawTensor::binary_op(self, other, BinaryOp::Max)
     }
@@ -2030,6 +2035,7 @@ impl Tensor {
     /// different devices, the promoted dtype is not a float, or the dtypes differ under
     /// [`DTypePolicy::Strict`](crate::DTypePolicy::Strict).
     #[must_use]
+    #[track_caller]
     pub fn modulo(&self, other: &Self) -> Self {
         RawTensor::binary_op(self, other, BinaryOp::Mod)
     }
@@ -2040,6 +2046,7 @@ impl Tensor {
     /// As [`RawTensor::compare`]: if the shapes don't broadcast, the operands are on
     /// different devices, or the dtypes differ under [`DTypePolicy::Strict`](crate::DTypePolicy::Strict).
     #[must_use]
+    #[track_caller]
     pub fn lt(&self, other: &Self) -> Self {
         RawTensor::compare(self, other, CmpOp::Lt)
     }
@@ -2050,6 +2057,7 @@ impl Tensor {
     /// As [`RawTensor::compare`]: if the shapes don't broadcast, the operands are on
     /// different devices, or the dtypes differ under [`DTypePolicy::Strict`](crate::DTypePolicy::Strict).
     #[must_use]
+    #[track_caller]
     pub fn le(&self, other: &Self) -> Self {
         RawTensor::compare(self, other, CmpOp::Le)
     }
@@ -2060,6 +2068,7 @@ impl Tensor {
     /// As [`RawTensor::compare`]: if the shapes don't broadcast, the operands are on
     /// different devices, or the dtypes differ under [`DTypePolicy::Strict`](crate::DTypePolicy::Strict).
     #[must_use]
+    #[track_caller]
     pub fn gt(&self, other: &Self) -> Self {
         RawTensor::compare(self, other, CmpOp::Gt)
     }
@@ -2070,6 +2079,7 @@ impl Tensor {
     /// As [`RawTensor::compare`]: if the shapes don't broadcast, the operands are on
     /// different devices, or the dtypes differ under [`DTypePolicy::Strict`](crate::DTypePolicy::Strict).
     #[must_use]
+    #[track_caller]
     pub fn ge(&self, other: &Self) -> Self {
         RawTensor::compare(self, other, CmpOp::Ge)
     }
@@ -2081,6 +2091,7 @@ impl Tensor {
     /// As [`RawTensor::compare`]: if the shapes don't broadcast, the operands are on
     /// different devices, or the dtypes differ under [`DTypePolicy::Strict`](crate::DTypePolicy::Strict).
     #[must_use]
+    #[track_caller]
     pub fn elem_eq(&self, other: &Self) -> Self {
         RawTensor::compare(self, other, CmpOp::Eq)
     }
@@ -2091,6 +2102,7 @@ impl Tensor {
     /// As [`RawTensor::compare`]: if the shapes don't broadcast, the operands are on
     /// different devices, or the dtypes differ under [`DTypePolicy::Strict`](crate::DTypePolicy::Strict).
     #[must_use]
+    #[track_caller]
     pub fn elem_ne(&self, other: &Self) -> Self {
         RawTensor::compare(self, other, CmpOp::Ne)
     }
@@ -2176,6 +2188,7 @@ impl Tensor {
 
     /// Sum of all elements, as a scalar.
     #[must_use]
+    #[track_caller]
     pub fn sum(&self) -> Self {
         RawTensor::reduce_op(self, ReduceOp::Sum)
     }
@@ -2184,12 +2197,14 @@ impl Tensor {
     /// The gradient is split evenly over every element equal to the maximum (every NaN,
     /// when the maximum is NaN).
     #[must_use]
+    #[track_caller]
     pub fn max_reduce(&self) -> Self {
         RawTensor::reduce_op(self, ReduceOp::Max)
     }
 
     /// Mean of all elements, as a scalar.
     #[must_use]
+    #[track_caller]
     pub fn mean(&self) -> Self {
         RawTensor::reduce_op(self, ReduceOp::Mean)
     }
@@ -2200,6 +2215,7 @@ impl Tensor {
     /// As [`RawTensor::ternary_op`]: if the three shapes differ, the operands are on
     /// different devices, or the promoted dtype is not a float.
     #[must_use]
+    #[track_caller]
     pub fn mulacc(&self, y: &Self, z: &Self) -> Self {
         RawTensor::ternary_op(self, y, z, TernaryOp::MulAcc)
     }

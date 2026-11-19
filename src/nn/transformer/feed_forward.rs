@@ -52,6 +52,7 @@ impl FeedForward {
     /// # Panics
     /// If `dropout` is not in `[0, 1]`.
     #[must_use]
+    #[track_caller]
     pub fn new(embed_dim: usize, expansion_factor: usize, dropout: f32) -> Self {
         let intermediate_dim = embed_dim * expansion_factor;
 
@@ -69,6 +70,7 @@ impl FeedForward {
     ///
     /// Uses `expansion_factor`=4 and `dropout`=0.1
     #[must_use]
+    #[track_caller]
     pub fn default_config(embed_dim: usize) -> Self {
         Self::new(embed_dim, 4, 0.1)
     }
@@ -84,6 +86,7 @@ impl FeedForward {
     /// # Panics
     /// If `x` is not 3D, or its last dimension is not `embed_dim`.
     #[must_use]
+    #[track_caller]
     pub fn forward(&self, x: &Tensor) -> Tensor {
         let input_shape = x.borrow().shape.clone();
 

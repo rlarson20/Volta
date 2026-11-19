@@ -66,6 +66,7 @@ impl SequentialBuilder {
     /// number (unnamed layers use their index as the key prefix), or a name containing
     /// `.` (the key separator, so `"a.b"` collides with layer `"b"` nested in `"a"`).
     #[must_use]
+    #[track_caller]
     pub fn build(self) -> Sequential {
         let mut seen = std::collections::HashSet::new();
         for name in self.entries.iter().filter_map(|e| e.name.as_deref()) {
