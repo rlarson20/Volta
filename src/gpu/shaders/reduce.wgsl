@@ -183,6 +183,32 @@ fn max_first(
     }
 }
 
+// First pass of the largest magnitude (the Muon Frobenius norm's scale, #373): as
+// `max_first` on `abs(x)`, finished by `max_next`. A NaN input gives NaN.
+@compute @workgroup_size(256)
+fn absmax_first(
+    @builtin(local_invocation_id) lid: vec3<u32>,
+    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let g = group_id(wid, num_wg);
+    let base = g * PER_GROUP;
+    var best = Best(0.0, 0u);
+    for (var k: u32 = 0u; k < PER_THREAD; k = k + 1u) {
+        let i = base + lid.x + k * WG;
+        if (i < params.n) {
+            best = combine(best, Best(abs(ld_input(i)), 1u));
+        }
+    }
+    sh_val[lid.x] = best.v;
+    sh_cnt[lid.x] = best.c;
+    tree_max(lid.x);
+    if (lid.x == 0u && base < params.n) {
+        st_out(g, sh_val[0]);
+        out_count[g] = sh_cnt[0];
+    }
+}
+
 // Max of the partial (value, count) pairs from an earlier pass.
 @compute @workgroup_size(256)
 fn max_next(
