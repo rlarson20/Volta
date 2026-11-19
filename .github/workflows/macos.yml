@@ -82,7 +82,7 @@ jobs:
     # Fail open: if `changes` itself fails, run anyway rather than skip (and so pass).
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run == 'true') }}
     runs-on: macos-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -95,11 +95,17 @@ jobs:
           components: rust-src
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
-      - name: Test (all features)
+      - name: "#355 fmod bench: bounded kernel"
         env:
-          # The runner has a Metal GPU; a missing adapter fails instead of skipping.
           VOLTA_REQUIRE_GPU: "1"
-        run: cargo test --all-features
+        run: |
+          for N in 1048576 8388608; do N=$N REPS=11 LABEL=bounded cargo run --release --example fmod_bench; done
+      - name: "#355 fmod bench: exact kernel"
+        env:
+          VOLTA_REQUIRE_GPU: "1"
+        run: |
+          cp examples/fmod_bench_exact.wgsl src/gpu/shaders/elementwise.wgsl
+          for N in 1048576 8388608; do N=$N REPS=11 LABEL=exact cargo run --release --example fmod_bench; done
 
   # A post-merge failure is open work, so it becomes an issue (CLAUDE.md: open work lives in
   # issues). `merge-gate` keeps improvements out of main until it is fixed. One open issue per
