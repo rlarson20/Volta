@@ -1,5 +1,3 @@
-use crate::Linear;
-use crate::ReLU;
 use crate::io::StateDict;
 use crate::nn::{Layer, Module, insert_prefixed, load_child, sub_state};
 use crate::tensor::Tensor;
@@ -149,18 +147,5 @@ impl Sequential {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.layers.is_empty()
-    }
-}
-
-// Usage example
-#[allow(dead_code)]
-impl Sequential {
-    /// Example: a two-layer perceptron with a `ReLU` between.
-    fn build_mlp(input_dim: usize, hidden_dim: usize, output_dim: usize) -> Self {
-        Self::new(vec![
-            Box::new(Linear::new(input_dim, hidden_dim, true)),
-            Box::new(ReLU),
-            Box::new(Linear::new(hidden_dim, output_dim, true)),
-        ])
     }
 }

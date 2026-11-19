@@ -96,8 +96,8 @@ pub use tensor::{RawTensor, Tensor};
 
 pub use tensor::{
     DataLoader, bce_loss, bce_with_logits_loss, check_gradients, check_gradients_simple,
-    cross_entropy_loss, kl_divergence_gaussian, manual_seed, max_dim, mse_loss, new_tensor,
-    nll_loss, ones, rand, randn, randn_like, softmax, sum_dim, zeros,
+    cross_entropy_loss, kl_divergence_gaussian, manual_seed, max_dim, mse_loss, nll_loss, ones,
+    rand, randn, randn_like, softmax, sum_dim, zeros,
 };
 
 pub use data::{load_mnist_images, load_mnist_labels, normalize, to_one_hot, try_normalize};

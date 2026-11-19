@@ -16,6 +16,3 @@ pub(crate) fn trainable_input(shape: &[usize]) -> crate::tensor::Tensor {
     x.set_requires_grad(true);
     x
 }
-
-// assert_close.rs, gradcheck.rs, gradgradcheck.rs, param_test.rs and tensor.rs under
-// src/macros/ are empty and not declared as modules (tracked in #118).

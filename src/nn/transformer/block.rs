@@ -37,18 +37,6 @@ pub struct TransformerBlock {
     norm2: LayerNorm,
     /// Feed-forward sublayer.
     ffn: FeedForward,
-    /// Dropout probability, passed to the sublayers. Not applied by the block itself.
-    #[allow(dead_code)]
-    dropout: f32,
-    /// Model width.
-    #[allow(dead_code)]
-    embed_dim: usize,
-    /// Number of attention heads.
-    #[allow(dead_code)]
-    num_heads: usize,
-    /// Hidden width of the feed-forward network, as a multiple of `embed_dim`.
-    #[allow(dead_code)]
-    expansion_factor: usize,
 }
 
 impl TransformerBlock {
@@ -66,10 +54,6 @@ impl TransformerBlock {
             attention: MultiHeadAttention::new(embed_dim, num_heads, dropout),
             norm2: LayerNorm::new(vec![embed_dim]),
             ffn: FeedForward::new(embed_dim, expansion_factor, dropout),
-            dropout,
-            embed_dim,
-            num_heads,
-            expansion_factor,
         }
     }
 
@@ -152,10 +136,19 @@ mod tests {
 
     #[test]
     fn test_block_creation() {
-        let block = TransformerBlock::new(512, 8, 4, 0.1);
-        assert_eq!(block.embed_dim, 512);
-        assert_eq!(block.num_heads, 8);
-        assert_eq!(block.expansion_factor, 4);
+        // The sublayers carry the sizes: two `LayerNorm`s (gamma, beta), the FFN's
+        // `d -> 4d -> d` Linears (with bias) and four `d -> d` attention projections, of
+        // which only the output projection has a bias.
+        let (d, expansion) = (512, 4);
+        let block = TransformerBlock::new(d, 8, expansion, 0.1);
+        let numel: usize = block
+            .parameters()
+            .iter()
+            .map(|p| p.borrow().shape.iter().product::<usize>())
+            .sum();
+        let hidden = expansion * d;
+        let expected = 2 * 2 * d + (d * hidden + hidden) + (hidden * d + d) + (4 * d * d + d);
+        assert_eq!(numel, expected);
     }
 
     #[test]
