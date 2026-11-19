@@ -1,7 +1,7 @@
 //! GPU f16 and bf16 against the CPU in the same dtype (ADDENDUM §11 P8), for native f16
 //! (where the device has `SHADER_F16`), f16 forced through the packed emulation, and bf16
 //! (always packed): unary and binary ops, matmul, reductions, movement, convolutions,
-//! casts, comparisons and `where`, SGD/Adam/Muon steps, and an autocast MLP; plus Bool
+//! casts, comparisons and `where`, SGD/Muon steps, and an autocast MLP; plus Bool
 //! round trips and the dtypes the GPU refuses. Both sides compute in f32 and round each
 //! output, so values agree to the last bit or a rounding step; bounds are in epsilons of
 //! the dtype relative to `max(|cpu|, rms(cpu))`. Without an adapter every test returns.
@@ -12,7 +12,7 @@ use crate::gpu::set_f16_emulation;
 use crate::nn::{Layer, Module};
 use crate::ops::{BinaryOp, UnaryOp};
 use crate::{
-    Adam, Axis, Conv2d, ConvAlgo, DType, Device, Linear, Muon, PadValue, RawTensor, ReLU, SGD,
+    Axis, Conv2d, ConvAlgo, DType, Device, Linear, Muon, PadValue, RawTensor, ReLU, SGD,
     Sequential, Storage, Tensor, is_gpu_available,
 };
 use std::sync::{Mutex, MutexGuard};
@@ -417,27 +417,21 @@ fn gpu_half_cast_compare_where_match_cpu_exactly() {
     });
 }
 
-/// SGD with momentum, Adam and Muon step a half parameter on the GPU as on the CPU.
+/// SGD with momentum and Muon step a half parameter on the GPU as on the CPU. Adam
+/// refuses half parameters (#317).
 #[test]
 fn gpu_half_optimizers_match_cpu() {
     each_mode(|m| {
-        for name in ["sgd", "adam", "muon"] {
+        for name in ["sgd", "muon"] {
             let (pc, pg) = pair(values(12, 12), &[3, 4], m.dtype);
             let mut step: Vec<Box<dyn FnMut()>> = Vec::new();
             for p in [pc.clone(), pg.clone()] {
-                step.push(match name {
-                    "sgd" => {
-                        let mut o = SGD::new(vec![p], 0.0625, 0.875, 0.0);
-                        Box::new(move || o.step())
-                    }
-                    "adam" => {
-                        let mut o = Adam::new(vec![p], 0.007_812_5, (0.875, 0.999), 1e-4, 0.0);
-                        Box::new(move || o.step())
-                    }
-                    _ => {
-                        let mut o = Muon::new(vec![p], 0.02, 0.95, true, 5);
-                        Box::new(move || o.step())
-                    }
+                step.push(if name == "sgd" {
+                    let mut o = SGD::new(vec![p], 0.0625, 0.875, 0.0);
+                    Box::new(move || o.step())
+                } else {
+                    let mut o = Muon::new(vec![p], 0.02, 0.95, true, 5);
+                    Box::new(move || o.step())
                 });
             }
             for k in 0..3 {

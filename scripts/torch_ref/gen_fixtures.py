@@ -664,9 +664,9 @@ def group_half():
         w = leaf("embedding.weight", rl(5, 3))
         case("embedding", F.embedding(torch.tensor([1, 3, 1]), w), {"weight": w})
 
+        # Adam refuses half parameters in Volta (#317), so only SGD is recorded.
         for oname, make in [
             ("sgd", lambda ps: torch.optim.SGD(ps, lr=2**-4, momentum=0.875)),
-            ("adam", lambda ps: torch.optim.Adam(ps, lr=2**-7, betas=(0.875, 1 - 2**-10), eps=2**-14, weight_decay=2**-7)),
         ]:
             p = torch.randn(2, 3).to(dt).requires_grad_(True)
             t[f"{dname}.{oname}.init"] = p.detach().clone()
