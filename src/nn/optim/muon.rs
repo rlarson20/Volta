@@ -1,5 +1,7 @@
 use crate::error::OrPanic;
+use crate::index::fetch;
 use crate::ops::gpu_ops::MuonStep;
+use crate::ops::reduce::pairwise_sum_by;
 use crate::real::{Real, dispatch_real};
 use crate::storage::Storage;
 use crate::tensor::{RawTensor, Tensor};
@@ -15,6 +17,32 @@ const NS_B: f32 = -4.7750;
 const NS_C: f32 = 2.0315;
 /// Added to the Frobenius norm before dividing by it, so a zero gradient stays zero.
 const NS_EPS: f32 = 1e-7;
+
+/// The Frobenius norm of `x`, scaled by its largest magnitude `m` before squaring
+/// (`m * sqrt(sum((v / m)^2))`, a pairwise sum), so entries past `sqrt(T::MAX)` (about
+/// 1.8e19 in f32) don't overflow the sum to inf and zero the update (#322). An all-zero
+/// `x` is 0. With an infinite entry the scaling would give NaN, so that case keeps the
+/// plain sum of squares (inf), as the reference implementation does; a NaN entry gives
+/// NaN either way.
+fn frobenius_norm<T: Real>(x: &[T]) -> T {
+    let abs = |v: T| if v < T::ZERO { -v } else { v };
+    // `>` skips NaN entries; they reach the sum below.
+    let max = x
+        .iter()
+        .fold(T::ZERO, |m, &v| if abs(v) > m { abs(v) } else { m });
+    if max == T::ZERO || max == T::from_f64(f64::INFINITY) {
+        return pairwise_sum_by(x.len(), |i| {
+            let v = fetch(x, i);
+            v * v
+        })
+        .sqrt();
+    }
+    let sum = pairwise_sum_by(x.len(), |i| {
+        let v = fetch(x, i) / max;
+        v * v
+    });
+    max * sum.sqrt()
+}
 
 /// Muon: momentum, then an approximately orthogonalized update.
 ///
@@ -142,7 +170,7 @@ impl Muon {
             g.to_vec()
         };
 
-        let norm = x.iter().map(|&v| v * v).sum::<T>().sqrt();
+        let norm = frobenius_norm(&x);
         let inv = T::from_f64(1.0) / (norm + eps);
         for v in &mut x {
             *v *= inv;
@@ -346,6 +374,45 @@ mod tests {
         for v in data_after.to_host_f32() {
             assert!(v.abs() < 2.0);
         }
+    }
+
+    /// The parameter's change after one Muon step from `w = 0` with gradient `g * scale`.
+    fn muon_update(g: &[f32], shape: &[usize], scale: f32) -> Vec<f32> {
+        let x = RawTensor::new(vec![0.0; g.len()], shape, true);
+        x.set_grad(Storage::cpu(g.iter().map(|v| v * scale).collect()));
+        Muon::new(vec![x.clone()], 0.1, 0.9, true, 5).step();
+        x.data()
+    }
+
+    /// #322: Muon's update is scale invariant. A gradient near 1e20 squared to inf in
+    /// the unscaled Frobenius norm, the inverse norm was 0 and the weights did not move.
+    #[test]
+    fn muon_update_is_the_same_for_a_1e20_scaled_gradient() {
+        let g = [0.3, -1.2, 0.7, 2.1, -0.4, 0.9];
+        let unit = muon_update(&g, &[2, 3], 1.0);
+        assert!(unit.iter().any(|v| v.abs() > 0.05), "{unit:?}");
+        for scale in [1e20f32, 1e30] {
+            let scaled = muon_update(&g, &[2, 3], scale);
+            assert_eq!(scaled.len(), unit.len());
+            for (i, (s, u)) in scaled.iter().zip(&unit).enumerate() {
+                assert!((s - u).abs() < 1e-5, "scale {scale} [{i}]: {s} vs {u}");
+            }
+        }
+    }
+
+    /// The scaled norm agrees with the plain one where that doesn't overflow, is 0 for
+    /// zeros, and keeps the reference's inf and NaN.
+    #[test]
+    fn frobenius_norm_scales_by_the_largest_entry() {
+        assert_eq!(frobenius_norm(&[3.0f32, -4.0]), 5.0);
+        assert_eq!(frobenius_norm(&[0.0f32; 4]), 0.0);
+        assert_eq!(frobenius_norm(&[3e20f32, -4e20]), 5e20);
+        assert_eq!(frobenius_norm(&[1.0f32, f32::INFINITY]), f32::INFINITY);
+        assert!(frobenius_norm(&[1.0f32, f32::NAN]).is_nan());
+        assert!(frobenius_norm(&[f32::NAN, 1.0]).is_nan());
+        let xs: Vec<f64> = (0..1000).map(|i| f64::from(i) * 0.37 - 100.0).collect();
+        let plain = xs.iter().map(|v| v * v).sum::<f64>().sqrt();
+        assert!((frobenius_norm(&xs) - plain).abs() < 1e-12 * plain);
     }
 
     #[test]
