@@ -365,12 +365,15 @@ prs:
 		gh pr checks "$b" || true
 	fi
 
-# Breaking changes since the last crates.io release (#397), for the default (CPU-only) build
-# and with `gpu`. Needs `cargo install cargo-semver-checks --locked` and network access for
-# the baseline. semver.yml runs it on PRs into main (the release point) and by hand.
+# Breaking changes since the last crates.io release (#397). Needs `cargo install
+# cargo-semver-checks --locked` and network access for the baseline. semver.yml runs it on PRs
+# into main (the release point) and by hand.
+# The check builds the baseline with the same features as the current crate. 0.3.0 does not
+# build without `gpu` (its default was `gpu,accelerate`, and its imports assume `gpu`), so
+# only the `gpu` build can be compared with it. Once 0.4.0 is on crates.io, also run
+# `cargo semver-checks check-release --only-explicit-features` to cover the CPU-only build.
 # Check for semver breaks against the last published version
 semver:
-	cargo semver-checks check-release --only-explicit-features
 	cargo semver-checks check-release --only-explicit-features --features gpu
 
 # Resolve every direct dependency at its declared lower bound, then build (#443), so a bound
