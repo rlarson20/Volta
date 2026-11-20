@@ -1096,7 +1096,7 @@ fn test_scalar_sum() {
     let x = RawTensor::new(vec![42.0], &[1], false);
     let s = x.sum();
 
-    assert_eq!(s.borrow().shape, vec![1]);
+    assert_eq!(s.borrow().shape, Vec::<usize>::new());
     assert_eq!(
         s.borrow()
             .data
@@ -1114,7 +1114,7 @@ fn test_scalar_mean() {
     let x = RawTensor::new(vec![99.0], &[1], false);
     let m = x.mean();
 
-    assert_eq!(m.borrow().shape, vec![1]);
+    assert_eq!(m.borrow().shape, Vec::<usize>::new());
     assert_eq!(
         m.borrow()
             .data
@@ -1132,7 +1132,7 @@ fn test_scalar_max() {
     let x = RawTensor::new(vec![17.0], &[1], false);
     let m = x.max_reduce();
 
-    assert_eq!(m.borrow().shape, vec![1]);
+    assert_eq!(m.borrow().shape, Vec::<usize>::new());
     assert_eq!(
         m.borrow()
             .data

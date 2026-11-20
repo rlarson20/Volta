@@ -649,7 +649,7 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 
 **Choices made here:**
 - **`DTypePolicy`, `Promote` by default.** Promotion is the one implicit conversion in the library, against the fail-loudly rule (ADDENDUM §8), so `with_dtype_policy(DTypePolicy::Strict)` turns it off for a scope: mixed operands panic, naming the op and "under DTypePolicy::Strict". It is a thread-local with a `!Send` restoring guard, the shape of `DevicePolicy` and `no_grad`. Strict refuses only mixed operands; `i64 / i64` in f32 is `div`'s definition, not a mix.
-- **No scalars, so `[1]` tensors promote fully** (decision (a)). Volta has no zero-dim tensors or scalar ops, so `f16[n] * f32[1]` is f32, exactly torch's rule for a `[1]` tensor. Torch keeps `f16 * 2.0` in f16 through its wrapped-number rule; scalar ops with that rule are a TODO. The library's constants come from `constant_like` in the input's dtype, so only user code can widen a half model this way.
+- **No scalars, so `[1]` tensors promote fully** (decision (a)). Volta has no zero-dim tensors or scalar ops, so `f16[n] * f32[1]` is f32, exactly torch's rule for a `[1]` tensor. Torch keeps `f16 * 2.0` in f16 through its wrapped-number rule; scalar ops with that rule are a TODO. *(Superseded in part by #100: full reductions are rank-0 and zero-dim operands follow torch's rule; see "Full reductions are rank-0". A `[1]` tensor still promotes fully.)* The library's constants come from `constant_like` in the input's dtype, so only user code can widen a half model this way.
 - **Integer arithmetic stays out** (decision on P5, kept): `i64 + i64` promotes to i64 and panics "no i64 kernel", while `i64 / i64` works. The asymmetry is noted in TODO until integer kernels land.
 - `where`'s condition stays Bool-only; only its branches promote.
 
@@ -759,6 +759,14 @@ Seeds spread about 0.25 points, so a 5-seed mean has a standard error near 0.05;
 **Decision:** `load_safetensors`, `save_safetensors`, `load_safetensors_with_mapping`, `load_mnist_images` and `load_mnist_labels` return `volta::Result`. Opening, reading or writing a file is `VoltaError::Io`. A file that was read but can't be decoded (not a valid safetensors file, an entry dtype Volta has no equivalent for, a short or malformed MNIST header) is the new `VoltaError::Decode { path, key, detail }`, where `key` names the entry when one tensor is at fault and `detail` is the #377 `ErrorDetail` (`op` is the loader, `arg` is `"path"`). An entry whose bytes don't fit its shape and dtype keeps its existing error (`StateDataLength { key, .. }`, or `InvalidParameter` for a bool byte), now returned as is instead of wrapped in `io::Error::other`. A mapper failure is the mapper's own `VoltaError`. A safetensors serialization failure after validation is `OpError`, since the caller has nothing to fix.
 
 **Why:** with `std::io::Result`, a missing file, a file that isn't safetensors, and a bad tensor shape were all `io::Error` and told apart only by message, and the key was lost (#136 item 2, R37). Breaking, before `main`.
+
+---
+
+### Full reductions are rank-0; zero-dim operands promote like torch (#100)
+
+**Decision:** `sum`, `mean` and `max` over every element, the losses built on them, and a 1-D dot product return a rank-0 tensor (shape `[]`, one element), as PyTorch does; before, they returned `[1]`, so `x.sum()` and `x.sum_dim(0).sum_dim(0)` disagreed on rank. Promotion now follows `torch.result_type` for zero-dim operands too (`DType::result_type`): a rank-0 operand changes the result only when it is a float and every dimensioned operand is integer or bool, so `f16[n] * f32[]` stays f16 while `f16[n] * f32[1]` is still f32. The rule is pinned against all 64 ordered dtype pairs from torch 2.15.0. On the GPU, the same-shape binary kernels also accept a "flat" broadcast (equal element counts and a broadcast shape of that count, such as `[] * [1]`), because a reduction times a `[1]` constant would otherwise fall into the #60 broadcast gap under `Strict`.
+
+**Why:** rank was a needless divergence from torch's shapes. Promotion had to change with it: treating the new rank-0 losses as dimensioned would widen a half model whenever user code multiplies a half tensor by an f32 loss, which is the case torch's zero-dim rule exists for. Not changed here: ops that refuse rank-0 inputs (softmax over an axis, matmul on `[]`) still refuse them, and a rank-0 CPU tensor does not get torch's CPU-scalar device exception. Breaking, before `main`.
 
 ---
 

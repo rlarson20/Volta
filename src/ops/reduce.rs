@@ -198,7 +198,8 @@ pub(crate) fn pairwise_sum<T: Real>(xs: &[T]) -> T {
 impl RawTensor {
     /// Apply a reduction operation that collapses tensor to scalar
     ///
-    /// All reduction ops produce a shape \[1\] output.
+    /// Every full reduction produces a rank-0 output: shape `[]`, one element, as in
+    /// PyTorch (#100).
     ///
     /// # Panics
     /// If the input's dtype is not a float (integer and bool tensors have no reduction
@@ -258,10 +259,11 @@ impl RawTensor {
             }
         };
 
+        // A full reduction is rank 0 (shape `[]`, one element), as in PyTorch (#100).
         edge(
             [self_t.clone()],
             storage,
-            Shape::derived(vec![1]),
+            Shape::derived(vec![]),
             device,
             grad_fn,
         )
