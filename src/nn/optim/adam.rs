@@ -5,6 +5,7 @@ use crate::storage::Storage;
 use crate::tensor::Tensor;
 
 /// Adam optimizer (Kingma & Ba): per-parameter step sizes from running first and second moments of the gradient.
+#[derive(Debug)]
 pub struct Adam {
     /// Parameters being optimized.
     pub(super) params: Vec<Tensor>,
@@ -23,6 +24,7 @@ pub struct Adam {
 }
 
 /// One parameter's moment estimates and step count.
+#[derive(Debug)]
 struct AdamState {
     /// First-moment estimate, on the parameter's device.
     m: Storage,

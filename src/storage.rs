@@ -63,6 +63,13 @@ mod host_buf {
         /// Booleans.
         Bool(Arc<[bool]>),
     }
+
+    /// The dtype and length, not the values.
+    impl std::fmt::Debug for HostBuf {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "HostBuf({} elements, {})", self.len(), self.dtype())
+        }
+    }
 }
 
 pub(crate) use host_buf::HostBuf;
@@ -172,7 +179,7 @@ mod sealed {
 
     /// A value only this crate can build: the private field keeps other crates from
     /// constructing one, so they cannot call the methods that take it.
-    #[derive(Clone, Copy)]
+    #[derive(Debug, Clone, Copy)]
     pub struct Internal(());
 
     /// The one `Internal` value.
@@ -1056,12 +1063,12 @@ impl PartialEq<Storage> for Vec<f32> {
 impl std::fmt::Debug for Storage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.0 {
-            Repr::Cpu(buf) => write!(f, "Storage::Cpu({} elements, {})", buf.len(), buf.dtype()),
+            Repr::Cpu(buf) => write!(f, "Storage(cpu, {} elements, {})", buf.len(), buf.dtype()),
             #[cfg(feature = "gpu")]
             Repr::Gpu(shared) => {
                 write!(
                     f,
-                    "Storage::Gpu({} elements, {})",
+                    "Storage(gpu, {} elements, {})",
                     shared.buffer.len(),
                     shared.buffer.dtype()
                 )
@@ -1279,7 +1286,7 @@ mod tests {
         let s = Storage::from_typed(vec![f16::from_f32(1.0), f16::from_f32(2.0)]).to_device(&gpu);
         assert_eq!(
             format!("{s:?}"),
-            format!("Storage::Gpu(2 elements, {})", DType::F16)
+            format!("Storage(gpu, 2 elements, {})", DType::F16)
         );
     }
 

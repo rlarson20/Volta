@@ -397,6 +397,7 @@ pub fn no_grad() -> NoGradGuard {
 /// `!Send`: the depth counter is thread-local, so a guard dropped on another thread would
 /// end that thread's scope and leave this one's open. `tests/compile_fail/guards_not_send.rs`
 /// pins it.
+#[derive(Debug)]
 pub struct NoGradGuard {
     /// Makes the guard `!Send` (and `!Sync`).
     _not_send: PhantomData<*const ()>,
@@ -645,6 +646,7 @@ impl GradSnapshot {
 ///
 /// This is the only type with a `backward` method, so backward can't start from a
 /// non-scalar or an untracked tensor. Get one with [`Tensor::into_loss`].
+#[derive(Debug)]
 pub struct ScalarLoss(Tensor);
 
 impl Tensor {

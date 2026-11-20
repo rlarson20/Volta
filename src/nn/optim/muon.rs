@@ -61,6 +61,7 @@ fn frobenius_norm<T: Real>(x: &[T]) -> T {
 ///
 /// Parameters may live on the CPU or the GPU. A GPU parameter's momentum, Newton-Schulz,
 /// and update all run on the device, with no host round-trip.
+#[derive(Debug)]
 pub struct Muon {
     /// Parameters being optimized.
     pub(super) params: Vec<Tensor>,

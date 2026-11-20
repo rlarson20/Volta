@@ -16,6 +16,7 @@ use std::io::{self, IsTerminal, Write};
 /// On a terminal the bar redraws one stderr line, and only when the shown percentage or
 /// the filled width changes. When stderr is not a terminal (redirected to a file or a
 /// pipe) nothing is drawn until [`ProgressBar::finish`], which writes the final line once.
+#[derive(Debug)]
 pub struct ProgressBar {
     /// Number of steps that make a full bar.
     total: usize,

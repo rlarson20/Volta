@@ -3,6 +3,7 @@ use crate::nn::{Layer, Module};
 use crate::tensor::Tensor;
 
 /// Logistic function `1 / (1 + exp(-x))`.
+#[derive(Debug, Clone, Copy)]
 pub struct Sigmoid;
 
 impl Module for Sigmoid {

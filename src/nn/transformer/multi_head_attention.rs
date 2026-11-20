@@ -31,6 +31,7 @@ use crate::tensor::Tensor;
 /// # use volta::nn::MultiHeadAttention;
 /// let mha = MultiHeadAttention::new(512, 8, 0.1);
 /// ```
+#[derive(Debug)]
 pub struct MultiHeadAttention {
     /// Model width.
     embed_dim: usize,

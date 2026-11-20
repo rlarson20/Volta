@@ -10,6 +10,7 @@ use crate::tensor::{RawTensor, Tensor};
 /// The state and arithmetic `BatchNorm1d` and `BatchNorm2d` share (#119). Each wrapper
 /// checks its input's rank and lays it out as a 2-D tensor with the channels on one axis
 /// and every value of a channel on the other, then calls [`BatchNorm::normalize`].
+#[derive(Debug)]
 struct BatchNorm {
     /// Number of channels `C`.
     num_features: usize,
@@ -205,6 +206,7 @@ impl BatchNorm {
 ///
 /// A half (f16/bf16) input is normalized in f32 and returned in its own dtype, with f32
 /// or half parameters, as PyTorch's half kernels accumulate in f32.
+#[derive(Debug)]
 pub struct BatchNorm2d {
     /// Parameters, running statistics and mode.
     core: BatchNorm,
@@ -270,6 +272,7 @@ impl BatchNorm2d {
 ///
 /// A half (f16/bf16) input is normalized in f32 and returned in its own dtype, with f32
 /// or half parameters, as PyTorch's half kernels accumulate in f32.
+#[derive(Debug)]
 pub struct BatchNorm1d {
     /// Parameters, running statistics and mode.
     core: BatchNorm,

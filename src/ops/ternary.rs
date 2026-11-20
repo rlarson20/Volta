@@ -8,7 +8,7 @@ use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
 
 /// Ternary operations: three inputs, one output
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TernaryOp {
     /// `x * y + z`, fused.

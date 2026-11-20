@@ -30,6 +30,7 @@ use crate::tensor::Tensor;
 /// let y = gelu.forward(&x);
 /// // y ≈ [0.8413, -0.1588, 0.0]
 /// ```
+#[derive(Debug, Clone, Copy)]
 pub struct GELU;
 
 impl GELU {

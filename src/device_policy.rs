@@ -109,6 +109,7 @@ pub fn with_device_policy(policy: DevicePolicy) -> DevicePolicyGuard {
 /// `!Send`: the policy is thread-local, so a guard dropped on another thread would set
 /// that thread's policy and leave this one's changed. `tests/compile_fail/guards_not_send.rs`
 /// pins it.
+#[derive(Debug)]
 pub struct DevicePolicyGuard {
     /// The policy to restore.
     prev: DevicePolicy,

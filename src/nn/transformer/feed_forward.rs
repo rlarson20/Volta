@@ -27,6 +27,7 @@ use crate::tensor::Tensor;
 /// # use volta::nn::FeedForward;
 /// let ffn = FeedForward::new(512, 4, 0.1);
 /// ```
+#[derive(Debug)]
 pub struct FeedForward {
     /// First projection, `embed_dim` to `embed_dim * expansion_factor`.
     expand: Linear,

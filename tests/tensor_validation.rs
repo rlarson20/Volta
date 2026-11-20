@@ -44,8 +44,7 @@ fn dataloader_rejects_zero_size_shapes() {
 #[test]
 fn dataloader_errors_name_the_op_and_argument() {
     let err = DataLoader::try_new(vec![0.0; 4], vec![0.0; 4], &[1], &[0], 2, true)
-        .err()
-        .expect("a zero target dimension is refused");
+        .expect_err("a zero target dimension is refused");
     let detail = err.detail().expect("InvalidParameter carries a detail");
     assert_eq!(
         (detail.op, detail.arg),

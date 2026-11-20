@@ -362,6 +362,7 @@ pub fn with_dtype_policy(policy: DTypePolicy) -> DTypePolicyGuard {
 /// Restores the previous dtype policy on drop. Made by [`with_dtype_policy`].
 ///
 /// `!Send`, like `DevicePolicyGuard`: the policy is thread-local.
+#[derive(Debug)]
 pub struct DTypePolicyGuard {
     /// The policy to restore.
     prev: DTypePolicy,

@@ -45,6 +45,13 @@ pub struct GpuBuffer {
     pool: Option<Arc<BufferPool>>,
 }
 
+/// The length and dtype, not the device memory.
+impl std::fmt::Debug for GpuBuffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "GpuBuffer({} elements, {})", self.len, self.dtype)
+    }
+}
+
 /// Bytes `len` elements of `dtype` occupy on the GPU (16-bit types padded to a word).
 ///
 /// # Panics

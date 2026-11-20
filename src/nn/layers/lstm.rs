@@ -13,6 +13,7 @@ use crate::tensor::{RawTensor, Tensor};
 /// - o = `sigmoid(W_io @ x + W_ho @ h + b_o)`  (output gate)
 /// - `c_next` = f * c + i * g                  (new cell state)
 /// - `h_next` = o * `tanh(c_next)`               (new hidden state)
+#[derive(Debug)]
 pub struct LSTMCell {
     /// Width of the hidden and cell state.
     hidden_size: usize,

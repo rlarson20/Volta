@@ -30,7 +30,7 @@ use std::rc::Rc;
 /// (needed for computation graphs) while still allowing mutation (for gradient accumulation).
 ///
 /// Single-threaded by design (DECISIONS.md, "Stay synchronous").
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Tensor {
     /// The shared node; private so downstream code cannot reach `RawTensor`'s fields.
     inner: Rc<RefCell<RawTensor>>,
@@ -613,11 +613,20 @@ impl Clone for RawTensor {
 impl std::fmt::Debug for RawTensor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Tensor")
-            .field("shape", &self.shape)
+            .field("shape", &self.shape.truncate_rank())
+            .field("dtype", &self.data.dtype())
             .field("requires_grad", &self.requires_grad)
             .field("has_grad", &self.grad.is_some())
             .field("device", &self.device)
             .finish_non_exhaustive()
+    }
+}
+
+/// The tensor's shape, dtype, device and gradient state, not its values (#116): the
+/// `RawTensor` behind the handle, without the `Rc<RefCell<..>>` wrapping.
+impl std::fmt::Debug for Tensor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&*self.inner.borrow(), f)
     }
 }
 
@@ -2510,6 +2519,21 @@ pub struct DataLoader {
     current: usize,
     /// If set, each batch is moved to this device (GPU prefetch).
     device: Option<crate::device::Device>,
+}
+
+/// The shapes, sizes and position, not the samples.
+impl std::fmt::Debug for DataLoader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DataLoader")
+            .field("samples", &self.indices.len())
+            .field("data_shape", &self.data_shape)
+            .field("target_shape", &self.target_shape)
+            .field("batch_size", &self.batch_size)
+            .field("shuffle", &self.shuffle)
+            .field("current", &self.current)
+            .field("device", &self.device)
+            .finish_non_exhaustive()
+    }
 }
 
 impl DataLoader {

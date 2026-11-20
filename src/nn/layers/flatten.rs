@@ -7,6 +7,7 @@ use crate::tensor::Tensor;
 /// Assumes the first dimension is the batch dimension and flattens all subsequent dimensions.
 /// Input shape: (B, D1, D2, ...)
 /// Output shape: (B, D1 * D2 * ...)
+#[derive(Debug, Clone, Copy)]
 pub struct Flatten;
 
 impl Flatten {

@@ -412,7 +412,7 @@ fn apply_movement_forward<T: Copy, M: ForwardIndexMapper>(
 ///
 /// These operations don't modify data values, only how they're indexed.
 /// Gradients must "undo" these operations during backpropagation.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum MovementOp {
     /// Change the shape, keeping element order.

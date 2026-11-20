@@ -10,6 +10,7 @@ use crate::tensor::{RawTensor, Tensor};
 ///
 /// Computes: y = xW + b
 /// where x is (batch, `in_features`), W is (`in_features`, `out_features`), b is (`out_features`)
+#[derive(Debug)]
 pub struct Linear {
     /// Weight, shape `[in_features, out_features]`.
     pub weight: Tensor,

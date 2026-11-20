@@ -16,6 +16,17 @@ pub struct Sequential {
     pub(crate) layers: Vec<LayerEntry>,
 }
 
+/// The layer names (`None` for an unnamed layer) and the parameter count; `dyn Layer` has
+/// no `Debug`.
+impl std::fmt::Debug for Sequential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Sequential")
+            .field("layers", &self.layer_names())
+            .field("parameters", &self.parameters().len())
+            .finish()
+    }
+}
+
 /// The prefix layer `i` loads from: a named layer reads its name's entries, and its
 /// index's if the state dict has none under the name.
 fn load_prefix(entry: &LayerEntry, i: usize, plan: &LoadPlan<'_>) -> String {
