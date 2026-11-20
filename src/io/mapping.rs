@@ -149,10 +149,10 @@ impl StateDictMapper {
     /// `name` is empty) from PyTorch's `[out, in]` to Volta's `[in, out]`.
     ///
     /// Unlike [`StateDictMapper::transpose`], a missing key or a non-2-D tensor is an
-    /// error, not a no-op: the caller said this layer is a `Linear`.
-    ///
-    /// # Panics
-    /// When the mapper runs, if the key is missing or the tensor is not 2-D.
+    /// error, not a no-op: the caller said this layer is a `Linear`. The check runs when
+    /// the mapper runs, not here: [`StateDictMapper::try_apply`] and
+    /// [`StateDictMapper::try_map`] return [`VoltaError::InvalidParameter`], and
+    /// [`StateDictMapper::apply`] and [`StateDictMapper::map`] panic at their caller.
     pub fn transpose_linear(mut self, name: impl Into<String>) -> Self {
         let name = name.into();
         let key = if name.is_empty() {
@@ -163,15 +163,19 @@ impl StateDictMapper {
 
         self.transformations
             .push(Box::new(move |state: &mut StateDict| {
-                let tensor_data = state
-                    .get_mut(&key)
-                    .unwrap_or_else(|| panic!("transpose_linear: no key {key:?}"));
-                assert_eq!(
-                    tensor_data.shape.len(),
-                    2,
-                    "transpose_linear: {key:?} has shape {:?}, not a 2-D Linear weight",
-                    tensor_data.shape
-                );
+                // An error, not a panic: a panic here would run inside this boxed closure,
+                // at `apply` time, and report this file instead of the caller's (#260).
+                let Some(tensor_data) = state.get_mut(&key) else {
+                    return Err(VoltaError::InvalidParameter(format!(
+                        "transpose_linear: no key {key:?}"
+                    )));
+                };
+                if tensor_data.shape.len() != 2 {
+                    return Err(VoltaError::InvalidParameter(format!(
+                        "transpose_linear: {key:?} has shape {:?}, not a 2-D Linear weight",
+                        tensor_data.shape
+                    )));
+                }
                 transpose_2d(tensor_data);
                 Ok(())
             }));
@@ -254,8 +258,9 @@ impl StateDictMapper {
     ///
     /// # Errors
     /// [`VoltaError::StateKeyCollision`] if a renaming step would give two entries the
-    /// same name. That step leaves `state` as it was, but the steps before it have
-    /// already been applied.
+    /// same name, or [`VoltaError::InvalidParameter`] if a
+    /// [`StateDictMapper::transpose_linear`] key is missing or not 2-D. That step leaves
+    /// `state` as it was, but the steps before it have already been applied.
     pub fn try_apply(&self, state: &mut StateDict) -> Result<()> {
         for transform in &self.transformations {
             transform(state)?;
@@ -267,6 +272,7 @@ impl StateDictMapper {
     ///
     /// # Panics
     /// Wherever [`StateDictMapper::try_apply`] returns an error.
+    #[track_caller]
     pub fn apply(&self, state: &mut StateDict) {
         if let Err(e) = self.try_apply(state) {
             panic!("StateDictMapper::apply: {e}");
@@ -287,6 +293,7 @@ impl StateDictMapper {
     /// # Panics
     /// Wherever [`StateDictMapper::try_map`] returns an error.
     #[must_use]
+    #[track_caller]
     pub fn map(&self, state: StateDict) -> StateDict {
         self.try_map(state).or_panic("StateDictMapper::map")
     }
@@ -372,6 +379,7 @@ impl Default for StateDictMapper {
 /// # Panics
 /// If a named layer has no `{name}.weight` key or it is not 2-D.
 #[must_use]
+#[track_caller]
 pub fn load_pytorch_linear_weights(state: StateDict, linear_layers: &[&str]) -> StateDict {
     linear_layers
         .iter()
@@ -392,6 +400,7 @@ pub fn load_pytorch_linear_weights(state: StateDict, linear_layers: &[&str]) -> 
 /// # Panics
 /// If a named layer has no `{name}.weight` key after stripping, or it is not 2-D.
 #[must_use]
+#[track_caller]
 pub fn load_huggingface_weights(
     state: StateDict,
     model_prefix: &str,
@@ -773,6 +782,20 @@ mod tests {
                 .to_vec_as::<f32>()
                 .unwrap(),
             vec![1.0, 2.0, 3.0, 4.0]
+        );
+    }
+
+    /// #260: the `try_` form returns the missing key as an error, leaving `state` as it was.
+    #[test]
+    fn test_transpose_linear_missing_key_is_an_error() {
+        let state = create_test_state();
+        let err = StateDictMapper::new()
+            .transpose_linear("fc9")
+            .try_map(state)
+            .expect_err("fc9.weight is missing");
+        assert!(
+            matches!(&err, VoltaError::InvalidParameter(m) if m.contains("\"fc9.weight\"")),
+            "{err}"
         );
     }
 

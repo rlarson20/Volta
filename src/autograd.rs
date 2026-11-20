@@ -281,6 +281,7 @@ impl GradFn {
 /// # Panics
 /// If the inputs are on different devices, under `DevicePolicy::Strict` when GPU inputs
 /// produced a CPU output, or if CPU inputs produced a GPU output (an op bug).
+#[track_caller]
 pub(crate) fn edge(
     inputs: impl AsRef<[Tensor]>,
     mut data: Storage,
@@ -350,6 +351,7 @@ pub(crate) fn edge(
 ///
 /// # Panics
 /// If two inputs are on different devices.
+#[track_caller]
 fn check_one_device(inputs: &[Tensor], first: &Device, grad: &GradFn) {
     if inputs.iter().skip(1).any(|t| t.borrow().device != *first) {
         let devices: Vec<Device> = inputs.iter().map(Tensor::device).collect();
@@ -451,6 +453,7 @@ impl RawTensor {
     /// 3. For each op output, call its `grad_fn` on the gradient this pass gave it
     /// 4. Add each parent's contribution: into `grad` for a leaf, into the pass's own
     ///    table for an op output (which keeps no `grad`, as in PyTorch)
+    #[track_caller]
     pub(crate) fn run_backward(tensor_ref: &Tensor) {
         /// A step of the iterative post-order DFS that builds the topological order.
         enum Action {
@@ -663,6 +666,7 @@ impl ScalarLoss {
     /// device move. PyTorch raises the same "modified by an inplace operation" error. Ops
     /// whose gradient doesn't depend on an input's values (`add`, `sum`, `reshape`) don't
     /// check it.
+    #[track_caller]
     pub fn backward(&self) {
         RawTensor::run_backward(&self.0);
     }
@@ -672,6 +676,7 @@ impl ScalarLoss {
     /// # Panics
     /// Never in practice: `into_loss` guarantees exactly one element.
     #[must_use]
+    #[track_caller]
     pub fn item(&self) -> f32 {
         self.0
             .data()

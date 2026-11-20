@@ -40,6 +40,7 @@ impl PixelShuffle {
     /// # Panics
     /// If `upscale_factor` is 0.
     #[must_use]
+    #[track_caller]
     pub fn new(upscale_factor: usize) -> Self {
         assert!(
             upscale_factor > 0,
@@ -67,6 +68,11 @@ impl Module for PixelShuffle {
 }
 
 impl Layer for PixelShuffle {
+    /// Rearranges `(B, C*r^2, H, W)` into `(B, C, H*r, W*r)`.
+    ///
+    /// # Panics
+    /// If `x` is not 4D, or its channels are not divisible by `upscale_factor^2`.
+    #[track_caller]
     fn forward(&self, x: &Tensor) -> Tensor {
         let x_ref = x.borrow();
         let shape = &x_ref.shape;

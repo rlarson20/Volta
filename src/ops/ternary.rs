@@ -146,6 +146,7 @@ impl RawTensor {
     /// - If the operands are on different devices, or the promoted dtype is not a float
     ///   (for `Where`, the dtype of the two branches).
     #[must_use]
+    #[track_caller]
     pub fn ternary_op(x: &Tensor, y: &Tensor, z: &Tensor, op: TernaryOp) -> Tensor {
         match op {
             TernaryOp::MulAcc => {

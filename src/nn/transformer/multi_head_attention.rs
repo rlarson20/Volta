@@ -59,6 +59,7 @@ impl MultiHeadAttention {
     /// # Panics
     /// `embed_dim` must be divisible by `num_heads`, and `dropout` must be in `[0, 1]`
     #[must_use]
+    #[track_caller]
     pub fn new(embed_dim: usize, num_heads: usize, dropout: f32) -> Self {
         assert!(
             embed_dim.is_multiple_of(num_heads),
@@ -93,6 +94,7 @@ impl MultiHeadAttention {
     /// If `x` is not [batch, `seq_len`, `embed_dim`] or `attention_mask` has an unsupported
     /// shape (see [`MultiHeadAttention::forward_qkv`]).
     #[must_use]
+    #[track_caller]
     pub fn forward(&self, x: &Tensor, causal: bool, attention_mask: Option<&Tensor>) -> Tensor {
         self.forward_qkv(x, x, x, causal, attention_mask)
     }
@@ -119,6 +121,7 @@ impl MultiHeadAttention {
     /// `key` and `value` differ in length, or `attention_mask` has another shape than the
     /// ones above. A per-sample `[batch, L, S]` mask is refused rather than guessed at.
     #[must_use]
+    #[track_caller]
     pub fn forward_qkv(
         &self,
         query: &Tensor,
@@ -236,6 +239,7 @@ impl MultiHeadAttention {
     /// Scaled dot-product attention over `[batch, num_heads, len, head_dim]` tensors
     /// (query length `L`, key/value length `S`), with an optional causal mask, an
     /// optional additive mask, and dropout on the attention weights in training mode.
+    #[track_caller]
     fn apply_attention(
         &self,
         q: &Tensor,

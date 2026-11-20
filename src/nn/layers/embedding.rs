@@ -61,6 +61,7 @@ impl Embedding {
     /// # Panics
     /// If `vocab_size` or `embedding_dim` is zero.
     #[must_use]
+    #[track_caller]
     pub fn new(vocab_size: usize, embedding_dim: usize) -> Self {
         assert!(vocab_size > 0, "vocab_size must be positive");
         assert!(embedding_dim > 0, "embedding_dim must be positive");
@@ -90,6 +91,7 @@ impl Embedding {
     ///
     /// # Panics
     /// If `indices` is not I64 or I32, or an index is negative or `>= vocab_size`.
+    #[track_caller]
     fn rows(&self, indices: &Tensor) -> Vec<usize> {
         let s = indices.borrow();
         let wide: Vec<i64> = match s.data.dtype() {
@@ -111,19 +113,19 @@ impl Embedding {
                  to_dtype(DType::I64)"
             ),
         };
-        wide.into_iter()
-            .map(|i| {
-                usize::try_from(i)
-                    .ok()
-                    .filter(|&r| r < self.vocab_size)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "Embedding: index {i} out of range for vocab_size {}",
-                            self.vocab_size
-                        )
-                    })
-            })
-            .collect()
+        // A loop, not a closure: a panic inside a closure reports the closure's location,
+        // not the caller's (`#[track_caller]` stops at closures).
+        let mut rows = Vec::with_capacity(wide.len());
+        for i in wide {
+            match usize::try_from(i) {
+                Ok(r) if r < self.vocab_size => rows.push(r),
+                _ => panic!(
+                    "Embedding: index {i} out of range for vocab_size {}",
+                    self.vocab_size
+                ),
+            }
+        }
+        rows
     }
 }
 
@@ -134,6 +136,7 @@ impl Layer for Embedding {
     ///
     /// # Panics
     /// If `indices` is not I64 or I32, or an index is negative or `>= vocab_size`.
+    #[track_caller]
     fn forward(&self, indices: &Tensor) -> Tensor {
         let rows = self.rows(indices);
         let weight_borrowed = self.weight.borrow();
