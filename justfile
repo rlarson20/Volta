@@ -365,6 +365,14 @@ prs:
 		gh pr checks "$b" || true
 	fi
 
+# Breaking changes since the last crates.io release (#397), for the default (CPU-only) build
+# and with `gpu`. Needs `cargo install cargo-semver-checks --locked` and network access for
+# the baseline. semver.yml runs it on PRs into main (the release point) and by hand.
+# Check for semver breaks against the last published version
+semver:
+	cargo semver-checks check-release --only-explicit-features
+	cargo semver-checks check-release --only-explicit-features --features gpu
+
 # Resolve every direct dependency at its declared lower bound, then build (#443), so a bound
 # in Cargo.toml that can never resolve (as `log = "0.4"` did under wgpu's `^0.4.29`) fails
 # here instead of going unnoticed. Only the resolve needs the nightly; the check runs on
