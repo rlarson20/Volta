@@ -326,7 +326,8 @@ impl RawTensor {
                 edge(
                     [self_t.clone(), other.clone()],
                     Storage::from_compute(dtype, vec![sum]),
-                    Shape::derived(vec![1]),
+                    // A dot product is rank 0, as in PyTorch (#100).
+                    Shape::derived(vec![]),
                     Device::CPU,
                     GradFn::MatMul(MatMulGradFn::vector()),
                 )
