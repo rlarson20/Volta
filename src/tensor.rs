@@ -79,6 +79,12 @@ impl Tensor {
         self.inner.as_ptr()
     }
 
+    /// This tensor's storage, for a `GradFn::backward` that builds its gradient with tensor
+    /// ops (#268): a refcount bump, and the handle is dropped.
+    pub(crate) fn into_grad_storage(self) -> crate::storage::Storage {
+        self.inner.borrow().data.clone()
+    }
+
     /// Whether `self` and `other` are handles to the same tensor (a `clone()` of a
     /// `Tensor` shares it), not merely equal values. A weight tied between two layers
     /// is the same tensor in both.
@@ -741,26 +747,6 @@ impl RawTensor {
         Self::new_with_storage(Storage::cpu(data), shape, Device::CPU, requires_grad)
     }
 
-    /// CPU gradient (no grad of its own) of `dtype` from a kernel's `T` result and an
-    /// already-validated `Shape`: the typed twin of [`Self::from_shape`] for backward code,
-    /// rounded to a half dtype like any kernel output (`Storage::from_compute`).
-    ///
-    /// # Panics
-    ///
-    /// If `data.len()` != `shape.numel()`, or `dtype` cannot hold a `T` result.
-    pub(crate) fn from_shape_compute<T: crate::real::Real>(
-        dtype: DType,
-        data: Vec<T>,
-        shape: Shape,
-    ) -> Tensor {
-        Self::new_with_storage(
-            Storage::from_compute(dtype, data),
-            shape,
-            Device::CPU,
-            false,
-        )
-    }
-
     /// Element count of a shape that came from the caller, checked before anything is
     /// allocated (zero dimension, overflow, or more than `MAX_NUMEL` elements).
     pub(crate) fn checked_numel(shape: &[usize]) -> Result<usize> {
@@ -1284,12 +1270,12 @@ impl SumDimGradFn {
         &self,
         out_grad: &RawTensor,
         _parents: &[Tensor],
-    ) -> Vec<Option<Tensor>> {
+    ) -> Vec<Option<Storage>> {
         dispatch_real!(out_grad.data.dtype(), T => self.backward_typed::<T>(out_grad))
     }
 
     /// [`Self::backward`] in the gradient's dtype `T`.
-    fn backward_typed<T: Real>(&self, out_grad: &RawTensor) -> Vec<Option<Tensor>> {
+    fn backward_typed<T: Real>(&self, out_grad: &RawTensor) -> Vec<Option<Storage>> {
         let grad_data = out_grad.data.host::<T>();
         let grad_shape = &out_grad.shape;
 
@@ -1334,11 +1320,7 @@ impl SumDimGradFn {
             *slot(&mut result, i) = fetch(&grad_data, grad_idx) / divisor;
         }
 
-        vec![Some(RawTensor::from_shape_compute(
-            out_grad.data.dtype(),
-            result,
-            self.input_shape.clone(),
-        ))]
+        vec![Some(Storage::from_compute(out_grad.data.dtype(), result))]
     }
 }
 
@@ -1361,12 +1343,12 @@ impl MaxDimGradFn {
         &self,
         out_grad: &RawTensor,
         _parents: &[Tensor],
-    ) -> Vec<Option<Tensor>> {
+    ) -> Vec<Option<Storage>> {
         dispatch_real!(out_grad.data.dtype(), T => self.backward_typed::<T>(out_grad))
     }
 
     /// [`Self::backward`] in the gradient's dtype `T`.
-    fn backward_typed<T: Real>(&self, out_grad: &RawTensor) -> Vec<Option<Tensor>> {
+    fn backward_typed<T: Real>(&self, out_grad: &RawTensor) -> Vec<Option<Storage>> {
         let grad_data = out_grad.data.host::<T>();
         let grad_shape = &out_grad.shape;
 
@@ -1400,11 +1382,7 @@ impl MaxDimGradFn {
             *slot(&mut result, max_lin_idx) = fetch(&grad_data, grad_idx);
         }
 
-        vec![Some(RawTensor::from_shape_compute(
-            out_grad.data.dtype(),
-            result,
-            self.input_shape.clone(),
-        ))]
+        vec![Some(Storage::from_compute(out_grad.data.dtype(), result))]
     }
 }
 

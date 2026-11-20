@@ -211,7 +211,7 @@ impl EmbeddingGradFn {
         &self,
         out_grad: &RawTensor,
         _parents: &[Tensor],
-    ) -> Vec<Option<Tensor>> {
+    ) -> Vec<Option<Storage>> {
         // out_grad: [num_indices, embedding_dim]
         // Scatter gradients to weight: [vocab_size, embedding_dim]
 
@@ -226,10 +226,7 @@ impl EmbeddingGradFn {
                     *slot(&mut grad_weight, weight_idx) += fetch(&g_host, out_grad_idx);
                 }
             }
-            RawTensor::from_shape_compute(out_grad.data.dtype(),
-                grad_weight,
-                Shape::derived(vec![self.vocab_size, self.embedding_dim]),
-            )
+            Storage::from_compute(out_grad.data.dtype(), grad_weight)
         });
 
         vec![Some(grad_tensor)]
