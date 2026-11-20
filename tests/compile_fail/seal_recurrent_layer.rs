@@ -13,8 +13,8 @@ impl Module for Outsider {
     fn state_dict(&self) -> StateDict {
         StateDict::new()
     }
-    fn load_state_dict_partial(&mut self, _state: &StateDict) -> volta::Result<()> {
-        Ok(())
+    fn plan_load(&self, _plan: &mut volta::nn::LoadPlan<'_>) {
+        // Nothing to load.
     }
 }
 

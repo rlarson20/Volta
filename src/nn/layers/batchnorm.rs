@@ -96,21 +96,12 @@ impl BatchNorm {
         state
     }
 
-    /// Loads each of the four entries that is present.
-    fn load_state_dict(&self, state: &StateDict) -> crate::Result<()> {
-        let params = [
-            ("gamma", &self.gamma),
-            ("beta", &self.beta),
-            ("running_mean", &self.running_mean),
-            ("running_var", &self.running_var),
-        ];
-
-        for (key, tensor) in params {
-            if let Some(t) = state.get(key) {
-                tensor.load_weight(key, t)?;
-            }
-        }
-        Ok(())
+    /// Names the four tensors a state-dict load writes ([`Module::plan_load`]).
+    fn plan_load(&self, plan: &mut crate::nn::LoadPlan<'_>) {
+        plan.param("gamma", &self.gamma);
+        plan.param("beta", &self.beta);
+        plan.param("running_mean", &self.running_mean);
+        plan.param("running_var", &self.running_var);
     }
 
     /// Normalizes `x`, a 2-D tensor whose `channel_axis` has the `C` channels and whose
@@ -280,8 +271,8 @@ macro_rules! batchnorm_module {
                 self.core.state_dict()
             }
 
-            fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
-                self.core.load_state_dict(state)
+            fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+                self.core.plan_load(plan);
             }
         }
 

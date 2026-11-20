@@ -1,5 +1,5 @@
 use crate::io::StateDict;
-use crate::nn::{Dropout, GELU, Layer, Linear, Module, insert_prefixed, load_child};
+use crate::nn::{Dropout, GELU, Layer, Linear, Module, insert_prefixed};
 use crate::tensor::Tensor;
 
 /// Feed-Forward Network (FFN) layer for transformer blocks
@@ -136,9 +136,9 @@ impl Module for FeedForward {
         state
     }
 
-    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
-        load_child(&mut self.expand, "expand.", state)?;
-        load_child(&mut self.contract, "contract.", state)
+    fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+        plan.child("expand.", &self.expand);
+        plan.child("contract.", &self.contract);
     }
 
     fn train(&mut self, mode: bool) {

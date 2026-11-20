@@ -183,11 +183,8 @@ impl Module for Embedding {
         state
     }
 
-    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
-        if let Some(weight_data) = state.get("weight") {
-            self.weight.load_weight("weight", weight_data)?;
-        }
-        Ok(())
+    fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+        plan.param("weight", &self.weight);
     }
 }
 

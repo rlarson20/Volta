@@ -31,15 +31,11 @@ impl Module for Linear {
         state
     }
 
-    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
-        if let Some(w) = state.get("weight") {
-            self.weight.load_weight("weight", w)?;
+    fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+        plan.param("weight", &self.weight);
+        if let Some(bias) = &self.bias {
+            plan.param("bias", bias);
         }
-        // Load bias if state has it and layer has bias
-        if let (Some(b), Some(bias_tensor)) = (state.get("bias"), self.bias.as_ref()) {
-            bias_tensor.load_weight("bias", b)?;
-        }
-        Ok(())
     }
 }
 

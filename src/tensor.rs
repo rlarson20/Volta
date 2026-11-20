@@ -103,25 +103,19 @@ impl Tensor {
         self.inner.borrow().shape.clone()
     }
 
-    /// Overwrite this tensor's values from a state-dict entry (H7).
-    ///
-    /// Keeps the tensor's shape, device, `requires_grad` and graph metadata: only the
-    /// values change. A GPU-resident tensor stays on the GPU.
+    /// Checks that the state-dict entry `src` can overwrite this tensor's values, without
+    /// decoding it: the check [`crate::nn::LoadPlan`] makes on every entry before it
+    /// writes any (#65).
     ///
     /// # Errors
     ///
-    /// `VoltaError::StateShapeMismatch` if `src.shape` differs from this tensor's shape,
-    /// `VoltaError::StateDataLength` if `src.data` does not hold the bytes `src.shape` and
-    /// `src.dtype` need (`InvalidParameter` for a bool byte that is not 0 or 1), and
-    /// `VoltaError::DTypeMismatch` if this tensor is not a float dtype. The entry's values
-    /// are cast from `src.dtype` to this tensor's dtype (following [`Storage::cast`]), as
-    /// PyTorch's `load_state_dict` does.
-    /// `name` is the state-dict key, reported in the error. Nothing is written on error.
-    pub(crate) fn load_weight(&self, name: &str, src: &crate::io::TensorData) -> Result<()> {
-        let mut t = self.inner.borrow_mut();
-        // The entry keeps the dtype it was saved in and is cast to the destination's dtype
-        // below, as PyTorch's `load_state_dict` (`copy_`) does. Only a float destination
-        // can be a parameter.
+    /// `VoltaError::DTypeMismatch` if this tensor is not a float dtype (only a float
+    /// tensor can be a parameter), `VoltaError::StateShapeMismatch` if `src.shape`
+    /// differs from this tensor's shape, and `VoltaError::StateDataLength` if `src.data`
+    /// does not hold the bytes `src.shape` and `src.dtype` need (`InvalidParameter` for a
+    /// bool byte that is not 0 or 1). `name` is the state-dict key, reported in the error.
+    pub(crate) fn check_load(&self, name: &str, src: &crate::io::TensorData) -> Result<()> {
+        let t = self.inner.borrow();
         if !t.data.dtype().is_float() {
             return Err(VoltaError::DTypeMismatch {
                 expected: DType::F32,
@@ -136,8 +130,24 @@ impl Tensor {
                 actual: src.shape.clone(),
             });
         }
-        // Checks the byte count against `src`'s own shape and dtype before decoding.
+        // The byte count against `src`'s own shape and dtype, and bool bytes.
+        src.validate(name)
+    }
+
+    /// Overwrite this tensor's values from a state-dict entry (H7).
+    ///
+    /// Keeps the tensor's shape, device, `requires_grad` and graph metadata: only the
+    /// values change. A GPU-resident tensor stays on the GPU. The entry's values are cast
+    /// from `src.dtype` to this tensor's dtype (following [`Storage::cast`]), as
+    /// PyTorch's `load_state_dict` (`copy_`) does.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`Self::check_load`], which runs first; nothing is written on error.
+    pub(crate) fn load_weight(&self, name: &str, src: &crate::io::TensorData) -> Result<()> {
+        self.check_load(name, src)?;
         let saved = src.to_storage(name)?;
+        let mut t = self.inner.borrow_mut();
         // The explicit cast: the entry's dtype need not be the parameter's.
         let cpu = saved.cast(t.data.dtype());
         t.data = cpu.to_device(&t.device);
