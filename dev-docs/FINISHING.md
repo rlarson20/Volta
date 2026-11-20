@@ -15,7 +15,7 @@ git fetch origin && git switch --detach origin/fix/116-debug
 VOLTA_REQUIRE_GPU=1 just test-full
 ```
 
-Then let `just restack` do the rebasing. It runs under bash whatever your shell is, works from remote branches only (no local branches needed), and remembers each branch's tip, so GitHub deleting a merged branch doesn't matter. It stops before pushing anything if a step fails.
+Then let `just restack` do the rebasing. It ships in #450 (this file's PR), so merge #450 first and run it from an up-to-date `improvements` checkout. It runs under bash whatever your shell is, works from remote branches only (no local branches needed), and remembers each branch's tip, so GitHub deleting a merged branch doesn't matter. It stops before pushing anything if a step fails.
 
 ```sh
 # Once, before the first merge: save the stack, bottom first.

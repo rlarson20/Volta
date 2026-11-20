@@ -83,6 +83,11 @@ git switch --quiet -c b && commit b1
 git switch --quiet -c c && commit c1 && commit c2
 git push --quiet origin a b c
 git switch --quiet improvements
+# The script lives on improvements only, as in the real repo, so `next` switching to a stack
+# branch removes it from the working tree mid-run.
+mkdir scripts && cp "$script" scripts/restack.sh
+git add scripts && git commit --quiet -m "add restack" && git push --quiet origin improvements
+script=$PWD/scripts/restack.sh
 pr a OPEN 1 && pr b OPEN 2 && pr c OPEN 3
 
 bash "$script" save a b c >/dev/null
@@ -106,8 +111,8 @@ out=$(bash "$script" next)
 squash_merge b
 bash "$script" next >/dev/null
 [[ $(git rev-list --count origin/improvements..origin/c) == 2 ]] || fail "c should carry 2 commits"
-# The rebased c has the same tree as the original stack top.
-[[ $(git rev-parse origin/c^{tree}) == $(git rev-parse "refs/restack/tip/c^{tree}") ]] || fail "c's tree changed"
+# The rebased c has the original stack top's files, plus only what improvements added.
+git diff --quiet "refs/restack/tip/c" origin/c -- . ':!scripts' || fail "c's content changed"
 
 out=$(bash "$script" next)
 [[ $out == *"stack done"* ]] || fail "after the top: $out"

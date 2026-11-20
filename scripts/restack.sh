@@ -18,6 +18,15 @@
 # bash 3.2 (macOS /bin/bash) is enough. Needs `gh`, and a clean working tree for `next`.
 set -euo pipefail
 
+# `next` switches the working tree to a stack branch, which may not contain this script (or
+# holds an older one), and bash reads a script as it runs. Run from a private copy instead.
+if [[ -z ${RESTACK_RUNNING_COPY:-} ]]; then
+	copy=$(mktemp "${TMPDIR:-/tmp}/restack.XXXXXX")
+	cp "$0" "$copy"
+	RESTACK_RUNNING_COPY=$copy exec bash "$copy" "$@"
+fi
+trap 'rm -f "$RESTACK_RUNNING_COPY"' EXIT
+
 die() {
 	echo "restack: $*" >&2
 	exit 1
