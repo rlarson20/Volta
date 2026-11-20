@@ -551,6 +551,36 @@ fn assert_same_len(kernel: &str, buffers: &[&GpuBuffer]) {
     );
 }
 
+thread_local! {
+    /// [`with_unused_state`]'s placeholders, one pair per element type.
+    static UNUSED_STATE: std::cell::RefCell<Vec<(DType, [GpuBuffer; 2])>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Runs `f` with two one-element `dtype` buffers for the optimizer kernel's state
+/// bindings that a step does not use (plain SGD binds both, SGD with momentum the second).
+/// The shader never touches them, so their size and contents don't matter; they are two
+/// buffers, not one, because WebGPU refuses one buffer bound to two writable bindings.
+/// Allocated once per element type and thread, so a stateless step allocates nothing
+/// (#207). `None` if no GPU is available or the allocation fails.
+fn with_unused_state<R>(dtype: DType, f: impl FnOnce(&GpuBuffer, &GpuBuffer) -> R) -> Option<R> {
+    UNUSED_STATE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if !cache.iter().any(|(d, _)| *d == dtype) {
+            let pair = [
+                GpuBuffer::zeros_of(dtype, 1)?,
+                GpuBuffer::zeros_of(dtype, 1)?,
+            ];
+            cache.push((dtype, pair));
+        }
+        let (_, [a, b]) = cache
+            .iter()
+            .find(|(d, _)| *d == dtype)
+            .expect("the pair for `dtype` was cached above");
+        Some(f(a, b))
+    })
+}
+
 /// Panics unless `buffer` holds `expected` elements, the length its kernel's geometry
 /// implies; as for [`assert_same_len`], the shader itself would not notice.
 #[track_caller]
@@ -1607,27 +1637,57 @@ impl GpuKernels {
     /// # Arguments
     /// * `params` - Parameters to update (read/write)
     /// * `grads` - Gradients for each parameter (read)
-    /// * `state1` - First state buffer: velocity (SGD) or m (Adam) (read/write)
-    /// * `state2` - Second state buffer: v (Adam only), unused for SGD (read/write)
+    /// * `state1` - First state buffer: velocity (SGD with momentum) or m (Adam)
+    ///   (read/write); `None` for plain SGD
+    /// * `state2` - Second state buffer: v (Adam only, read/write); `None` for SGD
     /// * `opt_params` - Optimizer hyperparameters
+    ///
+    /// A state the op keeps no state in (`None`) is bound to a one-element placeholder the
+    /// shader never reads or writes, cached per element type, so a stateless step
+    /// allocates nothing (#207).
+    ///
+    /// # Panics
+    /// If the op needs a state that is `None` (op 1 needs `state1`, op 2 both), or the
+    /// buffers that are bound for real differ in length or dtype.
     #[must_use]
     pub fn optimizer_step(
         params: &GpuBuffer,
         grads: &GpuBuffer,
-        state1: &GpuBuffer,
-        state2: &GpuBuffer,
+        state1: Option<&GpuBuffer>,
+        state2: Option<&GpuBuffer>,
         opt_params: &OptimizerStepParams,
     ) -> Option<()> {
-        assert_same_dtype("optimizer_step", &[params, grads, state1, state2]);
-        assert_same_len("optimizer_step", &[params, grads, state1, state2]);
+        let (needs1, needs2) = match opt_params.op {
+            0 => (false, false),
+            1 => (true, false),
+            _ => (true, true),
+        };
+        assert!(
+            (!needs1 || state1.is_some()) && (!needs2 || state2.is_some()),
+            "GPU optimizer_step: op {} needs {} state buffer(s)",
+            opt_params.op,
+            u8::from(needs1) + u8::from(needs2)
+        );
+        let mut used = vec![params, grads];
+        used.extend(state1);
+        used.extend(state2);
+        assert_same_dtype("optimizer_step", &used);
+        assert_same_len("optimizer_step", &used);
         let ctx = get_gpu_context()?;
-        run_kernel(
-            "Optimizer Step",
-            &ctx.pipelines_for(params.dtype()).optimizer_step,
-            &[params, grads, state1, state2],
-            bytemuck::bytes_of(opt_params),
-            Groups::cover(params.len()),
-        )
+        with_unused_state(params.dtype(), |unused1, unused2| {
+            run_kernel(
+                "Optimizer Step",
+                &ctx.pipelines_for(params.dtype()).optimizer_step,
+                &[
+                    params,
+                    grads,
+                    state1.unwrap_or(unused1),
+                    state2.unwrap_or(unused2),
+                ],
+                bytemuck::bytes_of(opt_params),
+                Groups::cover(params.len()),
+            )
+        })?
     }
 
     /// Muon momentum: `v ← μ·v + g`, returning `update = μ·v + g` (Nesterov) or `v`.
@@ -2772,5 +2832,42 @@ mod shared_struct_tests {
             wgsl_layout("WindowParams"),
             (window, std::mem::size_of::<WindowParams>())
         );
+    }
+}
+
+#[cfg(test)]
+mod unused_state_tests {
+    use super::with_unused_state;
+    use crate::dtype::DType;
+    use crate::gpu::is_gpu_available;
+
+    /// #207: the placeholders are allocated once per element type and thread, then reused,
+    /// so a stateless optimizer step allocates nothing. The pair is two distinct buffers.
+    #[test]
+    fn unused_state_placeholders_are_cached_per_dtype() {
+        if !is_gpu_available() {
+            return;
+        }
+        let addrs = |dtype| {
+            with_unused_state(dtype, |a, b| {
+                assert!(!std::ptr::eq(a, b), "two buffers, not one bound twice");
+                assert_eq!((a.len(), b.len()), (1, 1));
+                (
+                    std::ptr::from_ref(a) as usize,
+                    std::ptr::from_ref(b) as usize,
+                )
+            })
+            .expect("a GPU is available")
+        };
+        let f32_first = addrs(DType::F32);
+        let f16 = addrs(DType::F16);
+        assert_ne!(f32_first, f16, "one pair per element type");
+        // After another dtype's pair was added: an equal address would also follow from a
+        // freed-then-reused allocation, so check the cache keeps its length too.
+        assert_eq!(addrs(DType::F32), addrs(DType::F32));
+        let cached = super::UNUSED_STATE.with(|c| c.borrow().len());
+        addrs(DType::F32);
+        addrs(DType::F16);
+        assert_eq!(super::UNUSED_STATE.with(|c| c.borrow().len()), cached);
     }
 }

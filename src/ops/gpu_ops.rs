@@ -651,16 +651,23 @@ impl RawTensor {
     pub(crate) fn gpu_optimizer_step(
         params: &mut Storage,
         grads: &Storage,
-        state1: &mut Storage,
-        state2: &mut Storage,
+        state1: Option<&mut Storage>,
+        state2: Option<&mut Storage>,
         opt_params: &crate::gpu::OptimizerStepParams,
     ) -> Option<()> {
         // The kernel writes `params`, `state1` and `state2` in place, so each goes through
-        // the one GPU write path, which unshares it first.
+        // the one GPU write path, which unshares it first. A `None` state (plain SGD keeps
+        // none) is bound to a cached placeholder by the kernel, not allocated here (#207).
         let buf_params = params.gpu_buffer_mut()?;
         let buf_grads = grads.gpu_buffer()?;
-        let buf_state1 = state1.gpu_buffer_mut()?;
-        let buf_state2 = state2.gpu_buffer_mut()?;
+        let buf_state1 = match state1 {
+            Some(s) => Some(s.gpu_buffer_mut()?),
+            None => None,
+        };
+        let buf_state2 = match state2 {
+            Some(s) => Some(s.gpu_buffer_mut()?),
+            None => None,
+        };
         GpuKernels::optimizer_step(buf_params, buf_grads, buf_state1, buf_state2, opt_params)
     }
 
@@ -677,7 +684,7 @@ impl RawTensor {
         velocity: &mut Storage,
         step: &MuonStep,
     ) -> Option<()> {
-        use crate::gpu::{GpuBuffer, OptimizerStepParams};
+        use crate::gpu::OptimizerStepParams;
 
         // Muon's kernels compute in f32. A half parameter, its gradient and its velocity are
         // cast up on the device, stepped, and cast back, so each is rounded once per step,
@@ -709,10 +716,8 @@ impl RawTensor {
             update
         };
 
-        // `param -= lr·scale·update`, through the SGD arm of the optimizer kernel. That
-        // kernel binds both state buffers, so give it two it will not touch.
-        let len = update.len();
-        let (unused1, unused2) = (GpuBuffer::zeros(len)?, GpuBuffer::zeros(len)?);
+        // `param -= lr·scale·update`, through the SGD arm of the optimizer kernel, which
+        // keeps no state.
         let opt_params = OptimizerStepParams {
             op: 0,
             lr: step.lr * step.scale,
@@ -723,13 +728,7 @@ impl RawTensor {
             weight_decay: 0.0,
             v_hat_scale: 0.0,
         };
-        GpuKernels::optimizer_step(
-            param.gpu_buffer_mut()?,
-            &update,
-            &unused1,
-            &unused2,
-            &opt_params,
-        )
+        GpuKernels::optimizer_step(param.gpu_buffer_mut()?, &update, None, None, &opt_params)
     }
 
     /// Not-gpu stub: a GPU parameter cannot exist, so `Muon::step` never reaches this.
@@ -1287,10 +1286,9 @@ mod tests {
         }
         let mut param = Storage::gpu(vec![1.0, 2.0, 3.0, 4.0]);
         let grad = Storage::gpu(vec![1.0, 1.0, 1.0, 1.0]);
-        let (mut s1, mut s2) = (Storage::gpu(vec![0.0; 4]), Storage::gpu(vec![0.0; 4]));
         let snapshot = param.clone();
 
-        RawTensor::gpu_optimizer_step(&mut param, &grad, &mut s1, &mut s2, &sgd_params(0.5))
+        RawTensor::gpu_optimizer_step(&mut param, &grad, None, None, &sgd_params(0.5))
             .expect("optimizer step");
 
         assert_eq!(param.to_vec(), vec![0.5, 1.5, 2.5, 3.5], "param is updated");
@@ -1311,15 +1309,54 @@ mod tests {
         }
         let mut param = Storage::gpu(vec![1.0, 2.0, 3.0, 4.0]);
         let grad = Storage::gpu(vec![1.0, 1.0, 1.0, 1.0]);
-        let (mut s1, mut s2) = (Storage::gpu(vec![0.0; 4]), Storage::gpu(vec![0.0; 4]));
         let snapshot = param.clone();
         assert_eq!(snapshot.to_vec(), vec![1.0, 2.0, 3.0, 4.0]);
 
-        RawTensor::gpu_optimizer_step(&mut param, &grad, &mut s1, &mut s2, &sgd_params(0.5))
+        RawTensor::gpu_optimizer_step(&mut param, &grad, None, None, &sgd_params(0.5))
             .expect("optimizer step");
 
         assert_eq!(snapshot.to_vec(), vec![1.0, 2.0, 3.0, 4.0]);
         assert_eq!(param.to_vec(), vec![0.5, 1.5, 2.5, 3.5]);
+    }
+
+    /// #207: a stateless step binds the cached placeholders for any element type, f16
+    /// included (a one-element f16 buffer is one padded word), and computes the same step.
+    #[test]
+    fn gpu_sgd_step_without_state_buffers_f32_and_f16() {
+        if !is_gpu_available() {
+            return;
+        }
+        for dtype in [crate::DType::F32, crate::DType::F16] {
+            let mut param = Storage::gpu(vec![1.0, 2.0, 3.0]).cast(dtype);
+            let grad = Storage::gpu(vec![2.0, 2.0, 2.0]).cast(dtype);
+            RawTensor::gpu_optimizer_step(&mut param, &grad, None, None, &sgd_params(0.5))
+                .expect("optimizer step");
+            assert_eq!(param.to_f32_vec(), vec![0.0, 1.0, 2.0], "{dtype}");
+        }
+    }
+
+    /// #207: momentum reads `state1`, so leaving it out is a caller bug, not a placeholder.
+    #[test]
+    fn gpu_momentum_step_without_velocity_panics() {
+        if !is_gpu_available() {
+            return;
+        }
+        let mut param = Storage::gpu(vec![1.0]);
+        let grad = Storage::gpu(vec![1.0]);
+        let momentum = crate::gpu::OptimizerStepParams {
+            op: 1,
+            beta1: 0.9,
+            ..sgd_params(0.5)
+        };
+        let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = RawTensor::gpu_optimizer_step(&mut param, &grad, None, None, &momentum);
+        }))
+        .expect_err("a momentum step without a velocity buffer panics");
+        let msg = err
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .expect("a formatted panic message");
+        assert!(msg.contains("op 1 needs 1 state buffer(s)"), "{msg}");
     }
 
     /// H3: the step must also drop a host cache the parameter itself read before it.
@@ -1330,10 +1367,9 @@ mod tests {
         }
         let mut param = Storage::gpu(vec![1.0, 2.0]);
         let grad = Storage::gpu(vec![2.0, 2.0]);
-        let (mut s1, mut s2) = (Storage::gpu(vec![0.0; 2]), Storage::gpu(vec![0.0; 2]));
         assert_eq!(param.to_vec(), vec![1.0, 2.0]);
 
-        RawTensor::gpu_optimizer_step(&mut param, &grad, &mut s1, &mut s2, &sgd_params(0.5))
+        RawTensor::gpu_optimizer_step(&mut param, &grad, None, None, &sgd_params(0.5))
             .expect("optimizer step");
 
         assert_eq!(param.to_vec(), vec![0.0, 1.0]);
