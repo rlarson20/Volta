@@ -754,6 +754,14 @@ Seeds spread about 0.25 points, so a 5-seed mean has a standard error near 0.05;
 
 ---
 
+### File loaders return `volta::Result`; a `Decode` variant carries the path (#394)
+
+**Decision:** `load_safetensors`, `save_safetensors`, `load_safetensors_with_mapping`, `load_mnist_images` and `load_mnist_labels` return `volta::Result`. Opening, reading or writing a file is `VoltaError::Io`. A file that was read but can't be decoded (not a valid safetensors file, an entry dtype Volta has no equivalent for, a short or malformed MNIST header) is the new `VoltaError::Decode { path, key, detail }`, where `key` names the entry when one tensor is at fault and `detail` is the #377 `ErrorDetail` (`op` is the loader, `arg` is `"path"`). An entry whose bytes don't fit its shape and dtype keeps its existing error (`StateDataLength { key, .. }`, or `InvalidParameter` for a bool byte), now returned as is instead of wrapped in `io::Error::other`. A mapper failure is the mapper's own `VoltaError`. A safetensors serialization failure after validation is `OpError`, since the caller has nothing to fix.
+
+**Why:** with `std::io::Result`, a missing file, a file that isn't safetensors, and a bad tensor shape were all `io::Error` and told apart only by message, and the key was lost (#136 item 2, R37). Breaking, before `main`.
+
+---
+
 ### `check_gradients` refuses half-precision inputs and fails on NaN (#57/A6, #90)
 
 **Decision:** `check_gradients` (and `check_gradients_simple`, which calls it) panics when the input is f16 or bf16, saying the finite difference is meaningless at that precision and to cast to f32 or f64 first. A NaN or infinite relative error at any element fails the check and is what `max_error` reports.

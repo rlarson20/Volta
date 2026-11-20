@@ -200,6 +200,7 @@ fn test_shrink_wrong_length_too_short() {
         | VoltaError::BroadcastError(..)
         | VoltaError::DeviceError(_)
         | VoltaError::Io(_)
+        | VoltaError::Decode { .. }
         | VoltaError::NotScalar { .. }
         | VoltaError::NoGradRequired
         | VoltaError::OpError(_)
@@ -241,6 +242,7 @@ fn test_shrink_wrong_length_too_long() {
         | VoltaError::BroadcastError(..)
         | VoltaError::DeviceError(_)
         | VoltaError::Io(_)
+        | VoltaError::Decode { .. }
         | VoltaError::NotScalar { .. }
         | VoltaError::NoGradRequired
         | VoltaError::OpError(_)
@@ -271,6 +273,7 @@ fn test_shrink_out_of_bounds_end() {
         | VoltaError::BroadcastError(..)
         | VoltaError::DeviceError(_)
         | VoltaError::Io(_)
+        | VoltaError::Decode { .. }
         | VoltaError::NotScalar { .. }
         | VoltaError::NoGradRequired
         | VoltaError::InvalidParameter(_)
@@ -302,6 +305,7 @@ fn test_shrink_start_exceeds_dimension() {
         | VoltaError::BroadcastError(..)
         | VoltaError::DeviceError(_)
         | VoltaError::Io(_)
+        | VoltaError::Decode { .. }
         | VoltaError::NotScalar { .. }
         | VoltaError::NoGradRequired
         | VoltaError::InvalidParameter(_)
@@ -340,6 +344,7 @@ fn test_shrink_invalid_range_order() {
         | VoltaError::BroadcastError(..)
         | VoltaError::DeviceError(_)
         | VoltaError::Io(_)
+        | VoltaError::Decode { .. }
         | VoltaError::NotScalar { .. }
         | VoltaError::NoGradRequired
         | VoltaError::OpError(_)
@@ -377,6 +382,7 @@ fn test_shrink_empty_range() {
         | VoltaError::BroadcastError(..)
         | VoltaError::DeviceError(_)
         | VoltaError::Io(_)
+        | VoltaError::Decode { .. }
         | VoltaError::NotScalar { .. }
         | VoltaError::NoGradRequired
         | VoltaError::OpError(_)
@@ -410,6 +416,7 @@ fn test_shrink_both_empty_ranges() {
         | VoltaError::BroadcastError(..)
         | VoltaError::DeviceError(_)
         | VoltaError::Io(_)
+        | VoltaError::Decode { .. }
         | VoltaError::NotScalar { .. }
         | VoltaError::NoGradRequired
         | VoltaError::OpError(_)

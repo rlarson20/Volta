@@ -69,11 +69,41 @@ fn test_shrink_start_exceeds_end() {
 
 #[test]
 fn test_io_error() {
-    // load_safetensors returns std::io::Result, so we check for io::Error
+    // A missing file is `Io`, not `Decode` (#394).
     let result = volta::io::load_safetensors("nonexistent_path_xyz123.safetensors");
-    assert!(result.is_err());
     let err = result.err().unwrap();
-    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    assert!(
+        matches!(&err, VoltaError::Io(e) if e.kind() == std::io::ErrorKind::NotFound),
+        "{err:?}"
+    );
+}
+
+// ── Decode ─────────────────────────────────────────────────────────────
+
+#[test]
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "every variant other than Decode is a failure"
+)]
+fn test_decode_error_names_the_file() {
+    let path =
+        std::env::temp_dir().join(format!("volta_{}_not_st.safetensors", std::process::id()));
+    std::fs::write(&path, b"not a safetensors file").unwrap();
+    let err = volta::io::load_safetensors(&path).err().unwrap();
+    std::fs::remove_file(&path).unwrap();
+    match &err {
+        VoltaError::Decode {
+            path: p,
+            key,
+            detail,
+        } => {
+            assert_eq!(p, &path);
+            assert_eq!(key, &None);
+            assert_eq!((detail.op, detail.arg), ("load_safetensors", Some("path")));
+        }
+        other => panic!("expected Decode, got {other:?}"),
+    }
+    assert!(err.to_string().starts_with("Decode error in "), "{err}");
 }
 
 // ── DTypeMismatch ──────────────────────────────────────────────────────

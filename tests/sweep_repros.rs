@@ -137,7 +137,10 @@ fn assert_rejected(name: &str, dtype: safetensors::Dtype, shape: Vec<usize>, byt
     let result = load_safetensors(&path).map(|_| ());
     let _ = std::fs::remove_file(&path);
     let err = result.expect_err(&format!("load_safetensors accepted a {dtype:?} tensor"));
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData, "{err}");
+    assert!(
+        matches!(&err, volta::VoltaError::Decode { key: Some(k), .. } if k == "t"),
+        "a Decode error naming the entry: {err:?}"
+    );
     assert!(
         err.to_string().contains(&format!("{dtype:?}")),
         "the error should name the dtype: {err}"
