@@ -357,6 +357,20 @@ prs:
 		gh pr checks "$b" || true
 	fi
 
+# Resolve every direct dependency at its declared lower bound, then build (#443), so a bound
+# in Cargo.toml that can never resolve (as `log = "0.4"` did under wgpu's `^0.4.29`) fails
+# here instead of going unnoticed. Only the resolve needs the nightly; the check runs on
+# stable. The lockfile is restored afterwards, so the tree is left as it was.
+# Build with every direct dependency at its minimum version (both feature sets)
+minimal-versions:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	cp Cargo.lock Cargo.lock.minimal-versions-backup
+	trap 'mv Cargo.lock.minimal-versions-backup Cargo.lock' EXIT
+	cargo +{{sanitizer_nightly}} update -Zdirect-minimal-versions
+	cargo check --all-targets --no-default-features
+	cargo check --all-targets {{full}}
+
 # Search issues, open and closed, by title and body: run it before filing (`just issues "sum sequential"`)
 issues +terms:
 	gh issue list --state all --limit 30 --search "{{terms}} in:title,body"

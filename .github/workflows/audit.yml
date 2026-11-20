@@ -2,7 +2,7 @@ name: Dependency Audit
 on:
   # Dependency changes are checked in the PR; the schedule catches new advisories on old locks.
   pull_request:
-    paths: [Cargo.toml, Cargo.lock, deny.toml, .github/workflows/audit.yml]
+    paths: [Cargo.toml, Cargo.lock, deny.toml, justfile, .github/workflows/audit.yml]
   schedule:
     - cron: "0 0 * * 0" # Weekly on Sunday
   workflow_dispatch: # Manual trigger
@@ -21,11 +21,28 @@ jobs:
           tool: cargo-deny
       - run: cargo deny check
 
+  # Declared lower bounds are true (#443): resolve each direct dependency at its minimum and
+  # build. Not a required check (.github/rulesets/ name only ci.yml's jobs).
+  minimal-versions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+      # The resolve uses the nightly the justfile pins, read from it rather than repeated here.
+      - name: Install the pinned nightly
+        run: rustup toolchain install "$(just --evaluate sanitizer_nightly)" --profile minimal
+      - run: just minimal-versions
+
   # A scheduled failure is open work, so it becomes an issue (#258); without this a weekly or
   # nightly job just goes red where nobody looks. Not `merge-gate`: only macOS gates main.
   report-failure:
-    needs: audit
-    if: always() && needs.audit.result == 'failure' && github.event_name == 'schedule'
+    needs: [audit, minimal-versions]
+    if: >-
+      always() && github.event_name == 'schedule' &&
+      (needs.audit.result == 'failure' || needs.minimal-versions.result == 'failure')
     permissions:
       actions: read
       issues: write
@@ -35,4 +52,4 @@ jobs:
       labels: kind:bug,area:ci,P1
       workflow: audit.yml
       details: >-
-        `cargo deny check` failed: a new advisory, a yanked crate or a license change in the locked dependencies. Reproduce with `cargo deny check`.
+        `cargo deny check` failed (a new advisory, a yanked crate or a license change in the locked dependencies; reproduce with `cargo deny check`), or `just minimal-versions` failed (a dependency's floor moved above a bound in `Cargo.toml`).
