@@ -210,7 +210,13 @@ impl Adam {
         // snapshots and later reads stay correct.
         param
             .update_data(|data| {
-                crate::RawTensor::gpu_optimizer_step(data, &grad, m_state, v_state, &opt_params)
+                crate::RawTensor::gpu_optimizer_step(
+                    data,
+                    &grad,
+                    Some(m_state),
+                    Some(v_state),
+                    &opt_params,
+                )
             })
             .expect("GPU Adam step failed: the parameter was not updated");
     }
