@@ -327,7 +327,7 @@ impl GpuBuffer {
                         u8::from(w == 1)
                     })
                     .collect();
-                crate::storage::Storage::try_from_bytes(&bytes, DType::Bool)
+                HostBuf::try_from_bytes(&bytes, DType::Bool)
             }
             dtype @ (DType::F16
             | DType::BF16
@@ -337,16 +337,13 @@ impl GpuBuffer {
             | DType::I64
             | DType::U8) => {
                 let n = self.len * dtype.size_of();
-                crate::storage::Storage::try_from_bytes(
+                HostBuf::try_from_bytes(
                     bytes.get(..n).expect("download covers the elements"),
                     dtype,
                 )
             }
         };
-        match host.expect("valid bytes for the buffer's dtype") {
-            crate::storage::Storage::Cpu(h) => h,
-            crate::storage::Storage::Gpu(_) => unreachable!("try_from_bytes builds CPU storage"),
-        }
+        host.expect("valid bytes for the buffer's dtype")
     }
 
     /// Get the underlying wgpu buffer (for use in compute passes). Internal (#326): a caller
