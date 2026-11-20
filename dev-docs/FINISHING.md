@@ -15,29 +15,22 @@ git fetch origin && git switch --detach origin/fix/116-debug
 VOLTA_REQUIRE_GPU=1 just test-full
 ```
 
-Then repeat this loop for each PR, from the bottom up. Don't `git fetch --prune` until the stack is merged: the rebase needs the old tip of each merged branch, and GitHub deletes it on merge.
+Then let `just restack` do the rebasing. It runs under bash whatever your shell is, works from remote branches only (no local branches needed), and remembers each branch's tip, so GitHub deleting a merged branch doesn't matter. It stops before pushing anything if a step fails.
 
 ```sh
-# The stack, bottom first: PR number and branch.
-stack=(
-  "432 fix/356-opaque-storage"     "434 fix/268-backward-storages"
-  "435 fix/377-structured-errors"  "436 fix/394-io-volta-result"
-  "438 fix/100-rank-zero"          "439 fix/65-atomic-load"
-  "440 fix/133-layer-try-new"      "441 fix/142-panic-messages"
-  "442 fix/116-debug"
-)
-git fetch origin                   # once, before the first merge
+# Once, before the first merge: save the stack, bottom first.
+just restack save fix/356-opaque-storage fix/268-backward-storages fix/377-structured-errors \
+  fix/394-io-volta-result fix/100-rank-zero fix/65-atomic-load fix/133-layer-try-new \
+  fix/142-panic-messages fix/116-debug
 
-# For i = 0, 1, ...: squash-merge stack[i] on GitHub (CI green), then:
-i=0
-read -r _ merged <<<"${stack[$i]}"; read -r next_pr next <<<"${stack[$((i+1))]}"
-git fetch origin improvements
-git rebase --onto origin/improvements "origin/$merged" "$next"   # replays only next's commits
-git push --force-with-lease origin "$next"
-gh pr edit "$next_pr" --base improvements
+# Then, eight times (#432 through #441):
+#   1. squash-merge the lowest open stack PR on GitHub (CI green);
+#   2. run:
+just restack next      # rebases the next branch onto improvements, force-pushes with lease, retargets its PR
+# Finally, squash-merge #442.
 ```
 
-Each `rebase --onto` replays commits whose base tree is identical to the squashed commit, so it should apply cleanly. If one stops on a conflict, the squash differs from the branch: run `git rebase --abort` and ask an agent session to look. An agent can also run this loop for you after each merge. Merging is the only step that needs you.
+`just restack status` says what `next` would do without doing it. `next` refuses to run until the PR below has actually merged. If a rebase stops on a conflict, it prints how to continue or abort. An agent can also run it for you after each merge. Merging is the only step that needs you. When #442 is merged, run `just restack clean`.
 
 Done when #442 is merged.
 

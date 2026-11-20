@@ -346,6 +346,14 @@ sync mode="":
 test-sync:
 	./scripts/test-sync.sh
 
+# Rebase a stack of PRs after each squash merge: `just restack save <branch>...` once (bottom first), then `just restack next` after each merge (scripts/restack.sh)
+restack *args:
+	./scripts/restack.sh {{args}}
+
+# Check `just restack` against a scratch repo and a stub gh
+test-restack:
+	./scripts/test-restack.sh
+
 # Your open PRs and the checks on the current branch's PR
 prs:
 	#!/usr/bin/env bash
