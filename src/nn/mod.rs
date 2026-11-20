@@ -3,6 +3,8 @@ use crate::dtype::DType;
 use crate::io::StateDict;
 use crate::tensor::Tensor;
 
+/// Hyperparameter checks for the layers' `try_new` (#133).
+pub(crate) mod hyper;
 /// Layers and containers.
 pub(crate) mod layers;
 /// Atomic state-dict loading (#65).

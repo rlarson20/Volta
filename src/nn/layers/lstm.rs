@@ -1,4 +1,6 @@
+use crate::error::OrPanic;
 use crate::io::{StateDict, TensorData};
+use crate::nn::hyper;
 use crate::nn::{Module, RecurrentLayer, SealedLayer};
 use crate::tensor::{RawTensor, Tensor};
 
@@ -27,8 +29,23 @@ pub struct LSTMCell {
 
 impl LSTMCell {
     /// Create a new LSTM cell
+    ///
+    /// # Panics
+    /// If `input_size` or `hidden_size` is zero (see [`Self::try_new`]).
     #[must_use]
+    #[track_caller]
     pub fn new(input_size: usize, hidden_size: usize, bias: bool) -> Self {
+        Self::try_new(input_size, hidden_size, bias).or_panic("LSTMCell")
+    }
+
+    /// [`Self::new`], checking the sizes first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` naming the argument if `input_size` or
+    /// `hidden_size` is zero.
+    pub fn try_new(input_size: usize, hidden_size: usize, bias: bool) -> crate::Result<Self> {
+        hyper::at_least_one("LSTMCell", "input_size", input_size)?;
+        hyper::at_least_one("LSTMCell", "hidden_size", hidden_size)?;
         // Initialize weights using Xavier/Glorot uniform
         let weight_ih = RawTensor::xavier_uniform(&[4 * hidden_size, input_size]);
         let weight_hh = RawTensor::xavier_uniform(&[4 * hidden_size, hidden_size]);
@@ -46,13 +63,13 @@ impl LSTMCell {
             (None, None)
         };
 
-        Self {
+        Ok(Self {
             hidden_size,
             weight_ih,
             weight_hh,
             bias_ih,
             bias_hh,
-        }
+        })
     }
 
     /// Gate `gate_idx`'s columns of the combined `[batch, 4*hidden_size]` gates tensor.

@@ -780,6 +780,14 @@ Seeds spread about 0.25 points, so a 5-seed mean has a standard error near 0.05;
 
 ---
 
+### Layer hyperparameters are user data: every constructor has a `try_` form (#133)
+
+**Decision:** layer sizes, rates and `eps` are arguments a user supplies (from a config file or a UI), so they fall on the `Result` side of invariant 8, like optimizer hyperparameters. Every layer constructor has a `try_` form that checks its arguments before allocating and returns `InvalidParameter { op: <layer>, arg: <argument> }`, and the panicking form wraps it (`or_panic`, so the message names the layer once): `Linear`, `Conv2d`, `ConvTranspose2d`, `MaxPool2d` (`try_new`, `try_with_params`), `Embedding`, `LayerNorm` (`try_new`, `try_new_with_eps`), `BatchNorm1d`/`BatchNorm2d` (`try_new`, `try_new_with_params`), `Dropout`, `LSTMCell`, `PixelShuffle`, `MultiHeadAttention`, `FeedForward`, `TransformerBlock`, `PositionalEncoding`, and `amp::GradScaler::try_with_params`. Ranges, following PyTorch where it checks: sizes, kernels and strides at least 1; `eps` finite and `> 0`; `momentum` and `dropout` in `[0, 1]`; a non-empty `normalized_shape`; `GradScaler`'s scale and growth factor finite. The checks live in `nn::hyper`.
+
+**Why:** three groups were wrong (#133): values accepted and silently wrong (momentum 7 made `running_var` negative; `eps <= 0` gave NaN; `LayerNorm::new(vec![])` built a one-feature layer), values accepted and refused only in `forward` (stride 0, pool kernel 0), and zeros refused by accident in the weight initializer, with its name instead of the layer's. `new_on_device` constructors run the same check and panic; `MaxPool2d::new`/`with_params` are no longer `const fn`. Not covered: forward-time shape messages (#142).
+
+---
+
 ### `check_gradients` refuses half-precision inputs and fails on NaN (#57/A6, #90)
 
 **Decision:** `check_gradients` (and `check_gradients_simple`, which calls it) panics when the input is f16 or bf16, saying the finite difference is meaningless at that precision and to cast to f32 or f64 first. A NaN or infinite relative error at any element fails the check and is what `max_error` reports.

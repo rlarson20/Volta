@@ -5,6 +5,7 @@ use crate::dtype::DType;
 use crate::error::OrPanic;
 use crate::index::{fetch, signed, slot, unsigned};
 use crate::io::{StateDict, TensorData};
+use crate::nn::hyper;
 use crate::nn::{Layer, Module};
 use crate::ops::reduce::pairwise_sum_by;
 use crate::real::{Real, compute_dtype, dispatch_real};
@@ -639,7 +640,11 @@ fn weight_gradient_pairwise<T: Real>(x: &[T], out_grad: &[T], spec: &Conv2dSpec)
 
 impl Conv2d {
     /// Layer with square `kernel`, equal `stride` and `padding` on both axes, and He-initialized weights.
+    ///
+    /// # Panics
+    /// If a channel count, `kernel` or `stride` is zero (see [`Self::try_new`]).
     #[must_use]
+    #[track_caller]
     pub fn new(
         in_ch: usize,
         out_ch: usize,
@@ -648,6 +653,24 @@ impl Conv2d {
         padding: usize,
         use_bias: bool,
     ) -> Self {
+        Self::try_new(in_ch, out_ch, kernel, stride, padding, use_bias).or_panic(Self::OP)
+    }
+
+    /// [`Self::new`], checking the hyperparameters first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` naming the argument if `in_ch`, `out_ch`, `kernel`
+    /// or `stride` is zero. A zero stride used to be accepted here and to panic in
+    /// `forward` (#133).
+    pub fn try_new(
+        in_ch: usize,
+        out_ch: usize,
+        kernel: usize,
+        stride: usize,
+        padding: usize,
+        use_bias: bool,
+    ) -> crate::Result<Self> {
+        Self::check_hyper(in_ch, out_ch, kernel, stride)?;
         let w = RawTensor::he_initialization(&[out_ch, in_ch, kernel, kernel]);
         w.set_requires_grad(true);
         let b = if use_bias {
@@ -657,13 +680,24 @@ impl Conv2d {
         } else {
             None
         };
-        Self {
+        Ok(Self {
             weight: w,
             bias: b,
             stride: (stride, stride),
             padding: (padding, padding),
             algo: ConvAlgo::Auto,
-        }
+        })
+    }
+
+    /// The layer's name in errors.
+    const OP: &'static str = "Conv2d";
+
+    /// `Ok` if the channel counts, `kernel` and `stride` are at least 1.
+    fn check_hyper(in_ch: usize, out_ch: usize, kernel: usize, stride: usize) -> crate::Result<()> {
+        hyper::at_least_one(Self::OP, "in_ch", in_ch)?;
+        hyper::at_least_one(Self::OP, "out_ch", out_ch)?;
+        hyper::at_least_one(Self::OP, "kernel", kernel)?;
+        hyper::at_least_one(Self::OP, "stride", stride)
     }
 
     /// Create a new Conv2d layer on a specific device
@@ -690,7 +724,11 @@ impl Conv2d {
     /// // Parameters are now on GPU
     /// # }
     /// ```
+    ///
+    /// # Panics
+    /// As [`Self::new`], or if `device` is a GPU that cannot hold the parameters.
     #[must_use]
+    #[track_caller]
     pub fn new_on_device(
         in_ch: usize,
         out_ch: usize,
@@ -700,6 +738,7 @@ impl Conv2d {
         use_bias: bool,
         device: Device,
     ) -> Self {
+        Self::check_hyper(in_ch, out_ch, kernel, stride).or_panic(Self::OP);
         // Move, then mark trainable: `to_device` of a tensor that requires grad is a
         // differentiable copy, not a leaf, so the parameters must be leaves on `device`.
         let w = RawTensor::he_initialization(&[out_ch, in_ch, kernel, kernel])
@@ -2703,14 +2742,9 @@ mod conv2d_tests {
     }
 
     #[test]
-    fn test_conv2d_zero_stride_panics_with_spec_message() {
-        let mut conv = Conv2d::new(1, 1, 3, 0, 0, false);
-        let x = RawTensor::randn(&[1, 1, 8, 8]);
-        for algo in ALL_ALGOS {
-            conv.set_algo(algo);
-            let msg = forward_panic_message(&conv, &x);
-            assert!(msg.contains("stride must be non-zero"), "{algo:?}: {msg}");
-        }
+    #[should_panic(expected = "Invalid parameter: Conv2d: stride must be at least 1, got 0")]
+    fn test_conv2d_zero_stride_is_refused_at_construction() {
+        let _ = Conv2d::new(1, 1, 3, 0, 0, false);
     }
 
     #[test]
