@@ -43,16 +43,16 @@ Done when #442 is merged.
 
 ### The independent PRs
 
-These are based on `improvements`, not on the stack. Merge them after the stack and update each one from `improvements` first: #399 and #398 touch the README, and the stack edits it too.
+These are based on `improvements`, not on the stack. Merge them after the stack and update each one from `improvements` first: #444 and #448 touch the README, and the stack edits it too.
 
-| PR for | What to check before merging |
+| PR (issue) | What to check before merging |
 | --- | --- |
-| #399 README claims | The caution banner ("not in a spot that I'm proud of") is left for you. Replace it when you decide to |
-| #398 STABILITY.md | The policies are proposals: MSRV bump = minor, one-minor deprecation, no bitwise numerical promise. Edit what you disagree with |
-| #443 minimal-versions | Nothing; `just minimal-versions` passed in the cloud |
-| #433 GPU placeholders | `VOLTA_REQUIRE_GPU=1 just test-repeat-threads "--test gpu_optimizer_threads" 30` on the M2 |
-| #437 readback polls | `VOLTA_REQUIRE_GPU=1 just test-repeat-threads "--test gpu_readback_threads" 30` on the M2. The race never reproduced in the cloud, so Metal is the better test |
-| #397 semver job | Runs only on PRs into `main` and by hand: try it once with `gh workflow run semver.yml --ref <branch>` |
+| #444 (#399) README claims | The caution banner ("not in a spot that I'm proud of") is left for you. Replace it when you decide to |
+| #448 (#398) STABILITY.md | The policies are proposals: MSRV bump = minor, one-minor deprecation, no bitwise numerical promise. Edit what you disagree with |
+| #447 (#443) minimal-versions | Nothing; `just minimal-versions` passed in the cloud |
+| #446 (#433) GPU placeholders | `VOLTA_REQUIRE_GPU=1 just test-repeat-threads "--test gpu_optimizer_threads" 30` on the M2 |
+| #445 (#437) readback polls | `VOLTA_REQUIRE_GPU=1 just test-repeat-threads "--test gpu_readback_threads" 30` on the M2. The race never reproduced in the cloud, so Metal is the better test |
+| #449 (#397) semver job | Runs only on PRs into `main` and by hand: after it merges, try it once with `gh workflow run semver.yml --ref improvements` |
 
 Done when all six are merged or closed.
 
