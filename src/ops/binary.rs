@@ -100,7 +100,11 @@ impl BinaryGradFn {
     }
 
     /// Gradients for both operands, reduced back to each operand's pre-broadcast shape.
-    pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        parents: &[Tensor],
+    ) -> Vec<Option<Storage>> {
         let [x_ref, y_ref] = parents else {
             panic!("binary ops require 2 parents, got {}", parents.len());
         };
@@ -140,12 +144,7 @@ impl BinaryGradFn {
                     out_grad.shape.truncate_rank(),
                     operand.shape.truncate_rank(),
                 );
-                RawTensor::new_with_storage(
-                    Storage::from_compute(x.data.dtype(), summed),
-                    operand.shape.clone(),
-                    Device::CPU,
-                    false,
-                )
+                Storage::from_compute(x.data.dtype(), summed)
             };
             vec![
                 x.requires_grad.then(|| reduce_to(&grad_x, &x)),

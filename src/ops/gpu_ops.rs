@@ -359,7 +359,7 @@ impl RawTensor {
         out_grad: &Self,
         x: &Self,
         y: &Self,
-    ) -> Option<Vec<Option<Tensor>>> {
+    ) -> Option<Vec<Option<Storage>>> {
         if !(out_grad.device.is_gpu() && x.device.is_gpu() && y.device.is_gpu()) {
             return None;
         }
@@ -382,7 +382,7 @@ impl RawTensor {
         _out_grad: &Self,
         _x: &Self,
         _y: &Self,
-    ) -> Option<Vec<Option<Tensor>>> {
+    ) -> Option<Vec<Option<Storage>>> {
         None
     }
 
@@ -393,26 +393,16 @@ impl RawTensor {
         out_grad: &Self,
         x: &Self,
         y: &Self,
-    ) -> Option<Vec<Option<Tensor>>> {
+    ) -> Option<Vec<Option<Storage>>> {
         let gx = if x.requires_grad {
             let storage = Self::gpu_binary_backward_a(&out_grad.data, &x.data, &y.data, op)?;
-            Some(Self::new_with_storage(
-                storage,
-                x.shape.clone(),
-                x.device.clone(),
-                false,
-            ))
+            Some(storage)
         } else {
             None
         };
         let gy = if y.requires_grad {
             let storage = Self::gpu_binary_backward_b(&out_grad.data, &x.data, &y.data, op)?;
-            Some(Self::new_with_storage(
-                storage,
-                y.shape.clone(),
-                y.device.clone(),
-                false,
-            ))
+            Some(storage)
         } else {
             None
         };
@@ -430,7 +420,7 @@ impl RawTensor {
         out_grad: &Self,
         x: &Self,
         y: &Self,
-    ) -> Option<Vec<Option<Tensor>>> {
+    ) -> Option<Vec<Option<Storage>>> {
         let (grad_a, grad_b) = Self::gpu_binary_backward_broadcast_safe(
             &out_grad.data,
             &x.data,
@@ -440,12 +430,8 @@ impl RawTensor {
             x.shape.truncate_rank(),
             y.shape.truncate_rank(),
         )?;
-        let gx = x
-            .requires_grad
-            .then(|| Self::new_with_storage(grad_a, x.shape.clone(), x.device.clone(), false));
-        let gy = y
-            .requires_grad
-            .then(|| Self::new_with_storage(grad_b, y.shape.clone(), y.device.clone(), false));
+        let gx = x.requires_grad.then_some(grad_a);
+        let gy = y.requires_grad.then_some(grad_b);
         Some(vec![gx, gy])
     }
 
@@ -1231,8 +1217,6 @@ mod tests {
                 ] {
                     let got = got
                         .unwrap_or_else(|| panic!("{op:?}: missing {name} gradient"))
-                        .borrow()
-                        .data
                         .to_vec();
                     assert_eq!(got.len(), want.len(), "{op:?} {name} length");
                     for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {

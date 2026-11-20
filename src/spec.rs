@@ -142,16 +142,6 @@ impl Conv2dSpec {
         self.in_w + 2 * self.pad_w
     }
 
-    /// Input shape as `[B, C, H, W]`.
-    pub(crate) fn input_dims(&self) -> [usize; 4] {
-        [self.batch, self.in_ch, self.in_h, self.in_w]
-    }
-
-    /// Weight shape as `[O, C, Kh, Kw]`.
-    pub(crate) fn weight_dims(&self) -> [usize; 4] {
-        [self.out_ch, self.in_ch, self.kernel_h, self.kernel_w]
-    }
-
     /// Output shape as `[B, C, H, W]`.
     pub(crate) fn output_dims(&self) -> [usize; 4] {
         [self.batch, self.out_ch, self.out_h, self.out_w]
@@ -348,11 +338,6 @@ impl Window2dSpec {
             out_h,
             out_w,
         })
-    }
-
-    /// Input shape as `[B, C, H, W]`.
-    pub(crate) fn input_dims(&self) -> [usize; 4] {
-        [self.batch, self.channels, self.in_h, self.in_w]
     }
 
     /// Input height after padding.
@@ -573,8 +558,6 @@ mod tests {
         assert_eq!((spec.stride_h, spec.stride_w), (2, 1));
         assert_eq!((spec.pad_h, spec.pad_w), (1, 0));
         assert_eq!((spec.padded_h(), spec.padded_w()), (10, 9));
-        assert_eq!(spec.input_dims(), [2, 3, 8, 9]);
-        assert_eq!(spec.weight_dims(), [5, 3, 3, 2]);
         assert_eq!(spec.output_dims(), [2, 5, spec.out_h, spec.out_w]);
     }
 
@@ -583,7 +566,10 @@ mod tests {
         let spec =
             Conv2dSpec::new(&shape(&[2, 3, 8, 9]), &shape(&[5, 3, 3, 2]), (2, 1), (1, 2)).unwrap();
         let window = spec.padded_window();
-        assert_eq!(window.input_dims(), [2, 3, 10, 13]);
+        assert_eq!(
+            (window.batch, window.channels, window.in_h, window.in_w),
+            (2, 3, 10, 13)
+        );
         assert_eq!((window.kernel_h, window.kernel_w), (3, 2));
         assert_eq!((window.stride_h, window.stride_w), (2, 1));
         assert_eq!((window.pad_h, window.pad_w), (0, 0));
