@@ -326,13 +326,29 @@ impl RawTensor {
         if !device_a.is_gpu() || !device_b.is_gpu() || device_a != device_b {
             return None;
         }
-        if shape_a != shape_b {
-            return None;
-        }
+        let shape = Self::flat_broadcast(&shape_a, &shape_b)?;
 
         let storage = Self::gpu_binary(&storage_a, &storage_b, op)
             .unwrap_or_else(|| kernel_failed(&format!("Binary({op:?})")));
-        Some((shape_a, storage, device_a))
+        Some((shape, storage, device_a))
+    }
+
+    /// The broadcast shape of `a` and `b` if broadcasting repeats no element: both have
+    /// as many elements as the result, so each broadcast is a pure reshape and the
+    /// same-shape kernels read both buffers in the result's flat order. That covers equal
+    /// shapes and shapes that differ only by size-1 axes, such as a rank-0 loss times a
+    /// `[1]` constant (#100). `None` for a real broadcast (a gap) or incompatible shapes
+    /// (the CPU path reports those).
+    #[cfg(feature = "gpu")]
+    fn flat_broadcast(a: &Shape, b: &Shape) -> Option<Shape> {
+        if a == b {
+            return Some(a.clone());
+        }
+        if a.numel() != b.numel() {
+            return None;
+        }
+        let out = a.broadcast(b).ok()?;
+        (out.numel() == a.numel()).then_some(out)
     }
 
     /// Not-gpu stub: the CPU path always runs.
@@ -366,7 +382,10 @@ impl RawTensor {
         // Gap until the broadcast backward bind groups are fixed (issue #60, "GPU broadcast
         // backward is broken"): `None` sends differing shapes to the CPU path, and the
         // device policy applies when the gradient reaches its GPU parameter.
-        if !(out_grad.shape == x.shape && out_grad.shape == y.shape) {
+        // Equal element counts mean the broadcast repeated nothing (`flat_broadcast`), so
+        // each gradient is `out_grad`'s buffer in its operand's shape.
+        let n = out_grad.shape.numel();
+        if !(x.shape.numel() == n && y.shape.numel() == n) {
             return None;
         }
         Some(

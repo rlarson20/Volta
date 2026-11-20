@@ -200,6 +200,7 @@ fn test_shrink_wrong_length_too_short() {
         | VoltaError::BroadcastError(..)
         | VoltaError::DeviceError(_)
         | VoltaError::Io(_)
+        | VoltaError::Decode { .. }
         | VoltaError::NotScalar { .. }
         | VoltaError::NoGradRequired
         | VoltaError::OpError(_)
@@ -241,6 +242,7 @@ fn test_shrink_wrong_length_too_long() {
         | VoltaError::BroadcastError(..)
         | VoltaError::DeviceError(_)
         | VoltaError::Io(_)
+        | VoltaError::Decode { .. }
         | VoltaError::NotScalar { .. }
         | VoltaError::NoGradRequired
         | VoltaError::OpError(_)
@@ -271,6 +273,7 @@ fn test_shrink_out_of_bounds_end() {
         | VoltaError::BroadcastError(..)
         | VoltaError::DeviceError(_)
         | VoltaError::Io(_)
+        | VoltaError::Decode { .. }
         | VoltaError::NotScalar { .. }
         | VoltaError::NoGradRequired
         | VoltaError::InvalidParameter(_)
@@ -302,6 +305,7 @@ fn test_shrink_start_exceeds_dimension() {
         | VoltaError::BroadcastError(..)
         | VoltaError::DeviceError(_)
         | VoltaError::Io(_)
+        | VoltaError::Decode { .. }
         | VoltaError::NotScalar { .. }
         | VoltaError::NoGradRequired
         | VoltaError::InvalidParameter(_)
@@ -340,6 +344,7 @@ fn test_shrink_invalid_range_order() {
         | VoltaError::BroadcastError(..)
         | VoltaError::DeviceError(_)
         | VoltaError::Io(_)
+        | VoltaError::Decode { .. }
         | VoltaError::NotScalar { .. }
         | VoltaError::NoGradRequired
         | VoltaError::OpError(_)
@@ -377,6 +382,7 @@ fn test_shrink_empty_range() {
         | VoltaError::BroadcastError(..)
         | VoltaError::DeviceError(_)
         | VoltaError::Io(_)
+        | VoltaError::Decode { .. }
         | VoltaError::NotScalar { .. }
         | VoltaError::NoGradRequired
         | VoltaError::OpError(_)
@@ -410,6 +416,7 @@ fn test_shrink_both_empty_ranges() {
         | VoltaError::BroadcastError(..)
         | VoltaError::DeviceError(_)
         | VoltaError::Io(_)
+        | VoltaError::Decode { .. }
         | VoltaError::NotScalar { .. }
         | VoltaError::NoGradRequired
         | VoltaError::OpError(_)
@@ -1089,7 +1096,7 @@ fn test_scalar_sum() {
     let x = RawTensor::new(vec![42.0], &[1], false);
     let s = x.sum();
 
-    assert_eq!(s.borrow().shape, vec![1]);
+    assert_eq!(s.borrow().shape, Vec::<usize>::new());
     assert_eq!(
         s.borrow()
             .data
@@ -1107,7 +1114,7 @@ fn test_scalar_mean() {
     let x = RawTensor::new(vec![99.0], &[1], false);
     let m = x.mean();
 
-    assert_eq!(m.borrow().shape, vec![1]);
+    assert_eq!(m.borrow().shape, Vec::<usize>::new());
     assert_eq!(
         m.borrow()
             .data
@@ -1125,7 +1132,7 @@ fn test_scalar_max() {
     let x = RawTensor::new(vec![17.0], &[1], false);
     let m = x.max_reduce();
 
-    assert_eq!(m.borrow().shape, vec![1]);
+    assert_eq!(m.borrow().shape, Vec::<usize>::new());
     assert_eq!(
         m.borrow()
             .data

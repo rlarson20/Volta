@@ -156,7 +156,13 @@ pub(crate) fn promote_operands(
             }
         );
     }
-    let common = dtypes.iter().copied().fold(first, DType::promote);
+    // torch's `result_type`: a zero-dim operand promotes only across categories (#100).
+    let ranked: Vec<(DType, bool)> = operands
+        .iter()
+        .zip(&dtypes)
+        .map(|(t, &d)| (d, t.shape().rank() == 0))
+        .collect();
+    let common = DType::result_type(&ranked);
     let target = if float_result && !common.is_float() {
         DType::F32
     } else {
