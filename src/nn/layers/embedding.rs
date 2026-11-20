@@ -1,8 +1,10 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
 use crate::dtype::DType;
+use crate::error::OrPanic;
 use crate::index::{fetch, slot, span};
 use crate::io::StateDict;
+use crate::nn::hyper;
 use crate::nn::{Layer, Module};
 use crate::real::{Real, dispatch_real};
 use crate::shape::Shape;
@@ -59,12 +61,21 @@ impl Embedding {
     /// Weights are initialized uniformly in the range [-0.1, 0.1]
     ///
     /// # Panics
-    /// If `vocab_size` or `embedding_dim` is zero.
+    /// If `vocab_size` or `embedding_dim` is zero (see [`Self::try_new`]).
     #[must_use]
     #[track_caller]
     pub fn new(vocab_size: usize, embedding_dim: usize) -> Self {
-        assert!(vocab_size > 0, "vocab_size must be positive");
-        assert!(embedding_dim > 0, "embedding_dim must be positive");
+        Self::try_new(vocab_size, embedding_dim).or_panic("Embedding")
+    }
+
+    /// [`Self::new`], checking the sizes first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` naming the argument if `vocab_size` or
+    /// `embedding_dim` is zero.
+    pub fn try_new(vocab_size: usize, embedding_dim: usize) -> crate::Result<Self> {
+        hyper::at_least_one("Embedding", "vocab_size", vocab_size)?;
+        hyper::at_least_one("Embedding", "embedding_dim", embedding_dim)?;
 
         // Uniform [-0.1, 0.1]. This is not PyTorch's default, which is N(0, 1)
         // (docs/audits/2026-11-sweep.md, D2).
@@ -78,11 +89,11 @@ impl Embedding {
         let weight = RawTensor::new(data, &[vocab_size, embedding_dim], false);
         weight.set_requires_grad(true);
 
-        Self {
+        Ok(Self {
             weight,
             vocab_size,
             dim: embedding_dim,
-        }
+        })
     }
 }
 
@@ -183,11 +194,8 @@ impl Module for Embedding {
         state
     }
 
-    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
-        if let Some(weight_data) = state.get("weight") {
-            self.weight.load_weight("weight", weight_data)?;
-        }
-        Ok(())
+    fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+        plan.param("weight", &self.weight);
     }
 }
 
@@ -211,7 +219,7 @@ impl EmbeddingGradFn {
         &self,
         out_grad: &RawTensor,
         _parents: &[Tensor],
-    ) -> Vec<Option<Tensor>> {
+    ) -> Vec<Option<Storage>> {
         // out_grad: [num_indices, embedding_dim]
         // Scatter gradients to weight: [vocab_size, embedding_dim]
 
@@ -226,10 +234,7 @@ impl EmbeddingGradFn {
                     *slot(&mut grad_weight, weight_idx) += fetch(&g_host, out_grad_idx);
                 }
             }
-            RawTensor::from_shape_compute(out_grad.data.dtype(),
-                grad_weight,
-                Shape::derived(vec![self.vocab_size, self.embedding_dim]),
-            )
+            Storage::from_compute(out_grad.data.dtype(), grad_weight)
         });
 
         vec![Some(grad_tensor)]

@@ -14,14 +14,18 @@ use crate::shape::MAX_NUMEL;
 /// otherwise write NaN or infinity into every element. `data` is unchanged on an error.
 pub fn try_normalize(data: &mut [f32], mean: f32, std: f32) -> Result<()> {
     if !mean.is_finite() {
-        return Err(VoltaError::InvalidParameter(format!(
-            "normalize: mean must be finite, got {mean}"
-        )));
+        return Err(VoltaError::invalid(
+            "normalize",
+            Some("mean"),
+            format!("mean must be finite, got {mean}"),
+        ));
     }
     if !(std.is_finite() && std > 0.0) {
-        return Err(VoltaError::InvalidParameter(format!(
-            "normalize: std must be finite and > 0, got {std}"
-        )));
+        return Err(VoltaError::invalid(
+            "normalize",
+            Some("std"),
+            format!("std must be finite and > 0, got {std}"),
+        ));
     }
     for x in data.iter_mut() {
         *x = (*x - mean) / std;
@@ -53,10 +57,14 @@ pub fn normalize(data: &mut [f32], mean: f32, std: f32) {
 /// on the last one.
 pub fn to_one_hot(labels: &[u8], num_classes: usize) -> Result<Vec<f32>> {
     let too_big = || {
-        VoltaError::InvalidParameter(format!(
-            "one-hot of {} labels x {num_classes} classes is zero-sized or over {MAX_NUMEL} elements",
-            labels.len()
-        ))
+        VoltaError::invalid(
+            "to_one_hot",
+            Some("num_classes"),
+            format!(
+                "one-hot of {} labels x {num_classes} classes is zero-sized or over {MAX_NUMEL} elements",
+                labels.len()
+            ),
+        )
     };
     let total = labels
         .len()
@@ -70,9 +78,11 @@ pub fn to_one_hot(labels: &[u8], num_classes: usize) -> Result<Vec<f32>> {
 
     for (i, &label) in labels.iter().enumerate() {
         if usize::from(label) >= num_classes {
-            return Err(VoltaError::InvalidParameter(format!(
-                "label {label} at index {i} is out of range for {num_classes} classes"
-            )));
+            return Err(VoltaError::invalid(
+                "to_one_hot",
+                Some("labels"),
+                format!("label {label} at index {i} is out of range for {num_classes} classes"),
+            ));
         }
         *slot(&mut one_hot, i * num_classes + usize::from(label)) = 1.0;
     }

@@ -24,7 +24,9 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
+use crate::VoltaError;
 use crate::dtype::DType;
+use crate::error::OrPanic;
 use crate::nn::optim::Optimizer;
 use crate::real::{Real, dispatch_real};
 
@@ -64,6 +66,7 @@ pub fn autocast(dtype: DType) -> AutocastGuard {
 /// Ends an [`autocast`] scope on drop, restoring the enclosing one.
 ///
 /// `!Send`: the scope is thread-local, like `NoGradGuard`.
+#[derive(Debug)]
 pub struct AutocastGuard {
     /// The scope to restore.
     prev: Option<DType>,
@@ -200,8 +203,7 @@ impl GradScaler {
     /// A scaler with explicit settings.
     ///
     /// # Panics
-    /// Unless `init_scale > 0`, `growth_factor > 1`, `0 < backoff_factor < 1`, and
-    /// `growth_interval > 0` (PyTorch's checks).
+    /// If an argument is out of range (see [`Self::try_with_params`]).
     #[must_use]
     #[track_caller]
     pub fn with_params(
@@ -210,24 +212,51 @@ impl GradScaler {
         backoff_factor: f64,
         growth_interval: u32,
     ) -> Self {
-        assert!(init_scale > 0.0, "GradScaler: init_scale must be > 0");
-        assert!(growth_factor > 1.0, "GradScaler: growth_factor must be > 1");
-        assert!(
-            backoff_factor > 0.0 && backoff_factor < 1.0,
-            "GradScaler: backoff_factor must be in (0, 1)"
-        );
-        assert!(
-            growth_interval > 0,
-            "GradScaler: growth_interval must be > 0"
-        );
-        Self {
+        Self::try_with_params(init_scale, growth_factor, backoff_factor, growth_interval)
+            .or_panic("GradScaler")
+    }
+
+    /// [`Self::with_params`], checking the settings first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` naming the argument unless `init_scale > 0`,
+    /// `growth_factor > 1`, `0 < backoff_factor < 1` and `growth_interval > 0` (PyTorch's
+    /// checks), with `init_scale` and `growth_factor` finite: an infinite scale made every
+    /// scaled loss infinite (#133).
+    pub fn try_with_params(
+        init_scale: f64,
+        growth_factor: f64,
+        backoff_factor: f64,
+        growth_interval: u32,
+    ) -> crate::Result<Self> {
+        /// The error for argument `arg`.
+        fn bad(arg: &'static str, rule: &str, value: impl std::fmt::Display) -> VoltaError {
+            VoltaError::invalid(
+                "GradScaler",
+                arg,
+                format!("{arg} must be {rule}, got {value}"),
+            )
+        }
+        if !(init_scale.is_finite() && init_scale > 0.0) {
+            return Err(bad("init_scale", "finite and > 0", init_scale));
+        }
+        if !(growth_factor.is_finite() && growth_factor > 1.0) {
+            return Err(bad("growth_factor", "finite and > 1", growth_factor));
+        }
+        if !(backoff_factor > 0.0 && backoff_factor < 1.0) {
+            return Err(bad("backoff_factor", "in (0, 1)", backoff_factor));
+        }
+        if growth_interval == 0 {
+            return Err(bad("growth_interval", "at least 1", growth_interval));
+        }
+        Ok(Self {
             scale: init_scale,
             growth_factor,
             backoff_factor,
             growth_interval,
             growth_tracker: 0,
             stages: HashMap::new(),
-        }
+        })
     }
 
     /// The current loss scale.

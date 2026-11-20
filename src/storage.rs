@@ -1,10 +1,11 @@
 //! Tensor storage: a typed host buffer, or a GPU buffer of F32, F16, BF16 or Bool.
 //!
-//! CPU data is a [`HostBuf`]: one `Arc<[T]>` per dtype, so alignment and element type are
-//! guaranteed by the type rather than by a tag next to a byte buffer. Kernels read their
-//! inputs through `host::<T>()` for `T` = f32 or f64 (`crate::real`), which panics on any
-//! other dtype rather than converting it. GPU storage holds F32, F16, BF16 or Bool (P8); its
-//! host copy is a [`HostBuf`] too, so host reads treat both variants alike.
+//! [`Storage`] is opaque (#356). CPU data is a crate-private `HostBuf`: one `Arc<[T]>` per
+//! dtype, so alignment and element type are guaranteed by the type rather than by a tag
+//! next to a byte buffer. Kernels read their inputs through `host::<T>()` for `T` = f32 or
+//! f64 (`crate::real`), which panics on any other dtype rather than converting it. GPU
+//! storage holds F32, F16, BF16 or Bool (P8); its host copy is a `HostBuf` too, so host
+//! reads treat CPU and GPU storage alike.
 
 use crate::VoltaError;
 use crate::device::Device;
@@ -32,33 +33,87 @@ compile_error!(
 #[cfg(feature = "gpu")]
 use std::sync::OnceLock;
 
-/// CPU element data, one variant per [`DType`].
-///
-/// The buffer is shared: `clone` bumps a refcount instead of copying. The only write path
-/// is [`Storage::as_host_mut`], which copies first if the buffer is shared
-/// (copy-on-write), so a write to one storage is never visible through another.
-#[non_exhaustive]
-#[derive(Clone)]
-pub enum HostBuf {
-    /// IEEE half precision.
-    F16(Arc<[f16]>),
-    /// bfloat16.
-    BF16(Arc<[bf16]>),
-    /// IEEE single precision.
-    F32(Arc<[f32]>),
-    /// IEEE double precision.
-    F64(Arc<[f64]>),
-    /// 32-bit signed integers.
-    I32(Arc<[i32]>),
-    /// 64-bit signed integers.
-    I64(Arc<[i64]>),
-    /// 8-bit unsigned integers.
-    U8(Arc<[u8]>),
-    /// Booleans.
-    Bool(Arc<[bool]>),
+/// [`HostBuf`]'s definition. A private module holding a `pub` type: the sealed `Element`
+/// plumbing names it in `pub` trait methods, so it cannot be `pub(crate)` without a
+/// `private_interfaces` warning, but other crates cannot name it (#356).
+mod host_buf {
+    use super::{Arc, bf16, f16};
+
+    /// CPU element data, one variant per [`DType`](super::DType).
+    ///
+    /// The buffer is shared: `clone` bumps a refcount instead of copying. The only write path
+    /// is [`Storage::as_host_mut`](super::Storage::as_host_mut), which copies first if the buffer is shared
+    /// (copy-on-write), so a write to one storage is never visible through another.
+    #[derive(Clone)]
+    pub enum HostBuf {
+        /// IEEE half precision.
+        F16(Arc<[f16]>),
+        /// bfloat16.
+        BF16(Arc<[bf16]>),
+        /// IEEE single precision.
+        F32(Arc<[f32]>),
+        /// IEEE double precision.
+        F64(Arc<[f64]>),
+        /// 32-bit signed integers.
+        I32(Arc<[i32]>),
+        /// 64-bit signed integers.
+        I64(Arc<[i64]>),
+        /// 8-bit unsigned integers.
+        U8(Arc<[u8]>),
+        /// Booleans.
+        Bool(Arc<[bool]>),
+    }
+
+    /// The dtype and length, not the values.
+    impl std::fmt::Debug for HostBuf {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "HostBuf({} elements, {})", self.len(), self.dtype())
+        }
+    }
 }
 
+pub(crate) use host_buf::HostBuf;
+
 impl HostBuf {
+    /// Elements decoded from native-endian bytes: [`Storage::try_from_bytes`]'s decoder,
+    /// also used for a GPU download.
+    ///
+    /// # Errors
+    /// As [`Storage::try_from_bytes`].
+    pub(crate) fn try_from_bytes(bytes: &[u8], dtype: DType) -> Result<Self, VoltaError> {
+        if !bytes.len().is_multiple_of(dtype.size_of()) {
+            return Err(VoltaError::invalid(
+                "Storage::try_from_bytes",
+                Some("bytes"),
+                format!(
+                    "byte length {} is not a multiple of the {dtype} size {}",
+                    bytes.len(),
+                    dtype.size_of()
+                ),
+            ));
+        }
+        let buf = match dtype {
+            DType::F16 => Self::F16(pod_from_bytes(bytes)),
+            DType::BF16 => Self::BF16(pod_from_bytes(bytes)),
+            DType::F32 => Self::F32(pod_from_bytes(bytes)),
+            DType::F64 => Self::F64(pod_from_bytes(bytes)),
+            DType::I32 => Self::I32(pod_from_bytes(bytes)),
+            DType::I64 => Self::I64(pod_from_bytes(bytes)),
+            DType::U8 => Self::U8(Arc::from(bytes)),
+            DType::Bool => {
+                if let Some((i, b)) = bytes.iter().enumerate().find(|&(_, &b)| b > 1) {
+                    return Err(VoltaError::invalid(
+                        "Storage::try_from_bytes",
+                        Some("bytes"),
+                        format!("bool element {i} is the byte {b}, not 0 or 1"),
+                    ));
+                }
+                Self::Bool(bytes.iter().map(|&b| b == 1).collect())
+            }
+        };
+        Ok(buf)
+    }
+
     /// The dtype of the elements.
     #[must_use]
     pub const fn dtype(&self) -> DType {
@@ -124,7 +179,7 @@ mod sealed {
 
     /// A value only this crate can build: the private field keeps other crates from
     /// constructing one, so they cannot call the methods that take it.
-    #[derive(Clone, Copy)]
+    #[derive(Debug, Clone, Copy)]
     pub struct Internal(());
 
     /// The one `Internal` value.
@@ -189,19 +244,33 @@ element!(i64, I64, others: F16 | BF16 | F32 | F64 | I32 | U8 | Bool);
 element!(u8, U8, others: F16 | BF16 | F32 | F64 | I32 | I64 | Bool);
 element!(bool, Bool, others: F16 | BF16 | F32 | F64 | I32 | I64 | U8);
 
-/// Storage backend for tensor data
+/// Storage backend for tensor data: a typed host buffer on the CPU, or a GPU buffer of
+/// F32, F16, BF16 or Bool.
 ///
-/// This enum allows tensors to store their data either on CPU (a typed [`HostBuf`]) or on
-/// GPU (a `GpuBuffer` of F32, F16, BF16 or Bool).
+/// Opaque (#356): the representation (the host buffer type, the GPU handle) is private, so
+/// changing it is not a breaking change, and the type is the same with and without the
+/// `gpu` feature. Read storage through the methods (`dtype`, `len`, `is_gpu`, `as_host`,
+/// `to_host_f32`, `to_device`).
 ///
-/// `#[non_exhaustive]`, with the same two variants with and without the `gpu` feature
-/// (#340): a `match` outside this crate needs a wildcard arm, so it compiles the same
-/// whichever features the build turns on. Without `gpu` the `Gpu` variant cannot be
-/// built. Its payload can be matched (`Storage::Gpu(_)`) but not named or used; read
-/// storage through the methods (`dtype`, `len`,
-/// `is_gpu`, `as_host`, `to_host_f32`, `to_device`).
-#[non_exhaustive]
-pub enum Storage {
+/// The buffer is shared: `clone` bumps a refcount instead of copying. The only write
+/// paths are [`Storage::as_host_mut`] on the CPU and an internal one on the GPU; both copy
+/// first if the buffer is shared (copy-on-write), so a write to one storage is never
+/// visible through another.
+///
+/// There are no variants to match: this does not compile.
+///
+/// ```compile_fail,E0599
+/// use volta::storage::Storage;
+///
+/// let s = Storage::cpu(vec![1.0]);
+/// let Storage::Cpu(_) = s else { return };
+/// ```
+#[derive(Clone)]
+pub struct Storage(Repr);
+
+/// Where the elements live.
+#[derive(Clone)]
+enum Repr {
     /// CPU storage: a typed, shared, copy-on-write buffer.
     Cpu(HostBuf),
 
@@ -210,12 +279,18 @@ pub enum Storage {
     /// Shared like the CPU variant: `clone` bumps a refcount, and the only write path is
     /// `Storage::gpu_buffer_mut`, which copies the buffer first if it is shared. So a
     /// shared buffer never changes, and the host copy cached beside it never goes stale.
-    /// Present without the `gpu` feature too, but never built there.
+    /// Without the `gpu` feature `GpuStorage` has no values, so this is never built.
+    #[cfg_attr(
+        not(feature = "gpu"),
+        expect(
+            dead_code,
+            reason = "uninhabited without `gpu`; one variant set keeps the payload-free arms (`is_gpu`, `as_host`) free of cfg"
+        )
+    )]
     Gpu(Arc<GpuStorage>),
 }
 
-/// The payload of [`Storage::Gpu`]. A private module holding a `pub` type: other crates can
-/// match `Storage::Gpu(_)` but cannot name, build or use what it holds (#340).
+/// The payload of GPU [`Storage`].
 mod gpu_shared {
     #[cfg(feature = "gpu")]
     use super::{GpuBuffer, HostBuf, OnceLock};
@@ -245,24 +320,13 @@ mod gpu_shared {
         }
     }
 
-    /// Without the `gpu` feature there is no GPU storage: [`Storage::Gpu`](super::Storage::Gpu)
-    /// exists, so `Storage` has one variant set in every build (#340), but this type has no
-    /// values, so it is never built. Matches inside the crate handle the variant with
-    /// `match **never {}`.
+    /// Without the `gpu` feature there is no GPU storage: this type has no values, so the
+    /// GPU variant is never built. Matches handle it with `match **never {}`.
     #[cfg(not(feature = "gpu"))]
     pub enum GpuStorage {}
 }
 
 use gpu_shared::GpuStorage;
-
-impl Clone for Storage {
-    fn clone(&self) -> Self {
-        match self {
-            Self::Cpu(buf) => Self::Cpu(buf.clone()),
-            Self::Gpu(shared) => Self::Gpu(Arc::clone(shared)),
-        }
-    }
-}
 
 /// Decode native-endian (so little-endian, see the `compile_error!` above) `bytes` as
 /// `T`s; the copy handles any alignment.
@@ -366,7 +430,7 @@ impl Storage {
     /// CPU storage from data of any [`Element`] type; the dtype follows `T`.
     #[must_use]
     pub fn from_typed<T: Element>(data: Vec<T>) -> Self {
-        Self::Cpu(T::wrap(Arc::from(data), INTERNAL))
+        Self(Repr::Cpu(T::wrap(Arc::from(data), INTERNAL)))
     }
 
     /// CPU storage decoded from native-endian bytes (panicking form of
@@ -389,31 +453,7 @@ impl Storage {
     /// `InvalidParameter` if the byte length is not a multiple of the dtype's size, or a
     /// `Bool` byte is neither 0 nor 1.
     pub fn try_from_bytes(bytes: &[u8], dtype: DType) -> Result<Self, VoltaError> {
-        if !bytes.len().is_multiple_of(dtype.size_of()) {
-            return Err(VoltaError::InvalidParameter(format!(
-                "byte length {} is not a multiple of the {dtype} size {}",
-                bytes.len(),
-                dtype.size_of()
-            )));
-        }
-        let buf = match dtype {
-            DType::F16 => HostBuf::F16(pod_from_bytes(bytes)),
-            DType::BF16 => HostBuf::BF16(pod_from_bytes(bytes)),
-            DType::F32 => HostBuf::F32(pod_from_bytes(bytes)),
-            DType::F64 => HostBuf::F64(pod_from_bytes(bytes)),
-            DType::I32 => HostBuf::I32(pod_from_bytes(bytes)),
-            DType::I64 => HostBuf::I64(pod_from_bytes(bytes)),
-            DType::U8 => HostBuf::U8(Arc::from(bytes)),
-            DType::Bool => {
-                if let Some((i, b)) = bytes.iter().enumerate().find(|&(_, &b)| b > 1) {
-                    return Err(VoltaError::InvalidParameter(format!(
-                        "bool element {i} is the byte {b}, not 0 or 1"
-                    )));
-                }
-                HostBuf::Bool(bytes.iter().map(|&b| b == 1).collect())
-            }
-        };
-        Ok(Self::Cpu(buf))
+        HostBuf::try_from_bytes(bytes, dtype).map(|buf| Self(Repr::Cpu(buf)))
     }
 
     /// Create new GPU storage from f32 data.
@@ -454,7 +494,7 @@ impl Storage {
     #[cfg(feature = "gpu")]
     #[must_use]
     pub(crate) fn from_gpu_buffer(buffer: GpuBuffer) -> Self {
-        Self::Gpu(Arc::new(GpuStorage::new(buffer)))
+        Self(Repr::Gpu(Arc::new(GpuStorage::new(buffer))))
     }
 
     // ========== Dtype Access ==========
@@ -462,24 +502,24 @@ impl Storage {
     /// Get the data type of this storage
     #[must_use]
     pub fn dtype(&self) -> DType {
-        match self {
-            Self::Cpu(buf) => buf.dtype(),
+        match &self.0 {
+            Repr::Cpu(buf) => buf.dtype(),
             #[cfg(feature = "gpu")]
-            Self::Gpu(shared) => shared.buffer.dtype(),
+            Repr::Gpu(shared) => shared.buffer.dtype(),
             #[cfg(not(feature = "gpu"))]
-            Self::Gpu(never) => match **never {},
+            Repr::Gpu(never) => match **never {},
         }
     }
 
     /// The elements on the host: the CPU buffer, or GPU storage's host copy (read from
     /// the device once, then cached; the buffer never changes while shared).
     fn host_buf(&self) -> &HostBuf {
-        match self {
-            Self::Cpu(buf) => buf,
+        match &self.0 {
+            Repr::Cpu(buf) => buf,
             #[cfg(feature = "gpu")]
-            Self::Gpu(shared) => shared.host.get_or_init(|| shared.buffer.to_host()),
+            Repr::Gpu(shared) => shared.host.get_or_init(|| shared.buffer.to_host()),
             #[cfg(not(feature = "gpu"))]
-            Self::Gpu(never) => match **never {},
+            Repr::Gpu(never) => match **never {},
         }
     }
 
@@ -527,13 +567,15 @@ impl Storage {
     /// `DeviceError` if the storage is on the GPU (use [`Self::to_host_f32`]), and
     /// `DTypeMismatch` if the dtype is not `T`'s.
     pub fn as_host<T: Element>(&self) -> Result<&[T], VoltaError> {
-        match self {
-            Self::Cpu(buf) => T::view(buf, INTERNAL).ok_or(VoltaError::DTypeMismatch {
+        match &self.0 {
+            Repr::Cpu(buf) => T::view(buf, INTERNAL).ok_or(VoltaError::DTypeMismatch {
                 expected: T::DTYPE,
                 actual: buf.dtype(),
             }),
-            Self::Gpu(_) => Err(VoltaError::DeviceError(
-                "as_host on GPU storage; use to_host_f32 for an explicit transfer".to_string(),
+            Repr::Gpu(_) => Err(VoltaError::device(
+                "Storage::as_host",
+                None,
+                "GPU storage has no host view; use to_host_f32 for an explicit transfer",
             )),
         }
     }
@@ -549,16 +591,18 @@ impl Storage {
     /// `DeviceError` if the storage is on the GPU, and `DTypeMismatch` if the dtype is
     /// not `T`'s.
     pub fn as_host_mut<T: Element>(&mut self) -> Result<&mut [T], VoltaError> {
-        match self {
-            Self::Cpu(buf) => {
+        match &mut self.0 {
+            Repr::Cpu(buf) => {
                 let actual = buf.dtype();
                 T::view_mut(buf, INTERNAL).ok_or(VoltaError::DTypeMismatch {
                     expected: T::DTYPE,
                     actual,
                 })
             }
-            Self::Gpu(_) => Err(VoltaError::DeviceError(
-                "as_host_mut on GPU storage; GPU storage has no host write path".to_string(),
+            Repr::Gpu(_) => Err(VoltaError::device(
+                "Storage::as_host_mut",
+                None,
+                "GPU storage has no host write path",
             )),
         }
     }
@@ -783,10 +827,10 @@ impl Storage {
             return self.clone();
         }
         #[cfg(feature = "gpu")]
-        if let Self::Gpu(shared) = self {
+        if let Repr::Gpu(shared) = &self.0 {
             return Self::cast_on_gpu(&shared.buffer, target);
         }
-        Self::Cpu(match self.host_buf() {
+        Self(Repr::Cpu(match self.host_buf() {
             HostBuf::F16(d) => cast_float(d.iter().map(|x| f64::from(x.to_f32())), target),
             HostBuf::BF16(d) => cast_float(d.iter().map(|x| f64::from(x.to_f32())), target),
             HostBuf::F32(d) => cast_float(d.iter().map(|&x| f64::from(x)), target),
@@ -795,7 +839,7 @@ impl Storage {
             HostBuf::I64(d) => cast_int(d.iter().map(|&x| i128::from(x)), target),
             HostBuf::U8(d) => cast_int(d.iter().map(|&x| i128::from(x)), target),
             HostBuf::Bool(d) => cast_int(d.iter().map(|&x| i128::from(x)), target),
-        })
+        }))
     }
 
     // ========== Length and Properties ==========
@@ -803,12 +847,12 @@ impl Storage {
     /// Get the number of elements
     #[must_use]
     pub fn len(&self) -> usize {
-        match self {
-            Self::Cpu(buf) => buf.len(),
+        match &self.0 {
+            Repr::Cpu(buf) => buf.len(),
             #[cfg(feature = "gpu")]
-            Self::Gpu(shared) => shared.buffer.len(),
+            Repr::Gpu(shared) => shared.buffer.len(),
             #[cfg(not(feature = "gpu"))]
-            Self::Gpu(never) => match **never {},
+            Repr::Gpu(never) => match **never {},
         }
     }
 
@@ -821,9 +865,9 @@ impl Storage {
     /// Check if this is GPU storage
     #[must_use]
     pub const fn is_gpu(&self) -> bool {
-        match self {
-            Self::Cpu(_) => false,
-            Self::Gpu(_) => true,
+        match &self.0 {
+            Repr::Cpu(_) => false,
+            Repr::Gpu(_) => true,
         }
     }
 
@@ -867,41 +911,53 @@ impl Storage {
     /// ([`crate::gpu::max_tensor_bytes`]), checked before anything is allocated (#306).
     pub fn try_to_device(&self, device: &Device) -> Result<Self, VoltaError> {
         match device {
-            Device::CPU => Ok(match self {
+            Device::CPU => Ok(match &self.0 {
                 // Already host memory: share the buffer.
-                Self::Cpu(_) => self.clone(),
-                Self::Gpu(_) => Self::Cpu(self.host_buf().clone()),
+                Repr::Cpu(_) => self.clone(),
+                Repr::Gpu(_) => Self(Repr::Cpu(self.host_buf().clone())),
             }),
             Device::GPU(_) => {
                 #[cfg(feature = "gpu")]
                 {
                     if !is_gpu_available() {
-                        return Err(VoltaError::DeviceError(format!(
-                            "to_device({device}): no GPU is available"
-                        )));
+                        return Err(VoltaError::device(
+                            "to_device",
+                            Some("device"),
+                            format!("no GPU is available for {device}"),
+                        ));
                     }
-                    match self {
+                    match &self.0 {
                         // Already on the (only) GPU: share the buffer.
-                        Self::Gpu(_) => Ok(self.clone()),
-                        Self::Cpu(buf) => {
+                        Repr::Gpu(_) => Ok(self.clone()),
+                        Repr::Cpu(buf) => {
                             if !matches!(
                                 buf.dtype(),
                                 DType::F32 | DType::F16 | DType::BF16 | DType::Bool
                             ) {
-                                return Err(VoltaError::DeviceError(format!(
-                                    "to_device({device}): GPU tensors hold f32, f16, bf16 or \
+                                return Err(VoltaError::device(
+                                    "to_device",
+                                    Some("device"),
+                                    format!(
+                                        "{device}: GPU tensors hold f32, f16, bf16 or \
                                      bool, not {} (PyTorch's MPS refuses f64 too); cast with \
                                      to_dtype first",
-                                    buf.dtype()
-                                )));
+                                        buf.dtype()
+                                    ),
+                                ));
                             }
                             crate::gpu::check_fits(buf.dtype(), buf.len()).map_err(|e| {
-                                VoltaError::DeviceError(format!("to_device({device}): {e}"))
+                                VoltaError::device(
+                                    "to_device",
+                                    Some("device"),
+                                    format!("{device}: {e}"),
+                                )
                             })?;
                             let buffer = GpuBuffer::from_host(buf).ok_or_else(|| {
-                                VoltaError::DeviceError(format!(
-                                    "to_device({device}): GPU buffer allocation failed"
-                                ))
+                                VoltaError::device(
+                                    "to_device",
+                                    Some("device"),
+                                    format!("{device}: GPU buffer allocation failed"),
+                                )
                             })?;
                             Ok(Self::from_gpu_buffer(buffer))
                         }
@@ -909,10 +965,14 @@ impl Storage {
                 }
                 #[cfg(not(feature = "gpu"))]
                 {
-                    Err(VoltaError::DeviceError(format!(
-                        "to_device({device}): no GPU is available (built without the `gpu` \
+                    Err(VoltaError::device(
+                        "to_device",
+                        Some("device"),
+                        format!(
+                            "no GPU is available for {device} (built without the `gpu` \
                          feature)"
-                    )))
+                        ),
+                    ))
                 }
             }
         }
@@ -923,9 +983,9 @@ impl Storage {
     #[cfg(feature = "gpu")]
     #[must_use]
     pub(crate) fn gpu_buffer(&self) -> Option<&GpuBuffer> {
-        match self {
-            Self::Gpu(shared) => Some(&shared.buffer),
-            Self::Cpu(_) => None,
+        match &self.0 {
+            Repr::Gpu(shared) => Some(&shared.buffer),
+            Repr::Cpu(_) => None,
         }
     }
 
@@ -937,7 +997,7 @@ impl Storage {
     /// device copy fails.
     #[cfg(feature = "gpu")]
     pub(crate) fn gpu_buffer_mut(&mut self) -> Option<&GpuBuffer> {
-        let Self::Gpu(shared) = self else {
+        let Repr::Gpu(shared) = &mut self.0 else {
             return None;
         };
         if Arc::get_mut(shared).is_none() {
@@ -966,7 +1026,7 @@ impl Storage {
     /// ```
     #[cfg(feature = "gpu")]
     pub fn invalidate_cpu_cache(&mut self) {
-        if let Self::Gpu(shared) = self
+        if let Repr::Gpu(shared) = &mut self.0
             && let Some(unique) = Arc::get_mut(shared)
         {
             unique.host.take();
@@ -1002,19 +1062,19 @@ impl PartialEq<Storage> for Vec<f32> {
 
 impl std::fmt::Debug for Storage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Cpu(buf) => write!(f, "Storage::Cpu({} elements, {})", buf.len(), buf.dtype()),
+        match &self.0 {
+            Repr::Cpu(buf) => write!(f, "Storage(cpu, {} elements, {})", buf.len(), buf.dtype()),
             #[cfg(feature = "gpu")]
-            Self::Gpu(shared) => {
+            Repr::Gpu(shared) => {
                 write!(
                     f,
-                    "Storage::Gpu({} elements, {})",
+                    "Storage(gpu, {} elements, {})",
                     shared.buffer.len(),
                     shared.buffer.dtype()
                 )
             }
             #[cfg(not(feature = "gpu"))]
-            Self::Gpu(never) => match **never {},
+            Repr::Gpu(never) => match **never {},
         }
     }
 }
@@ -1226,7 +1286,7 @@ mod tests {
         let s = Storage::from_typed(vec![f16::from_f32(1.0), f16::from_f32(2.0)]).to_device(&gpu);
         assert_eq!(
             format!("{s:?}"),
-            format!("Storage::Gpu(2 elements, {})", DType::F16)
+            format!("Storage(gpu, 2 elements, {})", DType::F16)
         );
     }
 

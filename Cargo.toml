@@ -1,14 +1,15 @@
 [package]
 name = "volta"
-description = "A PyTorch-like Machine Learning framework."
+description = "A PyTorch-style tensor and autograd library in pure Rust, written to show how an autograd engine works rather than to be fast."
 version = "0.3.0"
 edition = "2024"
 rust-version = "1.89.0"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/rlarson20/Volta"
+documentation = "https://docs.rs/volta"
 keywords = ["ml", "machine-learning", "autodiff", "tensor"]
-categories = ["science"]
+categories = ["science", "science::ml"]
 # Ship the library and what `cargo test` on the package needs; leave out agent, audit and
 # tooling files (CLAUDE.md, .claude/, docs/, dev-docs/, notes/, scripts/, CI config).
 include = [
@@ -25,7 +26,7 @@ include = [
 rand = "0.10.3"
 rand_distr = "0.6.0"
 matrixmultiply = "0.3.10"
-log = "0.4"
+log = "0.4.29"
 safetensors = "0.8.0"
 thiserror = "2.0.18"
 libm = "0.2.16"
@@ -58,8 +59,8 @@ path = "examples/readme-2.rs"
 approx = "0.5.1"
 criterion = "0.8"
 trybuild = "1"
-serde_json = "1"
-rustversion = "1"
+serde_json = "1.0.100"
+rustversion = "1.0.6"
 # Validates every shader expansion without a device (src/gpu/shader_template.rs). Same
 # version as wgpu's own naga, so the lockfile keeps one copy.
 naga = { version = "30", features = ["wgsl-in"] }
@@ -91,6 +92,8 @@ harness = false
 
 [lints.rust]
 missing_docs = "deny"
+# Every public type can be `dbg!`ed and held in a `#[derive(Debug)]` struct (#116).
+missing_debug_implementations = "deny"
 
 # =============================================================================
 # Clippy Lints Configuration

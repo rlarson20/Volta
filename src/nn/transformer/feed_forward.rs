@@ -1,5 +1,7 @@
+use crate::error::OrPanic;
 use crate::io::StateDict;
-use crate::nn::{Dropout, GELU, Layer, Linear, Module, insert_prefixed, load_child};
+use crate::nn::hyper;
+use crate::nn::{Dropout, GELU, Layer, Linear, Module, insert_prefixed};
 use crate::tensor::Tensor;
 
 /// Feed-Forward Network (FFN) layer for transformer blocks
@@ -25,6 +27,7 @@ use crate::tensor::Tensor;
 /// # use volta::nn::FeedForward;
 /// let ffn = FeedForward::new(512, 4, 0.1);
 /// ```
+#[derive(Debug)]
 pub struct FeedForward {
     /// First projection, `embed_dim` to `embed_dim * expansion_factor`.
     expand: Linear,
@@ -50,20 +53,41 @@ impl FeedForward {
     /// * `dropout` - Dropout probability
     ///
     /// # Panics
-    /// If `dropout` is not in `[0, 1]`.
+    /// If an argument is out of range (see [`Self::try_new`]).
     #[must_use]
     #[track_caller]
     pub fn new(embed_dim: usize, expansion_factor: usize, dropout: f32) -> Self {
+        Self::try_new(embed_dim, expansion_factor, dropout).or_panic("FeedForward")
+    }
+
+    /// [`Self::new`], checking the arguments first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` naming the argument if `embed_dim` or
+    /// `expansion_factor` is zero, or `dropout` is not in `[0, 1]`.
+    pub fn try_new(embed_dim: usize, expansion_factor: usize, dropout: f32) -> crate::Result<Self> {
+        Self::check(embed_dim, expansion_factor, dropout)?;
         let intermediate_dim = embed_dim * expansion_factor;
 
-        Self {
+        Ok(Self {
             expand: Linear::new(embed_dim, intermediate_dim, true),
             contract: Linear::new(intermediate_dim, embed_dim, true),
             activation: GELU::new(),
             dropout: Dropout::new(dropout),
             embed_dim,
             expansion_factor,
-        }
+        })
+    }
+
+    /// `Ok` if `try_new` accepts these arguments.
+    pub(crate) fn check(
+        embed_dim: usize,
+        expansion_factor: usize,
+        dropout: f32,
+    ) -> crate::Result<()> {
+        hyper::at_least_one("FeedForward", "embed_dim", embed_dim)?;
+        hyper::at_least_one("FeedForward", "expansion_factor", expansion_factor)?;
+        hyper::unit_interval("FeedForward", "dropout", dropout)
     }
 
     /// Create a new feed-forward network with default settings
@@ -89,6 +113,12 @@ impl FeedForward {
     #[track_caller]
     pub fn forward(&self, x: &Tensor) -> Tensor {
         let input_shape = x.borrow().shape.clone();
+        assert!(
+            input_shape.rank() == 3 && input_shape.dim_at(2) == self.embed_dim,
+            "FeedForward: input must be [batch, seq_len, {}], got {:?}",
+            self.embed_dim,
+            input_shape.truncate_rank()
+        );
 
         // Reshape to 2D for Linear layers: [batch, seq_len, embed_dim] -> [batch * seq_len, embed_dim]
         let batch_size = input_shape.dim_at(0);
@@ -136,9 +166,9 @@ impl Module for FeedForward {
         state
     }
 
-    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
-        load_child(&mut self.expand, "expand.", state)?;
-        load_child(&mut self.contract, "contract.", state)
+    fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+        plan.child("expand.", &self.expand);
+        plan.child("contract.", &self.contract);
     }
 
     fn train(&mut self, mode: bool) {

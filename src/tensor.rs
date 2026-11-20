@@ -30,7 +30,7 @@ use std::rc::Rc;
 /// (needed for computation graphs) while still allowing mutation (for gradient accumulation).
 ///
 /// Single-threaded by design (DECISIONS.md, "Stay synchronous").
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Tensor {
     /// The shared node; private so downstream code cannot reach `RawTensor`'s fields.
     inner: Rc<RefCell<RawTensor>>,
@@ -79,6 +79,12 @@ impl Tensor {
         self.inner.as_ptr()
     }
 
+    /// This tensor's storage, for a `GradFn::backward` that builds its gradient with tensor
+    /// ops (#268): a refcount bump, and the handle is dropped.
+    pub(crate) fn into_grad_storage(self) -> crate::storage::Storage {
+        self.inner.borrow().data.clone()
+    }
+
     /// Whether `self` and `other` are handles to the same tensor (a `clone()` of a
     /// `Tensor` shares it), not merely equal values. A weight tied between two layers
     /// is the same tensor in both.
@@ -97,25 +103,19 @@ impl Tensor {
         self.inner.borrow().shape.clone()
     }
 
-    /// Overwrite this tensor's values from a state-dict entry (H7).
-    ///
-    /// Keeps the tensor's shape, device, `requires_grad` and graph metadata: only the
-    /// values change. A GPU-resident tensor stays on the GPU.
+    /// Checks that the state-dict entry `src` can overwrite this tensor's values, without
+    /// decoding it: the check [`crate::nn::LoadPlan`] makes on every entry before it
+    /// writes any (#65).
     ///
     /// # Errors
     ///
-    /// `VoltaError::StateShapeMismatch` if `src.shape` differs from this tensor's shape,
-    /// `VoltaError::StateDataLength` if `src.data` does not hold the bytes `src.shape` and
-    /// `src.dtype` need (`InvalidParameter` for a bool byte that is not 0 or 1), and
-    /// `VoltaError::DTypeMismatch` if this tensor is not a float dtype. The entry's values
-    /// are cast from `src.dtype` to this tensor's dtype (following [`Storage::cast`]), as
-    /// PyTorch's `load_state_dict` does.
-    /// `name` is the state-dict key, reported in the error. Nothing is written on error.
-    pub(crate) fn load_weight(&self, name: &str, src: &crate::io::TensorData) -> Result<()> {
-        let mut t = self.inner.borrow_mut();
-        // The entry keeps the dtype it was saved in and is cast to the destination's dtype
-        // below, as PyTorch's `load_state_dict` (`copy_`) does. Only a float destination
-        // can be a parameter.
+    /// `VoltaError::DTypeMismatch` if this tensor is not a float dtype (only a float
+    /// tensor can be a parameter), `VoltaError::StateShapeMismatch` if `src.shape`
+    /// differs from this tensor's shape, and `VoltaError::StateDataLength` if `src.data`
+    /// does not hold the bytes `src.shape` and `src.dtype` need (`InvalidParameter` for a
+    /// bool byte that is not 0 or 1). `name` is the state-dict key, reported in the error.
+    pub(crate) fn check_load(&self, name: &str, src: &crate::io::TensorData) -> Result<()> {
+        let t = self.inner.borrow();
         if !t.data.dtype().is_float() {
             return Err(VoltaError::DTypeMismatch {
                 expected: DType::F32,
@@ -130,8 +130,24 @@ impl Tensor {
                 actual: src.shape.clone(),
             });
         }
-        // Checks the byte count against `src`'s own shape and dtype before decoding.
+        // The byte count against `src`'s own shape and dtype, and bool bytes.
+        src.validate(name)
+    }
+
+    /// Overwrite this tensor's values from a state-dict entry (H7).
+    ///
+    /// Keeps the tensor's shape, device, `requires_grad` and graph metadata: only the
+    /// values change. A GPU-resident tensor stays on the GPU. The entry's values are cast
+    /// from `src.dtype` to this tensor's dtype (following [`Storage::cast`]), as
+    /// PyTorch's `load_state_dict` (`copy_`) does.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`Self::check_load`], which runs first; nothing is written on error.
+    pub(crate) fn load_weight(&self, name: &str, src: &crate::io::TensorData) -> Result<()> {
+        self.check_load(name, src)?;
         let saved = src.to_storage(name)?;
+        let mut t = self.inner.borrow_mut();
         // The explicit cast: the entry's dtype need not be the parameter's.
         let cpu = saved.cast(t.data.dtype());
         t.data = cpu.to_device(&t.device);
@@ -597,11 +613,20 @@ impl Clone for RawTensor {
 impl std::fmt::Debug for RawTensor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Tensor")
-            .field("shape", &self.shape)
+            .field("shape", &self.shape.truncate_rank())
+            .field("dtype", &self.data.dtype())
             .field("requires_grad", &self.requires_grad)
             .field("has_grad", &self.grad.is_some())
             .field("device", &self.device)
             .finish_non_exhaustive()
+    }
+}
+
+/// The tensor's shape, dtype, device and gradient state, not its values (#116): the
+/// `RawTensor` behind the handle, without the `Rc<RefCell<..>>` wrapping.
+impl std::fmt::Debug for Tensor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&*self.inner.borrow(), f)
     }
 }
 
@@ -741,26 +766,6 @@ impl RawTensor {
         Self::new_with_storage(Storage::cpu(data), shape, Device::CPU, requires_grad)
     }
 
-    /// CPU gradient (no grad of its own) of `dtype` from a kernel's `T` result and an
-    /// already-validated `Shape`: the typed twin of [`Self::from_shape`] for backward code,
-    /// rounded to a half dtype like any kernel output (`Storage::from_compute`).
-    ///
-    /// # Panics
-    ///
-    /// If `data.len()` != `shape.numel()`, or `dtype` cannot hold a `T` result.
-    pub(crate) fn from_shape_compute<T: crate::real::Real>(
-        dtype: DType,
-        data: Vec<T>,
-        shape: Shape,
-    ) -> Tensor {
-        Self::new_with_storage(
-            Storage::from_compute(dtype, data),
-            shape,
-            Device::CPU,
-            false,
-        )
-    }
-
     /// Element count of a shape that came from the caller, checked before anything is
     /// allocated (zero dimension, overflow, or more than `MAX_NUMEL` elements).
     pub(crate) fn checked_numel(shape: &[usize]) -> Result<usize> {
@@ -838,7 +843,11 @@ impl RawTensor {
     pub fn try_randn(shape: &[usize]) -> Result<Tensor> {
         let size = Self::checked_numel(shape)?;
         let normal = Normal::new(0.0, 1.0).map_err(|e| {
-            VoltaError::InvalidParameter(format!("Invalid normal distribution: {e}"))
+            VoltaError::invalid(
+                "randn",
+                Some("shape"),
+                format!("invalid normal distribution: {e}"),
+            )
         })?;
         let data: Vec<f32> = with_rng(|rng| (0..size).map(|_| normal.sample(rng)).collect());
 
@@ -900,9 +909,11 @@ impl RawTensor {
             [n] => (n, 1),
             [fan_in, fan_out] => (fan_in, fan_out),
             _ => {
-                return Err(VoltaError::InvalidParameter(format!(
-                    "xavier_uniform expects a rank-1 or rank-2 shape, got {shape:?}"
-                )));
+                return Err(VoltaError::invalid(
+                    "xavier_uniform",
+                    Some("shape"),
+                    format!("expects a rank-1 or rank-2 shape, got {shape:?}"),
+                ));
             }
         };
         let size = Self::checked_numel(shape)?;
@@ -940,8 +951,10 @@ impl RawTensor {
     /// [`Self::try_zeros`]
     pub fn try_he_initialization(shape: &[usize]) -> Result<Tensor> {
         if shape.is_empty() {
-            return Err(VoltaError::InvalidParameter(
-                "He initialization requires at least one dimension".to_string(),
+            return Err(VoltaError::invalid(
+                "he_initialization",
+                Some("shape"),
+                "requires at least one dimension".to_string(),
             ));
         }
         // After this, every dimension is non-zero, so `fan_in` below is positive.
@@ -954,8 +967,13 @@ impl RawTensor {
 
         let std_val: f32 = 2.0 / fan_in as f32;
         let std = std_val.sqrt();
-        let normal = Normal::new(0.0, std)
-            .map_err(|e| VoltaError::InvalidParameter(format!("Invalid He std: {e}")))?;
+        let normal = Normal::new(0.0, std).map_err(|e| {
+            VoltaError::invalid(
+                "he_initialization",
+                Some("shape"),
+                format!("invalid std: {e}"),
+            )
+        })?;
         let data: Vec<f32> = with_rng(|rng| (0..size).map(|_| normal.sample(rng)).collect());
 
         Self::try_new(data, shape, false)
@@ -1067,6 +1085,12 @@ impl RawTensor {
     pub fn cross_entropy_loss(logits: &Tensor, targets: &Tensor) -> Tensor {
         // An f32 op under `amp::autocast` (PyTorch's losses): half inputs are cast up.
         let (logits, targets) = (&crate::amp::to_f32(logits), &crate::amp::to_f32(targets));
+        let rank = logits.borrow().shape.rank();
+        assert!(
+            rank == 2,
+            "cross_entropy_loss: logits must be [N, C], got rank {rank} ({:?})",
+            logits.borrow().shape.truncate_rank()
+        );
         // Use log_softmax for numerical stability
         let log_probs = Self::log_softmax(logits, Axis(1));
         Self::nll_loss_named(&log_probs, targets, "cross_entropy_loss")
@@ -1284,12 +1308,12 @@ impl SumDimGradFn {
         &self,
         out_grad: &RawTensor,
         _parents: &[Tensor],
-    ) -> Vec<Option<Tensor>> {
+    ) -> Vec<Option<Storage>> {
         dispatch_real!(out_grad.data.dtype(), T => self.backward_typed::<T>(out_grad))
     }
 
     /// [`Self::backward`] in the gradient's dtype `T`.
-    fn backward_typed<T: Real>(&self, out_grad: &RawTensor) -> Vec<Option<Tensor>> {
+    fn backward_typed<T: Real>(&self, out_grad: &RawTensor) -> Vec<Option<Storage>> {
         let grad_data = out_grad.data.host::<T>();
         let grad_shape = &out_grad.shape;
 
@@ -1334,11 +1358,7 @@ impl SumDimGradFn {
             *slot(&mut result, i) = fetch(&grad_data, grad_idx) / divisor;
         }
 
-        vec![Some(RawTensor::from_shape_compute(
-            out_grad.data.dtype(),
-            result,
-            self.input_shape.clone(),
-        ))]
+        vec![Some(Storage::from_compute(out_grad.data.dtype(), result))]
     }
 }
 
@@ -1361,12 +1381,12 @@ impl MaxDimGradFn {
         &self,
         out_grad: &RawTensor,
         _parents: &[Tensor],
-    ) -> Vec<Option<Tensor>> {
+    ) -> Vec<Option<Storage>> {
         dispatch_real!(out_grad.data.dtype(), T => self.backward_typed::<T>(out_grad))
     }
 
     /// [`Self::backward`] in the gradient's dtype `T`.
-    fn backward_typed<T: Real>(&self, out_grad: &RawTensor) -> Vec<Option<Tensor>> {
+    fn backward_typed<T: Real>(&self, out_grad: &RawTensor) -> Vec<Option<Storage>> {
         let grad_data = out_grad.data.host::<T>();
         let grad_shape = &out_grad.shape;
 
@@ -1400,11 +1420,7 @@ impl MaxDimGradFn {
             *slot(&mut result, max_lin_idx) = fetch(&grad_data, grad_idx);
         }
 
-        vec![Some(RawTensor::from_shape_compute(
-            out_grad.data.dtype(),
-            result,
-            self.input_shape.clone(),
-        ))]
+        vec![Some(Storage::from_compute(out_grad.data.dtype(), result))]
     }
 }
 
@@ -1510,7 +1526,7 @@ impl RawTensor {
     #[must_use]
     #[track_caller]
     pub fn sum_dim(self_t: &Tensor, dim: Axis, keepdim: bool) -> Tensor {
-        Self::try_sum_dim(self_t, dim, keepdim).expect("Dimension out of bounds")
+        Self::try_sum_dim(self_t, dim, keepdim).or_panic("sum_dim")
     }
 
     /// Copy the tensor to `device`, as a differentiable op (PyTorch's `.to(device)`).
@@ -1556,9 +1572,11 @@ impl RawTensor {
             && let Some(real) = Device::gpu()
             && real != device
         {
-            return Err(VoltaError::DeviceError(format!(
-                "to_device({device}): no such GPU; the available GPU is {real}"
-            )));
+            return Err(VoltaError::device(
+                "to_device",
+                Some("device"),
+                format!("no such GPU {device}; the available GPU is {real}"),
+            ));
         }
 
         let (data, shape, source) = {
@@ -1694,6 +1712,8 @@ impl RawTensor {
     /// [`Self::max_dim`]).
     #[must_use]
     pub fn softmax(self_t: &Tensor, dim: Axis) -> Tensor {
+        // Checked under this op's name; `max_dim` would report its own (#142).
+        let _ = self_t.borrow().shape.dim(dim).or_panic("softmax");
         let max = Self::max_dim(self_t, dim, true);
         let shifted = self_t.sub(&max);
         let exp_x = shifted.exp();
@@ -1709,6 +1729,8 @@ impl RawTensor {
     /// [`Self::max_dim`]).
     #[must_use]
     pub fn log_softmax(self_t: &Tensor, dim: Axis) -> Tensor {
+        // Checked under this op's name; `max_dim` would report its own (#142).
+        let _ = self_t.borrow().shape.dim(dim).or_panic("log_softmax");
         let max = Self::max_dim(self_t, dim, true);
         let shifted = self_t.sub(&max);
         let exp_x = shifted.exp();
@@ -2499,6 +2521,21 @@ pub struct DataLoader {
     device: Option<crate::device::Device>,
 }
 
+/// The shapes, sizes and position, not the samples.
+impl std::fmt::Debug for DataLoader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DataLoader")
+            .field("samples", &self.indices.len())
+            .field("data_shape", &self.data_shape)
+            .field("target_shape", &self.target_shape)
+            .field("batch_size", &self.batch_size)
+            .field("shuffle", &self.shuffle)
+            .field("current", &self.current)
+            .field("device", &self.device)
+            .finish_non_exhaustive()
+    }
+}
+
 impl DataLoader {
     /// Builds a loader over `data` and `targets`, whose sample count is `data.len()` divided by the elements of `data_shape`. Shuffles once if `shuffle`.
     ///
@@ -2537,42 +2574,54 @@ impl DataLoader {
         shuffle: bool,
     ) -> Result<Self> {
         if batch_size == 0 {
-            return Err(VoltaError::InvalidParameter(
-                "DataLoader: batch_size must be at least 1".to_string(),
+            return Err(VoltaError::invalid(
+                "DataLoader::new",
+                Some("batch_size"),
+                "batch_size must be at least 1",
             ));
         }
         #[expect(
             clippy::wildcard_enum_match_arm,
             reason = "Shape::from_dims returns only InvalidParameter; any other error passes through unchanged"
         )]
-        let numel = |name: &str, dims: &[usize]| {
+        let numel = |name: &'static str, dims: &[usize]| {
             Shape::from_dims(dims.to_vec())
                 .map(|s| s.numel())
                 .map_err(|e| match e {
-                    VoltaError::InvalidParameter(m) => {
-                        VoltaError::InvalidParameter(format!("DataLoader {name}: {m}"))
-                    }
+                    VoltaError::InvalidParameter(d) => VoltaError::invalid(
+                        "DataLoader::new",
+                        name,
+                        format!("{name}: {}", d.message),
+                    ),
                     other => other,
                 })
         };
         let sample_size = numel("data_shape", data_shape)?;
         let target_size = numel("target_shape", target_shape)?;
         if !data.len().is_multiple_of(sample_size) {
-            return Err(VoltaError::InvalidParameter(format!(
-                "DataLoader: {} data values are not a whole number of samples of shape \
+            return Err(VoltaError::invalid(
+                "DataLoader::new",
+                Some("data"),
+                format!(
+                    "{} data values are not a whole number of samples of shape \
                  {data_shape:?} ({sample_size} values each)",
-                data.len()
-            )));
+                    data.len()
+                ),
+            ));
         }
         let num_samples = data.len() / sample_size;
         let expected_targets = num_samples.checked_mul(target_size);
         if expected_targets != Some(targets.len()) {
-            return Err(VoltaError::InvalidParameter(format!(
-                "DataLoader: {num_samples} samples of shape {data_shape:?} need {} target values of shape {target_shape:?}, got {}",
-                expected_targets
-                    .map_or_else(|| "more than usize::MAX".to_string(), |n| n.to_string()),
-                targets.len()
-            )));
+            return Err(VoltaError::invalid(
+                "DataLoader::new",
+                Some("targets"),
+                format!(
+                    "{num_samples} samples of shape {data_shape:?} need {} target values of shape {target_shape:?}, got {}",
+                    expected_targets
+                        .map_or_else(|| "more than usize::MAX".to_string(), |n| n.to_string()),
+                    targets.len()
+                ),
+            ));
         }
         let mut indices: Vec<usize> = (0..num_samples).collect();
 
@@ -3117,7 +3166,7 @@ mod tensor_tests {
     /// Rank 3 has no `[in, out]` reading. It used to default `fan_out` to the second dim
     /// and fail later as a data/shape mismatch; it now fails up front.
     #[test]
-    #[should_panic(expected = "xavier_uniform expects a rank-1 or rank-2 shape, got [2, 3, 4]")]
+    #[should_panic(expected = "xavier_uniform: expects a rank-1 or rank-2 shape, got [2, 3, 4]")]
     fn xavier_uniform_rejects_rank_three() {
         let _ = RawTensor::xavier_uniform(&[2, 3, 4]);
     }

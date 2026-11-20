@@ -412,7 +412,7 @@ fn apply_movement_forward<T: Copy, M: ForwardIndexMapper>(
 ///
 /// These operations don't modify data values, only how they're indexed.
 /// Gradients must "undo" these operations during backpropagation.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum MovementOp {
     /// Change the shape, keeping element order.
@@ -478,21 +478,16 @@ impl MovementGradFn {
         &self,
         out_grad: &RawTensor,
         _parents: &[Tensor],
-    ) -> Vec<Option<Tensor>> {
+    ) -> Vec<Option<Storage>> {
         dispatch_real!(out_grad.data.dtype(), T => self.backward_typed::<T>(out_grad))
     }
 
     /// [`Self::backward`] in the gradient's dtype `T`.
-    fn backward_typed<T: Real>(&self, out_grad: &RawTensor) -> Vec<Option<Tensor>> {
+    fn backward_typed<T: Real>(&self, out_grad: &RawTensor) -> Vec<Option<Storage>> {
         let grad_tensor = match &self.op {
             MovementOp::Reshape { .. } => {
                 // Reshape back to original shape: same data, same device, new shape.
-                return vec![Some(RawTensor::new_with_storage(
-                    out_grad.data.clone(),
-                    self.original_shape.clone(),
-                    out_grad.device.clone(),
-                    false,
-                ))];
+                return vec![Some(out_grad.data.clone())];
             }
             MovementOp::Permute { axes } => {
                 // Invert the permutation to restore original order
@@ -510,12 +505,7 @@ impl MovementGradFn {
                         &inverse_axes,
                     )
                     .unwrap_or_else(|| kernel_failed("Movement(Permute)"));
-                    return vec![Some(RawTensor::new_with_storage(
-                        grad_storage,
-                        self.original_shape.clone(),
-                        out_grad.device.clone(),
-                        false,
-                    ))];
+                    return vec![Some(grad_storage)];
                 }
 
                 // CPU path. `out_grad` may be GPU storage (a rank the kernel doesn't
@@ -529,13 +519,8 @@ impl MovementGradFn {
                     Device::CPU,
                     false,
                 );
-                let (storage, shape, device) = RawTensor::permute_impl(&grad_t, &inverse_axes);
-                return vec![Some(RawTensor::new_with_storage(
-                    storage,
-                    Shape::derived(shape),
-                    device,
-                    false,
-                ))];
+                let (storage, ..) = RawTensor::permute_impl(&grad_t, &inverse_axes);
+                return vec![Some(storage)];
             }
             MovementOp::Expand { new_shape } => {
                 // GPU path when the kernel covers this rank; a `None` from it is a failure.
@@ -546,12 +531,7 @@ impl MovementGradFn {
                         new_shape,
                     )
                     .unwrap_or_else(|| kernel_failed("Movement(Expand)"));
-                    return vec![Some(RawTensor::new_with_storage(
-                        grad_storage,
-                        self.original_shape.clone(),
-                        out_grad.device.clone(),
-                        false,
-                    ))];
+                    return vec![Some(grad_storage)];
                 }
 
                 // CPU path: each source element's gradient is the sum of the incoming
@@ -595,11 +575,7 @@ impl MovementGradFn {
                         pairwise_sum_by(terms, |k| fetch(&g_host, base + offset(k)))
                     })
                     .collect();
-                RawTensor::from_shape_compute(
-                    out_grad.data.dtype(),
-                    grad_data,
-                    self.original_shape.clone(),
-                )
+                Storage::from_compute(out_grad.data.dtype(), grad_data)
             }
             MovementOp::Pad { padding } => {
                 // GPU path when the kernel covers this rank; a `None` from it is a failure.
@@ -611,12 +587,7 @@ impl MovementGradFn {
                         padding,
                     )
                     .unwrap_or_else(|| kernel_failed("Movement(Pad)"));
-                    return vec![Some(RawTensor::new_with_storage(
-                        grad_storage,
-                        self.original_shape.clone(),
-                        out_grad.device.clone(),
-                        false,
-                    ))];
+                    return vec![Some(grad_storage)];
                 }
 
                 // CPU path: Remove padding from gradient (extract center region)
@@ -644,11 +615,7 @@ impl MovementGradFn {
                     0,
                     0,
                 );
-                RawTensor::from_shape_compute(
-                    out_grad.data.dtype(),
-                    result,
-                    self.original_shape.clone(),
-                )
+                Storage::from_compute(out_grad.data.dtype(), result)
             }
             MovementOp::Shrink { ranges } => {
                 // GPU path when the kernel covers this rank; a `None` from it is a failure.
@@ -660,12 +627,7 @@ impl MovementGradFn {
                         ranges,
                     )
                     .unwrap_or_else(|| kernel_failed("Movement(Shrink)"));
-                    return vec![Some(RawTensor::new_with_storage(
-                        grad_storage,
-                        self.original_shape.clone(),
-                        out_grad.device.clone(),
-                        false,
-                    ))];
+                    return vec![Some(grad_storage)];
                 }
 
                 // CPU path: Pad gradient back to original size (inverse of shrink)
@@ -693,11 +655,7 @@ impl MovementGradFn {
                     0,
                     0,
                 );
-                RawTensor::from_shape_compute(
-                    out_grad.data.dtype(),
-                    result,
-                    self.original_shape.clone(),
-                )
+                Storage::from_compute(out_grad.data.dtype(), result)
             }
             MovementOp::Stride { strides } => {
                 // GPU path when the kernel covers this rank; a `None` from it is a failure.
@@ -709,12 +667,7 @@ impl MovementGradFn {
                         strides,
                     )
                     .unwrap_or_else(|| kernel_failed("Movement(Stride)"));
-                    return vec![Some(RawTensor::new_with_storage(
-                        grad_storage,
-                        self.original_shape.clone(),
-                        out_grad.device.clone(),
-                        false,
-                    ))];
+                    return vec![Some(grad_storage)];
                 }
 
                 // CPU path: Upsample gradient (inverse of stride/downsampling)
@@ -742,11 +695,7 @@ impl MovementGradFn {
                     0,
                     0,
                 );
-                RawTensor::from_shape_compute(
-                    out_grad.data.dtype(),
-                    result,
-                    self.original_shape.clone(),
-                )
+                Storage::from_compute(out_grad.data.dtype(), result)
             }
         };
 
@@ -786,7 +735,7 @@ impl RawTensor {
     #[must_use]
     #[track_caller]
     pub fn reshape(self_t: &Tensor, new_shape: &[usize]) -> Tensor {
-        Self::try_reshape(self_t, new_shape).or_panic("Reshape")
+        Self::try_reshape(self_t, new_shape).or_panic("reshape")
     }
 
     /// Reshape tensor to new shape (fallible)
@@ -804,12 +753,16 @@ impl RawTensor {
         };
 
         if old_shape.numel() != target.numel() {
-            return Err(VoltaError::InvalidParameter(format!(
-                "cannot reshape {:?} ({} elements) to {new_shape:?} ({} elements)",
-                old_shape.truncate_rank(),
-                old_shape.numel(),
-                target.numel()
-            )));
+            return Err(VoltaError::invalid(
+                "reshape",
+                Some("shape"),
+                format!(
+                    "cannot reshape {:?} ({} elements) to {new_shape:?} ({} elements)",
+                    old_shape.truncate_rank(),
+                    old_shape.numel(),
+                    target.numel()
+                ),
+            ));
         }
 
         // `data` shares the input's buffer (copy-on-write storage); only the shape changes.
@@ -901,9 +854,12 @@ impl RawTensor {
         // Verify axes is a valid permutation
         let mut sorted_axes = axes.clone();
         sorted_axes.sort_unstable();
-        for (i, &ax) in sorted_axes.iter().enumerate() {
-            assert_eq!(i, ax, "Invalid permutation axes");
-        }
+        let rank = old_shape.rank();
+        assert!(
+            sorted_axes.iter().copied().eq(0..rank),
+            "permute: axes {axes:?} are not a permutation of 0..{rank} (shape {:?})",
+            old_shape.truncate_rank()
+        );
 
         let (storage, new_shape, device) = Self::permute_impl(self_t, &axes);
 
@@ -948,10 +904,14 @@ impl RawTensor {
         };
 
         if old_shape.rank() != new_shape.len() {
-            return Err(VoltaError::InvalidParameter(format!(
-                "expand: rank must match, got {:?} -> {new_shape:?}",
-                old_shape.truncate_rank()
-            )));
+            return Err(VoltaError::invalid(
+                "expand",
+                Some("shape"),
+                format!(
+                    "rank must match, got {:?} -> {new_shape:?}",
+                    old_shape.truncate_rank()
+                ),
+            ));
         }
 
         // Verify broadcasting rules: old dims must be 1 or equal to new
@@ -1048,28 +1008,33 @@ impl RawTensor {
         };
 
         if padding.len() != old_shape.rank() {
-            return Err(VoltaError::InvalidParameter(format!(
-                "Padding length ({}) must match tensor rank ({})",
-                padding.len(),
-                old_shape.rank()
-            )));
+            return Err(VoltaError::invalid(
+                "pad",
+                Some("padding"),
+                format!(
+                    "padding length ({}) must match tensor rank ({})",
+                    padding.len(),
+                    old_shape.rank()
+                ),
+            ));
         }
 
         // Checked: a user-supplied width can overflow `usize` (#96).
-        let new_shape = old_shape
-            .iter()
-            .zip(padding)
-            .enumerate()
-            .map(|(dim, (d, (l, r)))| {
-                d.checked_add(*l)
+        let new_shape =
+            old_shape
+                .iter()
+                .zip(padding)
+                .enumerate()
+                .map(|(dim, (d, (l, r)))| {
+                    d.checked_add(*l)
                     .and_then(|n| n.checked_add(*r))
                     .ok_or_else(|| {
-                        VoltaError::InvalidParameter(format!(
-                            "Padding ({l}, {r}) for dimension {dim} of size {d} overflows usize"
+                        VoltaError::invalid("pad", Some("padding"), format!(
+                            "padding ({l}, {r}) for dimension {dim} of size {d} overflows usize"
                         ))
                     })
-            })
-            .collect::<Result<Vec<usize>>>()?;
+                })
+                .collect::<Result<Vec<usize>>>()?;
 
         let out_shape = Shape::from_dims(new_shape.clone())?;
         let new_size = out_shape.numel();
@@ -1131,35 +1096,51 @@ impl RawTensor {
 
         // Validate rank match
         if ranges.len() != shape.len() {
-            return Err(VoltaError::InvalidParameter(format!(
-                "Shrink ranges length ({}) must match tensor rank ({})",
-                ranges.len(),
-                shape.len()
-            )));
+            return Err(VoltaError::invalid(
+                "shrink",
+                Some("ranges"),
+                format!(
+                    "ranges length ({}) must match tensor rank ({})",
+                    ranges.len(),
+                    shape.len()
+                ),
+            ));
         }
 
         // Validate each range
         for (dim, (&(start, end), &dim_size)) in ranges.iter().zip(shape.iter()).enumerate() {
             // Check range order
             if start > end {
-                return Err(VoltaError::InvalidParameter(format!(
-                    "Invalid shrink range for dimension {dim}: start ({start}) exceeds end ({end})"
-                )));
+                return Err(VoltaError::invalid(
+                    "shrink",
+                    Some("ranges"),
+                    format!(
+                        "invalid range for dimension {dim}: start ({start}) exceeds end ({end})"
+                    ),
+                ));
             }
 
             // Check end bound
             if end > dim_size {
-                return Err(VoltaError::DimensionOutOfBounds {
-                    dim,
-                    shape: shape.to_vec(),
-                });
+                return Err(VoltaError::invalid(
+                    "shrink",
+                    Some("ranges"),
+                    format!(
+                        "range ({start}, {end}) for dimension {dim} ends past its size {dim_size} \
+                         (shape {shape:?})"
+                    ),
+                ));
             }
 
             // Check for empty range
             if start == end {
-                return Err(VoltaError::InvalidParameter(format!(
-                    "Invalid shrink range for dimension {dim}: start equals end ({start}), creates zero-sized dimension"
-                )));
+                return Err(VoltaError::invalid(
+                    "shrink",
+                    Some("ranges"),
+                    format!(
+                        "invalid range for dimension {dim}: start equals end ({start}), creates zero-sized dimension"
+                    ),
+                ));
             }
         }
 
@@ -1185,7 +1166,7 @@ impl RawTensor {
     #[must_use]
     #[track_caller]
     pub fn shrink(self_t: &Tensor, ranges: &[(usize, usize)]) -> Tensor {
-        Self::try_shrink(self_t, ranges).expect("Invalid shrink ranges")
+        Self::try_shrink(self_t, ranges).or_panic("shrink")
     }
 
     /// Try to shrink tensor to specified ranges for each dimension
@@ -1290,16 +1271,22 @@ impl RawTensor {
         };
 
         if strides.len() != old_shape.rank() {
-            return Err(VoltaError::InvalidParameter(format!(
-                "Strides length ({}) must match tensor rank ({})",
-                strides.len(),
-                old_shape.rank()
-            )));
+            return Err(VoltaError::invalid(
+                "stride",
+                Some("strides"),
+                format!(
+                    "strides length ({}) must match tensor rank ({})",
+                    strides.len(),
+                    old_shape.rank()
+                ),
+            ));
         }
         if let Some(dim) = strides.iter().position(|&s| s == 0) {
-            return Err(VoltaError::InvalidParameter(format!(
-                "stride_op: stride 0 for dimension {dim} (strides must be >= 1)"
-            )));
+            return Err(VoltaError::invalid(
+                "stride",
+                Some("strides"),
+                format!("stride 0 for dimension {dim} (strides must be >= 1)"),
+            ));
         }
 
         let new_shape: Vec<usize> = old_shape

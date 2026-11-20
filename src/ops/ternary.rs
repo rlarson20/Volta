@@ -8,7 +8,7 @@ use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
 
 /// Ternary operations: three inputs, one output
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TernaryOp {
     /// `x * y + z`, fused.
@@ -31,7 +31,11 @@ impl MulAccGradFn {
         clippy::unused_self,
         reason = "uniform `GradFn` dispatch: every variant's `backward` takes `&self` (DECISIONS.md, #171)"
     )]
-    pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        parents: &[Tensor],
+    ) -> Vec<Option<Storage>> {
         let x_ref = parents
             .first()
             .cloned()
@@ -55,9 +59,7 @@ impl MulAccGradFn {
                     .collect::<Vec<T>>(),
             ))
         };
-        let wrap = |data: Storage| {
-            RawTensor::new_with_storage(data, out_grad.shape.clone(), Device::CPU, false)
-        };
+        let wrap = |data: Storage| data;
         let grad_x = x_val.requires_grad.then(|| wrap(product(&y_val.data)));
         let grad_y = y_val.requires_grad.then(|| wrap(product(&x_val.data)));
         let grad_z = parents
@@ -93,7 +95,11 @@ pub(crate) struct WhereGradFn {
 
 impl WhereGradFn {
     /// Routes the gradient to the selected branch and reduces over broadcast dims.
-    pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        parents: &[Tensor],
+    ) -> Vec<Option<Storage>> {
         let true_ref = parents
             .first()
             .cloned()
@@ -112,7 +118,7 @@ impl WhereGradFn {
         // The gradient goes to the branch each element came from, then is summed back
         // over the dims that branch was broadcast along.
         let branch_grad = |take: bool, shape: &Shape| {
-            let grad = dispatch_real!(out_grad.data.dtype(), T => {
+            dispatch_real!(out_grad.data.dtype(), T => {
                 let data: Vec<T> = out_grad
                     .data
                     .host::<T>()
@@ -125,8 +131,7 @@ impl WhereGradFn {
                     out_grad.shape.truncate_rank(),
                     shape.truncate_rank(),
                 ))
-            });
-            RawTensor::new_with_storage(grad, shape.clone(), Device::CPU, false)
+            })
         };
         let grad_true = needs_true.then(|| branch_grad(true, &self.true_shape));
         let grad_false = needs_false.then(|| branch_grad(false, &self.false_shape));
@@ -270,9 +275,13 @@ impl RawTensor {
                     false_data.to_device(&Device::CPU),
                 );
 
-                let tmp_shape =
-                    Self::broadcast_shape(cond_shape.truncate_rank(), true_shape.truncate_rank());
-                let out_shape = Self::broadcast_shape(&tmp_shape, false_shape.truncate_rank());
+                let tmp_shape = Self::broadcast_shape_for(
+                    "where",
+                    cond_shape.truncate_rank(),
+                    true_shape.truncate_rank(),
+                );
+                let out_shape =
+                    Self::broadcast_shape_for("where", &tmp_shape, false_shape.truncate_rank());
 
                 let mask = Self::broadcast_to(
                     cond_data

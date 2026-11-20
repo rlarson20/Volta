@@ -20,6 +20,16 @@ pub struct SequentialBuilder {
     entries: Vec<LayerEntry>,
 }
 
+/// The names of the layers added so far (`None` for an unnamed one).
+impl std::fmt::Debug for SequentialBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names: Vec<Option<&str>> = self.entries.iter().map(|e| e.name.as_deref()).collect();
+        f.debug_struct("SequentialBuilder")
+            .field("layers", &names)
+            .finish()
+    }
+}
+
 impl SequentialBuilder {
     /// Create a new empty builder
     #[must_use]

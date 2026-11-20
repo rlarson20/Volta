@@ -1,9 +1,12 @@
+use crate::error::OrPanic;
 use crate::io::StateDict;
+use crate::nn::hyper;
 use crate::nn::{Layer, Module};
 use crate::tensor::Tensor;
 use rand::RngExt;
 
 /// Zeroes each element with probability `p` in training mode, scaling the rest by `1 / (1 - p)`; the identity in evaluation mode.
+#[derive(Debug, Clone, Copy)]
 pub struct Dropout {
     /// Probability that an element is zeroed.
     p: f32,
@@ -18,15 +21,20 @@ impl Dropout {
     /// * `p` - Probability of an element being zeroed out (default: 0.5)
     ///
     /// # Panics
-    /// If `p` is not in `[0, 1]`.
+    /// If `p` is not in `[0, 1]` (see [`Self::try_new`]).
     #[must_use]
     #[track_caller]
     pub fn new(p: f32) -> Self {
-        assert!(
-            (0.0..=1.0).contains(&p),
-            "Dropout probability must be in [0, 1]"
-        );
-        Self { p, training: true }
+        Self::try_new(p).or_panic("Dropout")
+    }
+
+    /// [`Self::new`], checking `p` first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` if `p` is not in `[0, 1]` (or is NaN).
+    pub fn try_new(p: f32) -> crate::Result<Self> {
+        hyper::unit_interval("Dropout", "p", p)?;
+        Ok(Self { p, training: true })
     }
 }
 
@@ -39,10 +47,7 @@ impl Module for Dropout {
         StateDict::new()
     }
 
-    fn load_state_dict_partial(&mut self, _state: &StateDict) -> crate::Result<()> {
-        // Stateless
-        Ok(())
-    }
+    fn plan_load<'a>(&self, _plan: &mut crate::nn::LoadPlan<'a>) {}
 
     fn train(&mut self, mode: bool) {
         self.training = mode;

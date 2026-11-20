@@ -30,6 +30,7 @@ use crate::tensor::Tensor;
 /// let y = gelu.forward(&x);
 /// // y ≈ [0.8413, -0.1588, 0.0]
 /// ```
+#[derive(Debug, Clone, Copy)]
 pub struct GELU;
 
 impl GELU {
@@ -55,10 +56,7 @@ impl Module for GELU {
         StateDict::new()
     }
 
-    fn load_state_dict_partial(&mut self, _state: &StateDict) -> crate::Result<()> {
-        // Stateless activation, nothing to load
-        Ok(())
-    }
+    fn plan_load<'a>(&self, _plan: &mut crate::nn::LoadPlan<'a>) {}
 
     fn train(&mut self, _mode: bool) {
         // Stateless, no training/eval behavior difference

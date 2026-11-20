@@ -16,7 +16,7 @@ Every op ends in `edge()`, the only function that attaches `parents` and `grad_f
 
 1. Compute the output storage in `src/ops/<family>.rs`. For the GPU, call the `gpu_*` wrapper; for a case with no kernel, compute on the CPU and pass `Device::CPU` to `edge()` so `DevicePolicy` decides (`.claude/rules/gpu.md`). A kernel that covers the case and returns `None` calls `kernel_failed(op)`.
 2. Call `edge(inputs, data, Shape::derived(out_dims), device, GradFn::MyOp(MyGradFn { .. }))`. A movement op ends in one `RawTensor::movement_edge(..)` call with a `MovementOp` variant instead.
-3. `GradFn` is a closed enum in `src/autograd.rs`, not a trait. Add a variant, and an arm in both `GradFn::backward` and `GradFn::is_trivial` (the compiler rejects a missing one). The struct derives `Clone` and has a `pub(crate) fn backward`. Compute every required gradient or panic; never return `None` for a parent that needs one.
+3. `GradFn` is a closed enum in `src/autograd.rs`, not a trait. Add a variant, and an arm in both `GradFn::backward` and `GradFn::is_trivial` (the compiler rejects a missing one). The struct derives `Clone` and has a `pub(crate) fn backward` returning `Vec<Option<Storage>>`, one slot per parent: bare storage (`Storage::from_compute` for a CPU kernel result, the kernel's buffer on the GPU, `Tensor::into_grad_storage` for a gradient built from tensor ops), checked against the parent's element count in `run_backward`. Compute every required gradient or panic; never return `None` for a parent that needs one.
 4. Validate user-supplied dims once in forward, into a spec if the geometry is non-trivial (`MatmulSpec`, the conv specs in `src/spec.rs`), and store it in the `GradFn`. Backward takes its dims from the tensor whose gradient it computes.
 5. Add the inherent method on `Tensor`, as above.
 
@@ -29,9 +29,9 @@ Every op ends in `edge()`, the only function that attaches `parents` and `grad_f
 ## Adding a new neural network layer
 
 1. Create `src/nn/layers/my_layer.rs` and declare it `pub(crate) mod my_layer;` in `src/nn/layers/mod.rs` and add it to the `pub use` lists there and in `src/nn/mod.rs`, so its one public path is `volta::nn::MyLayer` (no root re-export; DECISIONS.md, "One path per item; the root re-exports the core").
-2. Implement `Module` (`parameters`, `state_dict`, `load_state_dict_partial`; the provided `load_state_dict` adds the strict key check) and `Layer` (`forward`). `parameters()` returns every learnable tensor. Index input is an I64/I32 tensor through `Layer` (`Embedding`); carried state is a `RecurrentLayer` (`LSTMCell`), which is sealed.
+2. Implement `Module` (`parameters`, `state_dict`, `plan_load`; the provided `load_state_dict` and `load_state_dict_partial` build a `LoadPlan` from `plan_load`, check every entry, then write them all) and `Layer` (`forward`). `parameters()` returns every learnable tensor. Index input is an I64/I32 tensor through `Layer` (`Embedding`); carried state is a `RecurrentLayer` (`LSTMCell`), which is sealed.
 3. Build the output from graph ops or `edge()`. A layer that holds a fixed non-parameter tensor overrides `Module::to_device` to move it, and builds constants with `x.constant_like(..)` so they land on the input's device.
-4. `load_state_dict_partial` goes through `Tensor::load_weight`, which checks the shape and keeps the destination's device.
+4. `plan_load` names each tensor with `plan.param("weight", &self.weight)` under its `state_dict` key, and each sub-module with `plan.child("ffn.", &self.ffn)`. `LoadPlan::apply` checks each entry with `Tensor::check_load` and writes through `Tensor::load_weight`, which keeps the destination's device.
 5. Add an `assert_trainable!` test with its input from `crate::macros::trainable_input(&shape)`, plus value tests against a hand-computed or reference result.
 6. Add an example in `examples/` if the layer is complex. Examples must not route around a broken component; file the defect as a GitHub issue instead.
 
@@ -43,7 +43,8 @@ Decide by where an argument comes from (DECISIONS.md, "Panic inside the program,
 - **`Result<_, VoltaError>`** when an argument can come from a file, a checkpoint, a dataset, JSON, or a UI: shapes and data for a new tensor, a state dict, labels, bytes, axes and ranges a user picks. Document it under `# Errors`.
 - **Both forms** only for those boundary arguments. Write the `try_` form, and make the panicking form `#[track_caller]` plus `try_x(..).or_panic("x")` (`crate::error::OrPanic`). Do not add a `try_` twin to an op just for symmetry.
 - **Validate before you allocate.** Run `Shape::from_dims` (or `RawTensor::checked_numel`) on a caller's shape before `product()`, `vec![..; n]`, or any buffer: an overflowing product or an oversized allocation is not an error you can catch afterwards.
-- A new error that names a state-dict entry carries its `key`; a container puts its prefix back with `VoltaError::with_key_prefix`.
+- A new error that names a state-dict entry carries its `key`, the full key in the loaded state dict (`LoadPlan` builds it with every container's prefix).
+- A panic for a caller's mistake reads `<public op or layer>: <what was wrong> (got <value>)` (#142, `tests/panic_messages.rs`). Panic from a `VoltaError` with `.or_panic("<op>")`, never `.expect(..)` (which prints the `Debug` dump). Use `assert!(cond, "..")` with the values in the message, not `assert_eq!`. A layer checks its input's rank and width itself, under its own name, before calling an op, and an op that calls another (`softmax` calling `max_dim`) checks its axis first so the message names the op the user called. A rank mistake must never reach `crate::index`, whose message says the bug is inside Volta.
 
 ## Testing workflow
 

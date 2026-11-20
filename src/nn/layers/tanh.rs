@@ -3,6 +3,7 @@ use crate::nn::{Layer, Module};
 use crate::tensor::Tensor;
 
 /// Hyperbolic tangent.
+#[derive(Debug, Clone, Copy)]
 pub struct Tanh;
 
 impl Module for Tanh {
@@ -14,10 +15,7 @@ impl Module for Tanh {
         StateDict::new()
     }
 
-    fn load_state_dict_partial(&mut self, _state: &StateDict) -> crate::Result<()> {
-        // Stateless
-        Ok(())
-    }
+    fn plan_load<'a>(&self, _plan: &mut crate::nn::LoadPlan<'a>) {}
 }
 
 impl Layer for Tanh {

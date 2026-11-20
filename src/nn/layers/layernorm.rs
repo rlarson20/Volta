@@ -1,4 +1,6 @@
+use crate::error::OrPanic;
 use crate::io::{StateDict, TensorData};
+use crate::nn::hyper;
 use crate::nn::{Layer, Module};
 use crate::shape::Axis;
 use crate::tensor::{RawTensor, Tensor};
@@ -27,6 +29,7 @@ use crate::tensor::{RawTensor, Tensor};
 /// // For 4D input (B, H, W, C): normalize over H, W, C
 /// let ln = LayerNorm::new(vec![32, 32, 3]);
 /// ```
+#[derive(Debug)]
 pub struct LayerNorm {
     /// Trailing dims the statistics are computed over.
     normalized_shape: Vec<usize>,
@@ -41,14 +44,53 @@ pub struct LayerNorm {
 
 impl LayerNorm {
     /// Create a new `LayerNorm` layer with default epsilon (1e-5)
+    ///
+    /// # Panics
+    /// As [`Self::new_with_eps`].
     #[must_use]
+    #[track_caller]
     pub fn new(normalized_shape: Vec<usize>) -> Self {
         Self::new_with_eps(normalized_shape, 1e-5)
     }
 
-    /// Create a new `LayerNorm` layer with specified epsilon
+    /// [`Self::new`], checking `normalized_shape` first.
+    ///
+    /// # Errors
+    /// As [`Self::try_new_with_eps`].
+    pub fn try_new(normalized_shape: Vec<usize>) -> crate::Result<Self> {
+        Self::try_new_with_eps(normalized_shape, 1e-5)
+    }
+
+    /// A `LayerNorm` over the trailing dimensions `normalized_shape`, with `eps` added to
+    /// the variance.
+    ///
+    /// # Panics
+    /// If `normalized_shape` is empty or has a zero, or `eps` is not finite and positive
+    /// (see [`Self::try_new_with_eps`]).
     #[must_use]
+    #[track_caller]
     pub fn new_with_eps(normalized_shape: Vec<usize>, eps: f32) -> Self {
+        Self::try_new_with_eps(normalized_shape, eps).or_panic("LayerNorm")
+    }
+
+    /// [`Self::new_with_eps`], checking the arguments first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` naming the argument if `normalized_shape` is empty
+    /// or has a zero dimension, or `eps` is zero, negative or not finite. An empty shape
+    /// used to give a layer over one feature, and a negative `eps` ran (#133).
+    pub fn try_new_with_eps(normalized_shape: Vec<usize>, eps: f32) -> crate::Result<Self> {
+        if normalized_shape.is_empty() {
+            return Err(crate::VoltaError::invalid(
+                "LayerNorm",
+                "normalized_shape",
+                "normalized_shape must have at least one dimension, got []",
+            ));
+        }
+        for &d in &normalized_shape {
+            hyper::at_least_one("LayerNorm", "normalized_shape", d)?;
+        }
+        hyper::eps("LayerNorm", eps)?;
         // Calculate total size of normalized dimensions
         let num_features: usize = normalized_shape.iter().product();
 
@@ -59,12 +101,12 @@ impl LayerNorm {
         let beta = RawTensor::zeros(&[num_features]);
         beta.set_requires_grad(true);
 
-        Self {
+        Ok(Self {
             normalized_shape,
             eps,
             gamma,
             beta,
-        }
+        })
     }
 
     /// Compute the dimension index to normalize over
@@ -88,15 +130,9 @@ impl Module for LayerNorm {
         state
     }
 
-    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
-        let params = [("gamma", &self.gamma), ("beta", &self.beta)];
-
-        for (key, tensor) in params {
-            if let Some(t) = state.get(key) {
-                tensor.load_weight(key, t)?;
-            }
-        }
-        Ok(())
+    fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+        plan.param("gamma", &self.gamma);
+        plan.param("beta", &self.beta);
     }
 
     fn train(&mut self, _mode: bool) {
@@ -124,18 +160,22 @@ impl LayerNorm {
         let norm_rank = self.normalized_shape.len();
         assert!(
             input_rank >= norm_rank,
-            "LayerNorm: input rank ({input_rank}) must be >= normalized_shape rank ({norm_rank})"
+            "LayerNorm({:?}): input rank ({input_rank}) must be >= normalized_shape rank ({norm_rank})",
+            self.normalized_shape
         );
 
         for (i, &expected_size) in self.normalized_shape.iter().enumerate() {
             let actual_size = input_shape.dim_at(input_rank - norm_rank + i);
-            assert_eq!(
-                actual_size,
-                expected_size,
-                "LayerNorm: dimension {} mismatch: expected {}, got {}",
-                input_rank - norm_rank + i,
-                expected_size,
-                actual_size
+            assert!(
+                actual_size == expected_size,
+                "LayerNorm({:?}): expected input [.., {}], got {:?}",
+                self.normalized_shape,
+                self.normalized_shape
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                input_shape.truncate_rank()
             );
         }
 

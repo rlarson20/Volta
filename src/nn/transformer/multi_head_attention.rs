@@ -1,6 +1,8 @@
+use crate::error::OrPanic;
 use crate::io::StateDict;
+use crate::nn::hyper;
 use crate::nn::transformer::mask::causal_mask_like;
-use crate::nn::{Dropout, Layer, Linear, Module, insert_prefixed, load_child};
+use crate::nn::{Dropout, Layer, Linear, Module, insert_prefixed};
 use crate::shape::Axis;
 use crate::tensor::Tensor;
 
@@ -29,6 +31,7 @@ use crate::tensor::Tensor;
 /// # use volta::nn::MultiHeadAttention;
 /// let mha = MultiHeadAttention::new(512, 8, 0.1);
 /// ```
+#[derive(Debug)]
 pub struct MultiHeadAttention {
     /// Model width.
     embed_dim: usize,
@@ -57,18 +60,27 @@ impl MultiHeadAttention {
     /// * `num_heads` - Number of attention heads
     /// * `dropout` - Dropout probability on the attention weights (0.0 = no dropout)
     /// # Panics
-    /// `embed_dim` must be divisible by `num_heads`, and `dropout` must be in `[0, 1]`
+    /// If an argument is out of range (see [`Self::try_new`]).
     #[must_use]
     #[track_caller]
     pub fn new(embed_dim: usize, num_heads: usize, dropout: f32) -> Self {
-        assert!(
-            embed_dim.is_multiple_of(num_heads),
-            "embed_dim must be divisible by num_heads"
-        );
+        Self::try_new(embed_dim, num_heads, dropout).or_panic(Self::OP)
+    }
 
+    /// The layer's name in errors.
+    const OP: &'static str = "MultiHeadAttention";
+
+    /// [`Self::new`], checking the arguments first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` naming the argument if `embed_dim` or `num_heads`
+    /// is zero, `embed_dim` is not a multiple of `num_heads`, or `dropout` is not in
+    /// `[0, 1]`.
+    pub fn try_new(embed_dim: usize, num_heads: usize, dropout: f32) -> crate::Result<Self> {
+        Self::check(embed_dim, num_heads, dropout)?;
         let head_dim = embed_dim / num_heads;
 
-        Self {
+        Ok(Self {
             embed_dim,
             num_heads,
             head_dim,
@@ -77,7 +89,22 @@ impl MultiHeadAttention {
             v_proj: Linear::new(embed_dim, embed_dim, false),
             out_proj: Linear::new(embed_dim, embed_dim, true),
             attn_dropout: Dropout::new(dropout),
+        })
+    }
+
+    /// `Ok` if `try_new` accepts these arguments; `TransformerBlock` checks with it
+    /// before building anything.
+    pub(crate) fn check(embed_dim: usize, num_heads: usize, dropout: f32) -> crate::Result<()> {
+        hyper::at_least_one(Self::OP, "embed_dim", embed_dim)?;
+        hyper::at_least_one(Self::OP, "num_heads", num_heads)?;
+        if !embed_dim.is_multiple_of(num_heads) {
+            return Err(crate::VoltaError::invalid(
+                Self::OP,
+                "num_heads",
+                format!("embed_dim ({embed_dim}) must be divisible by num_heads ({num_heads})"),
+            ));
         }
+        hyper::unit_interval(Self::OP, "dropout", dropout)
     }
 
     /// Forward pass for multi-head self-attention: `forward_qkv(x, x, x, ..)`.
@@ -136,8 +163,9 @@ impl MultiHeadAttention {
         for (name, shape) in [("query", &q_shape), ("key", &k_shape), ("value", &v_shape)] {
             assert!(
                 shape.rank() == 3 && shape.dim_at(2) == self.embed_dim,
-                "{name} must be [batch, seq_len, {}], got {shape:?}",
-                self.embed_dim
+                "MultiHeadAttention: {name} must be [batch, seq_len, {}], got {:?}",
+                self.embed_dim,
+                shape.truncate_rank()
             );
         }
         let (batch_size, q_len) = (q_shape.dim_at(0), q_shape.dim_at(1));
@@ -308,11 +336,11 @@ impl Module for MultiHeadAttention {
         state
     }
 
-    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
-        load_child(&mut self.q_proj, "q_proj.", state)?;
-        load_child(&mut self.k_proj, "k_proj.", state)?;
-        load_child(&mut self.v_proj, "v_proj.", state)?;
-        load_child(&mut self.out_proj, "out_proj.", state)
+    fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+        plan.child("q_proj.", &self.q_proj);
+        plan.child("k_proj.", &self.k_proj);
+        plan.child("v_proj.", &self.v_proj);
+        plan.child("out_proj.", &self.out_proj);
     }
 
     fn train(&mut self, mode: bool) {

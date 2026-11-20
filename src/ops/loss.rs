@@ -4,6 +4,7 @@
 use crate::autograd::{GradFn, edge, is_grad_enabled, no_grad};
 use crate::device::Device;
 use crate::dtype::DType;
+use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
 
 /// PyTorch's floor on each `log` in binary cross entropy (`binary_cross_entropy`).
@@ -28,7 +29,11 @@ impl BceGradFn {
         clippy::unused_self,
         reason = "uniform `GradFn` dispatch: every variant's `backward` takes `&self` (DECISIONS.md, #171)"
     )]
-    pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        parents: &[Tensor],
+    ) -> Vec<Option<Storage>> {
         let [pred, target] = parents else {
             panic!(
                 "Bce backward: 2 parents (pred, target), got {}",
@@ -50,7 +55,7 @@ impl BceGradFn {
         let eps = p.constant_like(vec![BCE_GRAD_EPS; n], dims);
         let denom = p.elem_mul(&one.sub(&p)).max_elem(&eps);
         let grad = g.elem_mul(&p.sub(&y)).div(&denom);
-        vec![Some(grad), None]
+        vec![Some(grad.into_grad_storage()), None]
     }
 }
 

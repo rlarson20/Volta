@@ -49,6 +49,15 @@ pub struct StateDictMapper {
     transformations: Vec<TransformationBox>,
 }
 
+/// The number of edits; they are closures, so their contents can't be shown.
+impl std::fmt::Debug for StateDictMapper {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StateDictMapper")
+            .field("transformations", &self.transformations.len())
+            .finish()
+    }
+}
+
 impl StateDictMapper {
     /// Create a new empty mapper
     pub fn new() -> Self {
@@ -166,15 +175,21 @@ impl StateDictMapper {
                 // An error, not a panic: a panic here would run inside this boxed closure,
                 // at `apply` time, and report this file instead of the caller's (#260).
                 let Some(tensor_data) = state.get_mut(&key) else {
-                    return Err(VoltaError::InvalidParameter(format!(
-                        "transpose_linear: no key {key:?}"
-                    )));
+                    return Err(VoltaError::invalid(
+                        "StateDictMapper::transpose_linear",
+                        Some("name"),
+                        format!("no key {key:?}"),
+                    ));
                 };
                 if tensor_data.shape.len() != 2 {
-                    return Err(VoltaError::InvalidParameter(format!(
-                        "transpose_linear: {key:?} has shape {:?}, not a 2-D Linear weight",
-                        tensor_data.shape
-                    )));
+                    return Err(VoltaError::invalid(
+                        "StateDictMapper::transpose_linear",
+                        Some("name"),
+                        format!(
+                            "{key:?} has shape {:?}, not a 2-D Linear weight",
+                            tensor_data.shape
+                        ),
+                    ));
                 }
                 transpose_2d(tensor_data);
                 Ok(())
@@ -794,7 +809,7 @@ mod tests {
             .try_map(state)
             .expect_err("fc9.weight is missing");
         assert!(
-            matches!(&err, VoltaError::InvalidParameter(m) if m.contains("\"fc9.weight\"")),
+            matches!(&err, VoltaError::InvalidParameter(m) if m.message.contains("\"fc9.weight\"")),
             "{err}"
         );
     }

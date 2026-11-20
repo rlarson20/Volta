@@ -326,13 +326,29 @@ impl RawTensor {
         if !device_a.is_gpu() || !device_b.is_gpu() || device_a != device_b {
             return None;
         }
-        if shape_a != shape_b {
-            return None;
-        }
+        let shape = Self::flat_broadcast(&shape_a, &shape_b)?;
 
         let storage = Self::gpu_binary(&storage_a, &storage_b, op)
             .unwrap_or_else(|| kernel_failed(&format!("Binary({op:?})")));
-        Some((shape_a, storage, device_a))
+        Some((shape, storage, device_a))
+    }
+
+    /// The broadcast shape of `a` and `b` if broadcasting repeats no element: both have
+    /// as many elements as the result, so each broadcast is a pure reshape and the
+    /// same-shape kernels read both buffers in the result's flat order. That covers equal
+    /// shapes and shapes that differ only by size-1 axes, such as a rank-0 loss times a
+    /// `[1]` constant (#100). `None` for a real broadcast (a gap) or incompatible shapes
+    /// (the CPU path reports those).
+    #[cfg(feature = "gpu")]
+    fn flat_broadcast(a: &Shape, b: &Shape) -> Option<Shape> {
+        if a == b {
+            return Some(a.clone());
+        }
+        if a.numel() != b.numel() {
+            return None;
+        }
+        let out = a.broadcast(b).ok()?;
+        (out.numel() == a.numel()).then_some(out)
     }
 
     /// Not-gpu stub: the CPU path always runs.
@@ -359,14 +375,17 @@ impl RawTensor {
         out_grad: &Self,
         x: &Self,
         y: &Self,
-    ) -> Option<Vec<Option<Tensor>>> {
+    ) -> Option<Vec<Option<Storage>>> {
         if !(out_grad.device.is_gpu() && x.device.is_gpu() && y.device.is_gpu()) {
             return None;
         }
         // Gap until the broadcast backward bind groups are fixed (issue #60, "GPU broadcast
         // backward is broken"): `None` sends differing shapes to the CPU path, and the
         // device policy applies when the gradient reaches its GPU parameter.
-        if !(out_grad.shape == x.shape && out_grad.shape == y.shape) {
+        // Equal element counts mean the broadcast repeated nothing (`flat_broadcast`), so
+        // each gradient is `out_grad`'s buffer in its operand's shape.
+        let n = out_grad.shape.numel();
+        if !(x.shape.numel() == n && y.shape.numel() == n) {
             return None;
         }
         Some(
@@ -382,7 +401,7 @@ impl RawTensor {
         _out_grad: &Self,
         _x: &Self,
         _y: &Self,
-    ) -> Option<Vec<Option<Tensor>>> {
+    ) -> Option<Vec<Option<Storage>>> {
         None
     }
 
@@ -393,26 +412,16 @@ impl RawTensor {
         out_grad: &Self,
         x: &Self,
         y: &Self,
-    ) -> Option<Vec<Option<Tensor>>> {
+    ) -> Option<Vec<Option<Storage>>> {
         let gx = if x.requires_grad {
             let storage = Self::gpu_binary_backward_a(&out_grad.data, &x.data, &y.data, op)?;
-            Some(Self::new_with_storage(
-                storage,
-                x.shape.clone(),
-                x.device.clone(),
-                false,
-            ))
+            Some(storage)
         } else {
             None
         };
         let gy = if y.requires_grad {
             let storage = Self::gpu_binary_backward_b(&out_grad.data, &x.data, &y.data, op)?;
-            Some(Self::new_with_storage(
-                storage,
-                y.shape.clone(),
-                y.device.clone(),
-                false,
-            ))
+            Some(storage)
         } else {
             None
         };
@@ -430,7 +439,7 @@ impl RawTensor {
         out_grad: &Self,
         x: &Self,
         y: &Self,
-    ) -> Option<Vec<Option<Tensor>>> {
+    ) -> Option<Vec<Option<Storage>>> {
         let (grad_a, grad_b) = Self::gpu_binary_backward_broadcast_safe(
             &out_grad.data,
             &x.data,
@@ -440,12 +449,8 @@ impl RawTensor {
             x.shape.truncate_rank(),
             y.shape.truncate_rank(),
         )?;
-        let gx = x
-            .requires_grad
-            .then(|| Self::new_with_storage(grad_a, x.shape.clone(), x.device.clone(), false));
-        let gy = y
-            .requires_grad
-            .then(|| Self::new_with_storage(grad_b, y.shape.clone(), y.device.clone(), false));
+        let gx = x.requires_grad.then_some(grad_a);
+        let gy = y.requires_grad.then_some(grad_b);
         Some(vec![gx, gy])
     }
 
@@ -1231,8 +1236,6 @@ mod tests {
                 ] {
                     let got = got
                         .unwrap_or_else(|| panic!("{op:?}: missing {name} gradient"))
-                        .borrow()
-                        .data
                         .to_vec();
                     assert_eq!(got.len(), want.len(), "{op:?} {name} length");
                     for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {

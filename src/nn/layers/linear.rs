@@ -1,5 +1,8 @@
+use crate::Result;
 use crate::device::Device;
+use crate::error::OrPanic;
 use crate::io::{StateDict, TensorData};
+use crate::nn::hyper;
 use crate::nn::{Layer, Module};
 use crate::tensor::{RawTensor, Tensor};
 
@@ -7,6 +10,7 @@ use crate::tensor::{RawTensor, Tensor};
 ///
 /// Computes: y = xW + b
 /// where x is (batch, `in_features`), W is (`in_features`, `out_features`), b is (`out_features`)
+#[derive(Debug)]
 pub struct Linear {
     /// Weight, shape `[in_features, out_features]`.
     pub weight: Tensor,
@@ -31,15 +35,11 @@ impl Module for Linear {
         state
     }
 
-    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
-        if let Some(w) = state.get("weight") {
-            self.weight.load_weight("weight", w)?;
+    fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+        plan.param("weight", &self.weight);
+        if let Some(bias) = &self.bias {
+            plan.param("bias", bias);
         }
-        // Load bias if state has it and layer has bias
-        if let (Some(b), Some(bias_tensor)) = (state.get("bias"), self.bias.as_ref()) {
-            bias_tensor.load_weight("bias", b)?;
-        }
-        Ok(())
     }
 }
 
@@ -54,10 +54,20 @@ impl Linear {
     /// Uses Xavier initialization.
     ///
     /// # Panics
-    /// If `in_features` or `out_features` is zero.
+    /// If `in_features` or `out_features` is zero (see [`Self::try_new`]).
     #[must_use]
     #[track_caller]
     pub fn new(in_features: usize, out_features: usize, use_bias: bool) -> Self {
+        Self::try_new(in_features, out_features, use_bias).or_panic(Self::OP)
+    }
+
+    /// [`Self::new`], checking the sizes first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` naming the argument if `in_features` or
+    /// `out_features` is zero.
+    pub fn try_new(in_features: usize, out_features: usize, use_bias: bool) -> Result<Self> {
+        Self::check_sizes(in_features, out_features)?;
         let w = RawTensor::xavier_uniform(&[in_features, out_features]);
         w.set_requires_grad(true);
         let b = if use_bias {
@@ -67,7 +77,16 @@ impl Linear {
         } else {
             None
         };
-        Self { weight: w, bias: b }
+        Ok(Self { weight: w, bias: b })
+    }
+
+    /// The layer's name in errors.
+    const OP: &'static str = "Linear";
+
+    /// `Ok` if both sizes are at least 1.
+    fn check_sizes(in_features: usize, out_features: usize) -> Result<()> {
+        hyper::at_least_one(Self::OP, "in_features", in_features)?;
+        hyper::at_least_one(Self::OP, "out_features", out_features)
     }
 
     /// Create a new linear layer on a specific device
@@ -103,6 +122,7 @@ impl Linear {
         use_bias: bool,
         device: Device,
     ) -> Self {
+        Self::check_sizes(in_features, out_features).or_panic(Self::OP);
         // Move, then mark trainable: `to_device` of a tensor that requires grad is a
         // differentiable copy, not a leaf, so the parameters must be leaves on `device`.
         let w = RawTensor::xavier_uniform(&[in_features, out_features]).to_device(device.clone());
@@ -126,6 +146,13 @@ impl Linear {
     #[must_use]
     #[track_caller]
     pub fn forward(&self, x: &Tensor) -> Tensor {
+        let [in_f, out_f] = self.weight.borrow().shape.fixed::<2>();
+        let x_shape = x.borrow().shape.clone();
+        assert!(
+            x_shape.rank() >= 1 && x_shape.dim_at(x_shape.rank() - 1) == in_f,
+            "Linear({in_f} -> {out_f}): expected input [.., {in_f}], got {:?}",
+            x_shape.truncate_rank()
+        );
         // One low-precision op under `amp::autocast`: input, weight and bias are cast
         // together, so the bias add stays in the low dtype (PyTorch's `linear`).
         let (x, weight, bias) = crate::amp::lower_layer(x, &self.weight, self.bias.as_ref());

@@ -87,8 +87,9 @@ impl DType {
     /// Matches `torch.result_type` for two dimensioned tensors on all 64 pairs
     /// (`tests/torch_ref_dtypes.rs`): `Bool` yields to anything; a float beats any
     /// integer, whatever its width (`F16` with `I64` is `F16`); `F16` with `BF16` is
-    /// `F32`; otherwise the wider type of the same kind wins. Zero-dim tensors and Rust
-    /// scalars promote by a different rule, which this does not model.
+    /// `F32`; otherwise the wider type of the same kind wins. Zero-dim (rank-0) operands
+    /// promote by torch's weaker zero-dim rule, which `promote_operands` applies on top
+    /// of this; Rust scalars have no ops.
     ///
     /// Elementwise ops call this through `promote_operands` (`src/real.rs`) unless
     /// [`DTypePolicy::Strict`] is set.
@@ -110,6 +111,43 @@ impl DType {
     }
 }
 
+impl DType {
+    /// The dtype PyTorch's `torch.result_type` gives an op on `operands`, each a dtype and
+    /// whether it is zero-dim (rank 0) (#100). Dimensioned operands promote among
+    /// themselves ([`Self::promote`]), and so do zero-dim ones. A zero-dim operand then
+    /// changes the result only if it is of a higher category (bool < integer < float):
+    /// `f16[n] * f32[]` is `F16`, but `i64[n] * f32[]` is `F32`, and `i32[n] * i64[]` is
+    /// `I32`. With no dimensioned operand, the zero-dim result is the result.
+    ///
+    /// # Panics
+    /// If `operands` is empty.
+    #[must_use]
+    pub(crate) fn result_type(operands: &[(Self, bool)]) -> Self {
+        let fold = |zero_dim: bool| {
+            operands
+                .iter()
+                .filter(|&&(_, z)| z == zero_dim)
+                .map(|&(d, _)| d)
+                .reduce(Self::promote)
+        };
+        match (fold(false), fold(true)) {
+            (Some(dim), None) => dim,
+            (None, Some(zero)) => zero,
+            // torch's `combine_categories(higher = dim, lower = zero)`.
+            (Some(dim), Some(zero)) => {
+                if dim.is_float() {
+                    dim
+                } else if dim == Self::Bool || zero.is_float() {
+                    Self::promote(dim, zero)
+                } else {
+                    dim
+                }
+            }
+            (None, None) => panic!("result_type of no operands"),
+        }
+    }
+}
+
 impl fmt::Display for DType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.name())
@@ -119,6 +157,101 @@ impl fmt::Display for DType {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `torch.result_type(dimensioned, zero_dim)` for all 64 ordered pairs, from
+    /// `torch.result_type(torch.ones(2, dtype=a), torch.ones((), dtype=b))` on torch
+    /// 2.15.0 (#100). Two zero-dim operands, or two dimensioned ones, follow `promote`.
+    #[test]
+    fn result_type_matches_torch_for_a_zero_dim_operand() {
+        use DType::{BF16, Bool, F16, F32, F64, I32, I64, U8};
+        let table = [
+            (F16, F16, F16),
+            (F16, BF16, F16),
+            (F16, F32, F16),
+            (F16, F64, F16),
+            (F16, I32, F16),
+            (F16, I64, F16),
+            (F16, U8, F16),
+            (F16, Bool, F16),
+            (BF16, F16, BF16),
+            (BF16, BF16, BF16),
+            (BF16, F32, BF16),
+            (BF16, F64, BF16),
+            (BF16, I32, BF16),
+            (BF16, I64, BF16),
+            (BF16, U8, BF16),
+            (BF16, Bool, BF16),
+            (F32, F16, F32),
+            (F32, BF16, F32),
+            (F32, F32, F32),
+            (F32, F64, F32),
+            (F32, I32, F32),
+            (F32, I64, F32),
+            (F32, U8, F32),
+            (F32, Bool, F32),
+            (F64, F16, F64),
+            (F64, BF16, F64),
+            (F64, F32, F64),
+            (F64, F64, F64),
+            (F64, I32, F64),
+            (F64, I64, F64),
+            (F64, U8, F64),
+            (F64, Bool, F64),
+            (I32, F16, F16),
+            (I32, BF16, BF16),
+            (I32, F32, F32),
+            (I32, F64, F64),
+            (I32, I32, I32),
+            (I32, I64, I32),
+            (I32, U8, I32),
+            (I32, Bool, I32),
+            (I64, F16, F16),
+            (I64, BF16, BF16),
+            (I64, F32, F32),
+            (I64, F64, F64),
+            (I64, I32, I64),
+            (I64, I64, I64),
+            (I64, U8, I64),
+            (I64, Bool, I64),
+            (U8, F16, F16),
+            (U8, BF16, BF16),
+            (U8, F32, F32),
+            (U8, F64, F64),
+            (U8, I32, U8),
+            (U8, I64, U8),
+            (U8, U8, U8),
+            (U8, Bool, U8),
+            (Bool, F16, F16),
+            (Bool, BF16, BF16),
+            (Bool, F32, F32),
+            (Bool, F64, F64),
+            (Bool, I32, I32),
+            (Bool, I64, I64),
+            (Bool, U8, U8),
+            (Bool, Bool, Bool),
+        ];
+        assert_eq!(table.len(), 64);
+        for (dim, zero, want) in table {
+            assert_eq!(
+                DType::result_type(&[(dim, false), (zero, true)]),
+                want,
+                "{dim}[n] with {zero}[]"
+            );
+            assert_eq!(
+                DType::result_type(&[(zero, true), (dim, false)]),
+                want,
+                "{zero}[] with {dim}[n]"
+            );
+            assert_eq!(
+                DType::result_type(&[(dim, true), (zero, true)]),
+                DType::promote(dim, zero)
+            );
+            assert_eq!(
+                DType::result_type(&[(dim, false), (zero, false)]),
+                DType::promote(dim, zero)
+            );
+        }
+    }
 
     #[test]
     fn test_dtype_size() {
@@ -229,6 +362,7 @@ pub fn with_dtype_policy(policy: DTypePolicy) -> DTypePolicyGuard {
 /// Restores the previous dtype policy on drop. Made by [`with_dtype_policy`].
 ///
 /// `!Send`, like `DevicePolicyGuard`: the policy is thread-local.
+#[derive(Debug)]
 pub struct DTypePolicyGuard {
     /// The policy to restore.
     prev: DTypePolicy,

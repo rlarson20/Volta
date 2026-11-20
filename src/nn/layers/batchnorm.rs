@@ -1,5 +1,7 @@
+use crate::error::OrPanic;
 use crate::index::{fetch, slot};
 use crate::io::{StateDict, TensorData};
+use crate::nn::hyper;
 use crate::nn::{Layer, Module};
 use crate::real::{Real, dispatch_real};
 use crate::shape::Axis;
@@ -8,6 +10,7 @@ use crate::tensor::{RawTensor, Tensor};
 /// The state and arithmetic `BatchNorm1d` and `BatchNorm2d` share (#119). Each wrapper
 /// checks its input's rank and lays it out as a 2-D tensor with the channels on one axis
 /// and every value of a channel on the other, then calls [`BatchNorm::normalize`].
+#[derive(Debug)]
 struct BatchNorm {
     /// Number of channels `C`.
     num_features: usize,
@@ -30,8 +33,17 @@ struct BatchNorm {
 }
 
 impl BatchNorm {
-    /// `gamma = 1`, `beta = 0`, running mean 0 and running variance 1, in training mode.
-    fn new(num_features: usize, eps: f32, momentum: f32) -> Self {
+    /// `gamma = 1`, `beta = 0`, running mean 0 and running variance 1, in training mode,
+    /// after checking the arguments under the layer's name `op`.
+    fn try_new(
+        op: &'static str,
+        num_features: usize,
+        eps: f32,
+        momentum: f32,
+    ) -> crate::Result<Self> {
+        hyper::at_least_one(op, "num_features", num_features)?;
+        hyper::eps(op, eps)?;
+        hyper::unit_interval(op, "momentum", momentum)?;
         let gamma = RawTensor::ones(&[num_features]);
         gamma.set_requires_grad(true);
 
@@ -42,7 +54,7 @@ impl BatchNorm {
         let running_mean = RawTensor::zeros(&[num_features]);
         let running_var = RawTensor::ones(&[num_features]);
 
-        Self {
+        Ok(Self {
             num_features,
             eps,
             momentum,
@@ -51,7 +63,7 @@ impl BatchNorm {
             beta,
             running_mean,
             running_var,
-        }
+        })
     }
 
     /// Panics unless `x` has `dtype`, the dtype [`crate::nn::norm_mixed`] computes in,
@@ -96,21 +108,12 @@ impl BatchNorm {
         state
     }
 
-    /// Loads each of the four entries that is present.
-    fn load_state_dict(&self, state: &StateDict) -> crate::Result<()> {
-        let params = [
-            ("gamma", &self.gamma),
-            ("beta", &self.beta),
-            ("running_mean", &self.running_mean),
-            ("running_var", &self.running_var),
-        ];
-
-        for (key, tensor) in params {
-            if let Some(t) = state.get(key) {
-                tensor.load_weight(key, t)?;
-            }
-        }
-        Ok(())
+    /// Names the four tensors a state-dict load writes ([`Module::plan_load`]).
+    fn plan_load(&self, plan: &mut crate::nn::LoadPlan<'_>) {
+        plan.param("gamma", &self.gamma);
+        plan.param("beta", &self.beta);
+        plan.param("running_mean", &self.running_mean);
+        plan.param("running_var", &self.running_var);
     }
 
     /// Normalizes `x`, a 2-D tensor whose `channel_axis` has the `C` channels and whose
@@ -203,6 +206,7 @@ impl BatchNorm {
 ///
 /// A half (f16/bf16) input is normalized in f32 and returned in its own dtype, with f32
 /// or half parameters, as PyTorch's half kernels accumulate in f32.
+#[derive(Debug)]
 pub struct BatchNorm2d {
     /// Parameters, running statistics and mode.
     core: BatchNorm,
@@ -210,17 +214,47 @@ pub struct BatchNorm2d {
 
 impl BatchNorm2d {
     /// Layer over `num_features` channels with `eps = 1e-5` and `momentum = 0.1`.
+    ///
+    /// # Panics
+    /// If `num_features` is zero.
     #[must_use]
+    #[track_caller]
     pub fn new(num_features: usize) -> Self {
         Self::new_with_params(num_features, 1e-5, 0.1)
     }
 
+    /// [`Self::new`], checking `num_features` first.
+    ///
+    /// # Errors
+    /// As [`Self::try_new_with_params`].
+    pub fn try_new(num_features: usize) -> crate::Result<Self> {
+        Self::try_new_with_params(num_features, 1e-5, 0.1)
+    }
+
     /// Layer over `num_features` channels with the given `eps` and `momentum`.
+    ///
+    /// # Panics
+    /// If an argument is out of range (see [`Self::try_new_with_params`]).
     #[must_use]
+    #[track_caller]
     pub fn new_with_params(num_features: usize, eps: f32, momentum: f32) -> Self {
-        Self {
-            core: BatchNorm::new(num_features, eps, momentum),
-        }
+        Self::try_new_with_params(num_features, eps, momentum).or_panic("BatchNorm2d")
+    }
+
+    /// [`Self::new_with_params`], checking the arguments first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` naming the argument if `num_features` is zero,
+    /// `eps` is zero, negative or not finite, or `momentum` is outside `[0, 1]` (a
+    /// momentum of 7 made the running variance negative, #133).
+    pub fn try_new_with_params(
+        num_features: usize,
+        eps: f32,
+        momentum: f32,
+    ) -> crate::Result<Self> {
+        Ok(Self {
+            core: BatchNorm::try_new("BatchNorm2d", num_features, eps, momentum)?,
+        })
     }
 }
 
@@ -238,6 +272,7 @@ impl BatchNorm2d {
 ///
 /// A half (f16/bf16) input is normalized in f32 and returned in its own dtype, with f32
 /// or half parameters, as PyTorch's half kernels accumulate in f32.
+#[derive(Debug)]
 pub struct BatchNorm1d {
     /// Parameters, running statistics and mode.
     core: BatchNorm,
@@ -245,17 +280,47 @@ pub struct BatchNorm1d {
 
 impl BatchNorm1d {
     /// Layer over `num_features` features with `eps = 1e-5` and `momentum = 0.1`.
+    ///
+    /// # Panics
+    /// If `num_features` is zero.
     #[must_use]
+    #[track_caller]
     pub fn new(num_features: usize) -> Self {
         Self::new_with_params(num_features, 1e-5, 0.1)
     }
 
+    /// [`Self::new`], checking `num_features` first.
+    ///
+    /// # Errors
+    /// As [`Self::try_new_with_params`].
+    pub fn try_new(num_features: usize) -> crate::Result<Self> {
+        Self::try_new_with_params(num_features, 1e-5, 0.1)
+    }
+
     /// Layer over `num_features` features with the given `eps` and `momentum`.
+    ///
+    /// # Panics
+    /// If an argument is out of range (see [`Self::try_new_with_params`]).
     #[must_use]
+    #[track_caller]
     pub fn new_with_params(num_features: usize, eps: f32, momentum: f32) -> Self {
-        Self {
-            core: BatchNorm::new(num_features, eps, momentum),
-        }
+        Self::try_new_with_params(num_features, eps, momentum).or_panic("BatchNorm1d")
+    }
+
+    /// [`Self::new_with_params`], checking the arguments first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` naming the argument if `num_features` is zero,
+    /// `eps` is zero, negative or not finite, or `momentum` is outside `[0, 1]` (a
+    /// momentum of 7 made the running variance negative, #133).
+    pub fn try_new_with_params(
+        num_features: usize,
+        eps: f32,
+        momentum: f32,
+    ) -> crate::Result<Self> {
+        Ok(Self {
+            core: BatchNorm::try_new("BatchNorm1d", num_features, eps, momentum)?,
+        })
     }
 }
 
@@ -280,8 +345,8 @@ macro_rules! batchnorm_module {
                 self.core.state_dict()
             }
 
-            fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
-                self.core.load_state_dict(state)
+            fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+                self.core.plan_load(plan);
             }
         }
 
@@ -307,12 +372,11 @@ impl BatchNorm2d {
         self.core.check_dtype("BatchNorm2d", x, dtype);
         let c = self.core.num_features;
         let x_borrow = x.borrow();
-        assert_eq!(
-            x_borrow.shape.rank(),
-            4,
-            "BatchNorm2d expected 4D input (B,C,H,W)"
+        assert!(
+            x_borrow.shape.rank() == 4 && x_borrow.shape.dim_at(1) == c,
+            "BatchNorm2d({c}): expected input [B, {c}, H, W], got {:?}",
+            x_borrow.shape.truncate_rank()
         );
-        assert_eq!(x_borrow.shape.dim_at(1), c, "Channel mismatch");
         let [b, _, h, w] = x_borrow.shape.fixed::<4>();
         let num_pixels = b * h * w;
         assert!(
@@ -341,15 +405,11 @@ impl BatchNorm1d {
     fn forward_in(&self, x: &Tensor, dtype: crate::DType) -> Tensor {
         self.core.check_dtype("BatchNorm1d", x, dtype);
         let x_borrow = x.borrow();
-        assert_eq!(
-            x_borrow.shape.rank(),
-            2,
-            "BatchNorm1d expected 2D input (B, C)"
-        );
-        assert_eq!(
-            x_borrow.shape.dim_at(1),
-            self.core.num_features,
-            "Feature mismatch"
+        let c = self.core.num_features;
+        assert!(
+            x_borrow.shape.rank() == 2 && x_borrow.shape.dim_at(1) == c,
+            "BatchNorm1d({c}): expected input [B, {c}], got {:?}",
+            x_borrow.shape.truncate_rank()
         );
         let batch_size = x_borrow.shape.dim_at(0);
         assert!(

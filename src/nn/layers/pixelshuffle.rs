@@ -1,4 +1,6 @@
+use crate::error::OrPanic;
 use crate::io::StateDict;
+use crate::nn::hyper;
 use crate::nn::{Layer, Module};
 use crate::shape::Axis;
 use crate::tensor::Tensor;
@@ -26,6 +28,7 @@ use crate::tensor::Tensor;
 /// let output = layer.forward(&input);
 /// assert_eq!(output.shape(), vec![1, 3, 8, 8]);
 /// ```
+#[derive(Debug, Clone, Copy)]
 pub struct PixelShuffle {
     /// Factor `r` by which each spatial side grows (channels shrink by `r^2`).
     upscale_factor: usize,
@@ -38,15 +41,20 @@ impl PixelShuffle {
     /// * `upscale_factor` - Factor to increase spatial resolution by (must be > 0)
     ///
     /// # Panics
-    /// If `upscale_factor` is 0.
+    /// If `upscale_factor` is 0 (see [`Self::try_new`]).
     #[must_use]
     #[track_caller]
     pub fn new(upscale_factor: usize) -> Self {
-        assert!(
-            upscale_factor > 0,
-            "PixelShuffle: upscale_factor must be positive, got {upscale_factor}",
-        );
-        Self { upscale_factor }
+        Self::try_new(upscale_factor).or_panic("PixelShuffle")
+    }
+
+    /// [`Self::new`], checking `upscale_factor` first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` if `upscale_factor` is 0.
+    pub fn try_new(upscale_factor: usize) -> crate::Result<Self> {
+        hyper::at_least_one("PixelShuffle", "upscale_factor", upscale_factor)?;
+        Ok(Self { upscale_factor })
     }
 }
 
@@ -61,10 +69,7 @@ impl Module for PixelShuffle {
         StateDict::new()
     }
 
-    fn load_state_dict_partial(&mut self, _state: &StateDict) -> crate::Result<()> {
-        // No parameters to load
-        Ok(())
-    }
+    fn plan_load<'a>(&self, _plan: &mut crate::nn::LoadPlan<'a>) {}
 }
 
 impl Layer for PixelShuffle {

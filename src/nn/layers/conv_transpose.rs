@@ -3,6 +3,7 @@ use crate::device::Device;
 use crate::error::OrPanic;
 use crate::index::{fetch, slot};
 use crate::io::{StateDict, TensorData};
+use crate::nn::hyper;
 use crate::nn::{Layer, Module};
 use crate::real::{Real, compute_dtype, dispatch_real};
 use crate::shape::Axis;
@@ -17,6 +18,7 @@ use crate::tensor::{RawTensor, Tensor};
 /// The operation is the gradient of Conv2d with respect to its input.
 ///
 /// Output size: `H_out` = (`H_in` - 1) * stride + kernel - 2*padding
+#[derive(Debug)]
 pub struct ConvTranspose2d {
     /// Kernel, shape `[in_channels, out_channels, kernel_h, kernel_w]`.
     weight: Tensor,
@@ -30,7 +32,11 @@ pub struct ConvTranspose2d {
 
 impl ConvTranspose2d {
     /// Layer with square `kernel`, equal `stride` and `padding` on both axes, and He-initialized weights.
+    ///
+    /// # Panics
+    /// If a channel count, `kernel` or `stride` is zero (see [`Self::try_new`]).
     #[must_use]
+    #[track_caller]
     pub fn new(
         in_ch: usize,
         out_ch: usize,
@@ -39,6 +45,24 @@ impl ConvTranspose2d {
         padding: usize,
         use_bias: bool,
     ) -> Self {
+        Self::try_new(in_ch, out_ch, kernel, stride, padding, use_bias).or_panic(Self::OP)
+    }
+
+    /// [`Self::new`], checking the hyperparameters first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` naming the argument if `in_ch`, `out_ch`, `kernel`
+    /// or `stride` is zero. A zero stride used to be accepted here and to panic in
+    /// `forward` (#133).
+    pub fn try_new(
+        in_ch: usize,
+        out_ch: usize,
+        kernel: usize,
+        stride: usize,
+        padding: usize,
+        use_bias: bool,
+    ) -> crate::Result<Self> {
+        Self::check_hyper(in_ch, out_ch, kernel, stride)?;
         // Weight shape for transpose conv: [in_channels, out_channels, K, K]
         let w = RawTensor::he_initialization(&[in_ch, out_ch, kernel, kernel]);
         w.set_requires_grad(true);
@@ -51,12 +75,23 @@ impl ConvTranspose2d {
             None
         };
 
-        Self {
+        Ok(Self {
             weight: w,
             bias: b,
             stride: (stride, stride),
             padding: (padding, padding),
-        }
+        })
+    }
+
+    /// The layer's name in errors.
+    const OP: &'static str = "ConvTranspose2d";
+
+    /// `Ok` if the channel counts, `kernel` and `stride` are at least 1.
+    fn check_hyper(in_ch: usize, out_ch: usize, kernel: usize, stride: usize) -> crate::Result<()> {
+        hyper::at_least_one(Self::OP, "in_ch", in_ch)?;
+        hyper::at_least_one(Self::OP, "out_ch", out_ch)?;
+        hyper::at_least_one(Self::OP, "kernel", kernel)?;
+        hyper::at_least_one(Self::OP, "stride", stride)
     }
 
     /// Convert column matrix back to image format
@@ -211,7 +246,11 @@ pub(crate) struct ConvTranspose2dGradFn {
 
 impl ConvTranspose2dGradFn {
     /// Gradients for the input, the weight, and (if `has_bias`) the bias.
-    pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        parents: &[Tensor],
+    ) -> Vec<Option<Storage>> {
         // parents: [input, weight, bias] if has_bias, else [input, weight]
         let input = parents
             .first()
@@ -267,7 +306,7 @@ impl ConvTranspose2dGradFn {
                     }
                 }
             }
-            RawTensor::new_with_storage(Storage::from_compute(dtype, grad_input_data), Shape::derived(vec![batch, in_channels, in_h, in_w]), Device::CPU, false)
+            Storage::from_compute(dtype, grad_input_data)
         });
 
         let grad_weight = need_weight.then(|| {
@@ -285,7 +324,7 @@ impl ConvTranspose2dGradFn {
             }
             // [C_in, C_out*K_h*K_w] is the weight's own layout.
             let grad_weight_data = T::gemm(&x_t, dcol, in_channels, rows, cols);
-            RawTensor::new_with_storage(Storage::from_compute(dtype, grad_weight_data), Shape::derived(vec![in_channels, out_channels, kh, kw]), Device::CPU, false)
+            Storage::from_compute(dtype, grad_weight_data)
         });
         vec![grad_input, grad_weight]
         });
@@ -309,6 +348,7 @@ impl ConvTranspose2dGradFn {
                 .sum_dim(Axis(3), false) // Sum over W
                 .sum_dim(Axis(2), false) // Sum over H
                 .sum_dim(Axis(0), false) // Sum over B
+                .into_grad_storage()
             }));
         }
 
@@ -334,20 +374,11 @@ impl Module for ConvTranspose2d {
         state
     }
 
-    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
-        if let Some(w) = state.get("weight") {
-            self.weight.load_weight("weight", w)?;
+    fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+        plan.param("weight", &self.weight);
+        if let Some(bias) = &self.bias {
+            plan.param("bias", bias);
         }
-        if let Some(b) = state.get("bias")
-            && self.bias.is_some()
-        {
-            let bias_tensor = self
-                .bias
-                .as_ref()
-                .expect("ConvTranspose2d: a bias entry is loaded only into a layer with a bias");
-            bias_tensor.load_weight("bias", b)?;
-        }
-        Ok(())
     }
 }
 
@@ -773,7 +804,10 @@ mod tests {
             for (name, actual, expected) in
                 [("input", grads.first(), gi), ("weight", grads.get(1), gw)]
             {
-                let actual = actual.and_then(Option::as_ref).expect("a gradient").data();
+                let actual = actual
+                    .and_then(Option::as_ref)
+                    .expect("a gradient")
+                    .to_vec();
                 assert_eq!(actual.len(), expected.len(), "{name} grad length, {case}");
                 for (i, (a, e)) in actual.iter().zip(&expected).enumerate() {
                     assert!(
@@ -786,7 +820,7 @@ mod tests {
     }
 
     /// The grad fn of `conv.forward(x)`, and its gradients for a random weighted loss.
-    fn backward_grads(conv: &ConvTranspose2d, x: &Tensor) -> Vec<Option<Tensor>> {
+    fn backward_grads(conv: &ConvTranspose2d, x: &Tensor) -> Vec<Option<Storage>> {
         let y = conv.forward(x);
         let (grad_fn, parents) = {
             let raw = y.borrow();
@@ -811,13 +845,7 @@ mod tests {
         let grads = backward_grads(&conv, &x);
         assert_eq!(grads.len(), 3);
         for (i, g) in grads.iter().enumerate() {
-            let g = g
-                .as_ref()
-                .unwrap_or_else(|| panic!("gradient {i} should be computed"));
-            assert!(
-                !g.borrow().requires_grad,
-                "gradient {i} must not require grad"
-            );
+            assert!(g.is_some(), "gradient {i} should be computed");
         }
 
         // Input is noise (no grad): no input gradient.
@@ -1132,11 +1160,11 @@ mod tests {
     }
 
     #[test]
-    fn test_conv_transpose2d_zero_stride_panics_with_spec_message() {
-        let conv = ConvTranspose2d::new(2, 3, 3, 0, 0, false);
-        let x = RawTensor::randn(&[1, 2, 4, 4]);
-        let msg = forward_panic_message(&conv, &x);
-        assert!(msg.contains("stride must be non-zero"), "{msg}");
+    #[should_panic(
+        expected = "Invalid parameter: ConvTranspose2d: stride must be at least 1, got 0"
+    )]
+    fn test_conv_transpose2d_zero_stride_is_refused_at_construction() {
+        let _ = ConvTranspose2d::new(2, 3, 3, 0, 0, false);
     }
 
     #[test]

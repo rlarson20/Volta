@@ -7,6 +7,7 @@ use crate::tensor::Tensor;
 /// Assumes the first dimension is the batch dimension and flattens all subsequent dimensions.
 /// Input shape: (B, D1, D2, ...)
 /// Output shape: (B, D1 * D2 * ...)
+#[derive(Debug, Clone, Copy)]
 pub struct Flatten;
 
 impl Flatten {
@@ -32,10 +33,7 @@ impl Module for Flatten {
         StateDict::new()
     }
 
-    fn load_state_dict_partial(&mut self, _state: &StateDict) -> crate::Result<()> {
-        // Stateless
-        Ok(())
-    }
+    fn plan_load<'a>(&self, _plan: &mut crate::nn::LoadPlan<'a>) {}
 }
 
 impl Layer for Flatten {

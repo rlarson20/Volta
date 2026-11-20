@@ -63,6 +63,7 @@ Read these when the need comes up; don't preload them.
 | Conv algorithms and selection | `dev-docs/CONV2D_IMPLEMENTATION.md` |
 | What's valid in a cloud session; Linux/no-GPU differences | `dev-docs/CLOUD.md` |
 | Local PR workflow: `just pr`, `just sync`, `just prs`, and why | `dev-docs/WORKFLOW.md` |
+| What's left that needs RJ's Mac, admin rights or decision (temporary) | `dev-docs/FINISHING.md` |
 
 ## Filing what you learn
 

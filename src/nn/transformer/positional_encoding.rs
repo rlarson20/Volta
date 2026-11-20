@@ -1,7 +1,9 @@
 use crate::Device;
+use crate::error::OrPanic;
 use crate::io::StateDict;
+use crate::nn::hyper;
 use crate::nn::layers::embedding::Embedding;
-use crate::nn::{Layer, Module, insert_prefixed, load_child};
+use crate::nn::{Layer, Module, insert_prefixed};
 use crate::tensor::{RawTensor, Tensor};
 
 /// Positional encoding type
@@ -63,16 +65,37 @@ impl PositionalEncoding {
     /// * `max_len` - Maximum sequence length
     /// * `encoding_type` - Type of positional encoding
     /// # Panics
-    /// If `encoding_type` is `Sinusoidal` and `embed_dim` is odd: the table is sin/cos pairs.
+    /// If an argument is out of range (see [`Self::try_new`]).
     #[must_use]
     #[track_caller]
     pub fn new(embed_dim: usize, max_len: usize, encoding_type: PositionalEncodingType) -> Self {
+        Self::try_new(embed_dim, max_len, encoding_type).or_panic("PositionalEncoding")
+    }
+
+    /// [`Self::new`], checking the arguments first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` naming the argument if `embed_dim` or `max_len` is
+    /// zero, or `encoding_type` is `Sinusoidal` and `embed_dim` is odd (the table is
+    /// sin/cos pairs).
+    pub fn try_new(
+        embed_dim: usize,
+        max_len: usize,
+        encoding_type: PositionalEncodingType,
+    ) -> crate::Result<Self> {
+        hyper::at_least_one("PositionalEncoding", "embed_dim", embed_dim)?;
+        hyper::at_least_one("PositionalEncoding", "max_len", max_len)?;
         let (encoding, learned_embedding) = match encoding_type {
             PositionalEncodingType::Sinusoidal => {
-                assert!(
-                    embed_dim.is_multiple_of(2),
-                    "embed_dim must be even for sinusoidal positional encoding, got {embed_dim}"
-                );
+                if !embed_dim.is_multiple_of(2) {
+                    return Err(crate::VoltaError::invalid(
+                        "PositionalEncoding",
+                        "embed_dim",
+                        format!(
+                            "embed_dim must be even for sinusoidal positional encoding, got {embed_dim}"
+                        ),
+                    ));
+                }
                 (
                     Some(Self::create_sinusoidal_encoding(
                         embed_dim,
@@ -85,13 +108,13 @@ impl PositionalEncoding {
             PositionalEncodingType::Learned => (None, Some(Embedding::new(max_len, embed_dim))),
         };
 
-        Self {
+        Ok(Self {
             embed_dim,
             max_len,
             encoding_type,
             encoding,
             learned_embedding,
-        }
+        })
     }
 
     /// Create sinusoidal positional encoding
@@ -180,10 +203,9 @@ impl Module for PositionalEncoding {
         }
     }
 
-    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
-        match &mut self.learned_embedding {
-            Some(emb) => load_child(emb, "learned_embedding.", state),
-            None => Ok(()),
+    fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+        if let Some(emb) = &self.learned_embedding {
+            plan.child("learned_embedding.", emb);
         }
     }
 

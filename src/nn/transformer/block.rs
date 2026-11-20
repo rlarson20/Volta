@@ -1,7 +1,6 @@
+use crate::error::OrPanic;
 use crate::io::StateDict;
-use crate::nn::{
-    FeedForward, Layer, LayerNorm, Module, MultiHeadAttention, insert_prefixed, load_child,
-};
+use crate::nn::{FeedForward, Layer, LayerNorm, Module, MultiHeadAttention, insert_prefixed};
 use crate::tensor::Tensor;
 
 /// Transformer Block (Pre-LN architecture)
@@ -28,6 +27,7 @@ use crate::tensor::Tensor;
 /// # use volta::nn::TransformerBlock;
 /// let block = TransformerBlock::new(512, 8, 4, 0.1);
 /// ```
+#[derive(Debug)]
 pub struct TransformerBlock {
     /// Layer norm applied before attention.
     norm1: LayerNorm,
@@ -47,14 +47,35 @@ impl TransformerBlock {
     /// * `num_heads` - Number of attention heads
     /// * `expansion_factor` - FFN expansion factor
     /// * `dropout` - Dropout probability
+    ///
+    /// # Panics
+    /// If an argument is out of range (see [`Self::try_new`]).
     #[must_use]
+    #[track_caller]
     pub fn new(embed_dim: usize, num_heads: usize, expansion_factor: usize, dropout: f32) -> Self {
-        Self {
+        Self::try_new(embed_dim, num_heads, expansion_factor, dropout).or_panic("TransformerBlock")
+    }
+
+    /// [`Self::new`], checking every argument before building a sublayer.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` from the sublayer that would refuse the argument
+    /// ([`MultiHeadAttention::try_new`], [`FeedForward::try_new`]): a zero size,
+    /// `embed_dim` not a multiple of `num_heads`, or `dropout` outside `[0, 1]`.
+    pub fn try_new(
+        embed_dim: usize,
+        num_heads: usize,
+        expansion_factor: usize,
+        dropout: f32,
+    ) -> crate::Result<Self> {
+        MultiHeadAttention::check(embed_dim, num_heads, dropout)?;
+        FeedForward::check(embed_dim, expansion_factor, dropout)?;
+        Ok(Self {
             norm1: LayerNorm::new(vec![embed_dim]),
             attention: MultiHeadAttention::new(embed_dim, num_heads, dropout),
             norm2: LayerNorm::new(vec![embed_dim]),
             ffn: FeedForward::new(embed_dim, expansion_factor, dropout),
-        }
+        })
     }
 
     /// Forward pass for the transformer block
@@ -108,11 +129,11 @@ impl Module for TransformerBlock {
         state
     }
 
-    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
-        load_child(&mut self.norm1, "norm1.", state)?;
-        load_child(&mut self.norm2, "norm2.", state)?;
-        load_child(&mut self.ffn, "ffn.", state)?;
-        load_child(&mut self.attention, "attention.", state)
+    fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+        plan.child("norm1.", &self.norm1);
+        plan.child("norm2.", &self.norm2);
+        plan.child("ffn.", &self.ffn);
+        plan.child("attention.", &self.attention);
     }
 
     fn train(&mut self, mode: bool) {

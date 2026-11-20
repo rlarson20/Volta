@@ -97,7 +97,7 @@ impl RawTensor {
             );
         }
         let (da, db) = (da.to_device(&Device::CPU), db.to_device(&Device::CPU));
-        let out_shape = Self::broadcast_shape(sa.truncate_rank(), sb.truncate_rank());
+        let out_shape = Self::broadcast_shape_for(&name(), sa.truncate_rank(), sb.truncate_rank());
         let result: Vec<bool> = dispatch_elem!(dtype, T => {
             let host = |s: &Storage| -> Vec<T> {
                 s.as_host::<T>()

@@ -3,6 +3,7 @@ use crate::nn::{Layer, Module};
 use crate::tensor::Tensor;
 
 /// Logistic function `1 / (1 + exp(-x))`.
+#[derive(Debug, Clone, Copy)]
 pub struct Sigmoid;
 
 impl Module for Sigmoid {
@@ -14,10 +15,7 @@ impl Module for Sigmoid {
         StateDict::new()
     }
 
-    fn load_state_dict_partial(&mut self, _state: &StateDict) -> crate::Result<()> {
-        // Stateless
-        Ok(())
-    }
+    fn plan_load<'a>(&self, _plan: &mut crate::nn::LoadPlan<'a>) {}
 }
 
 impl Layer for Sigmoid {

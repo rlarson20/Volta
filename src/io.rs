@@ -3,11 +3,12 @@ use crate::error::OrPanic;
 use crate::nn::Module;
 use crate::storage::{Element, Storage};
 use crate::tensor::Tensor;
+use crate::{Result, VoltaError};
 use safetensors::SafeTensors;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::File;
-use std::io::{Error, Read, Result, Write};
+use std::io::{Read, Write};
 use std::path::Path;
 
 /// Key remapping between Volta and external (e.g. PyTorch) state dicts.
@@ -154,8 +155,18 @@ impl TensorData {
     /// Whatever [`Self::validate`] returns; nothing is allocated before it passes.
     pub fn to_storage(&self, key: &str) -> crate::Result<Storage> {
         self.validate(key)?;
-        Storage::try_from_bytes(&self.data, self.dtype).map_err(|e| {
-            crate::VoltaError::InvalidParameter(format!("state dict entry '{key}': {e}"))
+        // `try_from_bytes` returns only `InvalidParameter`; name the entry in its message.
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "only InvalidParameter is rewrapped; any other error passes through unchanged"
+        )]
+        Storage::try_from_bytes(&self.data, self.dtype).map_err(|e| match e {
+            crate::VoltaError::InvalidParameter(d) => crate::VoltaError::invalid(
+                "TensorData::to_storage",
+                Some("data"),
+                format!("state dict entry '{key}': {}", d.message),
+            ),
+            other => other,
         })
     }
 
@@ -212,9 +223,11 @@ fn validate_entry(key: &str, data: &[u8], shape: &[usize], dtype: DType) -> crat
     if dtype == DType::Bool
         && let Some((i, b)) = data.iter().enumerate().find(|&(_, &b)| b > 1)
     {
-        return Err(crate::VoltaError::InvalidParameter(format!(
-            "state dict entry '{key}': bool element {i} is the byte {b}, not 0 or 1"
-        )));
+        return Err(crate::VoltaError::invalid(
+            "TensorData::validate",
+            Some("data"),
+            format!("state dict entry '{key}': bool element {i} is the byte {b}, not 0 or 1"),
+        ));
     }
     Ok(())
 }
@@ -222,12 +235,11 @@ fn validate_entry(key: &str, data: &[u8], shape: &[usize], dtype: DType) -> crat
 /// Checks every entry of a state dict read from outside the program.
 ///
 /// # Errors
-/// `InvalidData`, wrapping the [`crate::VoltaError`] from [`TensorData::to_storage`], for
-/// the first malformed entry.
+/// The [`VoltaError`] from [`TensorData::validate`] for the first malformed entry; it
+/// names the entry's key.
 fn validate_state(state: &StateDict) -> Result<()> {
     for (key, td) in state {
-        td.validate(key)
-            .map_err(|e| Error::new(std::io::ErrorKind::InvalidData, e))?;
+        td.validate(key)?;
     }
     Ok(())
 }
@@ -273,7 +285,7 @@ pub fn diff_state_dict(expected: &StateDict, loaded: &StateDict) -> StateDictDif
 ///
 /// This helper computes the diff between what the module currently expects
 /// (`module.state_dict()`) and what was provided before delegating to
-/// `module.load_state_dict_partial` (lenient). It is safe to call even when some keys are missing,
+/// a lenient load (as `module.load_state_dict_partial`). It is safe to call even when some keys are missing,
 /// since we inspect the diff up front. Entries whose shape mismatches are reported
 /// in the diff and *not* loaded, so a wrong shape is not an error here.
 ///
@@ -281,20 +293,17 @@ pub fn diff_state_dict(expected: &StateDict, loaded: &StateDict) -> StateDictDif
 ///
 /// `VoltaError::StateDataLength` if an entry whose shape matches holds the wrong
 /// number of values for it. Shape mismatches never reach the load; they are in the
-/// returned diff. As with [`Module::load_state_dict`], the module may be partly loaded
-/// on `Err`.
+/// returned diff. As with [`Module::load_state_dict`], every entry that would load is
+/// checked before any is written, so on `Err` the module is unchanged.
 pub fn load_state_dict_checked<M: Module + ?Sized>(
     module: &mut M,
     state: &StateDict,
 ) -> crate::Result<StateDictDiff> {
     let expected = module.state_dict();
     let diff = diff_state_dict(&expected, state);
-    let loadable: StateDict = state
-        .iter()
-        .filter(|(key, _)| !diff.shape_mismatches.iter().any(|(k, _, _)| k == *key))
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect();
-    module.load_state_dict_partial(&loadable)?;
+    let mut plan = crate::nn::LoadPlan::of(&*module, state);
+    plan.skip(|key| diff.shape_mismatches.iter().any(|(k, _, _)| k == key));
+    plan.apply()?;
     Ok(diff)
 }
 
@@ -331,15 +340,21 @@ const fn safetensors_dtype_to_volta(dtype: safetensors::Dtype) -> Option<DType> 
 /// Volta's dtype for one safetensors entry.
 ///
 /// # Errors
-/// `InvalidData` if the dtype has no Volta equivalent. Reading it as f32 bytes instead
-/// gave plausible wrong values (S18).
-fn entry_dtype(name: &str, tensor: &safetensors::tensor::TensorView<'_>) -> Result<DType> {
+/// [`VoltaError::Decode`] naming `path` and the entry if the dtype has no Volta
+/// equivalent. Reading it as f32 bytes instead gave plausible wrong values (S18).
+fn entry_dtype(
+    path: &Path,
+    name: &str,
+    tensor: &safetensors::tensor::TensorView<'_>,
+) -> Result<DType> {
     safetensors_dtype_to_volta(tensor.dtype()).ok_or_else(|| {
-        Error::new(
-            std::io::ErrorKind::InvalidData,
+        VoltaError::decode(
+            "load_safetensors",
+            path,
+            Some(name),
             format!(
-                "SafeTensors entry '{name}' has dtype {:?}, which Volta does not support \
-                 (supported: F16, BF16, F32, F64, I32, I64, U8, BOOL)",
+                "dtype {:?} has no Volta equivalent (supported: F16, BF16, F32, F64, I32, \
+                 I64, U8, BOOL)",
                 tensor.dtype()
             ),
         )
@@ -365,15 +380,26 @@ const fn volta_dtype_to_safetensors(dtype: DType) -> safetensors::Dtype {
 /// The values are not converted: [`Module::load_state_dict`] casts each entry to its
 /// parameter's dtype.
 /// # Errors
-/// The file can't be read or parsed, or an entry has a dtype Volta does not support
-/// (`InvalidData`; I8, U16, U32, U64, the f8 formats, ...).
+/// - [`VoltaError::Io`] if the file can't be opened or read.
+/// - [`VoltaError::Decode`], carrying the path, if it is not a valid safetensors file, or (with
+///   the entry's key) an entry has a dtype Volta does not support (I8, U16, U32, U64, the
+///   f8 formats, ...).
+/// - The [`TensorData::validate`] error, naming the key, for an entry whose bytes don't
+///   match its shape and dtype.
 pub fn load_safetensors<P: AsRef<Path>>(path: P) -> Result<StateDict> {
+    let path = path.as_ref();
     let mut file = File::open(path)?;
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer)?;
 
-    let tensors = SafeTensors::deserialize(&buffer)
-        .map_err(|e| Error::other(format!("SafeTensors parse error: {e}")))?;
+    let tensors = SafeTensors::deserialize(&buffer).map_err(|e| {
+        VoltaError::decode(
+            "load_safetensors",
+            path,
+            None,
+            format!("not a valid safetensors file: {e}"),
+        )
+    })?;
 
     let mut state_dict = StateDict::new();
 
@@ -381,7 +407,7 @@ pub fn load_safetensors<P: AsRef<Path>>(path: P) -> Result<StateDict> {
         let entry = TensorData {
             data: tensor.data().to_vec(),
             shape: tensor.shape().to_vec(),
-            dtype: entry_dtype(&name, &tensor)?,
+            dtype: entry_dtype(path, &name, &tensor)?,
         };
         state_dict.insert(name, entry);
     }
@@ -397,8 +423,10 @@ pub fn load_safetensors<P: AsRef<Path>>(path: P) -> Result<StateDict> {
 /// The file is written to a temporary file next to `path`, synced, and renamed over
 /// `path`, so a failed or interrupted save leaves an existing file at `path` intact.
 /// # Errors
-/// The file can't be written, or (`InvalidData`, wrapping the [`crate::VoltaError`] from
-/// [`TensorData::validate`]) an entry's byte count does not match its shape and dtype.
+/// - The [`TensorData::validate`] error, naming the key, if an entry's byte count does not
+///   match its shape and dtype; nothing is written.
+/// - [`VoltaError::InvalidParameter`] if `path` does not name a file.
+/// - [`VoltaError::Io`] if the file can't be written.
 pub fn save_safetensors<P: AsRef<Path>>(state: &StateDict, path: P) -> Result<()> {
     use safetensors::tensor::TensorView;
 
@@ -412,19 +440,35 @@ pub fn save_safetensors<P: AsRef<Path>>(state: &StateDict, path: P) -> Result<()
                 &td.data,
             )
             .map(|view| (name.clone(), view))
+            // `validate_state` checked the byte count, so this is a mismatch between the
+            // two libraries' rules, not a bad entry the caller can fix.
             .map_err(|e| {
-                Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("SafeTensors entry '{name}': {e}"),
-                )
+                VoltaError::OpError(crate::error::ErrorDetail::new(
+                    "save_safetensors",
+                    "state",
+                    format!("entry '{name}': {e}"),
+                ))
             })
         })
         .collect::<Result<Vec<(String, TensorView<'_>)>>>()?;
 
-    let bytes = safetensors::tensor::serialize(tensors, None)
-        .map_err(|e| Error::other(format!("SafeTensors serialize error: {e}")))?;
+    let bytes = safetensors::tensor::serialize(tensors, None).map_err(|e| {
+        VoltaError::OpError(crate::error::ErrorDetail::new(
+            "save_safetensors",
+            None,
+            format!("serialize: {e}"),
+        ))
+    })?;
 
-    write_atomically(path.as_ref(), |file| file.write_all(&bytes))
+    let path = path.as_ref();
+    if path.file_name().is_none() {
+        return Err(VoltaError::invalid(
+            "save_safetensors",
+            "path",
+            format!("{} does not name a file", path.display()),
+        ));
+    }
+    Ok(write_atomically(path, |file| file.write_all(&bytes))?)
 }
 
 /// Distinguishes temporary files made by concurrent saves in one process.
@@ -434,9 +478,12 @@ static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 /// flushed to disk with `sync_all`, then renamed over `path`. A failed write, a full disk or
 /// a crash before the rename leaves any existing file at `path` as it was (#395). On an
 /// error the temporary file is removed.
-fn write_atomically(path: &Path, write: impl FnOnce(&mut File) -> Result<()>) -> Result<()> {
+fn write_atomically(
+    path: &Path,
+    write: impl FnOnce(&mut File) -> std::io::Result<()>,
+) -> std::io::Result<()> {
     let file_name = path.file_name().ok_or_else(|| {
-        Error::new(
+        std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!("{} does not name a file", path.display()),
         )
@@ -491,19 +538,17 @@ fn write_atomically(path: &Path, write: impl FnOnce(&mut File) -> Result<()>) ->
 ///     .transpose("encoder.weight");
 ///
 /// let state = load_safetensors_with_mapping("pytorch_model.safetensors", &mapper)?;
-/// # Ok::<(), std::io::Error>(())
+/// # Ok::<(), volta::VoltaError>(())
 /// ```
 /// # Errors
-/// Same as [`load_safetensors`], and `InvalidData` wrapping the
-/// [`VoltaError`](crate::VoltaError) if the mapper fails ([`mapping::StateDictMapper::try_map`]).
+/// Same as [`load_safetensors`], and the mapper's error
+/// ([`mapping::StateDictMapper::try_map`]).
 pub fn load_safetensors_with_mapping<P: AsRef<Path>>(
     path: P,
     mapper: &mapping::StateDictMapper,
 ) -> Result<StateDict> {
     let state = load_safetensors(path)?;
-    mapper
-        .try_map(state)
-        .map_err(|e| Error::new(std::io::ErrorKind::InvalidData, e))
+    mapper.try_map(state)
 }
 
 #[cfg(test)]
@@ -797,7 +842,14 @@ mod io_tests {
         std::fs::write(tmp.path(), &bytes).expect("write");
 
         let err = load_safetensors(tmp.path()).expect_err("a short entry is an error");
-        assert!(err.to_string().contains("SafeTensors parse error"), "{err}");
+        assert!(
+            matches!(
+                &err,
+                crate::VoltaError::Decode { path, key: None, detail }
+                    if path == tmp.path() && detail.op == "load_safetensors"
+            ),
+            "{err:?}"
+        );
     }
 
     /// A program-built entry with the wrong byte count is an `Err` from
@@ -827,10 +879,13 @@ mod io_tests {
 
         let tmp = TempFile::new("malformed.safetensors");
         let err = save_safetensors(&state, tmp.path()).expect_err("short entry");
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            matches!(&err, crate::VoltaError::StateDataLength { key, .. } if key == "weight"),
+            "{err:?}"
+        );
     }
 
-    /// #110: `save_safetensors` returns `InvalidData` for an entry whose byte count
+    /// #110: `save_safetensors` returns `StateDataLength` for an entry whose byte count
     /// does not match its shape (it used to panic in `TensorView::new`), and creates no file.
     #[test]
     fn save_safetensors_rejects_a_length_mismatch_and_writes_nothing() {
@@ -840,8 +895,10 @@ mod io_tests {
         state.insert("w".to_string(), entry);
         let tmp = TempFile::new("mismatch.safetensors");
         let err = save_safetensors(&state, tmp.path()).expect_err("12 bytes for [2, 2]");
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-        assert!(err.to_string().contains("'w'"), "{err}");
+        assert!(
+            matches!(&err, crate::VoltaError::StateDataLength { key, expected: 16, len: 12 } if key == "w"),
+            "{err:?}"
+        );
         assert!(!tmp.path().exists(), "no file is written for a bad entry");
     }
 
@@ -862,7 +919,7 @@ mod io_tests {
 
         let err = write_atomically(&target, |file| {
             file.write_all(b"partial")?;
-            Err(Error::other("injected write failure"))
+            Err(std::io::Error::other("injected write failure"))
         })
         .expect_err("injected failure");
         assert_eq!(err.to_string(), "injected write failure");

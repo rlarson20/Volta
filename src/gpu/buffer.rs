@@ -45,6 +45,13 @@ pub struct GpuBuffer {
     pool: Option<Arc<BufferPool>>,
 }
 
+/// The length and dtype, not the device memory.
+impl std::fmt::Debug for GpuBuffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "GpuBuffer({} elements, {})", self.len, self.dtype)
+    }
+}
+
 /// Bytes `len` elements of `dtype` occupy on the GPU (16-bit types padded to a word).
 ///
 /// # Panics
@@ -258,13 +265,17 @@ impl GpuBuffer {
                 label: Some("Read Buffer Encoder"),
             });
         encoder.copy_buffer_to_buffer(buffer, 0, &staging_buffer, 0, byte_size);
-        ctx.queue().submit(Some(encoder.finish()));
+        let copy = ctx.queue().submit(Some(encoder.finish()));
         // Counted, but no `maybe_sync`: the blocking poll below waits for this submit and
         // everything before it. It does not reset the counter, so the next `maybe_sync` may
         // sync an already idle queue once, which costs a poll and nothing else.
         ctx.increment_pending();
 
-        // Map the staging buffer and wait for the copy (and everything before it).
+        // Map the staging buffer and wait for the copy (and everything before it: a queue
+        // completes in order). Waiting on this submission, not on `None` (the device's last
+        // one), matters when threads share the device: `None` can name another thread's
+        // submission before the queue has registered it, which trips an assert in wgpu-core
+        // (#437).
         let buffer_slice = staging_buffer.slice(..byte_size);
         let (sender, receiver) = mpsc::channel();
         buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
@@ -274,7 +285,7 @@ impl GpuBuffer {
         });
         ctx.device()
             .poll(wgpu::PollType::Wait {
-                submission_index: None,
+                submission_index: Some(copy),
                 timeout: Some(Duration::from_secs(5)),
             })
             .expect("Failed to poll device");
@@ -327,7 +338,7 @@ impl GpuBuffer {
                         u8::from(w == 1)
                     })
                     .collect();
-                crate::storage::Storage::try_from_bytes(&bytes, DType::Bool)
+                HostBuf::try_from_bytes(&bytes, DType::Bool)
             }
             dtype @ (DType::F16
             | DType::BF16
@@ -337,16 +348,13 @@ impl GpuBuffer {
             | DType::I64
             | DType::U8) => {
                 let n = self.len * dtype.size_of();
-                crate::storage::Storage::try_from_bytes(
+                HostBuf::try_from_bytes(
                     bytes.get(..n).expect("download covers the elements"),
                     dtype,
                 )
             }
         };
-        match host.expect("valid bytes for the buffer's dtype") {
-            crate::storage::Storage::Cpu(h) => h,
-            crate::storage::Storage::Gpu(_) => unreachable!("try_from_bytes builds CPU storage"),
-        }
+        host.expect("valid bytes for the buffer's dtype")
     }
 
     /// Get the underlying wgpu buffer (for use in compute passes). Internal (#326): a caller

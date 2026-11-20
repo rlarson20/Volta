@@ -1,5 +1,4 @@
 use crate::autograd::{GradFn, edge};
-use crate::device::Device;
 use crate::device_policy::kernel_failed;
 use crate::index::fetch;
 use crate::ops::gpu_ops::DeviceMax;
@@ -13,7 +12,7 @@ use crate::{RawTensor, Tensor};
 ///
 /// These operations collapse all dimensions and require special gradient handling
 /// since the output shape differs from the input.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ReduceOp {
     /// Sum of all elements; the gradient broadcasts ones.
@@ -39,31 +38,21 @@ impl SumGradFn {
         &self,
         out_grad: &RawTensor,
         _parents: &[Tensor],
-    ) -> Vec<Option<Tensor>> {
+    ) -> Vec<Option<Storage>> {
         let size: usize = self.input_shape.iter().product();
         // GPU path for a GPU gradient, read on the device; a `None` from the kernel is a
         // failure.
         if out_grad.device.is_gpu() {
             let storage = crate::RawTensor::gpu_sum_backward(&out_grad.data, size)
                 .unwrap_or_else(|| kernel_failed("Sum"));
-            return vec![Some(RawTensor::new_with_storage(
-                storage,
-                self.input_shape.clone(),
-                out_grad.device.clone(),
-                false,
-            ))];
+            return vec![Some(storage)];
         }
 
         // CPU path, in the gradient's dtype.
         let grad = dispatch_real!(out_grad.data.dtype(), T => {
             Storage::from_compute(out_grad.data.dtype(), vec![fetch(&out_grad.data.host::<T>(), 0); size])
         });
-        vec![Some(RawTensor::new_with_storage(
-            grad,
-            self.input_shape.clone(),
-            Device::CPU,
-            false,
-        ))]
+        vec![Some(grad)]
     }
 }
 
@@ -92,7 +81,11 @@ enum MaxWinners {
 impl MaxReduceGradFn {
     /// Splits the scalar gradient evenly over the maximum elements; every other element
     /// gets zero.
-    pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        parents: &[Tensor],
+    ) -> Vec<Option<Storage>> {
         let size: usize = self.input_shape.iter().product();
         // GPU path for a GPU gradient, read on the device; a `None` from the kernel is a
         // failure. The maximum was found on the same device as the gradient lives on.
@@ -108,12 +101,7 @@ impl MaxReduceGradFn {
                 .clone();
             let storage = crate::RawTensor::gpu_max_backward(&out_grad.data, &input, size, index)
                 .unwrap_or_else(|| kernel_failed("MaxReduce"));
-            return vec![Some(RawTensor::new_with_storage(
-                storage,
-                self.input_shape.clone(),
-                out_grad.device.clone(),
-                false,
-            ))];
+            return vec![Some(storage)];
         }
 
         // CPU path, in the gradient's dtype. `saves_input` makes an in-place edit of the
@@ -137,12 +125,7 @@ impl MaxReduceGradFn {
                 .collect();
             Storage::from_compute(out_grad.data.dtype(), grad_data)
         });
-        vec![Some(RawTensor::new_with_storage(
-            grad,
-            self.input_shape.clone(),
-            Device::CPU,
-            false,
-        ))]
+        vec![Some(grad)]
     }
 }
 
@@ -161,19 +144,14 @@ impl MeanGradFn {
         &self,
         out_grad: &RawTensor,
         _parents: &[Tensor],
-    ) -> Vec<Option<Tensor>> {
+    ) -> Vec<Option<Storage>> {
         let size: usize = self.input_shape.iter().product();
         // GPU path for a GPU gradient, read on the device; a `None` from the kernel is a
         // failure.
         if out_grad.device.is_gpu() {
             let storage = crate::RawTensor::gpu_mean_backward(&out_grad.data, size)
                 .unwrap_or_else(|| kernel_failed("Mean"));
-            return vec![Some(RawTensor::new_with_storage(
-                storage,
-                self.input_shape.clone(),
-                out_grad.device.clone(),
-                false,
-            ))];
+            return vec![Some(storage)];
         }
 
         // CPU path, in the gradient's dtype.
@@ -181,12 +159,7 @@ impl MeanGradFn {
             let g = fetch(&out_grad.data.host::<T>(), 0) / T::from_usize(size);
             Storage::from_compute(out_grad.data.dtype(), vec![g; size])
         });
-        vec![Some(RawTensor::new_with_storage(
-            grad,
-            self.input_shape.clone(),
-            Device::CPU,
-            false,
-        ))]
+        vec![Some(grad)]
     }
 }
 
@@ -225,7 +198,8 @@ pub(crate) fn pairwise_sum<T: Real>(xs: &[T]) -> T {
 impl RawTensor {
     /// Apply a reduction operation that collapses tensor to scalar
     ///
-    /// All reduction ops produce a shape \[1\] output.
+    /// Every full reduction produces a rank-0 output: shape `[]`, one element, as in
+    /// PyTorch (#100).
     ///
     /// # Panics
     /// If the input's dtype is not a float (integer and bool tensors have no reduction
@@ -285,10 +259,11 @@ impl RawTensor {
             }
         };
 
+        // A full reduction is rank 0 (shape `[]`, one element), as in PyTorch (#100).
         edge(
             [self_t.clone()],
             storage,
-            Shape::derived(vec![1]),
+            Shape::derived(vec![]),
             device,
             grad_fn,
         )

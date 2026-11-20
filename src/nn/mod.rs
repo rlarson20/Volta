@@ -3,8 +3,12 @@ use crate::dtype::DType;
 use crate::io::StateDict;
 use crate::tensor::Tensor;
 
+/// Hyperparameter checks for the layers' `try_new` (#133).
+pub(crate) mod hyper;
 /// Layers and containers.
 pub(crate) mod layers;
+/// Atomic state-dict loading (#65).
+mod load_plan;
 /// Optimizers.
 pub(crate) mod optim;
 pub(crate) mod transformer;
@@ -14,6 +18,7 @@ pub use layers::{
     LSTMCell, LayerNorm, Linear, MaxPool2d, PixelShuffle, ReLU, Sequential, SequentialBuilder,
     Sigmoid, Tanh,
 };
+pub use load_plan::LoadPlan;
 pub use optim::{Adam, Muon, Optimizer, SGD};
 pub use transformer::{
     FeedForward, MultiHeadAttention, PositionalEncoding, PositionalEncodingType,
@@ -66,61 +71,6 @@ pub(crate) fn insert_prefixed(state: &mut StateDict, prefix: &str, child: StateD
     );
 }
 
-/// The entries of `state` whose key starts with `prefix`, with the prefix removed. A key
-/// that is the bare prefix names no parameter and is left out.
-pub(crate) fn sub_state(state: &StateDict, prefix: &str) -> StateDict {
-    // Keys sort lexicographically, so the ones under `prefix` are one contiguous run.
-    state
-        .range(prefix.to_string()..)
-        .map_while(|(key, value)| Some((key.strip_prefix(prefix)?, value)))
-        .filter(|(sub_key, _)| !sub_key.is_empty())
-        .map(|(sub_key, value)| (sub_key.to_string(), value.clone()))
-        .collect()
-}
-
-/// Loads the entries of `state` under `prefix` into `child`, and does nothing when there
-/// are none. An error's key gets the prefix back, so it names the entry in `state`.
-pub(crate) fn load_child<M: Module + ?Sized>(
-    child: &mut M,
-    prefix: &str,
-    state: &StateDict,
-) -> crate::Result<()> {
-    let sub = sub_state(state, prefix);
-    if sub.is_empty() {
-        return Ok(());
-    }
-    child
-        .load_state_dict_partial(&sub)
-        .map_err(|e| e.with_key_prefix(prefix))
-}
-
-/// `Err(StateKeyMismatch)` unless the keys of `state` are exactly `expected`: the check
-/// a strict [`Module::load_state_dict`] makes before it writes anything.
-pub(crate) fn check_keys<'a>(
-    expected: impl IntoIterator<Item = &'a String>,
-    state: &StateDict,
-) -> crate::Result<()> {
-    let expected: std::collections::BTreeSet<&String> = expected.into_iter().collect();
-    let missing: Vec<String> = expected
-        .iter()
-        .filter(|k| !state.contains_key(k.as_str()))
-        .map(|k| (*k).clone())
-        .collect();
-    let unexpected: Vec<String> = state
-        .keys()
-        .filter(|k| !expected.contains(k))
-        .cloned()
-        .collect();
-    if missing.is_empty() && unexpected.is_empty() {
-        Ok(())
-    } else {
-        Err(crate::VoltaError::StateKeyMismatch {
-            missing,
-            unexpected,
-        })
-    }
-}
-
 /// Private supertrait that keeps [`RecurrentLayer`] implementable only inside
 /// this crate. `Module` and [`Layer`] stay open so users can write custom layers.
 mod sealed {
@@ -148,27 +98,64 @@ pub trait Module {
     /// entry keeps its parameter's dtype.
     fn state_dict(&self) -> StateDict;
 
+    /// Names, in `plan`, every tensor this module loads from a state dict: each of its
+    /// own with [`LoadPlan::param`] (under the same name as in [`Self::state_dict`]) and
+    /// each sub-module with [`LoadPlan::child`] (under its prefix). This is the method a
+    /// layer implements; [`Self::load_state_dict`] and [`Self::load_state_dict_partial`]
+    /// build a plan with it, check every write and only then make them (#65).
+    ///
+    /// The names must be exactly the keys of [`Self::state_dict`], or a strict load
+    /// expects keys the module never saves.
+    ///
+    /// ```
+    /// use volta::Tensor;
+    /// use volta::io::{StateDict, TensorData};
+    /// use volta::nn::{LoadPlan, Module};
+    ///
+    /// /// A learnable per-feature scale.
+    /// struct Scale {
+    ///     /// The scale, shape `[n]`.
+    ///     weight: Tensor,
+    /// }
+    ///
+    /// impl Module for Scale {
+    ///     fn parameters(&self) -> Vec<Tensor> {
+    ///         vec![self.weight.clone()]
+    ///     }
+    ///     fn state_dict(&self) -> StateDict {
+    ///         [("weight".to_string(), TensorData::from_tensor(&self.weight))].into()
+    ///     }
+    ///     fn plan_load<'a>(&self, plan: &mut LoadPlan<'a>) {
+    ///         plan.param("weight", &self.weight);
+    ///     }
+    /// }
+    /// ```
+    fn plan_load<'a>(&self, plan: &mut LoadPlan<'a>);
+
     /// Loads `state` into this module, strictly, as PyTorch's default `strict=True`.
     ///
-    /// The keys of `state` must be exactly the keys of [`Self::state_dict`]: a missing
-    /// or unexpected key is an `Err` naming every such key, checked before anything is
-    /// written. A typo in a key prefix therefore fails instead of leaving the module at
-    /// its random initialization (#344). Each entry then loads as in
+    /// The keys of `state` must be exactly the keys the module loads (those of
+    /// [`Self::state_dict`]): a missing or unexpected key is an `Err` naming every such
+    /// key. A typo in a key prefix therefore fails instead of leaving the module at its
+    /// random initialization (#344). Each entry then loads as in
     /// [`Self::load_state_dict_partial`]: it keeps the parameter's shape, device, and
     /// `requires_grad`, and an entry in another dtype is cast to the parameter's.
     ///
-    /// The key check calls [`Self::state_dict`], which copies every parameter once. For
-    /// a checkpoint that covers only part of the module, use
-    /// [`Self::load_state_dict_partial`], or [`crate::io::load_state_dict_checked`] to
-    /// get the diff as well.
+    /// The load is atomic: every entry is checked before any is written, so on `Err` the
+    /// module is unchanged (#65). No weight is copied to check the keys.
     ///
     /// # Errors
     ///
-    /// `VoltaError::StateKeyMismatch` if a key is missing or unexpected (nothing is
-    /// loaded then), and otherwise the errors of [`Self::load_state_dict_partial`].
+    /// `VoltaError::StateKeyMismatch` if a key is missing or unexpected, and otherwise
+    /// the errors of [`Self::load_state_dict_partial`]. Nothing is written on `Err`.
+    ///
+    /// # Panics
+    ///
+    /// If writing a checked entry fails (a GPU upload), leaving the module partly loaded.
     fn load_state_dict(&mut self, state: &StateDict) -> crate::Result<()> {
-        check_keys(self.state_dict().keys(), state)?;
-        self.load_state_dict_partial(state)
+        let plan = LoadPlan::of(&*self, state);
+        plan.check_keys()?;
+        plan.apply()
     }
 
     /// Loads the entries of `state` that match this module's parameters, leniently.
@@ -179,19 +166,24 @@ pub trait Module {
     /// `requires_grad`, and only the values change. An entry in another dtype is cast to
     /// the parameter's (following [`crate::storage::Storage::cast`]).
     ///
-    /// This is the method a layer implements; [`Self::load_state_dict`] checks the keys
-    /// and then calls it.
+    /// The load is atomic: every matching entry is checked before any is written, so on
+    /// `Err` the module is unchanged (#65).
     ///
     /// # Errors
     ///
     /// `VoltaError::StateShapeMismatch` if an entry's shape differs from its
     /// parameter's, `VoltaError::StateDataLength` if an entry has the wrong number of
-    /// bytes for its own shape and dtype. The `key` is the entry's name in `state`. A checkpoint
-    /// is data from outside the program, so this is an `Err`, not a panic.
+    /// bytes for its own shape and dtype (`InvalidParameter` for a bool byte that is not
+    /// 0 or 1), and `VoltaError::DTypeMismatch` if the parameter is not a float tensor.
+    /// The `key` is the entry's name in `state`. A checkpoint is data from outside the
+    /// program, so this is an `Err`, not a panic.
     ///
-    /// On `Err` the module may be partly loaded: entries before the bad one have
-    /// already been written. Discard the module, or load into a fresh one.
-    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()>;
+    /// # Panics
+    ///
+    /// As [`Self::load_state_dict`].
+    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
+        LoadPlan::of(&*self, state).apply()
+    }
 
     /// Clears the gradient of every parameter.
     fn zero_grad(&mut self) {
@@ -294,20 +286,6 @@ pub trait RecurrentLayer: Module + SealedLayer {
 mod tests {
     use super::*;
     use crate::io::TensorData;
-
-    #[test]
-    fn sub_state_takes_exactly_the_keys_under_the_prefix() {
-        let entry = || TensorData::from_f32(vec![1.0], vec![1]);
-        let state: StateDict = ["a", "a.", "a.w", "a.x.y", "ab.w", "b.w", "a-w"]
-            .into_iter()
-            .map(|k| (k.to_string(), entry()))
-            .collect();
-        let sub = sub_state(&state, "a.");
-        let keys: Vec<&str> = sub.keys().map(String::as_str).collect();
-        // Not the bare prefix, not `ab.` (shares the letter), not `a-w` (sorts before `a.`).
-        assert_eq!(keys, ["w", "x.y"]);
-        assert!(sub_state(&state, "c.").is_empty());
-    }
 
     #[test]
     fn insert_prefixed_prepends_the_prefix_to_every_key() {

@@ -649,7 +649,7 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 
 **Choices made here:**
 - **`DTypePolicy`, `Promote` by default.** Promotion is the one implicit conversion in the library, against the fail-loudly rule (ADDENDUM §8), so `with_dtype_policy(DTypePolicy::Strict)` turns it off for a scope: mixed operands panic, naming the op and "under DTypePolicy::Strict". It is a thread-local with a `!Send` restoring guard, the shape of `DevicePolicy` and `no_grad`. Strict refuses only mixed operands; `i64 / i64` in f32 is `div`'s definition, not a mix.
-- **No scalars, so `[1]` tensors promote fully** (decision (a)). Volta has no zero-dim tensors or scalar ops, so `f16[n] * f32[1]` is f32, exactly torch's rule for a `[1]` tensor. Torch keeps `f16 * 2.0` in f16 through its wrapped-number rule; scalar ops with that rule are a TODO. The library's constants come from `constant_like` in the input's dtype, so only user code can widen a half model this way.
+- **No scalars, so `[1]` tensors promote fully** (decision (a)). Volta has no zero-dim tensors or scalar ops, so `f16[n] * f32[1]` is f32, exactly torch's rule for a `[1]` tensor. Torch keeps `f16 * 2.0` in f16 through its wrapped-number rule; scalar ops with that rule are a TODO. *(Superseded in part by #100: full reductions are rank-0 and zero-dim operands follow torch's rule; see "Full reductions are rank-0". A `[1]` tensor still promotes fully.)* The library's constants come from `constant_like` in the input's dtype, so only user code can widen a half model this way.
 - **Integer arithmetic stays out** (decision on P5, kept): `i64 + i64` promotes to i64 and panics "no i64 kernel", while `i64 / i64` works. The asymmetry is noted in TODO until integer kernels land.
 - `where`'s condition stays Bool-only; only its branches promote.
 
@@ -730,13 +730,61 @@ Seeds spread about 0.25 points, so a 5-seed mean has a standard error near 0.05;
 
 **Validate, then allocate:** `zeros`, `ones`, and the others computed `shape.iter().product()` and allocated the `Vec` before `Shape::from_dims` ran. A shape such as `[usize::MAX, 2]` overflowed that product, and `[MAX_NUMEL + 1]` allocated first and checked later. An allocation failure aborts rather than unwinds, so for a user-supplied shape the check has to come first. Every `try_` constructor calls `RawTensor::checked_numel` (which is `Shape::from_dims`) before it builds anything. `reshape` used `Shape::derived`, whose panic says "op computed an invalid output shape"; that is wrong when the caller typed the shape.
 
-**State-dict errors name the entry:** `load_weight` returns `StateShapeMismatch { key, expected, actual }` or `StateDataLength { key, expected, len }`, and a container (`Sequential`, `TransformerBlock`, `MultiHeadAttention`, `FeedForward`, `PositionalEncoding`) puts its layer prefix back on the key (`VoltaError::with_key_prefix`), so a UI can say `2.weight` and not `weight`. The LSTM bias loads had been passing the name `"bias"` for the keys `bias_ih` and `bias_hh`; they pass the real keys now.
+**State-dict errors name the entry:** `load_weight` returns `StateShapeMismatch { key, expected, actual }` or `StateDataLength { key, expected, len }`, and a container (`Sequential`, `TransformerBlock`, `MultiHeadAttention`, `FeedForward`, `PositionalEncoding`) puts its layer prefix back on the key (`VoltaError::with_key_prefix`; since #65 the `LoadPlan` builds the full key while collecting), so a UI can say `2.weight` and not `weight`. The LSTM bias loads had been passing the name `"bias"` for the keys `bias_ih` and `bias_hh`; they pass the real keys now.
 
 **Missing keys still load nothing:** `load_state_dict` skips keys the module lacks and leaves parameters with no entry untouched. That is the old behavior, kept; `load_state_dict_checked` reports them. Strictness about missing keys is a separate decision.
 
 **Open: a failed load is not atomic.** `load_state_dict` checks each entry as it reaches it, so an `Err` can leave earlier layers overwritten. The trait doc says to discard the module. A browser tool must not rely on that. The fix has to avoid keeping a second copy of the weights, which rules out snapshot-and-rollback and a fresh model plus a swap (peak memory about twice the weights, gigabytes for a large model, in a browser tab). That leaves plan-then-apply: layers return the `(tensor, entry)` pairs they would load, one provided method validates all of them, and only then writes. Deferred until the browser tool exists, because it changes the `Module` trait again; the design and its costs are in #65.
 
 **Not changed:** ops that take an `Axis` (`max_dim`, `mean_dim`, `softmax`, `permute`, ...) and the GPU layer's `Option` returns stay as they were. A binding range-checks an axis against `shape().rank()` itself until those get a `try_` form.
+
+---
+
+### String error variants carry an `ErrorDetail { op, arg, message }` (#377)
+
+**Decision:** `VoltaError::InvalidParameter`, `DeviceError` and `OpError` each carry an `ErrorDetail`: `op` (the public operation that rejected the call, as a caller names it: `"reshape"`, `"to_device"`, `"Conv2d"`, `"Adam::new"`, `"Shape::from_dims"`), `arg` (the argument at fault as the signature names it, `Option<&'static str>`), and `message` (what is wrong, without repeating `op`). The struct is `#[non_exhaustive]` with public fields, so callers read and match it but only Volta builds one, and a field can be added later. `VoltaError::detail()` returns it for the three variants. `Display` is `"{op}: {message}"`, so `"Invalid parameter: reshape: cannot reshape [2] (2 elements) to [3] (3 elements)"`. Option 3 of the issue; RJ chose it (2026-11-19).
+
+**Why:** a caller (the browser tool, a config loader) could match the variant but not the cause without parsing the message (PA10, `docs/audits/2026-11-public-api.md`). Option 2 (structured variants for the common causes, strings for the rest) would have left two ways to report the same kind of failure. Changing a variant's payload is breaking, so it changes before `main`.
+
+**Choices:**
+- *`op` and `arg` are `&'static str`.* Every site names a fixed op; a value that varies (a device, a key) goes in `message`. Shared validators that are their own public API (`Shape::from_dims`) report themselves as the op; internal helpers (the conv-spec checks, the optimizer hyperparameter checks) take the op from their caller.
+- *`arg` is not in `Display`.* Most messages already name the argument in prose; `DataLoader::new` re-wraps a `Shape::from_dims` error and puts the argument name in front of the message so a panic still says which shape.
+- *`OrPanic` is implemented for `Result<_, VoltaError>` only,* and leaves out its `what` prefix when the detail's op is the same, so a panic reads `xavier_uniform: expects ...`, not the op twice.
+- *`OpError` keeps its variant* though nothing constructs it today; it carries the same detail so a later use doesn't need another breaking change.
+
+---
+
+### File loaders return `volta::Result`; a `Decode` variant carries the path (#394)
+
+**Decision:** `load_safetensors`, `save_safetensors`, `load_safetensors_with_mapping`, `load_mnist_images` and `load_mnist_labels` return `volta::Result`. Opening, reading or writing a file is `VoltaError::Io`. A file that was read but can't be decoded (not a valid safetensors file, an entry dtype Volta has no equivalent for, a short or malformed MNIST header) is the new `VoltaError::Decode { path, key, detail }`, where `key` names the entry when one tensor is at fault and `detail` is the #377 `ErrorDetail` (`op` is the loader, `arg` is `"path"`). An entry whose bytes don't fit its shape and dtype keeps its existing error (`StateDataLength { key, .. }`, or `InvalidParameter` for a bool byte), now returned as is instead of wrapped in `io::Error::other`. A mapper failure is the mapper's own `VoltaError`. A safetensors serialization failure after validation is `OpError`, since the caller has nothing to fix.
+
+**Why:** with `std::io::Result`, a missing file, a file that isn't safetensors, and a bad tensor shape were all `io::Error` and told apart only by message, and the key was lost (#136 item 2, R37). Breaking, before `main`.
+
+---
+
+### Full reductions are rank-0; zero-dim operands promote like torch (#100)
+
+**Decision:** `sum`, `mean` and `max` over every element, the losses built on them, and a 1-D dot product return a rank-0 tensor (shape `[]`, one element), as PyTorch does; before, they returned `[1]`, so `x.sum()` and `x.sum_dim(0).sum_dim(0)` disagreed on rank. Promotion now follows `torch.result_type` for zero-dim operands too (`DType::result_type`): a rank-0 operand changes the result only when it is a float and every dimensioned operand is integer or bool, so `f16[n] * f32[]` stays f16 while `f16[n] * f32[1]` is still f32. The rule is pinned against all 64 ordered dtype pairs from torch 2.15.0. On the GPU, the same-shape binary kernels also accept a "flat" broadcast (equal element counts and a broadcast shape of that count, such as `[] * [1]`), because a reduction times a `[1]` constant would otherwise fall into the #60 broadcast gap under `Strict`.
+
+**Why:** rank was a needless divergence from torch's shapes. Promotion had to change with it: treating the new rank-0 losses as dimensioned would widen a half model whenever user code multiplies a half tensor by an f32 loss, which is the case torch's zero-dim rule exists for. Not changed here: ops that refuse rank-0 inputs (softmax over an axis, matmul on `[]`) still refuse them, and a rank-0 CPU tensor does not get torch's CPU-scalar device exception. Breaking, before `main`.
+
+---
+
+### Loads are atomic: plan, then apply (#65)
+
+**Decision:** `Module`'s required load method is `plan_load(&self, &mut LoadPlan)`, which only names tensors: `plan.param("weight", &self.weight)` for its own, `plan.child("ffn.", &self.ffn)` for a sub-module. `load_state_dict` (strict) and `load_state_dict_partial` (lenient) are provided: they build the plan, which holds each write as (full key, `Tensor` handle, `&TensorData`), check every write with `Tensor::check_load` (float destination, shape, byte count, bool bytes), and only then make them all. On `Err` the module is unchanged. The strict key check compares `state` against the keys the plan asked for, so it no longer calls `state_dict()`. `Sequential`'s name-or-index prefix is chosen while planning (`LoadPlan::has_entries_under`), so its `load_state_dict` override is gone. `io::load_state_dict_checked` drops the shape mismatches from the plan rather than cloning the loadable entries. A test checks every layer's planned keys equal its `state_dict()` keys.
+
+**Why:** a load that fails in layer 3 of 5 left layers 1 and 2 overwritten, so a caller that reports "load failed" and keeps the model runs mixed weights. The issue's design: snapshot-and-rollback and load-into-a-fresh-model-then-swap both keep the old weights alive (about twice the memory at peak), and checking against `state_dict()` up front copies every weight and can't follow `Sequential`'s prefix choice or mapped keys. The plan costs a `Vec` of handles and references. Collecting with full keys retires `load_child`, `sub_state` (which cloned each sub-dict's entries) and `VoltaError::with_key_prefix`.
+
+**Limits:** the apply step decodes and uploads one entry at a time; a GPU upload failure there panics (`# Panics`), since the module may then be partly written and an `Err` would claim otherwise. Checkpoints (#73, blocked) should reuse the plan. Breaking for external `Module` implementors, before `main`.
+
+---
+
+### Layer hyperparameters are user data: every constructor has a `try_` form (#133)
+
+**Decision:** layer sizes, rates and `eps` are arguments a user supplies (from a config file or a UI), so they fall on the `Result` side of invariant 8, like optimizer hyperparameters. Every layer constructor has a `try_` form that checks its arguments before allocating and returns `InvalidParameter { op: <layer>, arg: <argument> }`, and the panicking form wraps it (`or_panic`, so the message names the layer once): `Linear`, `Conv2d`, `ConvTranspose2d`, `MaxPool2d` (`try_new`, `try_with_params`), `Embedding`, `LayerNorm` (`try_new`, `try_new_with_eps`), `BatchNorm1d`/`BatchNorm2d` (`try_new`, `try_new_with_params`), `Dropout`, `LSTMCell`, `PixelShuffle`, `MultiHeadAttention`, `FeedForward`, `TransformerBlock`, `PositionalEncoding`, and `amp::GradScaler::try_with_params`. Ranges, following PyTorch where it checks: sizes, kernels and strides at least 1; `eps` finite and `> 0`; `momentum` and `dropout` in `[0, 1]`; a non-empty `normalized_shape`; `GradScaler`'s scale and growth factor finite. The checks live in `nn::hyper`.
+
+**Why:** three groups were wrong (#133): values accepted and silently wrong (momentum 7 made `running_var` negative; `eps <= 0` gave NaN; `LayerNorm::new(vec![])` built a one-feature layer), values accepted and refused only in `forward` (stride 0, pool kernel 0), and zeros refused by accident in the weight initializer, with its name instead of the layer's. `new_on_device` constructors run the same check and panic; `MaxPool2d::new`/`with_params` are no longer `const fn`. Not covered: forward-time shape messages (#142).
 
 ---
 
@@ -812,6 +860,14 @@ A weight shared between layers (`l2.weight = l1.weight.clone()`) is one tensor. 
 
 **Consequence:** a plain `cargo build`/`cargo test` is CPU-only. GPU work needs `--features gpu` (the examples `gpu` and `gpu_training` say so and exit cleanly without it). CI is unchanged in coverage: `cpu-only` runs the no-feature recipes, `linux-lavapipe` runs `test-full`/`lint-full`/`doc-full`, `macos-cross` lints with `--all-features` and none, and `macos.yml` tests with `--all-features`. Job names are unchanged, so the rulesets are too. Breaking for anyone relying on the old default; it changes now, before `main`.
 
+### `Storage` is an opaque struct (#356, supersedes the `#[non_exhaustive]` enum of #340)
+
+**Decision:** `pub struct Storage(Repr)`, where `Repr` is a private enum with the `Cpu(HostBuf)` and `Gpu(Arc<GpuStorage>)` variants. Other crates read storage only through methods (`cpu`, `from_typed`, `try_from_bytes`, `dtype`, `len`, `is_gpu`, `as_host`, `as_host_mut`, `to_host_f32`, `to_device`, ...). `HostBuf` is `pub(crate)` at its use path; its definition is a `pub` type in a private module, because the sealed `Element` plumbing names it in `pub` trait methods and a `pub(crate)` type there is a `private_interfaces` warning. A `compile_fail` doctest on `Storage` pins that there is no variant to match.
+
+**Why:** #340 made the enum `#[non_exhaustive]` with one variant set in every feature set, which fixed feature additivity but left the representation (the host buffer type, the GPU handle wrapper) as public surface: any change to it after `main` would be breaking (PA3, `docs/audits/2026-11-public-api.md`). RJ chose the opaque struct (2026-11-19, on #356). Inside the crate every variant match already lived in `storage.rs` except one GPU download, which now decodes through `HostBuf::try_from_bytes` instead of unwrapping a `Storage`.
+
+**Consequence:** breaking for anyone matching `Storage::Cpu`/`Storage::Gpu` or naming `HostBuf`; it lands before `main`. The `Debug` output still reads `Storage::Cpu(n elements, dtype)`.
+
 ### One path per item; the root re-exports the core (#341)
 
 **Decision:** every public item has one canonical path, in the module that owns it, and at most one root re-export. Leaf modules are private (`pub(crate)` where other modules need their internals): `nn::layers::conv` is not a path, `nn::Conv2d` is. The root re-exports every public item of the eight core modules, `tensor`, `autograd`, `amp`, `dtype`, `device`, `device_policy`, `shape` and `error`, and nothing else. The domain modules are reached only through their module: `nn` (every layer, container, transformer block, optimizer and the `Layer`/`Module`/`Optimizer`/`RecurrentLayer` traits, flat), `ops` (the op enums), `data`, `io` (plus `io::mapping`), `utils`, `storage` and `gpu`. So `volta::Tensor`, `volta::no_grad` and `volta::nn::Conv2d`, as in `torch.Tensor`, `torch.no_grad` and `torch.nn.Conv2d`. `PadValue` lives in the private `spec` module, so `tensor` re-exports it as its canonical path. `assert_trainable!` was `#[macro_export]` and so sat at the root regardless, until #145 made it internal (see "`assert_trainable!`").
@@ -826,7 +882,7 @@ A weight shared between layers (`l2.weight = l1.weight.clone()`) is one tensor. 
 
 **Why:** PyTorch's default is `strict=True`, and with the lenient default a typo in a key prefix, or an empty state dict, returned `Ok` and left the model at its random initialization (PA8, `docs/audits/2026-11-public-api.md`). Changing the default after `main` would be a silent behavior change for users, so it changes now. RJ chose strict-by-default with an explicitly named lenient form (2026-11-19). A `strict: bool` argument, as in PyTorch, was not taken: a bare `true`/`false` at the call site says less than the method name.
 
-**Consequence:** a custom `Module` implements `load_state_dict_partial`, not `load_state_dict` (breaking for external implementors). The strict check calls `state_dict()`, which copies every parameter once per load. Loading part of a model (only `gamma`/`beta` of a `BatchNorm`, a checkpoint with extra keys) uses `load_state_dict_partial`. Atomic loading (#65) builds on this.
+**Consequence:** a custom `Module` implements `load_state_dict_partial`, not `load_state_dict` (breaking for external implementors). The strict check calls `state_dict()`, which copies every parameter once per load. *(Superseded by #65: the required method is `plan_load`, both loads are provided, and the strict check uses the plan's keys without copying; see "Loads are atomic".)* Loading part of a model (only `gamma`/`beta` of a `BatchNorm`, a checkpoint with extra keys) uses `load_state_dict_partial`. Atomic loading (#65) builds on this.
 
 ## Concurrency and Async
 

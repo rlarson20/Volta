@@ -594,11 +594,13 @@ impl GpuContext {
 
         // `write_buffer` data sits in wgpu's staging area until the next submit, so an upload
         // alone is never in flight. An empty submit flushes it and gives `poll` something to wait on.
-        self.queue.submit(std::iter::empty::<wgpu::CommandBuffer>());
+        let flush = self.queue.submit(std::iter::empty::<wgpu::CommandBuffer>());
 
-        // Poll the device until all work completes
+        // Poll until that submission, and so everything before it, completes. Waiting on
+        // our own index rather than `None` keeps another thread's in-flight submit out of
+        // it (#437).
         let result = self.device.poll(wgpu::PollType::Wait {
-            submission_index: None,
+            submission_index: Some(flush),
             timeout: Some(Duration::from_secs(get_sync_timeout_secs())),
         });
 

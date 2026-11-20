@@ -10,6 +10,7 @@ use crate::tensor::Tensor;
 /// - With momentum: v ← β·v - lr·∇θ, θ ← θ + v
 ///
 /// Momentum helps accelerate convergence and dampen oscillations.
+#[derive(Debug)]
 pub struct SGD {
     /// Parameters being optimized.
     pub(super) params: Vec<Tensor>,
@@ -57,11 +58,13 @@ impl SGD {
         momentum: f32,
         weight_decay: f32,
     ) -> crate::Result<Self> {
-        super::check_unique(&params)?;
-        super::check_leaves(&params)?;
-        super::check_non_negative("learning rate", lr)?;
-        super::check_non_negative("momentum", momentum)?;
-        super::check_non_negative("weight_decay", weight_decay)?;
+        /// The op named in errors.
+        const OP: &str = "SGD::new";
+        super::check_unique(OP, &params)?;
+        super::check_leaves(OP, &params)?;
+        super::check_non_negative(OP, "lr", "learning rate", lr)?;
+        super::check_non_negative(OP, "momentum", "momentum", momentum)?;
+        super::check_non_negative(OP, "weight_decay", "weight_decay", weight_decay)?;
         let velocity = params.iter().map(|_| None).collect();
 
         Ok(Self {

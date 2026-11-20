@@ -101,7 +101,7 @@ fn test_cross_entropy_loss() {
     loss.clone().into_loss().expect("scalar loss").backward();
 
     // Loss should be positive scalar
-    assert_eq!(loss.borrow().shape, vec![1]);
+    assert_eq!(loss.borrow().shape, Vec::<usize>::new());
     assert!(
         loss.borrow()
             .data

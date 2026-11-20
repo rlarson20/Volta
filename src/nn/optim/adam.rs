@@ -5,6 +5,7 @@ use crate::storage::Storage;
 use crate::tensor::Tensor;
 
 /// Adam optimizer (Kingma & Ba): per-parameter step sizes from running first and second moments of the gradient.
+#[derive(Debug)]
 pub struct Adam {
     /// Parameters being optimized.
     pub(super) params: Vec<Tensor>,
@@ -23,6 +24,7 @@ pub struct Adam {
 }
 
 /// One parameter's moment estimates and step count.
+#[derive(Debug)]
 struct AdamState {
     /// First-moment estimate, on the parameter's device.
     m: Storage,
@@ -49,7 +51,7 @@ fn half_parameter(params: &[Tensor]) -> Option<String> {
         let dtype = p.dtype();
         matches!(dtype, crate::DType::F16 | crate::DType::BF16).then(|| {
             format!(
-                "Adam: parameter {i} is {dtype}; Adam keeps its moment estimates in the \
+                "parameter {i} is {dtype}; Adam keeps its moment estimates in the \
                  parameter's dtype, where the second moment underflows (#317). Keep the \
                  parameters f32 and run the forward under amp::autocast"
             )
@@ -94,16 +96,18 @@ impl Adam {
         eps: f32,
         weight_decay: f32,
     ) -> crate::Result<Self> {
-        super::check_unique(&params)?;
-        super::check_leaves(&params)?;
+        /// The op named in errors.
+        const OP: &str = "Adam::new";
+        super::check_unique(OP, &params)?;
+        super::check_leaves(OP, &params)?;
         if let Some(message) = half_parameter(&params) {
-            return Err(crate::VoltaError::InvalidParameter(message));
+            return Err(crate::VoltaError::invalid(OP, "params", message));
         }
-        super::check_non_negative("learning rate", lr)?;
-        super::check_non_negative("epsilon", eps)?;
-        super::check_beta(0, betas.0)?;
-        super::check_beta(1, betas.1)?;
-        super::check_non_negative("weight_decay", weight_decay)?;
+        super::check_non_negative(OP, "lr", "learning rate", lr)?;
+        super::check_non_negative(OP, "eps", "epsilon", eps)?;
+        super::check_beta(OP, 0, betas.0)?;
+        super::check_beta(OP, 1, betas.1)?;
+        super::check_non_negative(OP, "weight_decay", "weight_decay", weight_decay)?;
         let state = params.iter().map(|_| None).collect();
 
         Ok(Self {
@@ -140,7 +144,7 @@ impl Adam {
             crate::real::compute_dtype(|| "Adam step".to_string(), &[param.dtype()]);
         }
         if let Some(message) = half_parameter(&self.params) {
-            panic!("{message}");
+            panic!("Adam: {message}");
         }
         super::assert_grad_lens("Adam", &self.params);
 

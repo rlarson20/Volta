@@ -14,7 +14,7 @@ fn assert_non_leaf_error<T>(r: volta::Result<T>, name: &str) {
     match r {
         Err(VoltaError::InvalidParameter(m)) => {
             assert!(
-                m.contains("non-leaf") && m.contains("parameter 1"),
+                m.message.contains("non-leaf") && m.message.contains("parameter 1"),
                 "{name}: {m}"
             );
         }

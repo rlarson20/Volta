@@ -29,17 +29,11 @@ impl TransposeGradFn {
         &self,
         out_grad: &RawTensor,
         _parents: &[Tensor],
-    ) -> Vec<Option<Tensor>> {
+    ) -> Vec<Option<Storage>> {
         let transposed = dispatch_real!(out_grad.data.dtype(), T => Storage::from_compute(out_grad.data.dtype(),
             RawTensor::transpose_2d(&out_grad.data.host::<T>(), out_grad.shape.truncate_rank()),
         ));
-        let [dim0, dim1] = out_grad.shape.fixed::<2>();
-        vec![Some(RawTensor::new_with_storage(
-            transposed,
-            Shape::derived(vec![dim1, dim0]),
-            Device::CPU,
-            false,
-        ))]
+        vec![Some(transposed)]
     }
 }
 
@@ -332,7 +326,8 @@ impl RawTensor {
                 edge(
                     [self_t.clone(), other.clone()],
                     Storage::from_compute(dtype, vec![sum]),
-                    Shape::derived(vec![1]),
+                    // A dot product is rank 0, as in PyTorch (#100).
+                    Shape::derived(vec![]),
                     Device::CPU,
                     GradFn::MatMul(MatMulGradFn::vector()),
                 )
@@ -532,7 +527,11 @@ impl MatMulGradFn {
 
 impl MatMulGradFn {
     /// Gradients for both operands of the matrix product.
-    pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        parents: &[Tensor],
+    ) -> Vec<Option<Storage>> {
         let x = parents
             .first()
             .map(|p| p.borrow())
@@ -551,14 +550,12 @@ impl MatMulGradFn {
             && let Some(spec) = self.spec.as_ref().filter(|s| !s.is_batched())
         {
             let grad_x = x.requires_grad.then(|| {
-                let storage = RawTensor::gpu_matmul_backward_a(&out_grad.data, &y.data, spec)
-                    .unwrap_or_else(|| kernel_failed("MatMul"));
-                RawTensor::new_with_storage(storage, x.shape.clone(), x.device.clone(), false)
+                RawTensor::gpu_matmul_backward_a(&out_grad.data, &y.data, spec)
+                    .unwrap_or_else(|| kernel_failed("MatMul"))
             });
             let grad_y = y.requires_grad.then(|| {
-                let storage = RawTensor::gpu_matmul_backward_b(&x.data, &out_grad.data, spec)
-                    .unwrap_or_else(|| kernel_failed("MatMul"));
-                RawTensor::new_with_storage(storage, y.shape.clone(), y.device.clone(), false)
+                RawTensor::gpu_matmul_backward_b(&x.data, &out_grad.data, spec)
+                    .unwrap_or_else(|| kernel_failed("MatMul"))
             });
             return vec![grad_x, grad_y];
         }
@@ -575,7 +572,7 @@ impl MatMulGradFn {
 
         let grad_x = if x.requires_grad {
             match (&self.spec, x.shape.rank(), y.shape.rank()) {
-                (Some(spec), _, _) => Some(RawTensor::from_shape_compute(x.data.dtype(), Self::matrix_grad_a(spec, &g_host, &y_host), x.shape.clone())),
+                (Some(spec), _, _) => Some(Storage::from_compute(x.data.dtype(), Self::matrix_grad_a(spec, &g_host, &y_host))),
                 (None, 2, 1) => {
                     // Matrix-vector: (m,n) @ (n,) -> (m,)
                     // ∂L/∂x = ∂L/∂z[:,None] @ v[None,:] = outer(out_grad, v)
@@ -587,7 +584,7 @@ impl MatMulGradFn {
                             *slot(&mut grad_data, i * n + j) = gz_i * fetch(&y_host, j);
                         }
                     }
-                    Some(RawTensor::from_shape_compute(x.data.dtype(), grad_data, x.shape.clone()))
+                    Some(Storage::from_compute(x.data.dtype(), grad_data))
                 }
                 (None, 1, 2) => {
                     // Vector-matrix: (n,) @ (n,p) -> (p,)
@@ -602,14 +599,14 @@ impl MatMulGradFn {
                             })
                         })
                         .collect();
-                    Some(RawTensor::from_shape_compute(x.data.dtype(), grad_data, x.shape.clone()))
+                    Some(Storage::from_compute(x.data.dtype(), grad_data))
                 }
                 (None, 1, 1) => {
                     // Dot: (n,) @ (n,) -> scalar
                     // ∂L/∂x = out_grad * y
                     let og = fetch(&g_host, 0);
                     let grad_data: Vec<T> = y_host.iter().map(|&v| og * v).collect();
-                    Some(RawTensor::from_shape_compute(x.data.dtype(), grad_data, x.shape.clone()))
+                    Some(Storage::from_compute(x.data.dtype(), grad_data))
                 }
                 (None, rx, ry) => {
                     unreachable!("vector matmul backward with ranks {rx} and {ry}")
@@ -621,7 +618,7 @@ impl MatMulGradFn {
 
         let grad_y = if y.requires_grad {
             match (&self.spec, x.shape.rank(), y.shape.rank()) {
-                (Some(spec), _, _) => Some(RawTensor::from_shape_compute(x.data.dtype(), Self::matrix_grad_b(spec, &x_host, &g_host), y.shape.clone())),
+                (Some(spec), _, _) => Some(Storage::from_compute(x.data.dtype(), Self::matrix_grad_b(spec, &x_host, &g_host))),
                 (None, 2, 1) => {
                     // Matrix-vector: (m,n) @ (n,) -> (m,)
                     // ∂L/∂v = X^T @ ∂L/∂z -> (n,)
@@ -629,7 +626,7 @@ impl MatMulGradFn {
                     let grad_data: Vec<T> = (0..n)
                         .map(|j| pairwise_sum_by(m, |i| fetch(&x_host, i * n + j) * fetch(&g_host, i)))
                         .collect();
-                    Some(RawTensor::from_shape_compute(x.data.dtype(), grad_data, y.shape.clone()))
+                    Some(Storage::from_compute(x.data.dtype(), grad_data))
                 }
                 (None, 1, 2) => {
                     // grad_y = x^T @ out_grad -> (n,1) @ (1,p) -> (n,p)
@@ -641,13 +638,13 @@ impl MatMulGradFn {
                                 fetch(&x_host, i) * fetch(&g_host, j);
                         }
                     }
-                    Some(RawTensor::from_shape_compute(x.data.dtype(), grad_data, y.shape.clone()))
+                    Some(Storage::from_compute(x.data.dtype(), grad_data))
                 }
                 (None, 1, 1) => {
                     // Dot: (n,) @ (n,) -> scalar
                     let og = fetch(&g_host, 0);
                     let grad_data: Vec<T> = x_host.iter().map(|&u| og * u).collect();
-                    Some(RawTensor::from_shape_compute(x.data.dtype(), grad_data, y.shape.clone()))
+                    Some(Storage::from_compute(x.data.dtype(), grad_data))
                 }
                 (None, rx, ry) => {
                     unreachable!("vector matmul backward with ranks {rx} and {ry}")

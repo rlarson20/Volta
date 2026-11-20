@@ -21,7 +21,7 @@ fn loader_err(
         batch,
         true,
     ) {
-        Err(VoltaError::InvalidParameter(m)) => m,
+        Err(VoltaError::InvalidParameter(m)) => m.message,
         Err(e) => panic!("wrong error {e:?}"),
         Ok(_) => panic!(
             "accepted data={data} targets={targets} {data_shape:?} {target_shape:?} batch={batch}"
@@ -36,8 +36,20 @@ fn dataloader_rejects_zero_batch_size() {
 
 #[test]
 fn dataloader_rejects_zero_size_shapes() {
-    assert!(loader_err(4, 4, &[0], &[1], 2).contains("data_shape"));
-    assert!(loader_err(4, 4, &[1], &[0], 2).contains("target_shape"));
+    assert!(loader_err(4, 4, &[0], &[1], 2).starts_with("data_shape: "));
+    assert!(loader_err(4, 4, &[1], &[0], 2).starts_with("target_shape: "));
+}
+
+/// The error names the op and the argument as fields, not only in prose (#377).
+#[test]
+fn dataloader_errors_name_the_op_and_argument() {
+    let err = DataLoader::try_new(vec![0.0; 4], vec![0.0; 4], &[1], &[0], 2, true)
+        .expect_err("a zero target dimension is refused");
+    let detail = err.detail().expect("InvalidParameter carries a detail");
+    assert_eq!(
+        (detail.op, detail.arg),
+        ("DataLoader::new", Some("target_shape"))
+    );
 }
 
 #[test]
