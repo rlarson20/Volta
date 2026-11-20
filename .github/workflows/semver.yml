@@ -1,0 +1,28 @@
+name: Semver
+# Breaking changes against the last crates.io release (`just semver`, #397). It runs where a
+# release is cut, on PRs into main, and by hand; not on every PR into improvements, where
+# each 0.x minor is allowed to break and a red check on every PR would teach people to
+# ignore it. A reported break is a real failure here: before 1.0 it means the release must
+# be a minor bump and the changelog must list the break. Not a required check
+# (.github/rulesets/ name only ci.yml's jobs); at the 1.0 cut, make it one.
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  semver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          tools: just,cargo-semver-checks
+
+      - name: Semver checks against crates.io
+        run: just semver

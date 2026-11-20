@@ -357,6 +357,14 @@ prs:
 		gh pr checks "$b" || true
 	fi
 
+# Breaking changes since the last crates.io release (#397), for the default (CPU-only) build
+# and with `gpu`. Needs `cargo install cargo-semver-checks --locked` and network access for
+# the baseline. semver.yml runs it on PRs into main (the release point) and by hand.
+# Check for semver breaks against the last published version
+semver:
+	cargo semver-checks check-release --only-explicit-features
+	cargo semver-checks check-release --only-explicit-features --features gpu
+
 # Search issues, open and closed, by title and body: run it before filing (`just issues "sum sequential"`)
 issues +terms:
 	gh issue list --state all --limit 30 --search "{{terms}} in:title,body"
