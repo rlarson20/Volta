@@ -198,11 +198,12 @@ pub fn gpu_compact() -> bool {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Compaction Encoder"),
             });
-        ctx.queue().submit(Some(encoder.finish()));
+        let flush = ctx.queue().submit(Some(encoder.finish()));
 
-        // Step 3: Poll device to completion to ensure all pending work finishes
+        // Step 3: Poll until that submission (and everything before it) finishes; our own
+        // index, not `None`, so another thread's in-flight submit can't race it (#437).
         let _ = ctx.device().poll(wgpu::PollType::Wait {
-            submission_index: None,
+            submission_index: Some(flush.clone()),
             timeout: Some(std::time::Duration::from_secs(2)),
         });
 
@@ -211,7 +212,7 @@ pub fn gpu_compact() -> bool {
 
         // Step 5: Poll again to pick up any deferred cleanup
         let _ = ctx.device().poll(wgpu::PollType::Wait {
-            submission_index: None,
+            submission_index: Some(flush),
             timeout: Some(std::time::Duration::from_millis(500)),
         });
 

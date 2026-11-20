@@ -258,13 +258,17 @@ impl GpuBuffer {
                 label: Some("Read Buffer Encoder"),
             });
         encoder.copy_buffer_to_buffer(buffer, 0, &staging_buffer, 0, byte_size);
-        ctx.queue().submit(Some(encoder.finish()));
+        let copy = ctx.queue().submit(Some(encoder.finish()));
         // Counted, but no `maybe_sync`: the blocking poll below waits for this submit and
         // everything before it. It does not reset the counter, so the next `maybe_sync` may
         // sync an already idle queue once, which costs a poll and nothing else.
         ctx.increment_pending();
 
-        // Map the staging buffer and wait for the copy (and everything before it).
+        // Map the staging buffer and wait for the copy (and everything before it: a queue
+        // completes in order). Waiting on this submission, not on `None` (the device's last
+        // one), matters when threads share the device: `None` can name another thread's
+        // submission before the queue has registered it, which trips an assert in wgpu-core
+        // (#437).
         let buffer_slice = staging_buffer.slice(..byte_size);
         let (sender, receiver) = mpsc::channel();
         buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
@@ -274,7 +278,7 @@ impl GpuBuffer {
         });
         ctx.device()
             .poll(wgpu::PollType::Wait {
-                submission_index: None,
+                submission_index: Some(copy),
                 timeout: Some(Duration::from_secs(5)),
             })
             .expect("Failed to poll device");
