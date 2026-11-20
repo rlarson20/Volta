@@ -3,6 +3,7 @@ use crate::device::Device;
 use crate::error::OrPanic;
 use crate::index::{fetch, slot};
 use crate::io::StateDict;
+use crate::nn::hyper;
 use crate::nn::{Layer, Module};
 use crate::ops::max_rule::pool_scan_replaces;
 use crate::real::{Real, compute_dtype, dispatch_real};
@@ -34,28 +35,62 @@ pub(crate) struct MaxPool2dGradFn {
 }
 
 impl MaxPool2d {
+    /// The layer's name in errors.
+    const OP: &'static str = "MaxPool2d";
+
     /// Square-kernel constructor for convenience
+    ///
+    /// # Panics
+    /// If `kernel` or `stride` is zero (see [`Self::try_new`]).
     #[must_use]
-    pub const fn new(kernel: usize, stride: usize, padding: usize) -> Self {
-        Self {
-            kernel: (kernel, kernel),
-            stride: (stride, stride),
-            padding: (padding, padding),
-        }
+    #[track_caller]
+    pub fn new(kernel: usize, stride: usize, padding: usize) -> Self {
+        Self::try_new(kernel, stride, padding).or_panic(Self::OP)
+    }
+
+    /// [`Self::new`], checking the hyperparameters first.
+    ///
+    /// # Errors
+    /// As [`Self::try_with_params`].
+    pub fn try_new(kernel: usize, stride: usize, padding: usize) -> crate::Result<Self> {
+        Self::try_with_params((kernel, kernel), (stride, stride), (padding, padding))
     }
 
     /// Arbitrary kernel/stride/padding constructor
+    ///
+    /// # Panics
+    /// If a `kernel` or `stride` component is zero (see [`Self::try_with_params`]).
     #[must_use]
-    pub const fn with_params(
+    #[track_caller]
+    pub fn with_params(
         kernel: (usize, usize),
         stride: (usize, usize),
         padding: (usize, usize),
     ) -> Self {
-        Self {
+        Self::try_with_params(kernel, stride, padding).or_panic(Self::OP)
+    }
+
+    /// [`Self::with_params`], checking the hyperparameters first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` naming the argument if a component of `kernel` or
+    /// `stride` is zero. These used to be accepted here and to panic in `forward` (#133).
+    pub fn try_with_params(
+        kernel: (usize, usize),
+        stride: (usize, usize),
+        padding: (usize, usize),
+    ) -> crate::Result<Self> {
+        for v in [kernel.0, kernel.1] {
+            hyper::at_least_one(Self::OP, "kernel", v)?;
+        }
+        for v in [stride.0, stride.1] {
+            hyper::at_least_one(Self::OP, "stride", v)?;
+        }
+        Ok(Self {
             kernel,
             stride,
             padding,
-        }
+        })
     }
 
     /// Computes the pooled output and attaches the backward edge.
@@ -762,19 +797,22 @@ mod tests {
     }
 
     #[test]
-    fn test_maxpool2d_zero_stride_panics_with_spec_message() {
-        let pool = MaxPool2d::new(2, 0, 0);
-        let x = RawTensor::randn(&[1, 1, 8, 8]);
-        let msg = forward_panic_message(&pool, &x);
-        assert!(msg.contains("stride must be non-zero"), "{msg}");
+    fn test_maxpool2d_zero_stride_is_refused_at_construction() {
+        let err = MaxPool2d::try_new(2, 0, 0)
+            .err()
+            .expect("stride 0 is refused");
+        let d = err.detail().expect("InvalidParameter");
+        assert_eq!((d.op, d.arg), ("MaxPool2d", Some("stride")));
+        assert_eq!(d.message, "stride must be at least 1, got 0");
     }
 
     #[test]
-    fn test_maxpool2d_zero_kernel_panics_with_spec_message() {
-        let pool = MaxPool2d::new(0, 1, 0);
-        let x = RawTensor::randn(&[1, 1, 8, 8]);
-        let msg = forward_panic_message(&pool, &x);
-        assert!(msg.contains("kernel must be positive"), "{msg}");
+    fn test_maxpool2d_zero_kernel_is_refused_at_construction() {
+        let err = MaxPool2d::try_with_params((2, 0), (1, 1), (0, 0))
+            .err()
+            .expect("a zero kernel width is refused");
+        let d = err.detail().expect("InvalidParameter");
+        assert_eq!((d.op, d.arg), ("MaxPool2d", Some("kernel")));
     }
 
     #[test]

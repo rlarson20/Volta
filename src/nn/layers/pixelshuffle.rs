@@ -1,4 +1,6 @@
+use crate::error::OrPanic;
 use crate::io::StateDict;
+use crate::nn::hyper;
 use crate::nn::{Layer, Module};
 use crate::shape::Axis;
 use crate::tensor::Tensor;
@@ -38,15 +40,20 @@ impl PixelShuffle {
     /// * `upscale_factor` - Factor to increase spatial resolution by (must be > 0)
     ///
     /// # Panics
-    /// If `upscale_factor` is 0.
+    /// If `upscale_factor` is 0 (see [`Self::try_new`]).
     #[must_use]
     #[track_caller]
     pub fn new(upscale_factor: usize) -> Self {
-        assert!(
-            upscale_factor > 0,
-            "PixelShuffle: upscale_factor must be positive, got {upscale_factor}",
-        );
-        Self { upscale_factor }
+        Self::try_new(upscale_factor).or_panic("PixelShuffle")
+    }
+
+    /// [`Self::new`], checking `upscale_factor` first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` if `upscale_factor` is 0.
+    pub fn try_new(upscale_factor: usize) -> crate::Result<Self> {
+        hyper::at_least_one("PixelShuffle", "upscale_factor", upscale_factor)?;
+        Ok(Self { upscale_factor })
     }
 }
 

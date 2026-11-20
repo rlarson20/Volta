@@ -3,6 +3,7 @@ use crate::device::Device;
 use crate::error::OrPanic;
 use crate::index::{fetch, slot};
 use crate::io::{StateDict, TensorData};
+use crate::nn::hyper;
 use crate::nn::{Layer, Module};
 use crate::real::{Real, compute_dtype, dispatch_real};
 use crate::shape::Axis;
@@ -30,7 +31,11 @@ pub struct ConvTranspose2d {
 
 impl ConvTranspose2d {
     /// Layer with square `kernel`, equal `stride` and `padding` on both axes, and He-initialized weights.
+    ///
+    /// # Panics
+    /// If a channel count, `kernel` or `stride` is zero (see [`Self::try_new`]).
     #[must_use]
+    #[track_caller]
     pub fn new(
         in_ch: usize,
         out_ch: usize,
@@ -39,6 +44,24 @@ impl ConvTranspose2d {
         padding: usize,
         use_bias: bool,
     ) -> Self {
+        Self::try_new(in_ch, out_ch, kernel, stride, padding, use_bias).or_panic(Self::OP)
+    }
+
+    /// [`Self::new`], checking the hyperparameters first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` naming the argument if `in_ch`, `out_ch`, `kernel`
+    /// or `stride` is zero. A zero stride used to be accepted here and to panic in
+    /// `forward` (#133).
+    pub fn try_new(
+        in_ch: usize,
+        out_ch: usize,
+        kernel: usize,
+        stride: usize,
+        padding: usize,
+        use_bias: bool,
+    ) -> crate::Result<Self> {
+        Self::check_hyper(in_ch, out_ch, kernel, stride)?;
         // Weight shape for transpose conv: [in_channels, out_channels, K, K]
         let w = RawTensor::he_initialization(&[in_ch, out_ch, kernel, kernel]);
         w.set_requires_grad(true);
@@ -51,12 +74,23 @@ impl ConvTranspose2d {
             None
         };
 
-        Self {
+        Ok(Self {
             weight: w,
             bias: b,
             stride: (stride, stride),
             padding: (padding, padding),
-        }
+        })
+    }
+
+    /// The layer's name in errors.
+    const OP: &'static str = "ConvTranspose2d";
+
+    /// `Ok` if the channel counts, `kernel` and `stride` are at least 1.
+    fn check_hyper(in_ch: usize, out_ch: usize, kernel: usize, stride: usize) -> crate::Result<()> {
+        hyper::at_least_one(Self::OP, "in_ch", in_ch)?;
+        hyper::at_least_one(Self::OP, "out_ch", out_ch)?;
+        hyper::at_least_one(Self::OP, "kernel", kernel)?;
+        hyper::at_least_one(Self::OP, "stride", stride)
     }
 
     /// Convert column matrix back to image format
@@ -1125,11 +1159,11 @@ mod tests {
     }
 
     #[test]
-    fn test_conv_transpose2d_zero_stride_panics_with_spec_message() {
-        let conv = ConvTranspose2d::new(2, 3, 3, 0, 0, false);
-        let x = RawTensor::randn(&[1, 2, 4, 4]);
-        let msg = forward_panic_message(&conv, &x);
-        assert!(msg.contains("stride must be non-zero"), "{msg}");
+    #[should_panic(
+        expected = "Invalid parameter: ConvTranspose2d: stride must be at least 1, got 0"
+    )]
+    fn test_conv_transpose2d_zero_stride_is_refused_at_construction() {
+        let _ = ConvTranspose2d::new(2, 3, 3, 0, 0, false);
     }
 
     #[test]

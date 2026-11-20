@@ -1,5 +1,7 @@
+use crate::error::OrPanic;
 use crate::index::{fetch, slot};
 use crate::io::{StateDict, TensorData};
+use crate::nn::hyper;
 use crate::nn::{Layer, Module};
 use crate::real::{Real, dispatch_real};
 use crate::shape::Axis;
@@ -30,8 +32,17 @@ struct BatchNorm {
 }
 
 impl BatchNorm {
-    /// `gamma = 1`, `beta = 0`, running mean 0 and running variance 1, in training mode.
-    fn new(num_features: usize, eps: f32, momentum: f32) -> Self {
+    /// `gamma = 1`, `beta = 0`, running mean 0 and running variance 1, in training mode,
+    /// after checking the arguments under the layer's name `op`.
+    fn try_new(
+        op: &'static str,
+        num_features: usize,
+        eps: f32,
+        momentum: f32,
+    ) -> crate::Result<Self> {
+        hyper::at_least_one(op, "num_features", num_features)?;
+        hyper::eps(op, eps)?;
+        hyper::unit_interval(op, "momentum", momentum)?;
         let gamma = RawTensor::ones(&[num_features]);
         gamma.set_requires_grad(true);
 
@@ -42,7 +53,7 @@ impl BatchNorm {
         let running_mean = RawTensor::zeros(&[num_features]);
         let running_var = RawTensor::ones(&[num_features]);
 
-        Self {
+        Ok(Self {
             num_features,
             eps,
             momentum,
@@ -51,7 +62,7 @@ impl BatchNorm {
             beta,
             running_mean,
             running_var,
-        }
+        })
     }
 
     /// Panics unless `x` has `dtype`, the dtype [`crate::nn::norm_mixed`] computes in,
@@ -201,17 +212,47 @@ pub struct BatchNorm2d {
 
 impl BatchNorm2d {
     /// Layer over `num_features` channels with `eps = 1e-5` and `momentum = 0.1`.
+    ///
+    /// # Panics
+    /// If `num_features` is zero.
     #[must_use]
+    #[track_caller]
     pub fn new(num_features: usize) -> Self {
         Self::new_with_params(num_features, 1e-5, 0.1)
     }
 
+    /// [`Self::new`], checking `num_features` first.
+    ///
+    /// # Errors
+    /// As [`Self::try_new_with_params`].
+    pub fn try_new(num_features: usize) -> crate::Result<Self> {
+        Self::try_new_with_params(num_features, 1e-5, 0.1)
+    }
+
     /// Layer over `num_features` channels with the given `eps` and `momentum`.
+    ///
+    /// # Panics
+    /// If an argument is out of range (see [`Self::try_new_with_params`]).
     #[must_use]
+    #[track_caller]
     pub fn new_with_params(num_features: usize, eps: f32, momentum: f32) -> Self {
-        Self {
-            core: BatchNorm::new(num_features, eps, momentum),
-        }
+        Self::try_new_with_params(num_features, eps, momentum).or_panic("BatchNorm2d")
+    }
+
+    /// [`Self::new_with_params`], checking the arguments first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` naming the argument if `num_features` is zero,
+    /// `eps` is zero, negative or not finite, or `momentum` is outside `[0, 1]` (a
+    /// momentum of 7 made the running variance negative, #133).
+    pub fn try_new_with_params(
+        num_features: usize,
+        eps: f32,
+        momentum: f32,
+    ) -> crate::Result<Self> {
+        Ok(Self {
+            core: BatchNorm::try_new("BatchNorm2d", num_features, eps, momentum)?,
+        })
     }
 }
 
@@ -236,17 +277,47 @@ pub struct BatchNorm1d {
 
 impl BatchNorm1d {
     /// Layer over `num_features` features with `eps = 1e-5` and `momentum = 0.1`.
+    ///
+    /// # Panics
+    /// If `num_features` is zero.
     #[must_use]
+    #[track_caller]
     pub fn new(num_features: usize) -> Self {
         Self::new_with_params(num_features, 1e-5, 0.1)
     }
 
+    /// [`Self::new`], checking `num_features` first.
+    ///
+    /// # Errors
+    /// As [`Self::try_new_with_params`].
+    pub fn try_new(num_features: usize) -> crate::Result<Self> {
+        Self::try_new_with_params(num_features, 1e-5, 0.1)
+    }
+
     /// Layer over `num_features` features with the given `eps` and `momentum`.
+    ///
+    /// # Panics
+    /// If an argument is out of range (see [`Self::try_new_with_params`]).
     #[must_use]
+    #[track_caller]
     pub fn new_with_params(num_features: usize, eps: f32, momentum: f32) -> Self {
-        Self {
-            core: BatchNorm::new(num_features, eps, momentum),
-        }
+        Self::try_new_with_params(num_features, eps, momentum).or_panic("BatchNorm1d")
+    }
+
+    /// [`Self::new_with_params`], checking the arguments first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` naming the argument if `num_features` is zero,
+    /// `eps` is zero, negative or not finite, or `momentum` is outside `[0, 1]` (a
+    /// momentum of 7 made the running variance negative, #133).
+    pub fn try_new_with_params(
+        num_features: usize,
+        eps: f32,
+        momentum: f32,
+    ) -> crate::Result<Self> {
+        Ok(Self {
+            core: BatchNorm::try_new("BatchNorm1d", num_features, eps, momentum)?,
+        })
     }
 }
 

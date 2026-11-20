@@ -1,4 +1,6 @@
+use crate::error::OrPanic;
 use crate::io::StateDict;
+use crate::nn::hyper;
 use crate::nn::{Dropout, GELU, Layer, Linear, Module, insert_prefixed};
 use crate::tensor::Tensor;
 
@@ -50,20 +52,41 @@ impl FeedForward {
     /// * `dropout` - Dropout probability
     ///
     /// # Panics
-    /// If `dropout` is not in `[0, 1]`.
+    /// If an argument is out of range (see [`Self::try_new`]).
     #[must_use]
     #[track_caller]
     pub fn new(embed_dim: usize, expansion_factor: usize, dropout: f32) -> Self {
+        Self::try_new(embed_dim, expansion_factor, dropout).or_panic("FeedForward")
+    }
+
+    /// [`Self::new`], checking the arguments first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` naming the argument if `embed_dim` or
+    /// `expansion_factor` is zero, or `dropout` is not in `[0, 1]`.
+    pub fn try_new(embed_dim: usize, expansion_factor: usize, dropout: f32) -> crate::Result<Self> {
+        Self::check(embed_dim, expansion_factor, dropout)?;
         let intermediate_dim = embed_dim * expansion_factor;
 
-        Self {
+        Ok(Self {
             expand: Linear::new(embed_dim, intermediate_dim, true),
             contract: Linear::new(intermediate_dim, embed_dim, true),
             activation: GELU::new(),
             dropout: Dropout::new(dropout),
             embed_dim,
             expansion_factor,
-        }
+        })
+    }
+
+    /// `Ok` if `try_new` accepts these arguments.
+    pub(crate) fn check(
+        embed_dim: usize,
+        expansion_factor: usize,
+        dropout: f32,
+    ) -> crate::Result<()> {
+        hyper::at_least_one("FeedForward", "embed_dim", embed_dim)?;
+        hyper::at_least_one("FeedForward", "expansion_factor", expansion_factor)?;
+        hyper::unit_interval("FeedForward", "dropout", dropout)
     }
 
     /// Create a new feed-forward network with default settings
