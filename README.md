@@ -394,6 +394,10 @@ The next major steps for Volta are focused on expanding its capabilities to hand
 - **Dtypes**: tensors of every dtype can be built, read back (`to_vec_as`), and cast (`RawTensor::from_typed`, `to_dtype`). Ops compute in f32, f64, f16 and bf16 on the CPU (half types in f32, rounding each output) and in f32, f16 and bf16 on the GPU (bf16, and f16 without `SHADER_F16`, as packed 16-bit emulation); integer and bool tensors are data (movement, comparisons, `where`, indices, class targets), and integer arithmetic panics. Mixed operands promote as in PyTorch unless `DTypePolicy::Strict`. `state_dict` keeps each parameter's dtype, so a model of any float dtype saves and loads bit-exact (loading into another dtype casts).
 - **Single-threaded**: Uses `Rc<RefCell>` instead of `Arc<Mutex>`, limiting to single-threaded execution on CPU.
 
+## Stability
+
+What Volta promises across releases (the stable surface, MSRV, numerical results, deprecation and platform tiers) is in [STABILITY.md](STABILITY.md). Until 1.0, a minor release may break the API.
+
 ## Contributing
 
 Contributions, issues, and feature requests are welcome! Feel free to check the [issues page](https://github.com/rlarson20/volta/issues).

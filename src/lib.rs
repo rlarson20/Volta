@@ -43,6 +43,12 @@
 //! - **Gradient checking**: [`check_gradients`] compares backward against central
 //!   finite differences.
 //!
+//! ## Stability
+//!
+//! Pre-1.0: a minor release may break the API. The policy for 1.0 (stable surface, MSRV,
+//! numerical results, deprecation, platform tiers) is in
+//! [STABILITY.md](https://github.com/rlarson20/Volta/blob/improvements/STABILITY.md).
+//!
 //! ## Features
 //!
 //! Both are off by default (a CPU-only build; DECISIONS.md, "Default features are
