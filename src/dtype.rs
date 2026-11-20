@@ -88,8 +88,8 @@ impl DType {
     /// (`tests/torch_ref_dtypes.rs`): `Bool` yields to anything; a float beats any
     /// integer, whatever its width (`F16` with `I64` is `F16`); `F16` with `BF16` is
     /// `F32`; otherwise the wider type of the same kind wins. Zero-dim (rank-0) operands
-    /// promote by a weaker rule, which `promote_operands` applies on top of this
-    /// ([`Self::result_type`]); Rust scalars have no ops.
+    /// promote by torch's weaker zero-dim rule, which `promote_operands` applies on top
+    /// of this; Rust scalars have no ops.
     ///
     /// Elementwise ops call this through `promote_operands` (`src/real.rs`) unless
     /// [`DTypePolicy::Strict`] is set.
