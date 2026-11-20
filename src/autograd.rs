@@ -75,6 +75,8 @@ pub(crate) enum GradFn {
     MaxPool2d(MaxPool2dGradFn),
     /// Embedding lookup.
     Embedding(EmbeddingGradFn),
+    /// `gather` along an axis: a scatter-add backward.
+    Gather(crate::ops::gather::GatherGradFn),
     /// Device transfer (exempt from `edge()`'s input-to-output device check).
     ToDevice(ToDeviceGradFn),
     /// Dtype conversion (`to_dtype`).
@@ -156,6 +158,7 @@ impl GradFn {
             Self::ConvTranspose2d(_) => "ConvTranspose2d".to_string(),
             Self::MaxPool2d(_) => "MaxPool2d".to_string(),
             Self::Embedding(_) => "Embedding".to_string(),
+            Self::Gather(_) => "Gather".to_string(),
             Self::ToDevice(_) => "ToDevice".to_string(),
             Self::Cast(_) => "Cast".to_string(),
             Self::Compare(g) => g.op_name(),
@@ -184,6 +187,7 @@ impl GradFn {
             Self::ConvTranspose2d(g) => g.backward(out_grad, parents),
             Self::MaxPool2d(g) => g.backward(out_grad, parents),
             Self::Embedding(g) => g.backward(out_grad, parents),
+            Self::Gather(g) => g.backward(out_grad, parents),
             Self::ToDevice(g) => g.backward(out_grad, parents),
             Self::Cast(g) => g.backward(out_grad, parents),
             Self::Compare(g) => unreachable!("{}: a Bool output has no grad fn", g.op_name()),
@@ -220,6 +224,7 @@ impl GradFn {
             | Self::Im2col(_)
             | Self::MaxPool2d(_)
             | Self::Embedding(_)
+            | Self::Gather(_)
             | Self::ToDevice(_)
             | Self::Cast(_)
             | Self::Compare(_) => false,
@@ -252,6 +257,7 @@ impl GradFn {
             | Self::ConvTranspose2d(_)
             | Self::MaxPool2d(_)
             | Self::Embedding(_)
+            | Self::Gather(_)
             | Self::ToDevice(_)
             | Self::Cast(_) => false,
         }

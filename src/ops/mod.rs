@@ -3,6 +3,8 @@
 pub(crate) mod binary;
 /// Elementwise comparisons (Bool results).
 pub(crate) mod compare;
+/// `gather` along one axis (`torch.gather`).
+pub(crate) mod gather;
 pub(crate) mod gpu_ops;
 /// Fused losses with their own gradient (binary cross entropy).
 pub(crate) mod loss;

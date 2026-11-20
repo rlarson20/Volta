@@ -1087,11 +1087,11 @@ impl RawTensor {
     }
 
     /// `-sum(targets * log_probs, dim=1).mean()` for probability targets, as PyTorch
-    /// computes it (so `0 * -inf` is NaN there too). Class-index targets select
-    /// `log_probs[i, t_i]` through a one-hot `where` mask instead of multiplying by it, as
-    /// PyTorch's gather does: a `-inf` log-probability on another class (a `-inf` logit)
-    /// is never touched, so it can't turn the loss into NaN (S8), and the gradient flows
-    /// to the picked entries only. `op` names the caller in panics.
+    /// computes it (so `0 * -inf` is NaN there too). Class-index targets gather
+    /// `log_probs[i, t_i]` instead of multiplying by a one-hot, as PyTorch does: a `-inf`
+    /// log-probability on another class (a `-inf` logit) is never touched, so it can't
+    /// turn the loss into NaN (S8), and the gradient flows to the picked entries only.
+    /// `op` names the caller in panics.
     #[track_caller]
     fn nll_loss_named(log_probs: &Tensor, targets: &Tensor, op: &str) -> Tensor {
         let picked = if targets.dtype().is_int() {
@@ -1120,20 +1120,18 @@ impl RawTensor {
                     panic!("{op}: class-index targets must be I64 or I32, got {other}")
                 }
             };
-            let mut one_hot = vec![0.0f32; n * c];
-            for (i, &t) in classes.iter().enumerate() {
-                let Some(class) = usize::try_from(t).ok().filter(|&k| k < c) else {
-                    panic!("{op}: target {t} out of range for {c} classes")
-                };
-                *slot(&mut one_hot, i * c + class) = 1.0;
+            // Checked here, before `gather`, so the error names the loss and the class count.
+            for &t in &classes {
+                assert!(
+                    usize::try_from(t).is_ok_and(|k| k < c),
+                    "{op}: target {t} out of range for {c} classes"
+                );
             }
-            // A no-grad Bool constant on the log-probs' device; the zeros come from the
-            // unselected branch, never from a product with a log-probability.
-            let mask = Self::new(one_hot, &[n, c], false)
-                .to_dtype(DType::Bool)
-                .to_device(log_probs.device());
-            let zeros = log_probs.constant_like(vec![0.0; n * c], &[n, c]);
-            mask.where_op(log_probs, &zeros)
+            // `log_probs[i, t_i]` for each row: `[N, 1]`, O(N) where a one-hot mask was
+            // O(N·C) (#78). The index stays on the host, as `gather` reads it.
+            let index = Self::from_typed(classes, &[n, 1]);
+            let picked = log_probs.gather(Axis(1), &index);
+            return picked.neg().mean();
         } else {
             // Exact match, no broadcast: float class indices `[N]` broadcast against
             // `[N, C]` whenever N == C or N == 1 and give a number that is no cross entropy.
@@ -2216,6 +2214,39 @@ impl Tensor {
     #[track_caller]
     pub fn where_op(&self, x: &Self, y: &Self) -> Self {
         RawTensor::ternary_op(self, x, y, TernaryOp::Where)
+    }
+
+    /// Values along `axis` picked by `index`, as `torch.gather(self, axis, index)`.
+    ///
+    /// `index` is an I64 or I32 tensor of the same rank as `self`, read on the host (the
+    /// GPU holds no integer dtype, so a GPU input takes a CPU index).
+    /// The output has `index`'s shape and `self`'s dtype, and
+    /// `out[.., j, ..] = self[.., index[.., j, ..], ..]` with `j` on `axis`: for a
+    /// `[N, C]` input and `axis = 1`, `out[i][j] = self[i][index[i][j]]`. On every other
+    /// axis `index` may be shorter than `self` (it reads a prefix), never longer. Negative
+    /// indices are refused, as in PyTorch.
+    ///
+    /// The gradient flows to the elements that were read, summed where one is read more
+    /// than once; the indices carry none. There is no GPU kernel: GPU inputs are a
+    /// device-policy gap (`DevicePolicy`).
+    ///
+    /// # Errors
+    /// - [`VoltaError::DimensionOutOfBounds`] if `axis` is not below `self`'s rank.
+    /// - [`VoltaError::DTypeMismatch`] if `index` is not I64 or I32.
+    /// - [`VoltaError::InvalidParameter`] if `index` has another rank, is longer than
+    ///   `self` on an axis other than `axis`, or holds a value outside `0..self.shape[axis]`.
+    pub fn try_gather(&self, axis: Axis, index: &Self) -> Result<Self> {
+        RawTensor::try_gather_op(self, axis, index)
+    }
+
+    /// [`Self::try_gather`], panicking on an error.
+    ///
+    /// # Panics
+    /// Wherever [`Self::try_gather`] returns an error.
+    #[must_use]
+    #[track_caller]
+    pub fn gather(&self, axis: Axis, index: &Self) -> Self {
+        self.try_gather(axis, index).or_panic("gather")
     }
 
     /// Reshapes to `new_shape`; the element count must match.
