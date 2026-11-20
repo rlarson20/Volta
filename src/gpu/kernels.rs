@@ -551,34 +551,64 @@ fn assert_same_len(kernel: &str, buffers: &[&GpuBuffer]) {
     );
 }
 
-thread_local! {
-    /// [`with_unused_state`]'s placeholders, one pair per element type.
-    static UNUSED_STATE: std::cell::RefCell<Vec<(DType, [GpuBuffer; 2])>> =
-        const { std::cell::RefCell::new(Vec::new()) };
+/// [`with_unused_state`]'s placeholders, one pair per GPU element type (f32, f16, bf16,
+/// bool). Process-wide and never dropped: a `thread_local!` dropped its `GpuBuffer`s in a
+/// TLS destructor, after wgpu-core's own thread-local could already be gone, which aborted
+/// the process at thread exit (#433).
+static UNUSED_STATE: UnusedState = UnusedState {
+    f32: std::sync::OnceLock::new(),
+    f16: std::sync::OnceLock::new(),
+    bf16: std::sync::OnceLock::new(),
+    bool: std::sync::OnceLock::new(),
+};
+
+/// One placeholder pair per GPU element type, each set once.
+struct UnusedState {
+    /// For f32 parameters.
+    f32: std::sync::OnceLock<[GpuBuffer; 2]>,
+    /// For f16 parameters.
+    f16: std::sync::OnceLock<[GpuBuffer; 2]>,
+    /// For bf16 parameters.
+    bf16: std::sync::OnceLock<[GpuBuffer; 2]>,
+    /// For bool buffers (no optimizer uses it today; kept so every GPU dtype has a slot).
+    bool: std::sync::OnceLock<[GpuBuffer; 2]>,
+}
+
+/// The [`UNUSED_STATE`] slot for `dtype`.
+///
+/// # Panics
+/// If `dtype` has no GPU representation.
+fn unused_state_slot(dtype: DType) -> &'static std::sync::OnceLock<[GpuBuffer; 2]> {
+    match dtype {
+        DType::F32 => &UNUSED_STATE.f32,
+        DType::F16 => &UNUSED_STATE.f16,
+        DType::BF16 => &UNUSED_STATE.bf16,
+        DType::Bool => &UNUSED_STATE.bool,
+        other @ (DType::F64 | DType::I32 | DType::I64 | DType::U8) => {
+            panic!("GPU buffers hold f32, f16, bf16 or bool, not {other}")
+        }
+    }
 }
 
 /// Runs `f` with two one-element `dtype` buffers for the optimizer kernel's state
 /// bindings that a step does not use (plain SGD binds both, SGD with momentum the second).
 /// The shader never touches them, so their size and contents don't matter; they are two
 /// buffers, not one, because WebGPU refuses one buffer bound to two writable bindings.
-/// Allocated once per element type and thread, so a stateless step allocates nothing
-/// (#207). `None` if no GPU is available or the allocation fails.
+/// Allocated once per element type for the process, so a stateless step allocates nothing
+/// (#207). `None` if no GPU is available or the allocation fails; a failed allocation is
+/// not cached, so a later call tries again.
 fn with_unused_state<R>(dtype: DType, f: impl FnOnce(&GpuBuffer, &GpuBuffer) -> R) -> Option<R> {
-    UNUSED_STATE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        if !cache.iter().any(|(d, _)| *d == dtype) {
-            let pair = [
-                GpuBuffer::zeros_of(dtype, 1)?,
-                GpuBuffer::zeros_of(dtype, 1)?,
-            ];
-            cache.push((dtype, pair));
-        }
-        let (_, [a, b]) = cache
-            .iter()
-            .find(|(d, _)| *d == dtype)
-            .expect("the pair for `dtype` was cached above");
-        Some(f(a, b))
-    })
+    let slot = unused_state_slot(dtype);
+    if slot.get().is_none() {
+        let pair = [
+            GpuBuffer::zeros_of(dtype, 1)?,
+            GpuBuffer::zeros_of(dtype, 1)?,
+        ];
+        // A thread that lost the race drops its own pair here, on a live thread.
+        let _ = slot.set(pair);
+    }
+    let [a, b] = slot.get().expect("the pair for `dtype` was set above");
+    Some(f(a, b))
 }
 
 /// Panics unless `buffer` holds `expected` elements, the length its kernel's geometry
@@ -2841,33 +2871,47 @@ mod unused_state_tests {
     use crate::dtype::DType;
     use crate::gpu::is_gpu_available;
 
-    /// #207: the placeholders are allocated once per element type and thread, then reused,
-    /// so a stateless optimizer step allocates nothing. The pair is two distinct buffers.
+    /// The `(first, second)` buffer addresses of `dtype`'s placeholder pair.
+    fn addrs(dtype: DType) -> (usize, usize) {
+        with_unused_state(dtype, |a, b| {
+            assert!(!std::ptr::eq(a, b), "two buffers, not one bound twice");
+            assert_eq!((a.len(), b.len()), (1, 1));
+            (
+                std::ptr::from_ref(a) as usize,
+                std::ptr::from_ref(b) as usize,
+            )
+        })
+        .expect("a GPU is available")
+    }
+
+    /// #207: the placeholders are allocated once per element type, then reused, so a
+    /// stateless optimizer step allocates nothing. The pair is two distinct buffers.
     #[test]
     fn unused_state_placeholders_are_cached_per_dtype() {
         if !is_gpu_available() {
             return;
         }
-        let addrs = |dtype| {
-            with_unused_state(dtype, |a, b| {
-                assert!(!std::ptr::eq(a, b), "two buffers, not one bound twice");
-                assert_eq!((a.len(), b.len()), (1, 1));
-                (
-                    std::ptr::from_ref(a) as usize,
-                    std::ptr::from_ref(b) as usize,
-                )
-            })
-            .expect("a GPU is available")
-        };
         let f32_first = addrs(DType::F32);
         let f16 = addrs(DType::F16);
         assert_ne!(f32_first, f16, "one pair per element type");
-        // After another dtype's pair was added: an equal address would also follow from a
-        // freed-then-reused allocation, so check the cache keeps its length too.
-        assert_eq!(addrs(DType::F32), addrs(DType::F32));
-        let cached = super::UNUSED_STATE.with(|c| c.borrow().len());
-        addrs(DType::F32);
-        addrs(DType::F16);
-        assert_eq!(super::UNUSED_STATE.with(|c| c.borrow().len()), cached);
+        // The pairs live in a static, so an equal address is the same buffer, not a freed
+        // allocation reused.
+        assert_eq!(addrs(DType::F32), f32_first);
+        assert_eq!(addrs(DType::F16), f16);
+    }
+
+    /// #433: a thread that uses the placeholders and exits drops nothing (the pairs are
+    /// process-wide), and every thread sees the same pair.
+    #[test]
+    fn unused_state_placeholders_are_shared_across_threads() {
+        if !is_gpu_available() {
+            return;
+        }
+        let here = addrs(DType::BF16);
+        let there = std::thread::spawn(|| addrs(DType::BF16))
+            .join()
+            .expect("the spawned thread finishes");
+        assert_eq!(here, there);
+        assert_eq!(addrs(DType::BF16), here);
     }
 }
