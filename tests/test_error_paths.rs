@@ -125,23 +125,19 @@ fn test_error_display() {
             "Cannot broadcast",
         ),
         (
-            VoltaError::DeviceError("test device error".into()),
-            "Device error",
-        ),
-        (
             VoltaError::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "file missing",
             )),
             "IO error",
         ),
+        // Only Volta builds an `ErrorDetail` (#377), so this one comes from a real call;
+        // the other two detail variants' `Display` is tested in `src/error.rs`.
         (
-            VoltaError::InvalidParameter("bad param".into()),
-            "Invalid parameter",
-        ),
-        (
-            VoltaError::OpError("something failed".into()),
-            "Operation failed",
+            RawTensor::new(vec![1.0, 2.0], &[2], false)
+                .try_reshape(&[3])
+                .expect_err("2 elements do not reshape to 3"),
+            "Invalid parameter: reshape: cannot reshape",
         ),
     ];
 

@@ -22,9 +22,9 @@ fn assert_refused(w: Tensor, dtype: DType) {
     match Adam::try_new(vec![w], 1e-3, (0.9, 0.999), 1e-8, 0.0) {
         Err(VoltaError::InvalidParameter(m)) => {
             assert!(
-                m.contains(&format!("parameter 0 is {dtype}"))
-                    && m.contains("#317")
-                    && m.contains("amp::autocast"),
+                m.message.contains(&format!("parameter 0 is {dtype}"))
+                    && m.message.contains("#317")
+                    && m.message.contains("amp::autocast"),
                 "{m}"
             );
         }
@@ -75,7 +75,9 @@ fn try_new_names_the_half_parameter() {
         probe_param(DType::F16, Device::CPU),
     ];
     match Adam::try_new(params, 1e-3, (0.9, 0.999), 1e-8, 0.0) {
-        Err(VoltaError::InvalidParameter(m)) => assert!(m.contains("parameter 1 is f16"), "{m}"),
+        Err(VoltaError::InvalidParameter(m)) => {
+            assert!(m.message.contains("parameter 1 is f16"), "{m}");
+        }
         Err(e) => panic!("wrong error {e:?}"),
         Ok(_) => panic!("Adam accepted a half parameter"),
     }

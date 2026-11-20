@@ -65,17 +65,25 @@ fn gather_sources(
         });
     }
     if index_dims.len() != rank {
-        return Err(VoltaError::InvalidParameter(format!(
-            "gather: index has rank {} ({index_dims:?}), the input rank {rank} ({input_dims:?})",
-            index_dims.len()
-        )));
+        return Err(VoltaError::invalid(
+            "gather",
+            Some("index"),
+            format!(
+                "index has rank {} ({index_dims:?}), the input rank {rank} ({input_dims:?})",
+                index_dims.len()
+            ),
+        ));
     }
     for (d, (&n, &m)) in index_dims.iter().zip(input_dims).enumerate() {
         if d != ax && n > m {
-            return Err(VoltaError::InvalidParameter(format!(
-                "gather: index {index_dims:?} is longer than the input {input_dims:?} on axis \
+            return Err(VoltaError::invalid(
+                "gather",
+                Some("index"),
+                format!(
+                    "index {index_dims:?} is longer than the input {input_dims:?} on axis \
                  {d} (only axis {ax} may differ freely)"
-            )));
+                ),
+            ));
         }
     }
     let extent = fetch(input_dims, ax);
@@ -87,9 +95,11 @@ fn gather_sources(
     let mut sources = Vec::with_capacity(index.len());
     for (i, &v) in index.iter().enumerate() {
         let Some(k) = usize::try_from(v).ok().filter(|&k| k < extent) else {
-            return Err(VoltaError::InvalidParameter(format!(
-                "gather: index {v} out of range for axis {ax} of size {extent}"
-            )));
+            return Err(VoltaError::invalid(
+                "gather",
+                Some("index"),
+                format!("index {v} out of range for axis {ax} of size {extent}"),
+            ));
         };
         // The coordinates of output element `i` (row-major over `index_dims`), with axis
         // `ax` replaced by the index value.

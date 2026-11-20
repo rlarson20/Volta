@@ -17,7 +17,7 @@ fn try_pad_with_rejects_overflowing_width() {
     ] {
         let r = RawTensor::try_pad_with(&x, &padding, PadValue::ZERO);
         assert!(
-            matches!(r, Err(VoltaError::InvalidParameter(ref m)) if m.contains("overflows")),
+            matches!(r, Err(VoltaError::InvalidParameter(ref m)) if m.message.contains("overflows")),
             "padding {padding:?}: expected an overflow error, got {:?}",
             r.map(|t| t.shape())
         );
@@ -40,12 +40,14 @@ fn pad_with_overflow_panics_with_message() {
 fn try_stride_op_rejects_zero_stride() {
     let r = RawTensor::try_stride_op(&x23(), &[0, 1]);
     assert!(
-        matches!(r, Err(VoltaError::InvalidParameter(ref m)) if m.contains("stride 0 for dimension 0")),
+        matches!(r, Err(VoltaError::InvalidParameter(ref m)) if m.message.contains("stride 0 for dimension 0")),
         "{:?}",
         r.map(|t| t.shape())
     );
     let r = RawTensor::try_stride_op(&x23(), &[1, 0]);
-    assert!(matches!(r, Err(VoltaError::InvalidParameter(ref m)) if m.contains("dimension 1")));
+    assert!(
+        matches!(r, Err(VoltaError::InvalidParameter(ref m)) if m.message.contains("dimension 1"))
+    );
 }
 
 #[test]

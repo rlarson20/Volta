@@ -75,11 +75,15 @@ impl HostBuf {
     /// As [`Storage::try_from_bytes`].
     pub(crate) fn try_from_bytes(bytes: &[u8], dtype: DType) -> Result<Self, VoltaError> {
         if !bytes.len().is_multiple_of(dtype.size_of()) {
-            return Err(VoltaError::InvalidParameter(format!(
-                "byte length {} is not a multiple of the {dtype} size {}",
-                bytes.len(),
-                dtype.size_of()
-            )));
+            return Err(VoltaError::invalid(
+                "Storage::try_from_bytes",
+                Some("bytes"),
+                format!(
+                    "byte length {} is not a multiple of the {dtype} size {}",
+                    bytes.len(),
+                    dtype.size_of()
+                ),
+            ));
         }
         let buf = match dtype {
             DType::F16 => Self::F16(pod_from_bytes(bytes)),
@@ -91,9 +95,11 @@ impl HostBuf {
             DType::U8 => Self::U8(Arc::from(bytes)),
             DType::Bool => {
                 if let Some((i, b)) = bytes.iter().enumerate().find(|&(_, &b)| b > 1) {
-                    return Err(VoltaError::InvalidParameter(format!(
-                        "bool element {i} is the byte {b}, not 0 or 1"
-                    )));
+                    return Err(VoltaError::invalid(
+                        "Storage::try_from_bytes",
+                        Some("bytes"),
+                        format!("bool element {i} is the byte {b}, not 0 or 1"),
+                    ));
                 }
                 Self::Bool(bytes.iter().map(|&b| b == 1).collect())
             }
@@ -559,8 +565,10 @@ impl Storage {
                 expected: T::DTYPE,
                 actual: buf.dtype(),
             }),
-            Repr::Gpu(_) => Err(VoltaError::DeviceError(
-                "as_host on GPU storage; use to_host_f32 for an explicit transfer".to_string(),
+            Repr::Gpu(_) => Err(VoltaError::device(
+                "Storage::as_host",
+                None,
+                "GPU storage has no host view; use to_host_f32 for an explicit transfer",
             )),
         }
     }
@@ -584,8 +592,10 @@ impl Storage {
                     actual,
                 })
             }
-            Repr::Gpu(_) => Err(VoltaError::DeviceError(
-                "as_host_mut on GPU storage; GPU storage has no host write path".to_string(),
+            Repr::Gpu(_) => Err(VoltaError::device(
+                "Storage::as_host_mut",
+                None,
+                "GPU storage has no host write path",
             )),
         }
     }
@@ -903,9 +913,11 @@ impl Storage {
                 #[cfg(feature = "gpu")]
                 {
                     if !is_gpu_available() {
-                        return Err(VoltaError::DeviceError(format!(
-                            "to_device({device}): no GPU is available"
-                        )));
+                        return Err(VoltaError::device(
+                            "to_device",
+                            Some("device"),
+                            format!("no GPU is available for {device}"),
+                        ));
                     }
                     match &self.0 {
                         // Already on the (only) GPU: share the buffer.
@@ -915,20 +927,30 @@ impl Storage {
                                 buf.dtype(),
                                 DType::F32 | DType::F16 | DType::BF16 | DType::Bool
                             ) {
-                                return Err(VoltaError::DeviceError(format!(
-                                    "to_device({device}): GPU tensors hold f32, f16, bf16 or \
+                                return Err(VoltaError::device(
+                                    "to_device",
+                                    Some("device"),
+                                    format!(
+                                        "{device}: GPU tensors hold f32, f16, bf16 or \
                                      bool, not {} (PyTorch's MPS refuses f64 too); cast with \
                                      to_dtype first",
-                                    buf.dtype()
-                                )));
+                                        buf.dtype()
+                                    ),
+                                ));
                             }
                             crate::gpu::check_fits(buf.dtype(), buf.len()).map_err(|e| {
-                                VoltaError::DeviceError(format!("to_device({device}): {e}"))
+                                VoltaError::device(
+                                    "to_device",
+                                    Some("device"),
+                                    format!("{device}: {e}"),
+                                )
                             })?;
                             let buffer = GpuBuffer::from_host(buf).ok_or_else(|| {
-                                VoltaError::DeviceError(format!(
-                                    "to_device({device}): GPU buffer allocation failed"
-                                ))
+                                VoltaError::device(
+                                    "to_device",
+                                    Some("device"),
+                                    format!("{device}: GPU buffer allocation failed"),
+                                )
                             })?;
                             Ok(Self::from_gpu_buffer(buffer))
                         }
@@ -936,10 +958,14 @@ impl Storage {
                 }
                 #[cfg(not(feature = "gpu"))]
                 {
-                    Err(VoltaError::DeviceError(format!(
-                        "to_device({device}): no GPU is available (built without the `gpu` \
+                    Err(VoltaError::device(
+                        "to_device",
+                        Some("device"),
+                        format!(
+                            "no GPU is available for {device} (built without the `gpu` \
                          feature)"
-                    )))
+                        ),
+                    ))
                 }
             }
         }

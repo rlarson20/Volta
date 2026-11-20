@@ -72,7 +72,8 @@ fn optimizers_reject_the_same_tensor_twice() {
     ] {
         match result {
             Err(VoltaError::InvalidParameter(msg)) => assert!(
-                msg.contains("parameter 1 is the same tensor as parameter 0"),
+                msg.message
+                    .contains("parameter 1 is the same tensor as parameter 0"),
                 "{name}: {msg}"
             ),
             other => panic!("{name}: expected InvalidParameter, got {other:?}"),

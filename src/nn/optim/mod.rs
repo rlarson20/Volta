@@ -44,13 +44,20 @@ pub(crate) fn assert_grad_lens(optimizer: &str, params: &[Tensor]) {
 /// `Ok` if `value` is at least 0 (NaN is not), else PyTorch's message:
 /// `Invalid <name> value: <value>`. Optimizer hyperparameters are arguments a user
 /// supplies, so they are checked before any state is allocated (invariant 8).
-pub(crate) fn check_non_negative(name: &str, value: f32) -> crate::Result<()> {
+pub(crate) fn check_non_negative(
+    op: &'static str,
+    arg: &'static str,
+    name: &str,
+    value: f32,
+) -> crate::Result<()> {
     if value >= 0.0 {
         Ok(())
     } else {
-        Err(crate::VoltaError::InvalidParameter(format!(
-            "Invalid {name} value: {value}"
-        )))
+        Err(crate::VoltaError::invalid(
+            op,
+            arg,
+            format!("Invalid {name} value: {value}"),
+        ))
     }
 }
 
@@ -59,12 +66,17 @@ pub(crate) fn check_non_negative(name: &str, value: f32) -> crate::Result<()> {
 /// or moment state kept twice (#101). PyTorch only warns; a duplicate is the caller's mistake
 /// and a wrong update, so it is an error here. `Module::parameters()` already lists a tied
 /// weight once.
-pub(crate) fn check_unique(params: &[Tensor]) -> crate::Result<()> {
+pub(crate) fn check_unique(op: &'static str, params: &[Tensor]) -> crate::Result<()> {
     for (j, p) in params.iter().enumerate() {
         if let Some(i) = params.iter().take(j).position(|q| q.ptr_eq(p)) {
-            return Err(crate::VoltaError::InvalidParameter(format!(
-                "parameter {j} is the same tensor as parameter {i} (a tied weight listed twice)"
-            )));
+            return Err(crate::VoltaError::invalid(
+                op,
+                "params",
+                format!(
+                    "parameter {j} is the same tensor as parameter {i} (a tied weight listed \
+                     twice)"
+                ),
+            ));
         }
     }
     Ok(())
@@ -77,24 +89,30 @@ pub(crate) fn check_unique(params: &[Tensor]) -> crate::Result<()> {
 ///
 /// A leaf with `requires_grad == false` (a frozen parameter) is accepted, as in PyTorch: it
 /// never gets a gradient, and `step` skips a parameter without one.
-pub(crate) fn check_leaves(params: &[Tensor]) -> crate::Result<()> {
+pub(crate) fn check_leaves(op: &'static str, params: &[Tensor]) -> crate::Result<()> {
     if let Some(i) = params.iter().position(|p| p.borrow().grad_fn.is_some()) {
-        return Err(crate::VoltaError::InvalidParameter(format!(
-            "can't optimize a non-leaf tensor (parameter {i} was computed by an op); pass the \
-             leaf it came from, or make a leaf on the target device or dtype first"
-        )));
+        return Err(crate::VoltaError::invalid(
+            op,
+            "params",
+            format!(
+                "can't optimize a non-leaf tensor (parameter {i} was computed by an op); pass \
+                 the leaf it came from, or make a leaf on the target device or dtype first"
+            ),
+        ));
     }
     Ok(())
 }
 
 /// `Ok` if `0 <= value < 1`, else PyTorch's `Invalid beta parameter at index <i>`.
-pub(crate) fn check_beta(index: usize, value: f32) -> crate::Result<()> {
+pub(crate) fn check_beta(op: &'static str, index: usize, value: f32) -> crate::Result<()> {
     if (0.0..1.0).contains(&value) {
         Ok(())
     } else {
-        Err(crate::VoltaError::InvalidParameter(format!(
-            "Invalid beta parameter at index {index}: {value}"
-        )))
+        Err(crate::VoltaError::invalid(
+            op,
+            "betas",
+            format!("Invalid beta parameter at index {index}: {value}"),
+        ))
     }
 }
 

@@ -740,6 +740,20 @@ Seeds spread about 0.25 points, so a 5-seed mean has a standard error near 0.05;
 
 ---
 
+### String error variants carry an `ErrorDetail { op, arg, message }` (#377)
+
+**Decision:** `VoltaError::InvalidParameter`, `DeviceError` and `OpError` each carry an `ErrorDetail`: `op` (the public operation that rejected the call, as a caller names it: `"reshape"`, `"to_device"`, `"Conv2d"`, `"Adam::new"`, `"Shape::from_dims"`), `arg` (the argument at fault as the signature names it, `Option<&'static str>`), and `message` (what is wrong, without repeating `op`). The struct is `#[non_exhaustive]` with public fields, so callers read and match it but only Volta builds one, and a field can be added later. `VoltaError::detail()` returns it for the three variants. `Display` is `"{op}: {message}"`, so `"Invalid parameter: reshape: cannot reshape [2] (2 elements) to [3] (3 elements)"`. Option 3 of the issue; RJ chose it (2026-11-19).
+
+**Why:** a caller (the browser tool, a config loader) could match the variant but not the cause without parsing the message (PA10, `docs/audits/2026-11-public-api.md`). Option 2 (structured variants for the common causes, strings for the rest) would have left two ways to report the same kind of failure. Changing a variant's payload is breaking, so it changes before `main`.
+
+**Choices:**
+- *`op` and `arg` are `&'static str`.* Every site names a fixed op; a value that varies (a device, a key) goes in `message`. Shared validators that are their own public API (`Shape::from_dims`) report themselves as the op; internal helpers (the conv-spec checks, the optimizer hyperparameter checks) take the op from their caller.
+- *`arg` is not in `Display`.* Most messages already name the argument in prose; `DataLoader::new` re-wraps a `Shape::from_dims` error and puts the argument name in front of the message so a panic still says which shape.
+- *`OrPanic` is implemented for `Result<_, VoltaError>` only,* and leaves out its `what` prefix when the detail's op is the same, so a panic reads `xavier_uniform: expects ...`, not the op twice.
+- *`OpError` keeps its variant* though nothing constructs it today; it carries the same detail so a later use doesn't need another breaking change.
+
+---
+
 ### `check_gradients` refuses half-precision inputs and fails on NaN (#57/A6, #90)
 
 **Decision:** `check_gradients` (and `check_gradients_simple`, which calls it) panics when the input is f16 or bf16, saying the finite difference is meaningless at that precision and to cast to f32 or f64 first. A NaN or infinite relative error at any element fails the check and is what `max_error` reports.

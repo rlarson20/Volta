@@ -753,12 +753,16 @@ impl RawTensor {
         };
 
         if old_shape.numel() != target.numel() {
-            return Err(VoltaError::InvalidParameter(format!(
-                "cannot reshape {:?} ({} elements) to {new_shape:?} ({} elements)",
-                old_shape.truncate_rank(),
-                old_shape.numel(),
-                target.numel()
-            )));
+            return Err(VoltaError::invalid(
+                "reshape",
+                Some("shape"),
+                format!(
+                    "cannot reshape {:?} ({} elements) to {new_shape:?} ({} elements)",
+                    old_shape.truncate_rank(),
+                    old_shape.numel(),
+                    target.numel()
+                ),
+            ));
         }
 
         // `data` shares the input's buffer (copy-on-write storage); only the shape changes.
@@ -897,10 +901,14 @@ impl RawTensor {
         };
 
         if old_shape.rank() != new_shape.len() {
-            return Err(VoltaError::InvalidParameter(format!(
-                "expand: rank must match, got {:?} -> {new_shape:?}",
-                old_shape.truncate_rank()
-            )));
+            return Err(VoltaError::invalid(
+                "expand",
+                Some("shape"),
+                format!(
+                    "rank must match, got {:?} -> {new_shape:?}",
+                    old_shape.truncate_rank()
+                ),
+            ));
         }
 
         // Verify broadcasting rules: old dims must be 1 or equal to new
@@ -997,28 +1005,33 @@ impl RawTensor {
         };
 
         if padding.len() != old_shape.rank() {
-            return Err(VoltaError::InvalidParameter(format!(
-                "Padding length ({}) must match tensor rank ({})",
-                padding.len(),
-                old_shape.rank()
-            )));
+            return Err(VoltaError::invalid(
+                "pad",
+                Some("padding"),
+                format!(
+                    "padding length ({}) must match tensor rank ({})",
+                    padding.len(),
+                    old_shape.rank()
+                ),
+            ));
         }
 
         // Checked: a user-supplied width can overflow `usize` (#96).
-        let new_shape = old_shape
-            .iter()
-            .zip(padding)
-            .enumerate()
-            .map(|(dim, (d, (l, r)))| {
-                d.checked_add(*l)
+        let new_shape =
+            old_shape
+                .iter()
+                .zip(padding)
+                .enumerate()
+                .map(|(dim, (d, (l, r)))| {
+                    d.checked_add(*l)
                     .and_then(|n| n.checked_add(*r))
                     .ok_or_else(|| {
-                        VoltaError::InvalidParameter(format!(
-                            "Padding ({l}, {r}) for dimension {dim} of size {d} overflows usize"
+                        VoltaError::invalid("pad", Some("padding"), format!(
+                            "padding ({l}, {r}) for dimension {dim} of size {d} overflows usize"
                         ))
                     })
-            })
-            .collect::<Result<Vec<usize>>>()?;
+                })
+                .collect::<Result<Vec<usize>>>()?;
 
         let out_shape = Shape::from_dims(new_shape.clone())?;
         let new_size = out_shape.numel();
@@ -1080,20 +1093,28 @@ impl RawTensor {
 
         // Validate rank match
         if ranges.len() != shape.len() {
-            return Err(VoltaError::InvalidParameter(format!(
-                "Shrink ranges length ({}) must match tensor rank ({})",
-                ranges.len(),
-                shape.len()
-            )));
+            return Err(VoltaError::invalid(
+                "shrink",
+                Some("ranges"),
+                format!(
+                    "ranges length ({}) must match tensor rank ({})",
+                    ranges.len(),
+                    shape.len()
+                ),
+            ));
         }
 
         // Validate each range
         for (dim, (&(start, end), &dim_size)) in ranges.iter().zip(shape.iter()).enumerate() {
             // Check range order
             if start > end {
-                return Err(VoltaError::InvalidParameter(format!(
-                    "Invalid shrink range for dimension {dim}: start ({start}) exceeds end ({end})"
-                )));
+                return Err(VoltaError::invalid(
+                    "shrink",
+                    Some("ranges"),
+                    format!(
+                        "invalid range for dimension {dim}: start ({start}) exceeds end ({end})"
+                    ),
+                ));
             }
 
             // Check end bound
@@ -1106,9 +1127,13 @@ impl RawTensor {
 
             // Check for empty range
             if start == end {
-                return Err(VoltaError::InvalidParameter(format!(
-                    "Invalid shrink range for dimension {dim}: start equals end ({start}), creates zero-sized dimension"
-                )));
+                return Err(VoltaError::invalid(
+                    "shrink",
+                    Some("ranges"),
+                    format!(
+                        "invalid range for dimension {dim}: start equals end ({start}), creates zero-sized dimension"
+                    ),
+                ));
             }
         }
 
@@ -1239,16 +1264,22 @@ impl RawTensor {
         };
 
         if strides.len() != old_shape.rank() {
-            return Err(VoltaError::InvalidParameter(format!(
-                "Strides length ({}) must match tensor rank ({})",
-                strides.len(),
-                old_shape.rank()
-            )));
+            return Err(VoltaError::invalid(
+                "stride",
+                Some("strides"),
+                format!(
+                    "strides length ({}) must match tensor rank ({})",
+                    strides.len(),
+                    old_shape.rank()
+                ),
+            ));
         }
         if let Some(dim) = strides.iter().position(|&s| s == 0) {
-            return Err(VoltaError::InvalidParameter(format!(
-                "stride_op: stride 0 for dimension {dim} (strides must be >= 1)"
-            )));
+            return Err(VoltaError::invalid(
+                "stride",
+                Some("strides"),
+                format!("stride 0 for dimension {dim} (strides must be >= 1)"),
+            ));
         }
 
         let new_shape: Vec<usize> = old_shape
