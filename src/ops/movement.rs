@@ -478,21 +478,16 @@ impl MovementGradFn {
         &self,
         out_grad: &RawTensor,
         _parents: &[Tensor],
-    ) -> Vec<Option<Tensor>> {
+    ) -> Vec<Option<Storage>> {
         dispatch_real!(out_grad.data.dtype(), T => self.backward_typed::<T>(out_grad))
     }
 
     /// [`Self::backward`] in the gradient's dtype `T`.
-    fn backward_typed<T: Real>(&self, out_grad: &RawTensor) -> Vec<Option<Tensor>> {
+    fn backward_typed<T: Real>(&self, out_grad: &RawTensor) -> Vec<Option<Storage>> {
         let grad_tensor = match &self.op {
             MovementOp::Reshape { .. } => {
                 // Reshape back to original shape: same data, same device, new shape.
-                return vec![Some(RawTensor::new_with_storage(
-                    out_grad.data.clone(),
-                    self.original_shape.clone(),
-                    out_grad.device.clone(),
-                    false,
-                ))];
+                return vec![Some(out_grad.data.clone())];
             }
             MovementOp::Permute { axes } => {
                 // Invert the permutation to restore original order
@@ -510,12 +505,7 @@ impl MovementGradFn {
                         &inverse_axes,
                     )
                     .unwrap_or_else(|| kernel_failed("Movement(Permute)"));
-                    return vec![Some(RawTensor::new_with_storage(
-                        grad_storage,
-                        self.original_shape.clone(),
-                        out_grad.device.clone(),
-                        false,
-                    ))];
+                    return vec![Some(grad_storage)];
                 }
 
                 // CPU path. `out_grad` may be GPU storage (a rank the kernel doesn't
@@ -529,13 +519,8 @@ impl MovementGradFn {
                     Device::CPU,
                     false,
                 );
-                let (storage, shape, device) = RawTensor::permute_impl(&grad_t, &inverse_axes);
-                return vec![Some(RawTensor::new_with_storage(
-                    storage,
-                    Shape::derived(shape),
-                    device,
-                    false,
-                ))];
+                let (storage, ..) = RawTensor::permute_impl(&grad_t, &inverse_axes);
+                return vec![Some(storage)];
             }
             MovementOp::Expand { new_shape } => {
                 // GPU path when the kernel covers this rank; a `None` from it is a failure.
@@ -546,12 +531,7 @@ impl MovementGradFn {
                         new_shape,
                     )
                     .unwrap_or_else(|| kernel_failed("Movement(Expand)"));
-                    return vec![Some(RawTensor::new_with_storage(
-                        grad_storage,
-                        self.original_shape.clone(),
-                        out_grad.device.clone(),
-                        false,
-                    ))];
+                    return vec![Some(grad_storage)];
                 }
 
                 // CPU path: each source element's gradient is the sum of the incoming
@@ -595,11 +575,7 @@ impl MovementGradFn {
                         pairwise_sum_by(terms, |k| fetch(&g_host, base + offset(k)))
                     })
                     .collect();
-                RawTensor::from_shape_compute(
-                    out_grad.data.dtype(),
-                    grad_data,
-                    self.original_shape.clone(),
-                )
+                Storage::from_compute(out_grad.data.dtype(), grad_data)
             }
             MovementOp::Pad { padding } => {
                 // GPU path when the kernel covers this rank; a `None` from it is a failure.
@@ -611,12 +587,7 @@ impl MovementGradFn {
                         padding,
                     )
                     .unwrap_or_else(|| kernel_failed("Movement(Pad)"));
-                    return vec![Some(RawTensor::new_with_storage(
-                        grad_storage,
-                        self.original_shape.clone(),
-                        out_grad.device.clone(),
-                        false,
-                    ))];
+                    return vec![Some(grad_storage)];
                 }
 
                 // CPU path: Remove padding from gradient (extract center region)
@@ -644,11 +615,7 @@ impl MovementGradFn {
                     0,
                     0,
                 );
-                RawTensor::from_shape_compute(
-                    out_grad.data.dtype(),
-                    result,
-                    self.original_shape.clone(),
-                )
+                Storage::from_compute(out_grad.data.dtype(), result)
             }
             MovementOp::Shrink { ranges } => {
                 // GPU path when the kernel covers this rank; a `None` from it is a failure.
@@ -660,12 +627,7 @@ impl MovementGradFn {
                         ranges,
                     )
                     .unwrap_or_else(|| kernel_failed("Movement(Shrink)"));
-                    return vec![Some(RawTensor::new_with_storage(
-                        grad_storage,
-                        self.original_shape.clone(),
-                        out_grad.device.clone(),
-                        false,
-                    ))];
+                    return vec![Some(grad_storage)];
                 }
 
                 // CPU path: Pad gradient back to original size (inverse of shrink)
@@ -693,11 +655,7 @@ impl MovementGradFn {
                     0,
                     0,
                 );
-                RawTensor::from_shape_compute(
-                    out_grad.data.dtype(),
-                    result,
-                    self.original_shape.clone(),
-                )
+                Storage::from_compute(out_grad.data.dtype(), result)
             }
             MovementOp::Stride { strides } => {
                 // GPU path when the kernel covers this rank; a `None` from it is a failure.
@@ -709,12 +667,7 @@ impl MovementGradFn {
                         strides,
                     )
                     .unwrap_or_else(|| kernel_failed("Movement(Stride)"));
-                    return vec![Some(RawTensor::new_with_storage(
-                        grad_storage,
-                        self.original_shape.clone(),
-                        out_grad.device.clone(),
-                        false,
-                    ))];
+                    return vec![Some(grad_storage)];
                 }
 
                 // CPU path: Upsample gradient (inverse of stride/downsampling)
@@ -742,11 +695,7 @@ impl MovementGradFn {
                     0,
                     0,
                 );
-                RawTensor::from_shape_compute(
-                    out_grad.data.dtype(),
-                    result,
-                    self.original_shape.clone(),
-                )
+                Storage::from_compute(out_grad.data.dtype(), result)
             }
         };
 

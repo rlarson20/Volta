@@ -100,13 +100,8 @@ impl CastGradFn {
         &self,
         out_grad: &RawTensor,
         _parents: &[Tensor],
-    ) -> Vec<Option<Tensor>> {
-        vec![Some(RawTensor::new_with_storage(
-            out_grad.data.cast(self.source),
-            out_grad.shape.clone(),
-            out_grad.device.clone(),
-            false,
-        ))]
+    ) -> Vec<Option<Storage>> {
+        vec![Some(out_grad.data.cast(self.source))]
     }
 }
 
@@ -124,13 +119,8 @@ impl ToDeviceGradFn {
         &self,
         out_grad: &RawTensor,
         _parents: &[Tensor],
-    ) -> Vec<Option<Tensor>> {
-        vec![Some(RawTensor::new_with_storage(
-            out_grad.data.to_device(&self.source),
-            out_grad.shape.clone(),
-            self.source.clone(),
-            false,
-        ))]
+    ) -> Vec<Option<Storage>> {
+        vec![Some(out_grad.data.to_device(&self.source))]
     }
 }
 
@@ -166,7 +156,11 @@ impl GradFn {
     }
 
     /// Compute gradients for parent tensors given output gradient.
-    pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        parents: &[Tensor],
+    ) -> Vec<Option<Storage>> {
         match self {
             Self::Unary(g) => g.backward(out_grad, parents),
             Self::Binary(g) => g.backward(out_grad, parents),
@@ -416,6 +410,21 @@ impl Drop for NoGradGuard {
 // ===== BACKPROPAGATION =====
 
 impl RawTensor {
+    /// Panics unless `grad` has one element per element of `parent`. A `backward` that
+    /// returned a gradient of the wrong size is an op bug, and one that slipped through
+    /// would be added elementwise to the wrong data or fail far from the op.
+    #[track_caller]
+    fn check_grad_len(op: &GradFn, grad: &Storage, parent: &Tensor) {
+        let expected = parent.borrow().shape.numel();
+        assert_eq!(
+            grad.len(),
+            expected,
+            "{} backward returned a gradient of {} elements for a parent of {expected}",
+            op.op_name(),
+            grad.len()
+        );
+    }
+
     /// Assert that `op`'s backward returned one gradient slot per parent.
     ///
     /// # Panics
@@ -569,8 +578,10 @@ impl RawTensor {
             // op-output parent gets the same checks and device move, but the sum waits
             // in `pending` for its own backward step.
             for (parent_grad, parent_ref) in parent_grads.into_iter().zip(parents.iter()) {
-                if let Some(g) = parent_grad {
-                    let grad_storage = g.borrow().data.clone();
+                if let Some(grad_storage) = parent_grad {
+                    // A `backward` returns bare storage (#268), so the element count is
+                    // checked here, against the tensor the gradient is for.
+                    Self::check_grad_len(grad_fn, &grad_storage, parent_ref);
                     let parent_is_leaf = parent_ref.borrow().grad_fn.is_none();
                     if parent_is_leaf {
                         parent_ref.accumulate_grad(grad_storage, grad_fn);
@@ -778,6 +789,24 @@ mod tests {
         let x = RawTensor::new(vec![1.0, 2.0], &[2], true);
         let op = x.sum().borrow().grad_fn.clone().expect("grad_fn");
         RawTensor::check_parent_grads(&op, 1, 1);
+    }
+
+    /// #268: a `backward` returns bare storage, so a gradient of the wrong size is caught
+    /// against the parent it is for, naming the op.
+    #[test]
+    #[should_panic(expected = "Sum backward returned a gradient of 3 elements for a parent of 2")]
+    fn grad_len_mismatch_panics() {
+        let x = RawTensor::new(vec![1.0, 2.0], &[2], true);
+        let op = x.sum().borrow().grad_fn.clone().expect("grad_fn");
+        RawTensor::check_grad_len(&op, &Storage::cpu(vec![1.0; 3]), &x);
+    }
+
+    /// A gradient with one element per parent element passes.
+    #[test]
+    fn grad_len_match_passes() {
+        let x = RawTensor::new(vec![1.0, 2.0], &[2], true);
+        let op = x.sum().borrow().grad_fn.clone().expect("grad_fn");
+        RawTensor::check_grad_len(&op, &Storage::cpu(vec![1.0; 2]), &x);
     }
 
     #[test]

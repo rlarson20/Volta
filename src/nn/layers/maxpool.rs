@@ -179,7 +179,11 @@ impl Layer for MaxPool2d {
 
 impl MaxPool2dGradFn {
     /// Scatters `out_grad` to the recorded maxima; all other input elements get zero.
-    pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        parents: &[Tensor],
+    ) -> Vec<Option<Storage>> {
         let input_shape = parents
             .first()
             .expect("MaxPool2d backward: one parent")
@@ -193,7 +197,7 @@ impl MaxPool2dGradFn {
                 let grad_val = fetch(&g_host, idx);
                 *slot(&mut grad_input, max_linear_idx) += grad_val;
             }
-            vec![Some(RawTensor::from_shape_compute(out_grad.data.dtype(), grad_input, input_shape))]
+            vec![Some(Storage::from_compute(out_grad.data.dtype(), grad_input))]
         })
     }
 }

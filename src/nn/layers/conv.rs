@@ -166,31 +166,20 @@ impl Im2colGradFn {
         &self,
         out_grad: &RawTensor,
         _parents: &[Tensor],
-    ) -> Vec<Option<Tensor>> {
+    ) -> Vec<Option<Storage>> {
         // out_grad has shape (B*H_out*W_out, C*K*K)
         // We need to convert it back to (B, C, H, W) using col2im
 
         // GPU col2im for a GPU gradient; a `None` from the kernel is a failure.
-        let (grad_storage, device) = if out_grad.device.is_gpu() {
-            let storage = RawTensor::gpu_col2im(&out_grad.data, &self.spec)
-                .unwrap_or_else(|| kernel_failed("Im2col"));
-            (storage, out_grad.device.clone())
+        let grad_storage = if out_grad.device.is_gpu() {
+            RawTensor::gpu_col2im(&out_grad.data, &self.spec)
+                .unwrap_or_else(|| kernel_failed("Im2col"))
         } else {
-            let col = dispatch_real!(out_grad.data.dtype(), T => {
+            dispatch_real!(out_grad.data.dtype(), T => {
                 Storage::from_compute(out_grad.data.dtype(), Conv2d::col2im(&out_grad.data.host::<T>(), &self.spec))
-            });
-            (col, crate::Device::CPU)
+            })
         };
-
-        let grad_tensor = RawTensor::try_new_with_storage(
-            grad_storage,
-            Shape::derived(self.spec.input_dims()),
-            device,
-            false,
-        )
-        .expect("col2im gradient shape mismatch");
-
-        vec![Some(grad_tensor)]
+        vec![Some(grad_storage)]
     }
 }
 
@@ -208,7 +197,11 @@ pub(crate) struct DirectConvGradFn {
 impl DirectConvGradFn {
     /// Gradients for the input and the weight, in that order; the bias gradient comes from
     /// the separate `add` node.
-    pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        parents: &[Tensor],
+    ) -> Vec<Option<Storage>> {
         // parents: [input, weight]
         let x = parents.first().cloned();
         let weight = parents.get(1).cloned();
@@ -225,7 +218,7 @@ impl DirectConvGradFn {
             // On the GPU, a `None` from the kernel is a failure: never a `None` gradient
             // (which would silently freeze the input) and never a silent CPU fallback.
             Some(if use_gpu {
-                let storage = RawTensor::gpu_conv_backward_input(
+                RawTensor::gpu_conv_backward_input(
                     &out_grad.data,
                     &weight
                         .as_ref()
@@ -234,13 +227,7 @@ impl DirectConvGradFn {
                         .data,
                     &self.spec,
                 )
-                .unwrap_or_else(|| kernel_failed("DirectConv"));
-                RawTensor::new_with_storage(
-                    storage,
-                    Shape::derived(self.spec.input_dims()),
-                    out_grad.device.clone(),
-                    false,
-                )
+                .unwrap_or_else(|| kernel_failed("DirectConv"))
             } else {
                 dispatch_real!(out_grad.data.dtype(), T => self.compute_input_gradient_cpu::<T>(
                     out_grad.data.dtype(),
@@ -257,7 +244,7 @@ impl DirectConvGradFn {
             && w_tensor.borrow().requires_grad
         {
             Some(if use_gpu {
-                let storage = RawTensor::gpu_conv_backward_weight(
+                RawTensor::gpu_conv_backward_weight(
                     &out_grad.data,
                     &x.as_ref()
                         .expect("DirectConv backward: the input is a parent")
@@ -265,13 +252,7 @@ impl DirectConvGradFn {
                         .data,
                     &self.spec,
                 )
-                .unwrap_or_else(|| kernel_failed("DirectConv"));
-                RawTensor::new_with_storage(
-                    storage,
-                    Shape::derived(self.spec.weight_dims()),
-                    out_grad.device.clone(),
-                    false,
-                )
+                .unwrap_or_else(|| kernel_failed("DirectConv"))
             } else {
                 dispatch_real!(out_grad.data.dtype(), T => self.compute_weight_gradient_cpu::<T>(
                     out_grad.data.dtype(),
@@ -318,7 +299,7 @@ impl DirectConvGradFn {
         dtype: DType,
         out_grad_data: &[T],
         weight_data: &[T],
-    ) -> Tensor {
+    ) -> Storage {
         let Conv2dSpec {
             batch,
             in_ch,
@@ -377,7 +358,7 @@ impl DirectConvGradFn {
             }
         }
 
-        RawTensor::from_shape_compute(dtype, grad_x_data, Shape::derived(self.spec.input_dims()))
+        Storage::from_compute(dtype, grad_x_data)
     }
 
     /// CPU implementation of weight gradient computation: [`weight_gradient_pairwise`].
@@ -386,9 +367,9 @@ impl DirectConvGradFn {
         dtype: DType,
         out_grad_data: &[T],
         x_data: &[T],
-    ) -> Tensor {
+    ) -> Storage {
         let grad_w_data = weight_gradient_pairwise(x_data, out_grad_data, &self.spec);
-        RawTensor::from_shape_compute(dtype, grad_w_data, Shape::derived(self.spec.weight_dims()))
+        Storage::from_compute(dtype, grad_w_data)
     }
 }
 
@@ -407,7 +388,11 @@ pub(crate) struct IGEMMGradFn {
 impl IGEMMGradFn {
     /// Gradients for the input and the weight, in that order; the bias gradient comes from
     /// the separate `add` node.
-    pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        parents: &[Tensor],
+    ) -> Vec<Option<Storage>> {
         // parents: [input, weight]
         let x = parents.first().cloned();
         let weight = parents.get(1).cloned();
@@ -439,12 +424,7 @@ impl IGEMMGradFn {
                     &self.spec,
                 )
                 .unwrap_or_else(|| kernel_failed("Igemm"));
-                Some(RawTensor::new_with_storage(
-                    storage,
-                    Shape::derived(self.spec.input_dims()),
-                    out_grad.device.clone(),
-                    false,
-                ))
+                Some(storage)
             } else {
                 // CPU path
                 dispatch_real!(out_grad.data.dtype(), T => {
@@ -469,7 +449,7 @@ impl IGEMMGradFn {
                     &config,
                 );
 
-                Some(RawTensor::from_shape_compute(out_grad.data.dtype(), grad_x_data, Shape::derived(self.spec.input_dims())))
+                Some(Storage::from_compute(out_grad.data.dtype(), grad_x_data))
                 })
             }
         } else {
@@ -491,12 +471,7 @@ impl IGEMMGradFn {
                     &self.spec,
                 )
                 .unwrap_or_else(|| kernel_failed("Igemm"));
-                Some(RawTensor::new_with_storage(
-                    storage,
-                    Shape::derived(self.spec.weight_dims()),
-                    out_grad.device.clone(),
-                    false,
-                ))
+                Some(storage)
             } else {
                 // CPU path
                 dispatch_real!(out_grad.data.dtype(), T => {
@@ -512,7 +487,7 @@ impl IGEMMGradFn {
                 // Weight gradient: the same blocked pairwise sum as Direct (#318).
                 let grad_w_data = weight_gradient_pairwise(&x_data, &out_grad_data, &self.spec);
 
-                Some(RawTensor::from_shape_compute(out_grad.data.dtype(), grad_w_data, Shape::derived(self.spec.weight_dims())))
+                Some(Storage::from_compute(out_grad.data.dtype(), grad_w_data))
                 })
             }
         } else {
@@ -2547,8 +2522,6 @@ mod conv2d_tests {
 
             let direct = DirectConvGradFn { spec }
                 .compute_input_gradient_cpu(crate::DType::F32, &out_grad, &w)
-                .borrow()
-                .data
                 .to_vec();
             let mut igemm = vec![0.0f32; expected.len()];
             IGEMMGradFn::igemm_backward_input(

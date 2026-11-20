@@ -211,7 +211,11 @@ pub(crate) struct ConvTranspose2dGradFn {
 
 impl ConvTranspose2dGradFn {
     /// Gradients for the input, the weight, and (if `has_bias`) the bias.
-    pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        parents: &[Tensor],
+    ) -> Vec<Option<Storage>> {
         // parents: [input, weight, bias] if has_bias, else [input, weight]
         let input = parents
             .first()
@@ -267,7 +271,7 @@ impl ConvTranspose2dGradFn {
                     }
                 }
             }
-            RawTensor::new_with_storage(Storage::from_compute(dtype, grad_input_data), Shape::derived(vec![batch, in_channels, in_h, in_w]), Device::CPU, false)
+            Storage::from_compute(dtype, grad_input_data)
         });
 
         let grad_weight = need_weight.then(|| {
@@ -285,7 +289,7 @@ impl ConvTranspose2dGradFn {
             }
             // [C_in, C_out*K_h*K_w] is the weight's own layout.
             let grad_weight_data = T::gemm(&x_t, dcol, in_channels, rows, cols);
-            RawTensor::new_with_storage(Storage::from_compute(dtype, grad_weight_data), Shape::derived(vec![in_channels, out_channels, kh, kw]), Device::CPU, false)
+            Storage::from_compute(dtype, grad_weight_data)
         });
         vec![grad_input, grad_weight]
         });
@@ -309,6 +313,7 @@ impl ConvTranspose2dGradFn {
                 .sum_dim(Axis(3), false) // Sum over W
                 .sum_dim(Axis(2), false) // Sum over H
                 .sum_dim(Axis(0), false) // Sum over B
+                .into_grad_storage()
             }));
         }
 
@@ -773,7 +778,10 @@ mod tests {
             for (name, actual, expected) in
                 [("input", grads.first(), gi), ("weight", grads.get(1), gw)]
             {
-                let actual = actual.and_then(Option::as_ref).expect("a gradient").data();
+                let actual = actual
+                    .and_then(Option::as_ref)
+                    .expect("a gradient")
+                    .to_vec();
                 assert_eq!(actual.len(), expected.len(), "{name} grad length, {case}");
                 for (i, (a, e)) in actual.iter().zip(&expected).enumerate() {
                     assert!(
@@ -786,7 +794,7 @@ mod tests {
     }
 
     /// The grad fn of `conv.forward(x)`, and its gradients for a random weighted loss.
-    fn backward_grads(conv: &ConvTranspose2d, x: &Tensor) -> Vec<Option<Tensor>> {
+    fn backward_grads(conv: &ConvTranspose2d, x: &Tensor) -> Vec<Option<Storage>> {
         let y = conv.forward(x);
         let (grad_fn, parents) = {
             let raw = y.borrow();
@@ -811,13 +819,7 @@ mod tests {
         let grads = backward_grads(&conv, &x);
         assert_eq!(grads.len(), 3);
         for (i, g) in grads.iter().enumerate() {
-            let g = g
-                .as_ref()
-                .unwrap_or_else(|| panic!("gradient {i} should be computed"));
-            assert!(
-                !g.borrow().requires_grad,
-                "gradient {i} must not require grad"
-            );
+            assert!(g.is_some(), "gradient {i} should be computed");
         }
 
         // Input is noise (no grad): no input gradient.

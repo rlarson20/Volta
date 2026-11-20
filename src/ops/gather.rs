@@ -31,7 +31,7 @@ impl GatherGradFn {
         &self,
         out_grad: &RawTensor,
         _parents: &[Tensor],
-    ) -> Vec<Option<Tensor>> {
+    ) -> Vec<Option<Storage>> {
         let dtype = out_grad.data.dtype();
         let grad = dispatch_real!(dtype, T => {
             let g = out_grad.data.host::<T>();
@@ -41,12 +41,7 @@ impl GatherGradFn {
             }
             Storage::from_compute(dtype, acc)
         });
-        vec![Some(RawTensor::new_with_storage(
-            grad,
-            self.input_shape.clone(),
-            Device::CPU,
-            false,
-        ))]
+        vec![Some(grad)]
     }
 }
 

@@ -99,7 +99,11 @@ impl UnaryGradFn {
     }
 
     /// Gradient for the single input: `out_grad` times the op's derivative.
-    pub(crate) fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        parents: &[Tensor],
+    ) -> Vec<Option<Storage>> {
         let x = parents
             .first()
             .map(|p| p.borrow())
@@ -110,12 +114,7 @@ impl UnaryGradFn {
         if out_grad.device.is_gpu() && x.device.is_gpu() && self.op.has_gpu_kernel() {
             let grad_storage = RawTensor::gpu_unary_backward(&out_grad.data, &x.data, self.op)
                 .unwrap_or_else(|| kernel_failed(&self.op_name()));
-            return vec![Some(RawTensor::new_with_storage(
-                grad_storage,
-                x.shape.clone(),
-                x.device.clone(),
-                false,
-            ))];
+            return vec![Some(grad_storage)];
         }
 
         // CPU path (CPU tensors, or a `cpu_only` op). Chain rule: ∂L/∂x = ∂L/∂y · ∂y/∂x, with the derivative from
@@ -130,12 +129,7 @@ impl UnaryGradFn {
                 .map(|(&g, &x)| T::unary_backward(op, g, x))
                 .collect::<Vec<T>>(),
         ));
-        vec![Some(RawTensor::new_with_storage(
-            grad,
-            x.shape.clone(),
-            Device::CPU,
-            false,
-        ))]
+        vec![Some(grad)]
     }
 }
 
