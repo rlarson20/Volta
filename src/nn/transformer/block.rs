@@ -1,7 +1,5 @@
 use crate::io::StateDict;
-use crate::nn::{
-    FeedForward, Layer, LayerNorm, Module, MultiHeadAttention, insert_prefixed, load_child,
-};
+use crate::nn::{FeedForward, Layer, LayerNorm, Module, MultiHeadAttention, insert_prefixed};
 use crate::tensor::Tensor;
 
 /// Transformer Block (Pre-LN architecture)
@@ -108,11 +106,11 @@ impl Module for TransformerBlock {
         state
     }
 
-    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
-        load_child(&mut self.norm1, "norm1.", state)?;
-        load_child(&mut self.norm2, "norm2.", state)?;
-        load_child(&mut self.ffn, "ffn.", state)?;
-        load_child(&mut self.attention, "attention.", state)
+    fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+        plan.child("norm1.", &self.norm1);
+        plan.child("norm2.", &self.norm2);
+        plan.child("ffn.", &self.ffn);
+        plan.child("attention.", &self.attention);
     }
 
     fn train(&mut self, mode: bool) {

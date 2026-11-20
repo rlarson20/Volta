@@ -285,7 +285,7 @@ pub fn diff_state_dict(expected: &StateDict, loaded: &StateDict) -> StateDictDif
 ///
 /// This helper computes the diff between what the module currently expects
 /// (`module.state_dict()`) and what was provided before delegating to
-/// `module.load_state_dict_partial` (lenient). It is safe to call even when some keys are missing,
+/// a lenient load (as `module.load_state_dict_partial`). It is safe to call even when some keys are missing,
 /// since we inspect the diff up front. Entries whose shape mismatches are reported
 /// in the diff and *not* loaded, so a wrong shape is not an error here.
 ///
@@ -293,20 +293,17 @@ pub fn diff_state_dict(expected: &StateDict, loaded: &StateDict) -> StateDictDif
 ///
 /// `VoltaError::StateDataLength` if an entry whose shape matches holds the wrong
 /// number of values for it. Shape mismatches never reach the load; they are in the
-/// returned diff. As with [`Module::load_state_dict`], the module may be partly loaded
-/// on `Err`.
+/// returned diff. As with [`Module::load_state_dict`], every entry that would load is
+/// checked before any is written, so on `Err` the module is unchanged.
 pub fn load_state_dict_checked<M: Module + ?Sized>(
     module: &mut M,
     state: &StateDict,
 ) -> crate::Result<StateDictDiff> {
     let expected = module.state_dict();
     let diff = diff_state_dict(&expected, state);
-    let loadable: StateDict = state
-        .iter()
-        .filter(|(key, _)| !diff.shape_mismatches.iter().any(|(k, _, _)| k == *key))
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect();
-    module.load_state_dict_partial(&loadable)?;
+    let mut plan = crate::nn::LoadPlan::of(&*module, state);
+    plan.skip(|key| diff.shape_mismatches.iter().any(|(k, _, _)| k == key));
+    plan.apply()?;
     Ok(diff)
 }
 

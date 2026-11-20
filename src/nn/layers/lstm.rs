@@ -147,32 +147,15 @@ impl Module for LSTMCell {
         state
     }
 
-    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
-        if let Some(w) = state.get("weight_ih") {
-            self.weight_ih.load_weight("weight_ih", w)?;
+    fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+        plan.param("weight_ih", &self.weight_ih);
+        plan.param("weight_hh", &self.weight_hh);
+        if let Some(bias_ih) = &self.bias_ih {
+            plan.param("bias_ih", bias_ih);
         }
-        if let Some(w) = state.get("weight_hh") {
-            self.weight_hh.load_weight("weight_hh", w)?;
+        if let Some(bias_hh) = &self.bias_hh {
+            plan.param("bias_hh", bias_hh);
         }
-        if let Some(b) = state.get("bias_ih")
-            && self.bias_ih.is_some()
-        {
-            let bias_tensor = self
-                .bias_ih
-                .as_ref()
-                .expect("LSTMCell: bias_ih exists when a bias entry is loaded");
-            bias_tensor.load_weight("bias_ih", b)?;
-        }
-        if let Some(b) = state.get("bias_hh")
-            && self.bias_hh.is_some()
-        {
-            let bias_tensor = self
-                .bias_hh
-                .as_ref()
-                .expect("LSTMCell: bias_hh exists when a bias entry is loaded");
-            bias_tensor.load_weight("bias_hh", b)?;
-        }
-        Ok(())
     }
 }
 
@@ -192,8 +175,8 @@ mod tests {
         fn state_dict(&self) -> StateDict {
             self.0.state_dict()
         }
-        fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
-            self.0.load_state_dict_partial(state)
+        fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+            self.0.plan_load(plan);
         }
     }
 

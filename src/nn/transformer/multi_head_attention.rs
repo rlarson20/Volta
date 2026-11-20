@@ -1,6 +1,6 @@
 use crate::io::StateDict;
 use crate::nn::transformer::mask::causal_mask_like;
-use crate::nn::{Dropout, Layer, Linear, Module, insert_prefixed, load_child};
+use crate::nn::{Dropout, Layer, Linear, Module, insert_prefixed};
 use crate::shape::Axis;
 use crate::tensor::Tensor;
 
@@ -308,11 +308,11 @@ impl Module for MultiHeadAttention {
         state
     }
 
-    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
-        load_child(&mut self.q_proj, "q_proj.", state)?;
-        load_child(&mut self.k_proj, "k_proj.", state)?;
-        load_child(&mut self.v_proj, "v_proj.", state)?;
-        load_child(&mut self.out_proj, "out_proj.", state)
+    fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+        plan.child("q_proj.", &self.q_proj);
+        plan.child("k_proj.", &self.k_proj);
+        plan.child("v_proj.", &self.v_proj);
+        plan.child("out_proj.", &self.out_proj);
     }
 
     fn train(&mut self, mode: bool) {

@@ -244,18 +244,6 @@ impl VoltaError {
             | Self::NotDifferentiable { .. } => None,
         }
     }
-
-    /// Puts `prefix` (e.g. `"2."`) in front of the key of a state-dict error, so an
-    /// error from a layer inside a container names the entry in the container's own
-    /// state dict. Other variants pass through unchanged.
-    #[must_use]
-    pub(crate) fn with_key_prefix(mut self, prefix: &str) -> Self {
-        if let Self::StateShapeMismatch { key, .. } | Self::StateDataLength { key, .. } = &mut self
-        {
-            *key = format!("{prefix}{key}");
-        }
-        self
-    }
 }
 
 impl ErrorDetail {

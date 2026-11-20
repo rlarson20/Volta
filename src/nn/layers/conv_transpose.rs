@@ -339,20 +339,11 @@ impl Module for ConvTranspose2d {
         state
     }
 
-    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
-        if let Some(w) = state.get("weight") {
-            self.weight.load_weight("weight", w)?;
+    fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+        plan.param("weight", &self.weight);
+        if let Some(bias) = &self.bias {
+            plan.param("bias", bias);
         }
-        if let Some(b) = state.get("bias")
-            && self.bias.is_some()
-        {
-            let bias_tensor = self
-                .bias
-                .as_ref()
-                .expect("ConvTranspose2d: a bias entry is loaded only into a layer with a bias");
-            bias_tensor.load_weight("bias", b)?;
-        }
-        Ok(())
     }
 }
 

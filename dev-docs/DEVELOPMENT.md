@@ -29,9 +29,9 @@ Every op ends in `edge()`, the only function that attaches `parents` and `grad_f
 ## Adding a new neural network layer
 
 1. Create `src/nn/layers/my_layer.rs` and declare it `pub(crate) mod my_layer;` in `src/nn/layers/mod.rs` and add it to the `pub use` lists there and in `src/nn/mod.rs`, so its one public path is `volta::nn::MyLayer` (no root re-export; DECISIONS.md, "One path per item; the root re-exports the core").
-2. Implement `Module` (`parameters`, `state_dict`, `load_state_dict_partial`; the provided `load_state_dict` adds the strict key check) and `Layer` (`forward`). `parameters()` returns every learnable tensor. Index input is an I64/I32 tensor through `Layer` (`Embedding`); carried state is a `RecurrentLayer` (`LSTMCell`), which is sealed.
+2. Implement `Module` (`parameters`, `state_dict`, `plan_load`; the provided `load_state_dict` and `load_state_dict_partial` build a `LoadPlan` from `plan_load`, check every entry, then write them all) and `Layer` (`forward`). `parameters()` returns every learnable tensor. Index input is an I64/I32 tensor through `Layer` (`Embedding`); carried state is a `RecurrentLayer` (`LSTMCell`), which is sealed.
 3. Build the output from graph ops or `edge()`. A layer that holds a fixed non-parameter tensor overrides `Module::to_device` to move it, and builds constants with `x.constant_like(..)` so they land on the input's device.
-4. `load_state_dict_partial` goes through `Tensor::load_weight`, which checks the shape and keeps the destination's device.
+4. `plan_load` names each tensor with `plan.param("weight", &self.weight)` under its `state_dict` key, and each sub-module with `plan.child("ffn.", &self.ffn)`. `LoadPlan::apply` checks each entry with `Tensor::check_load` and writes through `Tensor::load_weight`, which keeps the destination's device.
 5. Add an `assert_trainable!` test with its input from `crate::macros::trainable_input(&shape)`, plus value tests against a hand-computed or reference result.
 6. Add an example in `examples/` if the layer is complex. Examples must not route around a broken component; file the defect as a GitHub issue instead.
 
@@ -43,7 +43,7 @@ Decide by where an argument comes from (DECISIONS.md, "Panic inside the program,
 - **`Result<_, VoltaError>`** when an argument can come from a file, a checkpoint, a dataset, JSON, or a UI: shapes and data for a new tensor, a state dict, labels, bytes, axes and ranges a user picks. Document it under `# Errors`.
 - **Both forms** only for those boundary arguments. Write the `try_` form, and make the panicking form `#[track_caller]` plus `try_x(..).or_panic("x")` (`crate::error::OrPanic`). Do not add a `try_` twin to an op just for symmetry.
 - **Validate before you allocate.** Run `Shape::from_dims` (or `RawTensor::checked_numel`) on a caller's shape before `product()`, `vec![..; n]`, or any buffer: an overflowing product or an oversized allocation is not an error you can catch afterwards.
-- A new error that names a state-dict entry carries its `key`; a container puts its prefix back with `VoltaError::with_key_prefix`.
+- A new error that names a state-dict entry carries its `key`, the full key in the loaded state dict (`LoadPlan` builds it with every container's prefix).
 
 ## Testing workflow
 

@@ -1,7 +1,7 @@
 use crate::Device;
 use crate::io::StateDict;
 use crate::nn::layers::embedding::Embedding;
-use crate::nn::{Layer, Module, insert_prefixed, load_child};
+use crate::nn::{Layer, Module, insert_prefixed};
 use crate::tensor::{RawTensor, Tensor};
 
 /// Positional encoding type
@@ -180,10 +180,9 @@ impl Module for PositionalEncoding {
         }
     }
 
-    fn load_state_dict_partial(&mut self, state: &StateDict) -> crate::Result<()> {
-        match &mut self.learned_embedding {
-            Some(emb) => load_child(emb, "learned_embedding.", state),
-            None => Ok(()),
+    fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+        if let Some(emb) = &self.learned_embedding {
+            plan.child("learned_embedding.", emb);
         }
     }
 

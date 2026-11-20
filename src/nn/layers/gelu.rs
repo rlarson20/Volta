@@ -55,10 +55,7 @@ impl Module for GELU {
         StateDict::new()
     }
 
-    fn load_state_dict_partial(&mut self, _state: &StateDict) -> crate::Result<()> {
-        // Stateless activation, nothing to load
-        Ok(())
-    }
+    fn plan_load<'a>(&self, _plan: &mut crate::nn::LoadPlan<'a>) {}
 
     fn train(&mut self, _mode: bool) {
         // Stateless, no training/eval behavior difference
