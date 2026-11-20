@@ -18,6 +18,7 @@ use crate::tensor::{RawTensor, Tensor};
 /// The operation is the gradient of Conv2d with respect to its input.
 ///
 /// Output size: `H_out` = (`H_in` - 1) * stride + kernel - 2*padding
+#[derive(Debug)]
 pub struct ConvTranspose2d {
     /// Kernel, shape `[in_channels, out_channels, kernel_h, kernel_w]`.
     weight: Tensor,

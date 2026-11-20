@@ -10,6 +10,7 @@ use crate::tensor::Tensor;
 /// - With momentum: v ← β·v - lr·∇θ, θ ← θ + v
 ///
 /// Momentum helps accelerate convergence and dampen oscillations.
+#[derive(Debug)]
 pub struct SGD {
     /// Parameters being optimized.
     pub(super) params: Vec<Tensor>,

@@ -27,6 +27,7 @@ use crate::tensor::Tensor;
 /// # use volta::nn::TransformerBlock;
 /// let block = TransformerBlock::new(512, 8, 4, 0.1);
 /// ```
+#[derive(Debug)]
 pub struct TransformerBlock {
     /// Layer norm applied before attention.
     norm1: LayerNorm,

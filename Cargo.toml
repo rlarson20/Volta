@@ -91,6 +91,8 @@ harness = false
 
 [lints.rust]
 missing_docs = "deny"
+# Every public type can be `dbg!`ed and held in a `#[derive(Debug)]` struct (#116).
+missing_debug_implementations = "deny"
 
 # =============================================================================
 # Clippy Lints Configuration

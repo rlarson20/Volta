@@ -49,6 +49,15 @@ pub struct StateDictMapper {
     transformations: Vec<TransformationBox>,
 }
 
+/// The number of edits; they are closures, so their contents can't be shown.
+impl std::fmt::Debug for StateDictMapper {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StateDictMapper")
+            .field("transformations", &self.transformations.len())
+            .finish()
+    }
+}
+
 impl StateDictMapper {
     /// Create a new empty mapper
     pub fn new() -> Self {

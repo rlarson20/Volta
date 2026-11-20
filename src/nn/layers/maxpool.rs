@@ -18,6 +18,7 @@ use crate::tensor::{RawTensor, Tensor};
 /// spatial window to its maximum value, similar to PyTorch's `nn.MaxPool2d`. As in torch, a
 /// NaN in a window makes the output NaN (the last NaN gets the gradient), a tie goes to
 /// the first element in scan order, and all of the gradient goes to that one element.
+#[derive(Debug, Clone, Copy)]
 pub struct MaxPool2d {
     /// `(height, width)` of the pooling window.
     kernel: (usize, usize),
@@ -798,9 +799,7 @@ mod tests {
 
     #[test]
     fn test_maxpool2d_zero_stride_is_refused_at_construction() {
-        let err = MaxPool2d::try_new(2, 0, 0)
-            .err()
-            .expect("stride 0 is refused");
+        let err = MaxPool2d::try_new(2, 0, 0).expect_err("stride 0 is refused");
         let d = err.detail().expect("InvalidParameter");
         assert_eq!((d.op, d.arg), ("MaxPool2d", Some("stride")));
         assert_eq!(d.message, "stride must be at least 1, got 0");
@@ -809,8 +808,7 @@ mod tests {
     #[test]
     fn test_maxpool2d_zero_kernel_is_refused_at_construction() {
         let err = MaxPool2d::try_with_params((2, 0), (1, 1), (0, 0))
-            .err()
-            .expect("a zero kernel width is refused");
+            .expect_err("a zero kernel width is refused");
         let d = err.detail().expect("InvalidParameter");
         assert_eq!((d.op, d.arg), ("MaxPool2d", Some("kernel")));
     }

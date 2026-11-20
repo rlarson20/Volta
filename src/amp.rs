@@ -66,6 +66,7 @@ pub fn autocast(dtype: DType) -> AutocastGuard {
 /// Ends an [`autocast`] scope on drop, restoring the enclosing one.
 ///
 /// `!Send`: the scope is thread-local, like `NoGradGuard`.
+#[derive(Debug)]
 pub struct AutocastGuard {
     /// The scope to restore.
     prev: Option<DType>,

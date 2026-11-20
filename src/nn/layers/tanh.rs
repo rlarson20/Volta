@@ -3,6 +3,7 @@ use crate::nn::{Layer, Module};
 use crate::tensor::Tensor;
 
 /// Hyperbolic tangent.
+#[derive(Debug, Clone, Copy)]
 pub struct Tanh;
 
 impl Module for Tanh {

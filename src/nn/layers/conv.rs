@@ -141,6 +141,7 @@ impl Default for TileConfig {
 }
 
 /// 2D convolution over `[B, C, H, W]` input, with an algorithm chosen by [`ConvAlgo`].
+#[derive(Debug)]
 pub struct Conv2d {
     /// Kernel, shape `[out_channels, in_channels, kernel_h, kernel_w]`.
     weight: Tensor,

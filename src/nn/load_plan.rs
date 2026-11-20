@@ -23,6 +23,18 @@ pub struct LoadPlan<'a> {
     writes: Vec<(String, Tensor, &'a TensorData)>,
 }
 
+/// The prefix being visited and the keys planned, not the entries' bytes.
+impl std::fmt::Debug for LoadPlan<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let writes: Vec<&str> = self.writes.iter().map(|(k, _, _)| k.as_str()).collect();
+        f.debug_struct("LoadPlan")
+            .field("prefix", &self.prefix)
+            .field("wanted", &self.wanted)
+            .field("writes", &writes)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<'a> LoadPlan<'a> {
     /// An empty plan for loading `state`.
     pub(crate) const fn new(state: &'a StateDict) -> Self {

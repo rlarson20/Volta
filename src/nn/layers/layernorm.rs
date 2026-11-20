@@ -29,6 +29,7 @@ use crate::tensor::{RawTensor, Tensor};
 /// // For 4D input (B, H, W, C): normalize over H, W, C
 /// let ln = LayerNorm::new(vec![32, 32, 3]);
 /// ```
+#[derive(Debug)]
 pub struct LayerNorm {
     /// Trailing dims the statistics are computed over.
     normalized_shape: Vec<usize>,
