@@ -44,9 +44,26 @@ pub enum VoltaError {
     #[error("Device error: {0}")]
     DeviceError(ErrorDetail),
 
-    /// An underlying I/O operation failed.
+    /// An underlying I/O operation failed: a file could not be opened, read or written.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// A file was read but its contents could not be decoded: not a safetensors file, an
+    /// entry whose dtype Volta has no equivalent for, or a malformed MNIST IDX header
+    /// (#394). Nothing was loaded.
+    #[error(
+        "Decode error in {}{}: {detail}",
+        .path.display(),
+        .key.as_ref().map_or_else(String::new, |k| format!(" (entry '{k}')"))
+    )]
+    Decode {
+        /// The file.
+        path: std::path::PathBuf,
+        /// The entry, when one tensor of a state dict is at fault.
+        key: Option<String>,
+        /// The loader that failed (`op`, with `arg` `"path"`) and what was wrong.
+        detail: ErrorDetail,
+    },
 
     /// An argument is out of its valid range: the detail names the op, the argument, and
     /// what is wrong with it.
@@ -130,8 +147,9 @@ pub enum VoltaError {
 }
 
 /// The payload of [`VoltaError::InvalidParameter`], [`VoltaError::DeviceError`] and
-/// [`VoltaError::OpError`] (#377): which operation failed, which argument (if one is at
-/// fault), and why, so a caller can match the cause without parsing the message.
+/// [`VoltaError::OpError`] (#377), and part of [`VoltaError::Decode`]: which operation
+/// failed, which argument (if one is at fault), and why, so a caller can match the cause
+/// without parsing the message.
 ///
 /// `#[non_exhaustive]`: read the fields, but only Volta builds one, and a new field is
 /// not a breaking change.
@@ -176,6 +194,21 @@ impl VoltaError {
         Self::InvalidParameter(ErrorDetail::new(op, arg, message))
     }
 
+    /// [`VoltaError::Decode`] of `path` (and entry `key`), reported by loader `op`.
+    #[must_use]
+    pub(crate) fn decode(
+        op: &'static str,
+        path: &std::path::Path,
+        key: Option<&str>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::Decode {
+            path: path.to_path_buf(),
+            key: key.map(str::to_string),
+            detail: ErrorDetail::new(op, "path", message),
+        }
+    }
+
     /// [`VoltaError::DeviceError`] from its parts.
     #[must_use]
     pub(crate) fn device(
@@ -186,12 +219,16 @@ impl VoltaError {
         Self::DeviceError(ErrorDetail::new(op, arg, message))
     }
 
-    /// The op, argument and message of an `InvalidParameter`, `DeviceError` or `OpError`;
+    /// The op, argument and message of an `InvalidParameter`, `DeviceError`, `OpError` or
+    /// `Decode`;
     /// `None` for the variants whose fields already say what went wrong.
     #[must_use]
     pub const fn detail(&self) -> Option<&ErrorDetail> {
         match self {
-            Self::InvalidParameter(d) | Self::DeviceError(d) | Self::OpError(d) => Some(d),
+            Self::InvalidParameter(d)
+            | Self::DeviceError(d)
+            | Self::OpError(d)
+            | Self::Decode { detail: d, .. } => Some(d),
             // Listed, not `_`: a new variant is a compile error here.
             Self::ShapeDataMismatch { .. }
             | Self::DimensionOutOfBounds { .. }
