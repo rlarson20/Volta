@@ -1,6 +1,6 @@
 //! CPU/GPU parity for the losses that #42 changed: `bce_loss` (the fused `Bce` op, whose
 //! forward and backward run as device ops) and `cross_entropy_loss` with class-index
-//! targets (a `where` select), forward and input gradient. Both pin their device-policy
+//! targets (a `gather`), forward and input gradient. Both pin their device-policy
 //! gaps, so an op that silently drops to the CPU fails the test.
 
 #![cfg(feature = "gpu")]
@@ -51,12 +51,11 @@ fn bce_loss_parity_including_the_clamp() {
 
 #[test]
 fn cross_entropy_index_targets_parity_with_a_neg_inf_logit() {
-    // Class indices stay on the CPU (the GPU holds no integer dtype); the mask they
-    // become is moved to the logits' device. Pinned gaps: `log_softmax`'s per-axis
-    // reductions and its broadcast subtract, and `where`'s backward, which runs on the
-    // host (its forward has a kernel).
+    // Class indices stay on the CPU (the GPU holds no integer dtype), and `gather` reads
+    // them there. Pinned gaps: `log_softmax`'s per-axis reductions and its broadcast
+    // subtract, and `gather`, which has no kernel (#78).
     let logits = vec![1.0, f32::NEG_INFINITY, 2.0, 0.5, 0.2, f32::NEG_INFINITY];
-    expect_gaps(&["Binary(Sub)", "MaxDim", "SumDim", "Where"], || {
+    expect_gaps(&["Binary(Sub)", "Gather", "MaxDim", "SumDim"], || {
         let z_cpu = RawTensor::new(logits.clone(), &[2, 3], true);
         let z_gpu = gpu_leaf(&z_cpu);
         let classes = RawTensor::new(vec![0.0, 1.0], &[2], false).to_dtype(DType::I64);

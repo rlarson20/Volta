@@ -102,7 +102,7 @@ fn bce_rejects_a_broadcast_target() {
 
 #[test]
 fn cross_entropy_index_targets_gradient_matches_finite_differences() {
-    // The class-index path selects with `where`, not a one-hot product.
+    // The class-index path gathers `log_probs[i, t_i]`, not a one-hot product (#78).
     manual_seed(0xC8);
     let logits = RawTensor::randn(&[3, 4]);
     logits.set_requires_grad(true);
