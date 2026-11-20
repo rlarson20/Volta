@@ -178,6 +178,17 @@ impl RawTensor {
     #[must_use]
     #[track_caller]
     pub fn broadcast_shape(shape_a: &[usize], shape_b: &[usize]) -> Vec<usize> {
+        Self::broadcast_shape_for("broadcast_shape", shape_a, shape_b)
+    }
+
+    /// [`Self::broadcast_shape`], with the panic naming `op`, the public op the shapes
+    /// came from (`"add"`), as `add: Cannot broadcast shapes .. at dimension ..` (#142).
+    #[track_caller]
+    pub(crate) fn broadcast_shape_for(
+        op: &str,
+        shape_a: &[usize],
+        shape_b: &[usize],
+    ) -> Vec<usize> {
         match Self::try_broadcast_shape(shape_a, shape_b) {
             Ok(shape) => shape,
             Err(VoltaError::BroadcastError(a, b)) => {
@@ -197,13 +208,13 @@ impl RawTensor {
                     if a_dim != b_dim && a_dim != 1 && b_dim != 1 {
                         let dim = max_len - 1 - i;
                         panic!(
-                            "Cannot broadcast shapes {shape_a:?} and {shape_b:?} at dimension {dim}"
+                            "{op}: Cannot broadcast shapes {shape_a:?} and {shape_b:?} at dimension {dim}"
                         );
                     }
                 }
-                panic!("Cannot broadcast shapes {shape_a:?} and {shape_b:?}");
+                panic!("{op}: Cannot broadcast shapes {shape_a:?} and {shape_b:?}");
             }
-            Err(e) => panic!("Broadcast error: {e}"),
+            Err(e) => panic!("{op}: {e}"),
         }
     }
 
@@ -398,7 +409,9 @@ impl RawTensor {
         };
 
         // CPU path: compute broadcast shape and perform the operation on host data.
-        let out_shape = Self::broadcast_shape(shape_a.truncate_rank(), shape_b.truncate_rank());
+        let op_name = format!("{op:?}").to_lowercase();
+        let out_shape =
+            Self::broadcast_shape_for(&op_name, shape_a.truncate_rank(), shape_b.truncate_rank());
 
         // Broadcast inputs to output shape
         // Check for reasonable sizes to prevent memory issues

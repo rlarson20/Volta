@@ -1076,6 +1076,12 @@ impl RawTensor {
     pub fn cross_entropy_loss(logits: &Tensor, targets: &Tensor) -> Tensor {
         // An f32 op under `amp::autocast` (PyTorch's losses): half inputs are cast up.
         let (logits, targets) = (&crate::amp::to_f32(logits), &crate::amp::to_f32(targets));
+        let rank = logits.borrow().shape.rank();
+        assert!(
+            rank == 2,
+            "cross_entropy_loss: logits must be [N, C], got rank {rank} ({:?})",
+            logits.borrow().shape.truncate_rank()
+        );
         // Use log_softmax for numerical stability
         let log_probs = Self::log_softmax(logits, Axis(1));
         Self::nll_loss_named(&log_probs, targets, "cross_entropy_loss")
@@ -1511,7 +1517,7 @@ impl RawTensor {
     #[must_use]
     #[track_caller]
     pub fn sum_dim(self_t: &Tensor, dim: Axis, keepdim: bool) -> Tensor {
-        Self::try_sum_dim(self_t, dim, keepdim).expect("Dimension out of bounds")
+        Self::try_sum_dim(self_t, dim, keepdim).or_panic("sum_dim")
     }
 
     /// Copy the tensor to `device`, as a differentiable op (PyTorch's `.to(device)`).
@@ -1697,6 +1703,8 @@ impl RawTensor {
     /// [`Self::max_dim`]).
     #[must_use]
     pub fn softmax(self_t: &Tensor, dim: Axis) -> Tensor {
+        // Checked under this op's name; `max_dim` would report its own (#142).
+        let _ = self_t.borrow().shape.dim(dim).or_panic("softmax");
         let max = Self::max_dim(self_t, dim, true);
         let shifted = self_t.sub(&max);
         let exp_x = shifted.exp();
@@ -1712,6 +1720,8 @@ impl RawTensor {
     /// [`Self::max_dim`]).
     #[must_use]
     pub fn log_softmax(self_t: &Tensor, dim: Axis) -> Tensor {
+        // Checked under this op's name; `max_dim` would report its own (#142).
+        let _ = self_t.borrow().shape.dim(dim).or_panic("log_softmax");
         let max = Self::max_dim(self_t, dim, true);
         let shifted = self_t.sub(&max);
         let exp_x = shifted.exp();

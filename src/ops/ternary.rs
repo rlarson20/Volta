@@ -275,9 +275,13 @@ impl RawTensor {
                     false_data.to_device(&Device::CPU),
                 );
 
-                let tmp_shape =
-                    Self::broadcast_shape(cond_shape.truncate_rank(), true_shape.truncate_rank());
-                let out_shape = Self::broadcast_shape(&tmp_shape, false_shape.truncate_rank());
+                let tmp_shape = Self::broadcast_shape_for(
+                    "where",
+                    cond_shape.truncate_rank(),
+                    true_shape.truncate_rank(),
+                );
+                let out_shape =
+                    Self::broadcast_shape_for("where", &tmp_shape, false_shape.truncate_rank());
 
                 let mask = Self::broadcast_to(
                     cond_data

@@ -39,7 +39,7 @@ fn test_reshape_zero_dimension() {
 // ===== PERMUTE INVALID AXES TESTS =====
 
 #[test]
-#[should_panic(expected = "Axes length must match rank")]
+#[should_panic(expected = "are not a permutation of")]
 fn test_permute_wrong_length_too_short() {
     // Attempt to permute rank-3 tensor with only 2 axes
     let x = RawTensor::new(
@@ -51,7 +51,7 @@ fn test_permute_wrong_length_too_short() {
 }
 
 #[test]
-#[should_panic(expected = "Axes length must match rank")]
+#[should_panic(expected = "are not a permutation of")]
 fn test_permute_wrong_length_too_long() {
     // Attempt to permute rank-2 tensor with 3 axes
     let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
@@ -59,7 +59,7 @@ fn test_permute_wrong_length_too_long() {
 }
 
 #[test]
-#[should_panic(expected = "Invalid permutation axes")]
+#[should_panic(expected = "are not a permutation of")]
 fn test_permute_out_of_bounds_axis() {
     // Attempt to permute with axis exceeding tensor rank
     let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
@@ -67,7 +67,7 @@ fn test_permute_out_of_bounds_axis() {
 }
 
 #[test]
-#[should_panic(expected = "Invalid permutation axes")]
+#[should_panic(expected = "are not a permutation of")]
 fn test_permute_duplicate_axes() {
     // Attempt to permute with duplicate axes
     let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
@@ -75,7 +75,7 @@ fn test_permute_duplicate_axes() {
 }
 
 #[test]
-#[should_panic(expected = "Invalid permutation axes")]
+#[should_panic(expected = "are not a permutation of")]
 fn test_permute_non_contiguous_axes() {
     // Attempt to permute with non-contiguous axes
     let x = RawTensor::new(
@@ -261,30 +261,20 @@ fn test_shrink_out_of_bounds_end() {
     let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
     let result = RawTensor::try_shrink(&x, &[(0, 2), (0, 10)]);
 
-    assert!(result.is_err());
-    match result.as_ref().unwrap_err() {
-        VoltaError::DimensionOutOfBounds { dim, shape } => {
-            assert_eq!(*dim, 1, "Error should be for dimension 1");
-            assert_eq!(shape, &vec![2, 3], "Shape should match original tensor");
-        }
-        VoltaError::ShapeDataMismatch { .. }
-        | VoltaError::DTypeMismatch { .. }
-        | VoltaError::NotDifferentiable { .. }
-        | VoltaError::BroadcastError(..)
-        | VoltaError::DeviceError(_)
-        | VoltaError::Io(_)
-        | VoltaError::Decode { .. }
-        | VoltaError::NotScalar { .. }
-        | VoltaError::NoGradRequired
-        | VoltaError::InvalidParameter(_)
-        | VoltaError::OpError(_)
-        | VoltaError::StateShapeMismatch { .. }
-        | VoltaError::StateDataLength { .. }
-        | VoltaError::StateKeyCollision { .. }
-        | VoltaError::StateKeyMismatch { .. } => {
-            panic!("Expected DimensionOutOfBounds error, got {result:?}")
-        }
-    }
+    // A range past the end is an `InvalidParameter` naming the range (#142); it used to
+    // be `DimensionOutOfBounds`, which has no field for the range.
+    let detail = result
+        .err()
+        .and_then(|e| e.detail().cloned())
+        .expect("InvalidParameter");
+    assert_eq!((detail.op, detail.arg), ("shrink", Some("ranges")));
+    assert!(
+        detail
+            .message
+            .starts_with("range (0, 10) for dimension 1 ends past its size 3"),
+        "{}",
+        detail.message
+    );
 }
 
 #[test]
@@ -293,30 +283,20 @@ fn test_shrink_start_exceeds_dimension() {
     let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false);
     let result = RawTensor::try_shrink(&x, &[(0, 2), (5, 10)]);
 
-    assert!(result.is_err());
-    match result.as_ref().unwrap_err() {
-        VoltaError::DimensionOutOfBounds { dim, shape } => {
-            assert_eq!(*dim, 1, "Error should be for dimension 1");
-            assert_eq!(shape, &vec![2, 3], "Shape should match original tensor");
-        }
-        VoltaError::ShapeDataMismatch { .. }
-        | VoltaError::DTypeMismatch { .. }
-        | VoltaError::NotDifferentiable { .. }
-        | VoltaError::BroadcastError(..)
-        | VoltaError::DeviceError(_)
-        | VoltaError::Io(_)
-        | VoltaError::Decode { .. }
-        | VoltaError::NotScalar { .. }
-        | VoltaError::NoGradRequired
-        | VoltaError::InvalidParameter(_)
-        | VoltaError::OpError(_)
-        | VoltaError::StateShapeMismatch { .. }
-        | VoltaError::StateDataLength { .. }
-        | VoltaError::StateKeyCollision { .. }
-        | VoltaError::StateKeyMismatch { .. } => {
-            panic!("Expected DimensionOutOfBounds error, got {result:?}")
-        }
-    }
+    // A range past the end is an `InvalidParameter` naming the range (#142); it used to
+    // be `DimensionOutOfBounds`, which has no field for the range.
+    let detail = result
+        .err()
+        .and_then(|e| e.detail().cloned())
+        .expect("InvalidParameter");
+    assert_eq!((detail.op, detail.arg), ("shrink", Some("ranges")));
+    assert!(
+        detail
+            .message
+            .starts_with("range (5, 10) for dimension 1 ends past its size 3"),
+        "{}",
+        detail.message
+    );
 }
 
 #[test]

@@ -735,7 +735,7 @@ impl RawTensor {
     #[must_use]
     #[track_caller]
     pub fn reshape(self_t: &Tensor, new_shape: &[usize]) -> Tensor {
-        Self::try_reshape(self_t, new_shape).or_panic("Reshape")
+        Self::try_reshape(self_t, new_shape).or_panic("reshape")
     }
 
     /// Reshape tensor to new shape (fallible)
@@ -854,9 +854,12 @@ impl RawTensor {
         // Verify axes is a valid permutation
         let mut sorted_axes = axes.clone();
         sorted_axes.sort_unstable();
-        for (i, &ax) in sorted_axes.iter().enumerate() {
-            assert_eq!(i, ax, "Invalid permutation axes");
-        }
+        let rank = old_shape.rank();
+        assert!(
+            sorted_axes.iter().copied().eq(0..rank),
+            "permute: axes {axes:?} are not a permutation of 0..{rank} (shape {:?})",
+            old_shape.truncate_rank()
+        );
 
         let (storage, new_shape, device) = Self::permute_impl(self_t, &axes);
 
@@ -1119,10 +1122,14 @@ impl RawTensor {
 
             // Check end bound
             if end > dim_size {
-                return Err(VoltaError::DimensionOutOfBounds {
-                    dim,
-                    shape: shape.to_vec(),
-                });
+                return Err(VoltaError::invalid(
+                    "shrink",
+                    Some("ranges"),
+                    format!(
+                        "range ({start}, {end}) for dimension {dim} ends past its size {dim_size} \
+                         (shape {shape:?})"
+                    ),
+                ));
             }
 
             // Check for empty range
@@ -1159,7 +1166,7 @@ impl RawTensor {
     #[must_use]
     #[track_caller]
     pub fn shrink(self_t: &Tensor, ranges: &[(usize, usize)]) -> Tensor {
-        Self::try_shrink(self_t, ranges).expect("Invalid shrink ranges")
+        Self::try_shrink(self_t, ranges).or_panic("shrink")
     }
 
     /// Try to shrink tensor to specified ranges for each dimension

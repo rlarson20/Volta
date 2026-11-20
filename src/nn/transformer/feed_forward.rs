@@ -112,6 +112,12 @@ impl FeedForward {
     #[track_caller]
     pub fn forward(&self, x: &Tensor) -> Tensor {
         let input_shape = x.borrow().shape.clone();
+        assert!(
+            input_shape.rank() == 3 && input_shape.dim_at(2) == self.embed_dim,
+            "FeedForward: input must be [batch, seq_len, {}], got {:?}",
+            self.embed_dim,
+            input_shape.truncate_rank()
+        );
 
         // Reshape to 2D for Linear layers: [batch, seq_len, embed_dim] -> [batch * seq_len, embed_dim]
         let batch_size = input_shape.dim_at(0);
