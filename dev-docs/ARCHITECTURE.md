@@ -56,12 +56,14 @@ pub struct RawTensor {
 ## Storage and dtypes (`src/storage.rs`, `src/dtype.rs`)
 
 ```rust
-pub enum Storage {
+pub struct Storage(Repr);          // opaque: read through methods (#356)
+enum Repr {                        // private
     Cpu(HostBuf),                  // F16 | BF16 | F32 | F64 | I32 | I64 | U8 | Bool, each an Arc<[T]>
-    #[cfg(feature = "gpu")]
-    Gpu(Arc<GpuStorage>),          // GpuBuffer (F32, F16, BF16 or Bool) + OnceLock<HostBuf> host copy
-}
+    Gpu(Arc<GpuStorage>),          // GpuBuffer (F32, F16, BF16 or Bool) + OnceLock<HostBuf> host copy;
+}                                  // without `gpu`, GpuStorage has no values
 ```
+
+- **Opaque.** `Storage` has no public variants and `HostBuf` is crate-private, so the representation can change without a breaking change and the type is the same in every feature set. Why: "`Storage` is an opaque struct".
 
 - **Copy-on-write.** Cloning storage bumps a refcount; a write copies first if the buffer is shared. On the GPU the host copy is filled once by the first read and shared by every clone, and it cannot go stale because a shared buffer is never written. `Storage` has no `Deref`. Why: "CPU storage: `Arc<[u8]>` copy-on-write", "Typed host buffer", "No `Deref` on `Storage`", "GPU storage: shared write-once host copy".
 - **Which dtypes compute.** CPU kernels are generic over the sealed `Real` trait (f32, f64), with two instances per `define_ops!` row. F16 and BF16 run the f32 instance and round each output. Integer and Bool tensors are data: movement, comparisons, `where`, indices and targets. Why: "Core ops in f64", "Half types run the f32 kernels", "I64 and Bool are data".
