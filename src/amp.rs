@@ -256,6 +256,7 @@ impl GradScaler {
     /// gradients would be divided twice), or a gradient is f16 (torch refuses those: loss
     /// scaling is for f32 parameters under autocast; bf16 gradients are accepted, as in
     /// torch).
+    #[track_caller]
     pub fn unscale(&mut self, opt: &impl Optimizer) {
         let key = optimizer_key(opt);
         assert!(
@@ -294,6 +295,7 @@ impl GradScaler {
     ///
     /// # Panics
     /// If called twice for the same optimizer before `update`.
+    #[track_caller]
     pub fn step(&mut self, opt: &mut impl Optimizer) -> bool {
         let key = optimizer_key(opt);
         if self.stage_of(&key) == Stage::Ready {
@@ -315,6 +317,7 @@ impl GradScaler {
     ///
     /// # Panics
     /// If `step` has not run for any optimizer since the last `update`.
+    #[track_caller]
     pub fn update(&mut self) {
         assert!(
             self.stages

@@ -20,6 +20,7 @@ impl Dropout {
     /// # Panics
     /// If `p` is not in `[0, 1]`.
     #[must_use]
+    #[track_caller]
     pub fn new(p: f32) -> Self {
         assert!(
             (0.0..=1.0).contains(&p),

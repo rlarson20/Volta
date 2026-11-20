@@ -216,6 +216,7 @@ impl Layer for PositionalEncoding {
     ///
     /// # Panics
     /// If `x` is not rank 3, its last dim is not `embed_dim`, or `seq_len > max_len`.
+    #[track_caller]
     fn forward(&self, x: &Tensor) -> Tensor {
         let [batch, seq_len, embed_dim] = x.shape().fixed::<3>();
         assert_eq!(

@@ -177,6 +177,7 @@ impl RawTensor {
     /// If the shapes cannot be broadcast (a dimension differs and neither is 1), or either
     /// is not a valid [`Shape`] (a zero dimension, or more than `MAX_NUMEL` elements).
     #[must_use]
+    #[track_caller]
     pub fn broadcast_shape(shape_a: &[usize], shape_b: &[usize]) -> Vec<usize> {
         match Self::try_broadcast_shape(shape_a, shape_b) {
             Ok(shape) => shape,
@@ -363,6 +364,7 @@ impl RawTensor {
     /// promoted dtype is not a float (integer and bool tensors have no arithmetic kernel).
     /// Under [`DTypePolicy::Strict`](crate::DTypePolicy::Strict), also if the dtypes differ.
     #[must_use]
+    #[track_caller]
     pub fn binary_op(self_t: &Tensor, other: &Tensor, op: BinaryOp) -> Tensor {
         // Mixed operands are cast to one dtype first (`DTypePolicy`); `Div` is true
         // division, so integers divide in f32 as in PyTorch.

@@ -52,7 +52,11 @@ impl Linear {
     /// Create a new linear layer with random initialization
     ///
     /// Uses Xavier initialization.
+    ///
+    /// # Panics
+    /// If `in_features` or `out_features` is zero.
     #[must_use]
+    #[track_caller]
     pub fn new(in_features: usize, out_features: usize, use_bias: bool) -> Self {
         let w = RawTensor::xavier_uniform(&[in_features, out_features]);
         w.set_requires_grad(true);
@@ -87,7 +91,12 @@ impl Linear {
     /// // Parameters are now on GPU
     /// # }
     /// ```
+    ///
+    /// # Panics
+    /// If `in_features` or `out_features` is zero, or `device` is a GPU that cannot hold
+    /// the parameters.
     #[must_use]
+    #[track_caller]
     pub fn new_on_device(
         in_features: usize,
         out_features: usize,
@@ -110,7 +119,12 @@ impl Linear {
     }
 
     /// Forward pass through the layer
+    ///
+    /// # Panics
+    /// If `x`'s last dimension is not `in_features`, or `x` is on another device than the
+    /// parameters.
     #[must_use]
+    #[track_caller]
     pub fn forward(&self, x: &Tensor) -> Tensor {
         // One low-precision op under `amp::autocast`: input, weight and bias are cast
         // together, so the bias add stays in the low dtype (PyTorch's `linear`).

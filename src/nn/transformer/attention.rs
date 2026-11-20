@@ -66,6 +66,7 @@ impl ScaledDotProductAttention {
     /// If a tensor is not 3D, the batch sizes differ, query and key differ in `d_k`, or
     /// key and value differ in length.
     #[must_use]
+    #[track_caller]
     pub fn forward(
         &self,
         query: &Tensor,

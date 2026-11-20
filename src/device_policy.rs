@@ -159,6 +159,7 @@ fn record(event: FallbackEvent) {
 ///
 /// # Panics
 /// Under [`DevicePolicy::Strict`].
+#[track_caller]
 pub(crate) fn on_gap(op: &str, pass: Pass) {
     match device_policy() {
         DevicePolicy::Strict => panic!(
@@ -190,6 +191,7 @@ pub(crate) fn kernel_failed(op: &str) -> ! {
 /// # Panics
 /// If two devices differ. GPU names count, so this stays correct once there is more
 /// than one GPU.
+#[track_caller]
 pub(crate) fn common_device<'a>(
     op: &str,
     devices: impl IntoIterator<Item = &'a Device>,

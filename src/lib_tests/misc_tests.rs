@@ -1453,3 +1453,126 @@ fn panicking_wrappers_report_the_callers_location() {
         let _ = crate::nn::Adam::new(vec![a.clone()], -1.0, (0.9, 0.999), 1e-8, 0.0);
     });
 }
+
+/// #260: the binary/reduce/ternary ops, `ScalarLoss`, `GradScaler`, the layers and the
+/// state-dict mapper report the caller's line too, through every wrapper down to the
+/// `panic!`.
+#[test]
+fn ops_layers_and_mapper_report_the_callers_location() {
+    use crate::nn::{
+        Dropout, FeedForward, MultiHeadAttention, PositionalEncoding, PositionalEncodingType,
+        ScaledDotProductAttention, SequentialBuilder,
+    };
+    let a = RawTensor::new(vec![1.0; 6], &[2, 3], true);
+    let b = RawTensor::new(vec![1.0; 4], &[4], false);
+    let ints = a.to_dtype(DType::I32);
+
+    // Ops: binary (broadcast), compare, reduce (integer dtype), ternary (shape, condition).
+    assert_panics_here("Tensor::add", line!() + 1, || {
+        let _ = a.add(&b);
+    });
+    assert_panics_here("Tensor::elem_mul", line!() + 1, || {
+        let _ = a.elem_mul(&b);
+    });
+    assert_panics_here("Tensor::lt", line!() + 1, || {
+        let _ = a.lt(&b);
+    });
+    assert_panics_here("Tensor::sum", line!() + 1, || {
+        let _ = ints.sum();
+    });
+    assert_panics_here("Tensor::mulacc", line!() + 1, || {
+        let _ = a.mulacc(&a, &b);
+    });
+    assert_panics_here("Tensor::where_op", line!() + 1, || {
+        let _ = a.where_op(&a, &a);
+    });
+
+    // Layers.
+    assert_panics_here("Linear::new", line!() + 1, || {
+        let _ = Linear::new(0, 3, true);
+    });
+    let linear = Linear::new(4, 3, true);
+    assert_panics_here("Linear::forward", line!() + 1, || {
+        let _ = linear.forward(&a);
+    });
+    assert_panics_here("Dropout::new", line!() + 1, || {
+        let _ = Dropout::new(2.0);
+    });
+    assert_panics_here("Embedding::new", line!() + 1, || {
+        let _ = Embedding::new(0, 3);
+    });
+    let embedding = Embedding::new(4, 3);
+    let out_of_range = RawTensor::new(vec![4.0], &[1], false).to_dtype(DType::I64);
+    assert_panics_here("Embedding::forward", line!() + 1, || {
+        let _ = embedding.forward(&out_of_range);
+    });
+    assert_panics_here("PixelShuffle::new", line!() + 1, || {
+        let _ = PixelShuffle::new(0);
+    });
+    assert_panics_here("PixelShuffle::forward", line!() + 1, || {
+        let _ = PixelShuffle::new(2).forward(&a);
+    });
+    let numbered = SequentialBuilder::new().add_named("1", Box::new(ReLU));
+    assert_panics_here("SequentialBuilder::build", line!() + 1, || {
+        let _ = numbered.build();
+    });
+
+    // Transformer layers, with a [1, 2, 3] input where they expect embed_dim 4.
+    let x = a.reshape(&[1, 2, 3]);
+    assert_panics_here("ScaledDotProductAttention::forward", line!() + 1, || {
+        let _ = ScaledDotProductAttention::new().forward(&a, &a, &a, false, None);
+    });
+    let ff = FeedForward::new(4, 2, 0.0);
+    assert_panics_here("FeedForward::forward", line!() + 1, || {
+        let _ = ff.forward(&x);
+    });
+    assert_panics_here("FeedForward::new", line!() + 1, || {
+        let _ = FeedForward::new(4, 2, 2.0);
+    });
+    assert_panics_here("MultiHeadAttention::new", line!() + 1, || {
+        let _ = MultiHeadAttention::new(4, 3, 0.0);
+    });
+    let mha = MultiHeadAttention::new(4, 2, 0.0);
+    assert_panics_here("MultiHeadAttention::forward", line!() + 1, || {
+        let _ = mha.forward(&x, false, None);
+    });
+    let x4 = RawTensor::new(vec![0.0; 8], &[1, 2, 4], false);
+    let bad_mask = RawTensor::new(vec![0.0; 3], &[3], false);
+    assert_panics_here("MultiHeadAttention::forward (mask)", line!() + 1, || {
+        let _ = mha.forward(&x4, false, Some(&bad_mask));
+    });
+    let pe = PositionalEncoding::new(4, 8, PositionalEncodingType::Sinusoidal);
+    assert_panics_here("PositionalEncoding::forward", line!() + 1, || {
+        let _ = pe.forward(&x);
+    });
+
+    // GradScaler, ScalarLoss and the mapper.
+    assert_panics_here("GradScaler::update", line!() + 1, || {
+        crate::amp::GradScaler::new().update();
+    });
+    let w = RawTensor::new(vec![1.0, 2.0], &[2], true);
+    let loss = w
+        .elem_mul(&w)
+        .sum()
+        .into_loss()
+        .expect("a scalar that requires grad");
+    w.update_data(|data| data.as_host_f32_mut().expect("CPU f32")[0] = 9.0);
+    assert_panics_here("ScalarLoss::backward", line!() + 1, || {
+        loss.backward();
+    });
+    let state = || {
+        let mut s = crate::io::StateDict::new();
+        s.insert(
+            "fc.weight".to_string(),
+            crate::io::TensorData::from_f32(vec![0.0; 8], vec![2, 2, 2]),
+        );
+        s
+    };
+    let mapper = crate::io::mapping::StateDictMapper::new().transpose_linear("fc");
+    assert_panics_here("StateDictMapper::map", line!() + 1, || {
+        let _ = mapper.map(state());
+    });
+    assert_panics_here("load_pytorch_linear_weights", line!() + 1, || {
+        let _ = crate::io::mapping::load_pytorch_linear_weights(state(), &["fc9"]);
+    });
+}

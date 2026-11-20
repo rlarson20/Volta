@@ -134,24 +134,21 @@ impl SGD {
             return;
         };
 
-        let len = param.borrow().data.len();
-        let device = param.device();
-        // Plain SGD keeps no state, but the kernel binds both state buffers, in the
-        // parameter's dtype (the kernel binds one element type).
-        let dtype = param.dtype();
-        let mut dummy_state1 = Storage::new_zeros(len, &device).cast(dtype);
-        let mut dummy_state2 = Storage::new_zeros(len, &device).cast(dtype);
+        // Plain SGD keeps no state: the kernel binds a cached placeholder for each state it
+        // doesn't use, so a step allocates nothing (#207).
         let (op, beta1, state1) = if self.momentum == 0.0 {
-            (0, 0.0, &mut dummy_state1)
+            (0, 0.0, None)
         } else {
             // Allocated on the parameter's first step, on its current device.
             (
                 1,
                 self.momentum,
-                self.velocity
-                    .get_mut(i)
-                    .expect("SGD: velocity slot per parameter")
-                    .get_or_insert_with(|| super::zeros_like(param)),
+                Some(
+                    self.velocity
+                        .get_mut(i)
+                        .expect("SGD: velocity slot per parameter")
+                        .get_or_insert_with(|| super::zeros_like(param)),
+                ),
             )
         };
 
@@ -171,13 +168,7 @@ impl SGD {
         // snapshots and later reads stay correct.
         param
             .update_data(|data| {
-                crate::RawTensor::gpu_optimizer_step(
-                    data,
-                    &grad,
-                    state1,
-                    &mut dummy_state2,
-                    &opt_params,
-                )
+                crate::RawTensor::gpu_optimizer_step(data, &grad, state1, None, &opt_params)
             })
             .expect("GPU SGD step failed: the parameter was not updated");
     }
