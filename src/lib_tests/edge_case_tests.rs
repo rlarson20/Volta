@@ -181,15 +181,15 @@ fn test_shrink_wrong_length_too_short() {
     match result.as_ref().unwrap_err() {
         VoltaError::InvalidParameter(msg) => {
             assert!(
-                msg.contains("length"),
+                msg.message.contains("length"),
                 "Error message should mention length"
             );
             assert!(
-                msg.contains('2'),
+                msg.message.contains('2'),
                 "Error message should mention expected rank 2"
             );
             assert!(
-                msg.contains('1'),
+                msg.message.contains('1'),
                 "Error message should mention actual length 1"
             );
         }
@@ -222,15 +222,15 @@ fn test_shrink_wrong_length_too_long() {
     match result.as_ref().unwrap_err() {
         VoltaError::InvalidParameter(msg) => {
             assert!(
-                msg.contains("length"),
+                msg.message.contains("length"),
                 "Error message should mention length"
             );
             assert!(
-                msg.contains('2'),
+                msg.message.contains('2'),
                 "Error message should mention expected rank 2"
             );
             assert!(
-                msg.contains('3'),
+                msg.message.contains('3'),
                 "Error message should mention actual length 3"
             );
         }
@@ -325,13 +325,13 @@ fn test_shrink_invalid_range_order() {
     match result.as_ref().unwrap_err() {
         VoltaError::InvalidParameter(msg) => {
             assert!(
-                msg.contains("dimension 0"),
+                msg.message.contains("dimension 0"),
                 "Error should mention dimension 0"
             );
-            assert!(msg.contains("start"), "Error should mention start");
-            assert!(msg.contains("end"), "Error should mention end");
-            assert!(msg.contains('3'), "Error should include values");
-            assert!(msg.contains('2'), "Error should include values");
+            assert!(msg.message.contains("start"), "Error should mention start");
+            assert!(msg.message.contains("end"), "Error should mention end");
+            assert!(msg.message.contains('3'), "Error should include values");
+            assert!(msg.message.contains('2'), "Error should include values");
         }
         VoltaError::ShapeDataMismatch { .. }
         | VoltaError::DimensionOutOfBounds { .. }
@@ -362,11 +362,11 @@ fn test_shrink_empty_range() {
     match result.as_ref().unwrap_err() {
         VoltaError::InvalidParameter(msg) => {
             assert!(
-                msg.contains("dimension 0"),
+                msg.message.contains("dimension 0"),
                 "Error should mention dimension 0"
             );
             assert!(
-                msg.contains("zero-sized"),
+                msg.message.contains("zero-sized"),
                 "Error should mention zero-sized dimension"
             );
         }
@@ -399,7 +399,7 @@ fn test_shrink_both_empty_ranges() {
     match result.as_ref().unwrap_err() {
         VoltaError::InvalidParameter(msg) => {
             assert!(
-                msg.contains("zero-sized"),
+                msg.message.contains("zero-sized"),
                 "Error should mention zero-sized dimension"
             );
         }
@@ -1340,7 +1340,9 @@ fn test_try_new_data_length_mismatch_is_shape_data_mismatch() {
 }
 
 #[test]
-#[should_panic(expected = "Expand: Invalid parameter: shape [100000000, 2] has 200000000 elements")]
+#[should_panic(
+    expected = "Expand: Invalid parameter: Shape::from_dims: shape [100000000, 2] has 200000000 elements"
+)]
 fn test_expand_over_max_numel_panics() {
     let x = RawTensor::new(vec![1.0, 2.0], &[1, 2], false);
     let _ = x.expand(&[crate::shape::MAX_NUMEL, 2]);

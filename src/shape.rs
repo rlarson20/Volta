@@ -41,22 +41,30 @@ impl Shape {
     pub fn from_dims(dims: impl Into<Vec<usize>>) -> Result<Self> {
         let dims = dims.into();
         if dims.contains(&0) {
-            return Err(VoltaError::InvalidParameter(format!(
-                "shape {dims:?} has a zero dimension"
-            )));
+            return Err(VoltaError::invalid(
+                "Shape::from_dims",
+                Some("dims"),
+                format!("shape {dims:?} has a zero dimension"),
+            ));
         }
         let numel = dims
             .iter()
             .try_fold(1usize, |acc, &d| acc.checked_mul(d))
             .ok_or_else(|| {
-                VoltaError::InvalidParameter(format!(
-                    "shape {dims:?} overflows usize while computing element count"
-                ))
+                VoltaError::invalid(
+                    "Shape::from_dims",
+                    Some("dims"),
+                    format!("shape {dims:?} overflows usize while computing element count"),
+                )
             })?;
         if numel > MAX_NUMEL {
-            return Err(VoltaError::InvalidParameter(format!(
-                "shape {dims:?} has {numel} elements > {MAX_NUMEL} - check for memory issues"
-            )));
+            return Err(VoltaError::invalid(
+                "Shape::from_dims",
+                Some("dims"),
+                format!(
+                    "shape {dims:?} has {numel} elements > {MAX_NUMEL} - check for memory issues"
+                ),
+            ));
         }
         Ok(Self(dims))
     }

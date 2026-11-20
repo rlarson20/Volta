@@ -117,10 +117,12 @@ impl Muon {
         nesterov: bool,
         ns_steps: usize,
     ) -> crate::Result<Self> {
-        super::check_unique(&params)?;
-        super::check_leaves(&params)?;
-        super::check_non_negative("learning rate", lr)?;
-        super::check_non_negative("momentum", momentum)?;
+        /// The op named in errors.
+        const OP: &str = "Muon::new";
+        super::check_unique(OP, &params)?;
+        super::check_leaves(OP, &params)?;
+        super::check_non_negative(OP, "lr", "learning rate", lr)?;
+        super::check_non_negative(OP, "momentum", "momentum", momentum)?;
         let velocity = params.iter().map(|_| None).collect();
         Ok(Self {
             params,

@@ -40,17 +40,18 @@ pub enum VoltaError {
     #[error("Cannot broadcast shapes {0:?} and {1:?}")]
     BroadcastError(Vec<usize>, Vec<usize>),
 
-    /// A device operation failed or is unsupported; the message says which.
+    /// A device operation failed or is unsupported: the detail names the op and says why.
     #[error("Device error: {0}")]
-    DeviceError(String),
+    DeviceError(ErrorDetail),
 
     /// An underlying I/O operation failed.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
-    /// An argument is out of its valid range; the message names it.
+    /// An argument is out of its valid range: the detail names the op, the argument, and
+    /// what is wrong with it.
     #[error("Invalid parameter: {0}")]
-    InvalidParameter(String),
+    InvalidParameter(ErrorDetail),
 
     /// `backward` was requested on a tensor with more than one element.
     #[error(
@@ -65,9 +66,10 @@ pub enum VoltaError {
     #[error("Cannot start backward from a tensor that doesn't require grad")]
     NoGradRequired,
 
-    /// An operation failed for a reason that has no dedicated variant.
+    /// An operation failed for a reason that has no dedicated variant: the detail names
+    /// the op and says why.
     #[error("Operation failed: {0}")]
-    OpError(String),
+    OpError(ErrorDetail),
 
     /// A state-dict entry's shape differs from the parameter it would load into.
     /// `key` is the entry's name as the caller's state dict spells it (a container
@@ -127,7 +129,85 @@ pub enum VoltaError {
     },
 }
 
+/// The payload of [`VoltaError::InvalidParameter`], [`VoltaError::DeviceError`] and
+/// [`VoltaError::OpError`] (#377): which operation failed, which argument (if one is at
+/// fault), and why, so a caller can match the cause without parsing the message.
+///
+/// `#[non_exhaustive]`: read the fields, but only Volta builds one, and a new field is
+/// not a breaking change.
+///
+/// ```
+/// use volta::{ErrorDetail, RawTensor, VoltaError};
+///
+/// let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
+/// let err = x.try_reshape(&[3]).unwrap_err();
+/// let VoltaError::InvalidParameter(ErrorDetail { op, arg, .. }) = &err else {
+///     panic!("expected InvalidParameter, got {err}");
+/// };
+/// assert_eq!((*op, *arg), ("reshape", Some("shape")));
+/// ```
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErrorDetail {
+    /// The public operation that rejected the call, as a caller names it (`"reshape"`,
+    /// `"to_device"`, `"Conv2d"`, `"Adam::new"`, `"Shape::from_dims"`).
+    pub op: &'static str,
+    /// The argument at fault, as the operation's signature names it, if one is
+    /// (`Some("shape")`); `None` when the failure is not one argument's (no GPU).
+    pub arg: Option<&'static str>,
+    /// What is wrong, in words. It does not repeat `op`.
+    pub message: String,
+}
+
+impl std::fmt::Display for ErrorDetail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.op, self.message)
+    }
+}
+
 impl VoltaError {
+    /// [`VoltaError::InvalidParameter`] from its parts.
+    #[must_use]
+    pub(crate) fn invalid(
+        op: &'static str,
+        arg: impl Into<Option<&'static str>>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::InvalidParameter(ErrorDetail::new(op, arg, message))
+    }
+
+    /// [`VoltaError::DeviceError`] from its parts.
+    #[must_use]
+    pub(crate) fn device(
+        op: &'static str,
+        arg: impl Into<Option<&'static str>>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::DeviceError(ErrorDetail::new(op, arg, message))
+    }
+
+    /// The op, argument and message of an `InvalidParameter`, `DeviceError` or `OpError`;
+    /// `None` for the variants whose fields already say what went wrong.
+    #[must_use]
+    pub const fn detail(&self) -> Option<&ErrorDetail> {
+        match self {
+            Self::InvalidParameter(d) | Self::DeviceError(d) | Self::OpError(d) => Some(d),
+            // Listed, not `_`: a new variant is a compile error here.
+            Self::ShapeDataMismatch { .. }
+            | Self::DimensionOutOfBounds { .. }
+            | Self::DTypeMismatch { .. }
+            | Self::BroadcastError(..)
+            | Self::Io(_)
+            | Self::NotScalar { .. }
+            | Self::NoGradRequired
+            | Self::StateShapeMismatch { .. }
+            | Self::StateDataLength { .. }
+            | Self::StateKeyMismatch { .. }
+            | Self::StateKeyCollision { .. }
+            | Self::NotDifferentiable { .. } => None,
+        }
+    }
+
     /// Puts `prefix` (e.g. `"2."`) in front of the key of a state-dict error, so an
     /// error from a layer inside a container names the entry in the container's own
     /// state dict. Other variants pass through unchanged.
@@ -138,6 +218,22 @@ impl VoltaError {
             *key = format!("{prefix}{key}");
         }
         self
+    }
+}
+
+impl ErrorDetail {
+    /// A detail from its parts.
+    #[must_use]
+    pub(crate) fn new(
+        op: &'static str,
+        arg: impl Into<Option<&'static str>>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            op,
+            arg: arg.into(),
+            message: message.into(),
+        }
     }
 }
 
@@ -160,13 +256,56 @@ pub(crate) trait OrPanic<T> {
     fn or_panic(self, what: &str) -> T;
 }
 
-impl<T, E: std::fmt::Display> OrPanic<T> for std::result::Result<T, E> {
+impl<T> OrPanic<T> for std::result::Result<T, VoltaError> {
+    /// A detail error already names its op, so `what` is left out when it is that op
+    /// (`reshape: Invalid parameter: reshape: ..` would say it twice).
     #[track_caller]
     fn or_panic(self, what: &str) -> T {
         match self {
             Ok(v) => v,
-            Err(e) if what.is_empty() => panic!("{e}"),
+            Err(e) if what.is_empty() || e.detail().is_some_and(|d| d.op == what) => {
+                panic!("{e}")
+            }
             Err(e) => panic!("{what}: {e}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each detail variant displays its prefix, then `op: message` (#377).
+    #[test]
+    fn detail_variants_display_op_then_message() {
+        let cases = [
+            (
+                VoltaError::invalid("reshape", "shape", "bad"),
+                "Invalid parameter: reshape: bad",
+            ),
+            (
+                VoltaError::device("to_device", None, "no GPU"),
+                "Device error: to_device: no GPU",
+            ),
+            (
+                VoltaError::OpError(ErrorDetail::new("op", None, "failed")),
+                "Operation failed: op: failed",
+            ),
+        ];
+        for (err, want) in cases {
+            assert_eq!(err.to_string(), want);
+        }
+    }
+
+    /// `detail` reads the payload of the three detail variants and nothing else.
+    #[test]
+    fn detail_is_some_only_for_the_detail_variants() {
+        let err = VoltaError::invalid("pad", "padding", "too long");
+        let d = err.detail().expect("InvalidParameter has a detail");
+        assert_eq!(
+            (d.op, d.arg, d.message.as_str()),
+            ("pad", Some("padding"), "too long")
+        );
+        assert!(VoltaError::NoGradRequired.detail().is_none());
     }
 }

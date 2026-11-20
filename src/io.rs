@@ -154,8 +154,18 @@ impl TensorData {
     /// Whatever [`Self::validate`] returns; nothing is allocated before it passes.
     pub fn to_storage(&self, key: &str) -> crate::Result<Storage> {
         self.validate(key)?;
-        Storage::try_from_bytes(&self.data, self.dtype).map_err(|e| {
-            crate::VoltaError::InvalidParameter(format!("state dict entry '{key}': {e}"))
+        // `try_from_bytes` returns only `InvalidParameter`; name the entry in its message.
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "only InvalidParameter is rewrapped; any other error passes through unchanged"
+        )]
+        Storage::try_from_bytes(&self.data, self.dtype).map_err(|e| match e {
+            crate::VoltaError::InvalidParameter(d) => crate::VoltaError::invalid(
+                "TensorData::to_storage",
+                Some("data"),
+                format!("state dict entry '{key}': {}", d.message),
+            ),
+            other => other,
         })
     }
 
@@ -212,9 +222,11 @@ fn validate_entry(key: &str, data: &[u8], shape: &[usize], dtype: DType) -> crat
     if dtype == DType::Bool
         && let Some((i, b)) = data.iter().enumerate().find(|&(_, &b)| b > 1)
     {
-        return Err(crate::VoltaError::InvalidParameter(format!(
-            "state dict entry '{key}': bool element {i} is the byte {b}, not 0 or 1"
-        )));
+        return Err(crate::VoltaError::invalid(
+            "TensorData::validate",
+            Some("data"),
+            format!("state dict entry '{key}': bool element {i} is the byte {b}, not 0 or 1"),
+        ));
     }
     Ok(())
 }
