@@ -104,6 +104,17 @@ next)
 	parent=${stack[$((i - 1))]}
 	[[ -z $(git status --porcelain --untracked-files=no) ]] || die "the working tree has changes; commit or stash them first"
 
+	# A rebase re-signs every commit it replays. Check signing works first, so a bad passphrase
+	# fails here instead of leaving a half-done rebase.
+	if [[ $(git config --bool commit.gpgsign || true) == true ]]; then
+		fmt=$(git config gpg.format || echo openpgp)
+		if [[ $fmt == openpgp ]]; then
+			key=$(git config user.signingkey || true)
+			echo restack-sign-check | "$(git config gpg.program || echo gpg)" ${key:+-u "$key"} --clearsign >/dev/null ||
+				die "commit.gpgsign is on and gpg could not sign (passphrase? pinentry?); fix that and run next again"
+		fi
+	fi
+
 	git fetch --quiet origin "$base" "$child"
 	old=$(git rev-parse "refs/restack/tip/$parent")
 	child_tip=$(git rev-parse "refs/remotes/origin/$child")
@@ -114,8 +125,12 @@ next)
 	git log --oneline "$old..$child_tip"
 	git switch --quiet -C "$child" "$child_tip"
 	if ! git rebase --onto "refs/remotes/origin/$base" "$old"; then
-		echo "restack: the rebase stopped on a conflict. Resolve it and run 'git rebase --continue'," >&2
-		echo "  then 'git push --force-with-lease=$child:$child_tip origin $child', or 'git rebase --abort'." >&2
+		# Never leave the repo mid-rebase: undo it, and leave the branch at its remote tip.
+		git rebase --abort 2>/dev/null || true
+		git switch --quiet -C "$child" "$child_tip"
+		echo "restack: the rebase of $child failed (a conflict, or a commit that could not be written or signed) and was aborted; nothing was pushed." >&2
+		echo "  To do it by hand: git switch $child && git rebase --onto origin/$base $(git rev-parse --short "$old")" >&2
+		echo "  then: git push --force-with-lease=$child:$child_tip origin $child && gh pr edit <PR> --base $base" >&2
 		exit 1
 	fi
 	git push --quiet --force-with-lease="$child:$child_tip" origin "$child"

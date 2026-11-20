@@ -97,6 +97,16 @@ out=$(bash "$script" next)
 [[ $out == *"squash-merge the PR for a"* ]] || fail "before any merge: $out"
 
 squash_merge a
+
+# Signing is on and gpg fails: next stops before touching anything.
+printf '#!/bin/sh\nexit 2\n' >"$tmp/bin/badgpg" && chmod +x "$tmp/bin/badgpg"
+git config commit.gpgsign true && git config gpg.program "$tmp/bin/badgpg"
+before=$(git rev-parse origin/b)
+bash "$script" next >/dev/null 2>&1 && fail "next should refuse when signing fails"
+[[ $(git rev-parse origin/b) == "$before" ]] || fail "b was pushed despite the signing failure"
+git config --unset commit.gpgsign && git config --unset gpg.program
+git switch --quiet improvements
+
 git show-ref --verify --quiet refs/remotes/origin/a && fail "origin/a should be pruned"
 bash "$script" next >/dev/null
 # b now holds exactly its own commit on top of the squashed a.
@@ -108,8 +118,18 @@ bash "$script" next >/dev/null
 out=$(bash "$script" next)
 [[ $out == *"squash-merge the PR for b"* ]] || fail "waiting on b: $out"
 
+# A conflict: improvements changes c1's file before b merges. next aborts the rebase,
+# leaves no rebase in progress, pushes nothing, then succeeds once the conflict is gone.
+git switch --quiet improvements && git pull --quiet --ff-only origin improvements
+echo conflicting >c1 && git add c1 && git commit --quiet -m "conflict" && git push --quiet origin improvements
 squash_merge b
-bash "$script" next >/dev/null
+before=$(git rev-parse origin/c)
+bash "$script" next >/dev/null 2>&1 && fail "next should fail on the conflict"
+[[ -d $(git rev-parse --git-path rebase-merge) || -d $(git rev-parse --git-path rebase-apply) ]] && fail "left mid-rebase"
+git fetch --quiet origin
+[[ $(git rev-parse origin/c) == "$before" ]] || fail "c was pushed despite the conflict"
+git switch --quiet improvements && git rm --quiet c1 && git commit --quiet -m "drop conflict" && git push --quiet origin improvements
+bash "$script" next >/dev/null 2>&1
 [[ $(git rev-list --count origin/improvements..origin/c) == 2 ]] || fail "c should carry 2 commits"
 # The rebased c has the original stack top's files, plus only what improvements added.
 git diff --quiet "refs/restack/tip/c" origin/c -- . ':!scripts' || fail "c's content changed"
