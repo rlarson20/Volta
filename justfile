@@ -55,14 +55,14 @@ sanitizer_nightly := "nightly-2026-11-01"
 # under Miri that is hours, so they are skipped (#213). They run in every other lane.
 # Miri (undefined behavior, memory still allocated at exit) over CPU-only library tests
 miri filters="autograd:: ops::matmul spec:: dtype:: storage:: io::":
-	MIRIFLAGS="-Zmiri-disable-isolation" cargo +{{sanitizer_nightly}} miri test --no-default-features --lib -- {{filters}} --skip long_contraction
+	MIRIFLAGS="-Zmiri-disable-isolation" rustup run {{sanitizer_nightly}} cargo miri test --no-default-features --lib -- {{filters}} --skip long_contraction
 
 # `asan` covers the CPU-only library and integration tests, Linux x86_64 only. Doctests and
 # the trybuild `compile_fail` test (it runs rustc itself, which the sanitizer flags break)
 # are left out. LeakSanitizer is what catches an `Rc` cycle in the graph.
 # AddressSanitizer and LeakSanitizer over the CPU-only tests (#257)
 asan:
-	RUSTFLAGS="-Zsanitizer=address" ASAN_OPTIONS=detect_leaks=1 cargo +{{sanitizer_nightly}} test -Zbuild-std --target x86_64-unknown-linux-gnu --no-default-features --lib --tests -- --skip compile_fail
+	RUSTFLAGS="-Zsanitizer=address" ASAN_OPTIONS=detect_leaks=1 rustup run {{sanitizer_nightly}} cargo test -Zbuild-std --target x86_64-unknown-linux-gnu --no-default-features --lib --tests -- --skip compile_fail
 
 # Run coverage with llvm-cov and open HTML report
 coverage:
@@ -364,6 +364,21 @@ prs:
 		echo
 		gh pr checks "$b" || true
 	fi
+
+# Resolve every direct dependency at its declared lower bound, then build (#443), so a bound
+# in Cargo.toml that can never resolve (as `log = "0.4"` did under wgpu's `^0.4.29`) fails
+# here instead of going unnoticed. Only the resolve needs the nightly; the check runs on
+# stable. The lockfile is restored afterwards, so the tree is left as it was.
+# Build with every direct dependency at its minimum version (both feature sets)
+minimal-versions:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	cp Cargo.lock Cargo.lock.minimal-versions-backup
+	trap 'mv Cargo.lock.minimal-versions-backup Cargo.lock' EXIT
+	rustup toolchain install {{sanitizer_nightly}} --profile minimal
+	rustup run {{sanitizer_nightly}} cargo update -Zdirect-minimal-versions
+	cargo check --all-targets --no-default-features
+	cargo check --all-targets {{full}}
 
 # Search issues, open and closed, by title and body: run it before filing (`just issues "sum sequential"`)
 issues +terms:
