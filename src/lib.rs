@@ -117,7 +117,7 @@ pub use device_policy::{
     take_fallback_events, with_device_policy,
 };
 pub use dtype::{DType, DTypePolicy, DTypePolicyGuard, dtype_policy, with_dtype_policy};
-pub use error::{Result, VoltaError};
+pub use error::{ErrorDetail, Result, VoltaError};
 pub use shape::{Axis, MAX_NUMEL, Shape, Strides};
 pub use tensor::{
     DataLoader, PadValue, RawTensor, Tensor, bce_loss, bce_with_logits_loss, check_gradients,

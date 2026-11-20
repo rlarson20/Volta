@@ -696,12 +696,12 @@ fn test_try_pad_with_reports_errors_instead_of_panicking() {
     let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
     let rank = RawTensor::try_pad_with(&x, &[(1, 1)], PadValue::ZERO);
     assert!(
-        matches!(&rank, Err(VoltaError::InvalidParameter(m)) if m.contains("must match tensor rank")),
+        matches!(&rank, Err(VoltaError::InvalidParameter(m)) if m.message.contains("must match tensor rank")),
         "{rank:?}"
     );
     let huge = RawTensor::try_pad_with(&x, &[(50_000, 50_000), (50_000, 50_000)], PadValue::ZERO);
     assert!(
-        matches!(&huge, Err(VoltaError::InvalidParameter(m)) if m.contains("memory issues")),
+        matches!(&huge, Err(VoltaError::InvalidParameter(m)) if m.message.contains("memory issues")),
         "{huge:?}"
     );
     assert!(RawTensor::try_pad_with(&x, &[(1, 1), (0, 0)], PadValue::ZERO).is_ok());

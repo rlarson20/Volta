@@ -52,7 +52,7 @@ fn tensors_up_to_the_binding_limit() {
         let x = RawTensor::new(vec![1.0; repro], &[repro], false);
         match x.try_to_device(gpu_device()) {
             Err(VoltaError::DeviceError(msg)) => {
-                assert!(msg.contains("storage binding limit"), "{msg}");
+                assert!(msg.message.contains("storage binding limit"), "{msg}");
             }
             other => panic!("expected a DeviceError, got {:?}", other.map(|t| t.shape())),
         }
@@ -80,7 +80,7 @@ fn try_to_device_reports_errors() {
     }
     let x = RawTensor::new(vec![1.0, 2.0], &[2], false).to_dtype(DType::F64);
     match x.try_to_device(gpu_device()) {
-        Err(VoltaError::DeviceError(msg)) => assert!(msg.contains("not f64"), "{msg}"),
+        Err(VoltaError::DeviceError(msg)) => assert!(msg.message.contains("not f64"), "{msg}"),
         other => panic!("expected a DeviceError, got {:?}", other.map(|t| t.shape())),
     }
     let back = RawTensor::new(vec![1.0, 2.0], &[2], false)

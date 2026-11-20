@@ -143,47 +143,79 @@ fn grad_scaler_refuses_f16_gradients() {
 
 /// A3's rule for every optimizer: a negative (or NaN) hyperparameter, or an Adam beta
 /// outside `[0, 1)`, is refused by `try_new` with PyTorch's message, before any state is
-/// allocated; valid ones build.
+/// allocated; valid ones build. The error names the optimizer and the argument (#377).
 #[test]
 fn optimizers_validate_hyperparameters_like_torch() {
     use volta::VoltaError;
     use volta::nn::{Adam, Muon};
     let p = || vec![RawTensor::new(vec![1.0], &[1], true)];
     let msg = |r: volta::Result<()>| match r {
-        Err(VoltaError::InvalidParameter(m)) => m,
+        Err(VoltaError::InvalidParameter(d)) => (d.op, d.arg, d.message),
         other => panic!("expected InvalidParameter, got {other:?}"),
     };
     assert_eq!(
         msg(SGD::try_new(p(), -0.1, 0.0, 0.0).map(drop)),
-        "Invalid learning rate value: -0.1"
+        (
+            "SGD::new",
+            Some("lr"),
+            "Invalid learning rate value: -0.1".to_string()
+        )
     );
     assert_eq!(
         msg(SGD::try_new(p(), 0.1, -0.5, 0.0).map(drop)),
-        "Invalid momentum value: -0.5"
+        (
+            "SGD::new",
+            Some("momentum"),
+            "Invalid momentum value: -0.5".to_string()
+        )
     );
     assert_eq!(
         msg(SGD::try_new(p(), 0.1, f32::NAN, 0.0).map(drop)),
-        "Invalid momentum value: NaN"
+        (
+            "SGD::new",
+            Some("momentum"),
+            "Invalid momentum value: NaN".to_string()
+        )
     );
     assert_eq!(
         msg(SGD::try_new(p(), 0.1, 0.0, -1.0).map(drop)),
-        "Invalid weight_decay value: -1"
+        (
+            "SGD::new",
+            Some("weight_decay"),
+            "Invalid weight_decay value: -1".to_string()
+        )
     );
     assert_eq!(
         msg(Adam::try_new(p(), 0.1, (1.0, 0.999), 1e-8, 0.0).map(drop)),
-        "Invalid beta parameter at index 0: 1"
+        (
+            "Adam::new",
+            Some("betas"),
+            "Invalid beta parameter at index 0: 1".to_string()
+        )
     );
     assert_eq!(
         msg(Adam::try_new(p(), 0.1, (0.9, -0.1), 1e-8, 0.0).map(drop)),
-        "Invalid beta parameter at index 1: -0.1"
+        (
+            "Adam::new",
+            Some("betas"),
+            "Invalid beta parameter at index 1: -0.1".to_string()
+        )
     );
     assert_eq!(
         msg(Adam::try_new(p(), 0.1, (0.9, 0.999), -1e-8, 0.0).map(drop)),
-        "Invalid epsilon value: -0.00000001"
+        (
+            "Adam::new",
+            Some("eps"),
+            "Invalid epsilon value: -0.00000001".to_string()
+        )
     );
     assert_eq!(
         msg(Muon::try_new(p(), 0.02, -0.95, true, 5).map(drop)),
-        "Invalid momentum value: -0.95"
+        (
+            "Muon::new",
+            Some("momentum"),
+            "Invalid momentum value: -0.95".to_string()
+        )
     );
     assert!(SGD::try_new(p(), 0.1, 0.9, 1e-4).is_ok());
     assert!(Adam::try_new(p(), 1e-3, (0.9, 0.999), 1e-8, 0.0).is_ok());

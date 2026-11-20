@@ -9,12 +9,13 @@ use crate::error::{Result, VoltaError};
 use crate::shape::{Axis, Shape};
 
 /// Reads the four dims of an NCHW-style shape, or says which tensor was not 4D.
-fn dims4(shape: &Shape, what: &str) -> Result<[usize; 4]> {
+fn dims4(op: &'static str, shape: &Shape, what: &'static str) -> Result<[usize; 4]> {
     if shape.rank() != 4 {
-        return Err(VoltaError::InvalidParameter(format!(
-            "{what} must be 4D, got shape {:?}",
-            shape.truncate_rank()
-        )));
+        return Err(VoltaError::invalid(
+            op,
+            what,
+            format!("{what} must be 4D, got shape {:?}", shape.truncate_rank()),
+        ));
     }
     Ok([
         shape.dim(Axis(0))?,
@@ -25,18 +26,24 @@ fn dims4(shape: &Shape, what: &str) -> Result<[usize; 4]> {
 }
 
 /// Rejects a zero stride in either direction.
-fn check_stride(stride: (usize, usize)) -> Result<()> {
+fn check_stride(op: &'static str, stride: (usize, usize)) -> Result<()> {
     if stride.0 == 0 || stride.1 == 0 {
-        return Err(VoltaError::InvalidParameter(format!(
-            "stride must be non-zero, got {stride:?}"
-        )));
+        return Err(VoltaError::invalid(
+            op,
+            "stride",
+            format!("stride must be non-zero, got {stride:?}"),
+        ));
     }
     Ok(())
 }
 
 /// The error for a geometry whose intermediate extent overflows `usize`.
-fn overflow(what: &str, axis: &str, detail: &str) -> VoltaError {
-    VoltaError::InvalidParameter(format!("{what} {axis} overflows usize ({detail})"))
+fn overflow(op: &'static str, what: &str, axis: &str, detail: &str) -> VoltaError {
+    VoltaError::invalid(
+        op,
+        "padding",
+        format!("{what} {axis} overflows usize ({detail})"),
+    )
 }
 
 /// Output extent of a sliding window: `(padded - kernel) / stride + 1`.
@@ -44,22 +51,34 @@ fn overflow(what: &str, axis: &str, detail: &str) -> VoltaError {
 /// `padded = input + 2 * pad` is checked, so a huge padding is an
 /// `InvalidParameter` in every profile rather than a debug panic or a release
 /// wrap to a small, plausible extent.
-fn window_out(axis: &str, input: usize, kernel: usize, stride: usize, pad: usize) -> Result<usize> {
+fn window_out(
+    op: &'static str,
+    axis: &str,
+    input: usize,
+    kernel: usize,
+    stride: usize,
+    pad: usize,
+) -> Result<usize> {
     let padded = pad
         .checked_mul(2)
         .and_then(|p| input.checked_add(p))
         .ok_or_else(|| {
             overflow(
+                op,
                 "padded input",
                 axis,
                 &format!("input {input}, padding {pad}"),
             )
         })?;
     if kernel > padded {
-        return Err(VoltaError::InvalidParameter(format!(
-            "kernel {axis} {kernel} is larger than padded input {axis} {padded} \
-             (input {input}, padding {pad})"
-        )));
+        return Err(VoltaError::invalid(
+            op,
+            "input",
+            format!(
+                "kernel {axis} {kernel} is larger than padded input {axis} {padded} \
+                 (input {input}, padding {pad})"
+            ),
+        ));
     }
     Ok((padded - kernel) / stride + 1)
 }
@@ -103,18 +122,24 @@ impl Conv2dSpec {
         stride: (usize, usize),
         padding: (usize, usize),
     ) -> Result<Self> {
-        let [batch, in_ch, in_h, in_w] = dims4(input, "input")?;
-        let [out_ch, w_in_ch, kernel_h, kernel_w] = dims4(weight, "weight")?;
+        /// The op named in errors.
+        const OP: &str = "Conv2d";
+        let [batch, in_ch, in_h, in_w] = dims4(OP, input, "input")?;
+        let [out_ch, w_in_ch, kernel_h, kernel_w] = dims4(OP, weight, "weight")?;
         if w_in_ch != in_ch {
-            return Err(VoltaError::InvalidParameter(format!(
-                "channel mismatch: input has {in_ch} channels but weight expects {w_in_ch}"
-            )));
+            return Err(VoltaError::invalid(
+                OP,
+                "input",
+                format!(
+                    "channel mismatch: input has {in_ch} channels but weight expects {w_in_ch}"
+                ),
+            ));
         }
-        check_stride(stride)?;
+        check_stride(OP, stride)?;
         let (stride_h, stride_w) = stride;
         let (pad_h, pad_w) = padding;
-        let out_h = window_out("height", in_h, kernel_h, stride_h, pad_h)?;
-        let out_w = window_out("width", in_w, kernel_w, stride_w, pad_w)?;
+        let out_h = window_out(OP, "height", in_h, kernel_h, stride_h, pad_h)?;
+        let out_w = window_out(OP, "width", in_w, kernel_w, stride_w, pad_w)?;
         Ok(Self {
             batch,
             in_ch,
@@ -208,18 +233,24 @@ impl ConvTranspose2dSpec {
         stride: (usize, usize),
         padding: (usize, usize),
     ) -> Result<Self> {
-        let [batch, in_ch, in_h, in_w] = dims4(input, "input")?;
-        let [w_in_ch, out_ch, kernel_h, kernel_w] = dims4(weight, "weight")?;
+        /// The op named in errors.
+        const OP: &str = "ConvTranspose2d";
+        let [batch, in_ch, in_h, in_w] = dims4(OP, input, "input")?;
+        let [w_in_ch, out_ch, kernel_h, kernel_w] = dims4(OP, weight, "weight")?;
         if w_in_ch != in_ch {
-            return Err(VoltaError::InvalidParameter(format!(
-                "channel mismatch: input has {in_ch} channels but weight expects {w_in_ch}"
-            )));
+            return Err(VoltaError::invalid(
+                OP,
+                "input",
+                format!(
+                    "channel mismatch: input has {in_ch} channels but weight expects {w_in_ch}"
+                ),
+            ));
         }
-        check_stride(stride)?;
+        check_stride(OP, stride)?;
         let (stride_h, stride_w) = stride;
         let (pad_h, pad_w) = padding;
-        let out_h = transpose_out("height", in_h, kernel_h, stride_h, pad_h)?;
-        let out_w = transpose_out("width", in_w, kernel_w, stride_w, pad_w)?;
+        let out_h = transpose_out(OP, "height", in_h, kernel_h, stride_h, pad_h)?;
+        let out_w = transpose_out(OP, "width", in_w, kernel_w, stride_w, pad_w)?;
         Ok(Self {
             batch,
             in_ch,
@@ -248,6 +279,7 @@ impl ConvTranspose2dSpec {
 /// Every step is checked: a huge stride, kernel or padding is an
 /// `InvalidParameter`, never a debug panic or a release wrap.
 fn transpose_out(
+    op: &'static str,
     axis: &str,
     input: usize,
     kernel: usize,
@@ -259,15 +291,19 @@ fn transpose_out(
         .checked_sub(1)
         .and_then(|n| n.checked_mul(stride))
         .and_then(|n| n.checked_add(kernel))
-        .ok_or_else(|| overflow("transposed conv output", axis, &detail()))?;
+        .ok_or_else(|| overflow(op, "transposed conv output", axis, &detail()))?;
     // A padding whose double overflows is larger than any `full`, so the
     // output would be non-positive: report it as that, not as an overflow.
     let trim = pad.saturating_mul(2);
     if full <= trim {
-        return Err(VoltaError::InvalidParameter(format!(
-            "transposed conv output {axis} would be non-positive \
-             (input {input}, kernel {kernel}, stride {stride}, padding {pad})"
-        )));
+        return Err(VoltaError::invalid(
+            op,
+            "input",
+            format!(
+                "output {axis} would be non-positive \
+                 (input {input}, kernel {kernel}, stride {stride}, padding {pad})"
+            ),
+        ));
     }
     Ok(full - 2 * pad)
 }
@@ -312,18 +348,22 @@ impl Window2dSpec {
         stride: (usize, usize),
         padding: (usize, usize),
     ) -> Result<Self> {
-        let [batch, channels, in_h, in_w] = dims4(input, "input")?;
+        /// The op named in errors.
+        const OP: &str = "MaxPool2d";
+        let [batch, channels, in_h, in_w] = dims4(OP, input, "input")?;
         if kernel.0 == 0 || kernel.1 == 0 {
-            return Err(VoltaError::InvalidParameter(format!(
-                "kernel must be positive, got {kernel:?}"
-            )));
+            return Err(VoltaError::invalid(
+                OP,
+                "kernel_size",
+                format!("kernel must be positive, got {kernel:?}"),
+            ));
         }
-        check_stride(stride)?;
+        check_stride(OP, stride)?;
         let (kernel_h, kernel_w) = kernel;
         let (stride_h, stride_w) = stride;
         let (pad_h, pad_w) = padding;
-        let out_h = window_out("height", in_h, kernel_h, stride_h, pad_h)?;
-        let out_w = window_out("width", in_w, kernel_w, stride_w, pad_w)?;
+        let out_h = window_out(OP, "height", in_h, kernel_h, stride_h, pad_h)?;
+        let out_w = window_out(OP, "width", in_w, kernel_w, stride_w, pad_w)?;
         Ok(Self {
             batch,
             channels,
@@ -384,18 +424,26 @@ impl MatmulSpec {
     /// inner dims, and an output (or an operand broadcast to the output batch) that is not a
     /// valid [`Shape`] (more than [`crate::shape::MAX_NUMEL`] elements).
     pub(crate) fn new(a: &Shape, b: &Shape) -> Result<Self> {
+        /// The op named in errors.
+        const OP: &str = "matmul";
         let (a_dims, b_dims) = (a.truncate_rank(), b.truncate_rank());
         let (rank_a, rank_b) = (a_dims.len(), b_dims.len());
         if rank_a < 2 || rank_b < 2 {
-            return Err(VoltaError::InvalidParameter(format!(
-                "matmul needs rank >= 2 operands, got {a_dims:?} @ {b_dims:?}"
-            )));
+            return Err(VoltaError::invalid(
+                OP,
+                None,
+                format!("needs rank >= 2 operands, got {a_dims:?} @ {b_dims:?}"),
+            ));
         }
         if rank_a != rank_b {
-            return Err(VoltaError::InvalidParameter(format!(
-                "matmul operands must have equal rank, got {a_dims:?} @ {b_dims:?} \
+            return Err(VoltaError::invalid(
+                OP,
+                None,
+                format!(
+                    "operands must have equal rank, got {a_dims:?} @ {b_dims:?} \
                  (rank {rank_a} vs {rank_b})"
-            )));
+                ),
+            ));
         }
         let (a_batch, a_mat) = a_dims.split_at(rank_a - 2);
         let (b_batch, b_mat) = b_dims.split_at(rank_b - 2);
@@ -403,9 +451,11 @@ impl MatmulSpec {
             unreachable!("split_at(rank - 2) leaves exactly two trailing dims");
         };
         if k != k2 {
-            return Err(VoltaError::InvalidParameter(format!(
-                "matmul dimension mismatch: {a_dims:?} @ {b_dims:?} (inner dims {k} vs {k2})"
-            )));
+            return Err(VoltaError::invalid(
+                OP,
+                None,
+                format!("dimension mismatch: {a_dims:?} @ {b_dims:?} (inner dims {k} vs {k2})"),
+            ));
         }
         let out_batch = a_batch
             .iter()
@@ -414,9 +464,11 @@ impl MatmulSpec {
                 (x, y) if x == y => Ok(x),
                 (1, y) => Ok(y),
                 (x, 1) => Ok(x),
-                _ => Err(VoltaError::InvalidParameter(format!(
-                    "matmul batch dims {a_batch:?} and {b_batch:?} do not broadcast"
-                ))),
+                _ => Err(VoltaError::invalid(
+                    OP,
+                    None,
+                    format!("batch dims {a_batch:?} and {b_batch:?} do not broadcast"),
+                )),
             })
             .collect::<Result<Vec<usize>>>()?;
         // Validate every buffer the forward allocates (the output, and the operands broadcast to
@@ -763,7 +815,14 @@ mod tests {
     #[test]
     fn transpose_rejects_kernel_that_overflows_the_output() {
         // (2 - 1) * usize::MAX + 1 overflows in the add, not the multiply.
-        let msg = err_text(transpose_out("width", 2, 1, usize::MAX, 0));
+        let msg = err_text(transpose_out(
+            "ConvTranspose2d",
+            "width",
+            2,
+            1,
+            usize::MAX,
+            0,
+        ));
         assert!(
             msg.contains("transposed conv output width overflows usize"),
             "{msg}"

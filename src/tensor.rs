@@ -824,7 +824,11 @@ impl RawTensor {
     pub fn try_randn(shape: &[usize]) -> Result<Tensor> {
         let size = Self::checked_numel(shape)?;
         let normal = Normal::new(0.0, 1.0).map_err(|e| {
-            VoltaError::InvalidParameter(format!("Invalid normal distribution: {e}"))
+            VoltaError::invalid(
+                "randn",
+                Some("shape"),
+                format!("invalid normal distribution: {e}"),
+            )
         })?;
         let data: Vec<f32> = with_rng(|rng| (0..size).map(|_| normal.sample(rng)).collect());
 
@@ -886,9 +890,11 @@ impl RawTensor {
             [n] => (n, 1),
             [fan_in, fan_out] => (fan_in, fan_out),
             _ => {
-                return Err(VoltaError::InvalidParameter(format!(
-                    "xavier_uniform expects a rank-1 or rank-2 shape, got {shape:?}"
-                )));
+                return Err(VoltaError::invalid(
+                    "xavier_uniform",
+                    Some("shape"),
+                    format!("expects a rank-1 or rank-2 shape, got {shape:?}"),
+                ));
             }
         };
         let size = Self::checked_numel(shape)?;
@@ -926,8 +932,10 @@ impl RawTensor {
     /// [`Self::try_zeros`]
     pub fn try_he_initialization(shape: &[usize]) -> Result<Tensor> {
         if shape.is_empty() {
-            return Err(VoltaError::InvalidParameter(
-                "He initialization requires at least one dimension".to_string(),
+            return Err(VoltaError::invalid(
+                "he_initialization",
+                Some("shape"),
+                "requires at least one dimension".to_string(),
             ));
         }
         // After this, every dimension is non-zero, so `fan_in` below is positive.
@@ -940,8 +948,13 @@ impl RawTensor {
 
         let std_val: f32 = 2.0 / fan_in as f32;
         let std = std_val.sqrt();
-        let normal = Normal::new(0.0, std)
-            .map_err(|e| VoltaError::InvalidParameter(format!("Invalid He std: {e}")))?;
+        let normal = Normal::new(0.0, std).map_err(|e| {
+            VoltaError::invalid(
+                "he_initialization",
+                Some("shape"),
+                format!("invalid std: {e}"),
+            )
+        })?;
         let data: Vec<f32> = with_rng(|rng| (0..size).map(|_| normal.sample(rng)).collect());
 
         Self::try_new(data, shape, false)
@@ -1534,9 +1547,11 @@ impl RawTensor {
             && let Some(real) = Device::gpu()
             && real != device
         {
-            return Err(VoltaError::DeviceError(format!(
-                "to_device({device}): no such GPU; the available GPU is {real}"
-            )));
+            return Err(VoltaError::device(
+                "to_device",
+                Some("device"),
+                format!("no such GPU {device}; the available GPU is {real}"),
+            ));
         }
 
         let (data, shape, source) = {
@@ -2515,42 +2530,54 @@ impl DataLoader {
         shuffle: bool,
     ) -> Result<Self> {
         if batch_size == 0 {
-            return Err(VoltaError::InvalidParameter(
-                "DataLoader: batch_size must be at least 1".to_string(),
+            return Err(VoltaError::invalid(
+                "DataLoader::new",
+                Some("batch_size"),
+                "batch_size must be at least 1",
             ));
         }
         #[expect(
             clippy::wildcard_enum_match_arm,
             reason = "Shape::from_dims returns only InvalidParameter; any other error passes through unchanged"
         )]
-        let numel = |name: &str, dims: &[usize]| {
+        let numel = |name: &'static str, dims: &[usize]| {
             Shape::from_dims(dims.to_vec())
                 .map(|s| s.numel())
                 .map_err(|e| match e {
-                    VoltaError::InvalidParameter(m) => {
-                        VoltaError::InvalidParameter(format!("DataLoader {name}: {m}"))
-                    }
+                    VoltaError::InvalidParameter(d) => VoltaError::invalid(
+                        "DataLoader::new",
+                        name,
+                        format!("{name}: {}", d.message),
+                    ),
                     other => other,
                 })
         };
         let sample_size = numel("data_shape", data_shape)?;
         let target_size = numel("target_shape", target_shape)?;
         if !data.len().is_multiple_of(sample_size) {
-            return Err(VoltaError::InvalidParameter(format!(
-                "DataLoader: {} data values are not a whole number of samples of shape \
+            return Err(VoltaError::invalid(
+                "DataLoader::new",
+                Some("data"),
+                format!(
+                    "{} data values are not a whole number of samples of shape \
                  {data_shape:?} ({sample_size} values each)",
-                data.len()
-            )));
+                    data.len()
+                ),
+            ));
         }
         let num_samples = data.len() / sample_size;
         let expected_targets = num_samples.checked_mul(target_size);
         if expected_targets != Some(targets.len()) {
-            return Err(VoltaError::InvalidParameter(format!(
-                "DataLoader: {num_samples} samples of shape {data_shape:?} need {} target values of shape {target_shape:?}, got {}",
-                expected_targets
-                    .map_or_else(|| "more than usize::MAX".to_string(), |n| n.to_string()),
-                targets.len()
-            )));
+            return Err(VoltaError::invalid(
+                "DataLoader::new",
+                Some("targets"),
+                format!(
+                    "{num_samples} samples of shape {data_shape:?} need {} target values of shape {target_shape:?}, got {}",
+                    expected_targets
+                        .map_or_else(|| "more than usize::MAX".to_string(), |n| n.to_string()),
+                    targets.len()
+                ),
+            ));
         }
         let mut indices: Vec<usize> = (0..num_samples).collect();
 
@@ -3095,7 +3122,7 @@ mod tensor_tests {
     /// Rank 3 has no `[in, out]` reading. It used to default `fan_out` to the second dim
     /// and fail later as a data/shape mismatch; it now fails up front.
     #[test]
-    #[should_panic(expected = "xavier_uniform expects a rank-1 or rank-2 shape, got [2, 3, 4]")]
+    #[should_panic(expected = "xavier_uniform: expects a rank-1 or rank-2 shape, got [2, 3, 4]")]
     fn xavier_uniform_rejects_rank_three() {
         let _ = RawTensor::xavier_uniform(&[2, 3, 4]);
     }
