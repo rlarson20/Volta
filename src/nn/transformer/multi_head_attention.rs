@@ -162,8 +162,9 @@ impl MultiHeadAttention {
         for (name, shape) in [("query", &q_shape), ("key", &k_shape), ("value", &v_shape)] {
             assert!(
                 shape.rank() == 3 && shape.dim_at(2) == self.embed_dim,
-                "{name} must be [batch, seq_len, {}], got {shape:?}",
-                self.embed_dim
+                "MultiHeadAttention: {name} must be [batch, seq_len, {}], got {:?}",
+                self.embed_dim,
+                shape.truncate_rank()
             );
         }
         let (batch_size, q_len) = (q_shape.dim_at(0), q_shape.dim_at(1));

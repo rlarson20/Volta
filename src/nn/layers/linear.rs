@@ -145,6 +145,13 @@ impl Linear {
     #[must_use]
     #[track_caller]
     pub fn forward(&self, x: &Tensor) -> Tensor {
+        let [in_f, out_f] = self.weight.borrow().shape.fixed::<2>();
+        let x_shape = x.borrow().shape.clone();
+        assert!(
+            x_shape.rank() >= 1 && x_shape.dim_at(x_shape.rank() - 1) == in_f,
+            "Linear({in_f} -> {out_f}): expected input [.., {in_f}], got {:?}",
+            x_shape.truncate_rank()
+        );
         // One low-precision op under `amp::autocast`: input, weight and bias are cast
         // together, so the bias add stays in the low dtype (PyTorch's `linear`).
         let (x, weight, bias) = crate::amp::lower_layer(x, &self.weight, self.bias.as_ref());

@@ -159,18 +159,22 @@ impl LayerNorm {
         let norm_rank = self.normalized_shape.len();
         assert!(
             input_rank >= norm_rank,
-            "LayerNorm: input rank ({input_rank}) must be >= normalized_shape rank ({norm_rank})"
+            "LayerNorm({:?}): input rank ({input_rank}) must be >= normalized_shape rank ({norm_rank})",
+            self.normalized_shape
         );
 
         for (i, &expected_size) in self.normalized_shape.iter().enumerate() {
             let actual_size = input_shape.dim_at(input_rank - norm_rank + i);
-            assert_eq!(
-                actual_size,
-                expected_size,
-                "LayerNorm: dimension {} mismatch: expected {}, got {}",
-                input_rank - norm_rank + i,
-                expected_size,
-                actual_size
+            assert!(
+                actual_size == expected_size,
+                "LayerNorm({:?}): expected input [.., {}], got {:?}",
+                self.normalized_shape,
+                self.normalized_shape
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                input_shape.truncate_rank()
             );
         }
 

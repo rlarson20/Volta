@@ -44,6 +44,7 @@ Decide by where an argument comes from (DECISIONS.md, "Panic inside the program,
 - **Both forms** only for those boundary arguments. Write the `try_` form, and make the panicking form `#[track_caller]` plus `try_x(..).or_panic("x")` (`crate::error::OrPanic`). Do not add a `try_` twin to an op just for symmetry.
 - **Validate before you allocate.** Run `Shape::from_dims` (or `RawTensor::checked_numel`) on a caller's shape before `product()`, `vec![..; n]`, or any buffer: an overflowing product or an oversized allocation is not an error you can catch afterwards.
 - A new error that names a state-dict entry carries its `key`, the full key in the loaded state dict (`LoadPlan` builds it with every container's prefix).
+- A panic for a caller's mistake reads `<public op or layer>: <what was wrong> (got <value>)` (#142, `tests/panic_messages.rs`). Panic from a `VoltaError` with `.or_panic("<op>")`, never `.expect(..)` (which prints the `Debug` dump). Use `assert!(cond, "..")` with the values in the message, not `assert_eq!`. A layer checks its input's rank and width itself, under its own name, before calling an op, and an op that calls another (`softmax` calling `max_dim`) checks its axis first so the message names the op the user called. A rank mistake must never reach `crate::index`, whose message says the bug is inside Volta.
 
 ## Testing workflow
 

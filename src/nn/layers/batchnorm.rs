@@ -369,12 +369,11 @@ impl BatchNorm2d {
         self.core.check_dtype("BatchNorm2d", x, dtype);
         let c = self.core.num_features;
         let x_borrow = x.borrow();
-        assert_eq!(
-            x_borrow.shape.rank(),
-            4,
-            "BatchNorm2d expected 4D input (B,C,H,W)"
+        assert!(
+            x_borrow.shape.rank() == 4 && x_borrow.shape.dim_at(1) == c,
+            "BatchNorm2d({c}): expected input [B, {c}, H, W], got {:?}",
+            x_borrow.shape.truncate_rank()
         );
-        assert_eq!(x_borrow.shape.dim_at(1), c, "Channel mismatch");
         let [b, _, h, w] = x_borrow.shape.fixed::<4>();
         let num_pixels = b * h * w;
         assert!(
@@ -403,15 +402,11 @@ impl BatchNorm1d {
     fn forward_in(&self, x: &Tensor, dtype: crate::DType) -> Tensor {
         self.core.check_dtype("BatchNorm1d", x, dtype);
         let x_borrow = x.borrow();
-        assert_eq!(
-            x_borrow.shape.rank(),
-            2,
-            "BatchNorm1d expected 2D input (B, C)"
-        );
-        assert_eq!(
-            x_borrow.shape.dim_at(1),
-            self.core.num_features,
-            "Feature mismatch"
+        let c = self.core.num_features;
+        assert!(
+            x_borrow.shape.rank() == 2 && x_borrow.shape.dim_at(1) == c,
+            "BatchNorm1d({c}): expected input [B, {c}], got {:?}",
+            x_borrow.shape.truncate_rank()
         );
         let batch_size = x_borrow.shape.dim_at(0);
         assert!(
