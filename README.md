@@ -2,7 +2,7 @@
 
 <small>A PyTorch-like deep learning framework in pure Rust</small>
 
-[![Build Status](https://img.shields.io/github/actions/workflow/status/rlarson20/volta/ci.yml?branch=main)](https://github.com/rlarson20/volta/actions)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/rlarson20/volta/ci.yml?branch=improvements)](https://github.com/rlarson20/volta/actions)
 [![Crates.io](https://img.shields.io/crates/v/volta.svg)](https://crates.io/crates/volta)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/rlarson20/Volta)
@@ -11,7 +11,7 @@ Volta is a minimal deep learning and automatic differentiation library for Rust,
 Built from scratch to expose the internals - DAG linearization, `GradFn` dispatch, and SafeTensors interop - that production frameworks abstract away.
 It provides a dynamic computation graph, NumPy-style broadcasting, and common neural network primitives.
 
-This project is an educational endeavor to demystify the inner workings of modern autograd engines. It prioritizes correctness, clarity, and a clean API over raw performance, while still providing hooks for hardware acceleration.
+This project is an educational endeavor to demystify the inner workings of modern autograd engines. It prioritizes correctness, clarity, and a clean API over raw performance, while still offering optional GPU (WGPU) and Accelerate (BLAS) backends. The GPU backend is experimental and currently slower than the CPU (see What's in Progress).
 
 > [!CAUTION]
 > This repo is pre-v1.0, and currently... not in a spot that I'm proud of.
@@ -30,7 +30,7 @@ This project is an educational endeavor to demystify the inner workings of moder
 - **SafeTensors dtypes:** f16, bf16, f64, i32, i64, u8, and bool files load (converted to f32); every op, layer, and optimizer computes in f32, f64, f16 or bf16 on the CPU and in f32, f16 or bf16 on the GPU (`Module::to_dtype` converts a model); `amp::autocast` and `GradScaler` give mixed precision (`docs/plans/ADDENDUM.md` §11).
 - **IO System:** Save and load model weights (state dicts) in SafeTensors format.
 - **BLAS Acceleration (macOS):** Optional acceleration for matrix multiplication via Apple's Accelerate framework.
-- **GPU Acceleration:** Experimental WGPU-based GPU support for core tensor operations (elementwise, matmul, reductions, movement ops) with automatic backward pass on GPU.
+- **GPU Backend:** Experimental WGPU-based GPU support for core tensor operations (elementwise, matmul, reductions, movement ops) with automatic backward pass on GPU.
 - **Validation-Focused:** Includes a robust numerical gradient checker to ensure the correctness of all implemented operations.
 
 ## Project Status
@@ -47,7 +47,7 @@ This library trains MLPs, CNNs, RNNs, GANs, VAEs, and other architectures on CPU
   - **Examples:** MNIST (CNN, LSTM, bf16 autocast), character LMs (LSTM, Transformer), VAE, DCGAN, super-resolution, LSTM sine-wave prediction, polynomial regression; see [Available Examples](#available-examples)
   - **GPU Training Pipeline:** Fully GPU-accelerated training for Conv2d layers with device-aware constructors and GPU optimizer state storage
   - **Benchmarking Suite:** Criterion benchmarks in 4 targets (tensor_ops, neural_networks, gpu_comparison, conv_algorithms) with HTML reports
-  - **Enhanced GPU Safety:** GPU buffer pooling, command queue throttling, CPU cache invalidation, and early warning system
+  - **GPU Resource Handling:** GPU buffer pooling, command queue throttling, and CPU cache invalidation
   - **Code Quality:** `cargo clippy --all-targets -- -D warnings` (with the pedantic set configured in `Cargo.toml`) is clean with no features and with `gpu` + `accelerate`, and runs in CI
   - **GPU Convolution:** Fully GPU-accelerated Conv2d with Direct, im2col, and iGEMM algorithms
     - All algorithms support both forward and backward passes on GPU
@@ -57,7 +57,7 @@ This library trains MLPs, CNNs, RNNs, GANs, VAEs, and other architectures on CPU
 - ⚠️ **What's in Progress:**
   - **Performance:** Comprehensive benchmarking suite for performance tracking with `just bench` commands
   - **Benchmarks:** `just bench-gpu` completes a full run. The GPU is slower than the CPU at every size measured, because each op pays about 1.5 ms of fixed overhead; see `dev-docs/BENCHMARKING.md`
-  - **GPU Support:** Experimental WGPU-based acceleration via `gpu` feature:
+  - **GPU Support:** Experimental WGPU backend via the `gpu` feature:
     - ✅ Core ops on GPU: elementwise (unary/binary), matmul, reductions (sum/max/mean), movement ops (permute/expand/pad/shrink/stride)
     - ✅ GPU backward pass for autograd with lazy CPU↔GPU transfers
     - ⚠️ Broadcasting preprocessing happens on CPU before GPU dispatch
@@ -74,7 +74,7 @@ Add Volta to your `Cargo.toml`:
 volta = "0.3.0"
 ```
 
-The default build is CPU-only. Both backends are opt-in features, and they add to each other: `gpu` (experimental WGPU acceleration, which compiles `wgpu`) and `accelerate` (Apple's Accelerate framework for matrix multiplication on macOS; a no-op on other platforms).
+The default build is CPU-only. Both backends are opt-in features, and they add to each other: `gpu` (the experimental WGPU backend, which compiles `wgpu`) and `accelerate` (Apple's Accelerate framework for matrix multiplication on macOS; a no-op on other platforms).
 
 ### GPU and Accelerate
 
@@ -276,7 +276,7 @@ fn main() {
 
 See `examples/load_external_mnist.rs` for a complete end-to-end example with validation.
 
-### GPU Acceleration Example
+### GPU Example
 
 ```rust,no_run
 use volta::{Device, randn};
@@ -371,9 +371,9 @@ cargo run --release --example time_sequence    # LSTM sine-wave prediction (trai
 # External model loading
 cargo run --example load_external_mnist        # Load PyTorch weights via SafeTensors
 
-# GPU acceleration (needs the `gpu` feature)
+# GPU backend (needs the `gpu` feature)
 cargo run --features gpu --example gpu         # GPU tensor operations
-cargo run --features gpu --example gpu_training  # GPU-accelerated training
+cargo run --features gpu --example gpu_training  # Training on the GPU
 
 # Regression
 cargo run --example regression                 # Polynomial curve fitting

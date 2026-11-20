@@ -1,14 +1,15 @@
 [package]
 name = "volta"
-description = "A PyTorch-like Machine Learning framework."
+description = "A PyTorch-style tensor and autograd library in pure Rust, written to show how an autograd engine works rather than to be fast."
 version = "0.3.0"
 edition = "2024"
 rust-version = "1.89.0"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/rlarson20/Volta"
+documentation = "https://docs.rs/volta"
 keywords = ["ml", "machine-learning", "autodiff", "tensor"]
-categories = ["science"]
+categories = ["science", "science::ml"]
 # Ship the library and what `cargo test` on the package needs; leave out agent, audit and
 # tooling files (CLAUDE.md, .claude/, docs/, dev-docs/, notes/, scripts/, CI config).
 include = [
