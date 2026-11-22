@@ -1,4 +1,5 @@
-//! Repros for the defects found by the post-Phase-5 audit (`docs/audits/2026-11-post-phase5.md`).
+//! Repros for the defects found by the post-Phase-5 audit (`docs/audits/2026-11-post-phase5.md`)
+//! and by the 2026-11-22 outside audit (issues #458-#460).
 //!
 //! Each test asserts the correct behaviour (PyTorch's, where it has one) and carries
 //! `#[ignore = "A<n>: ..."]` (or the sweep ID it confirms) until the fix lands; un-ignore it
@@ -234,4 +235,62 @@ fn grad_scaler_accepts_bf16_gradients() {
     let mut opt = SGD::new(vec![p.clone()], 0.5, 0.0, 0.0);
     assert!(GradScaler::new().step(&mut opt));
     assert_eq!(p.data(), vec![0.5]);
+}
+
+/// #458: a state-dict entry of integer data is not differentiable, so building it with
+/// `requires_grad` must fail, as `try_new_typed` and `set_requires_grad` already do.
+#[test]
+#[ignore = "#458: try_to_tensor goes through try_new_with_storage, which skips the float check"]
+fn try_to_tensor_refuses_requires_grad_on_integer_data() {
+    use volta::io::TensorData;
+    let td = TensorData::from_typed(vec![1i64, 2, 3], vec![3]);
+    assert!(td.try_to_tensor(false).is_ok());
+    assert!(
+        matches!(
+            td.try_to_tensor(true),
+            Err(volta::VoltaError::NotDifferentiable { dtype: DType::I64 })
+        ),
+        "an I64 entry with requires_grad must be refused"
+    );
+}
+
+/// #459: a `[0, usize::MAX]` entry has numel 0, passes `validate`, and then hangs
+/// `transpose_2d`. `try_map` handles data from outside the program, so it must return an
+/// error promptly. The map runs on a thread so that today's hang fails the test instead
+/// of stalling the suite.
+#[test]
+#[ignore = "#459: validate_entry accepts zero dims and transpose_2d loops usize::MAX times"]
+fn mapper_rejects_a_zero_dim_entry_instead_of_hanging() {
+    use volta::io::TensorData;
+    use volta::io::mapping::StateDictMapper;
+    let mut state = std::collections::BTreeMap::new();
+    state.insert(
+        "w".to_string(),
+        TensorData::from_typed(Vec::<f32>::new(), vec![0, usize::MAX]),
+    );
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = StateDictMapper::new().transpose("w").try_map(state);
+        let _ = tx.send(result.is_err());
+    });
+    let is_err = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("try_map did not return within 5 s");
+    assert!(is_err, "a zero-dim entry must be an error");
+}
+
+/// #460: `try_new` validates user-supplied sizes (Invariant 8), so a size whose element
+/// count overflows is an `Err`, not a panic inside an initializer.
+#[test]
+#[ignore = "#460: layer try_new checks each size >= 1 but not the element count"]
+fn layer_try_new_returns_err_on_an_overflowing_size() {
+    use volta::nn::{Embedding, Linear};
+    let linear = std::panic::catch_unwind(|| Linear::try_new(usize::MAX / 2, 4, true).is_err());
+    assert_eq!(linear.ok(), Some(true), "Linear::try_new must return Err");
+    let embedding = std::panic::catch_unwind(|| Embedding::try_new(1 << 40, 1 << 30).is_err());
+    assert_eq!(
+        embedding.ok(),
+        Some(true),
+        "Embedding::try_new must return Err"
+    );
 }
