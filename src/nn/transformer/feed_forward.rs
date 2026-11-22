@@ -65,6 +65,8 @@ impl FeedForward {
     /// # Errors
     /// `VoltaError::InvalidParameter` naming the argument if `embed_dim` or
     /// `expansion_factor` is zero, or `dropout` is not in `[0, 1]`.
+    /// A parameter of more than [`crate::shape::MAX_NUMEL`] elements is refused the same
+    /// way, before anything is allocated (#460).
     pub fn try_new(embed_dim: usize, expansion_factor: usize, dropout: f32) -> crate::Result<Self> {
         Self::check(embed_dim, expansion_factor, dropout)?;
         let intermediate_dim = embed_dim * expansion_factor;
@@ -87,6 +89,12 @@ impl FeedForward {
     ) -> crate::Result<()> {
         hyper::at_least_one("FeedForward", "embed_dim", embed_dim)?;
         hyper::at_least_one("FeedForward", "expansion_factor", expansion_factor)?;
+        // Both weights hold embed_dim * (embed_dim * expansion_factor) elements.
+        hyper::param_numel(
+            "FeedForward",
+            "embed_dim, expansion_factor",
+            &[embed_dim, embed_dim, expansion_factor],
+        )?;
         hyper::unit_interval("FeedForward", "dropout", dropout)
     }
 

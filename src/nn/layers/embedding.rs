@@ -72,10 +72,16 @@ impl Embedding {
     ///
     /// # Errors
     /// `VoltaError::InvalidParameter` naming the argument if `vocab_size` or
-    /// `embedding_dim` is zero.
+    /// `embedding_dim` is zero, or naming both if the weight would have more than
+    /// [`crate::shape::MAX_NUMEL`] elements.
     pub fn try_new(vocab_size: usize, embedding_dim: usize) -> crate::Result<Self> {
         hyper::at_least_one("Embedding", "vocab_size", vocab_size)?;
         hyper::at_least_one("Embedding", "embedding_dim", embedding_dim)?;
+        hyper::param_numel(
+            "Embedding",
+            "vocab_size, embedding_dim",
+            &[vocab_size, embedding_dim],
+        )?;
 
         // Uniform [-0.1, 0.1]. This is not PyTorch's default, which is N(0, 1)
         // (docs/audits/2026-11-sweep.md, D2).

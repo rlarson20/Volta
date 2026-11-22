@@ -65,7 +65,8 @@ impl Linear {
     ///
     /// # Errors
     /// `VoltaError::InvalidParameter` naming the argument if `in_features` or
-    /// `out_features` is zero.
+    /// `out_features` is zero, or naming both if the weight would have more than
+    /// [`crate::shape::MAX_NUMEL`] elements.
     pub fn try_new(in_features: usize, out_features: usize, use_bias: bool) -> Result<Self> {
         Self::check_sizes(in_features, out_features)?;
         let w = RawTensor::xavier_uniform(&[in_features, out_features]);
@@ -83,10 +84,15 @@ impl Linear {
     /// The layer's name in errors.
     const OP: &'static str = "Linear";
 
-    /// `Ok` if both sizes are at least 1.
+    /// `Ok` if both sizes are at least 1 and the weight fits in a tensor.
     fn check_sizes(in_features: usize, out_features: usize) -> Result<()> {
         hyper::at_least_one(Self::OP, "in_features", in_features)?;
-        hyper::at_least_one(Self::OP, "out_features", out_features)
+        hyper::at_least_one(Self::OP, "out_features", out_features)?;
+        hyper::param_numel(
+            Self::OP,
+            "in_features, out_features",
+            &[in_features, out_features],
+        )
     }
 
     /// Create a new linear layer on a specific device

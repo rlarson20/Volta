@@ -78,6 +78,8 @@ impl PositionalEncoding {
     /// `VoltaError::InvalidParameter` naming the argument if `embed_dim` or `max_len` is
     /// zero, or `encoding_type` is `Sinusoidal` and `embed_dim` is odd (the table is
     /// sin/cos pairs).
+    /// A parameter of more than [`crate::shape::MAX_NUMEL`] elements is refused the same
+    /// way, before anything is allocated (#460).
     pub fn try_new(
         embed_dim: usize,
         max_len: usize,
@@ -85,6 +87,12 @@ impl PositionalEncoding {
     ) -> crate::Result<Self> {
         hyper::at_least_one("PositionalEncoding", "embed_dim", embed_dim)?;
         hyper::at_least_one("PositionalEncoding", "max_len", max_len)?;
+        // The sinusoid table and the learned embedding are both [max_len, embed_dim].
+        hyper::param_numel(
+            "PositionalEncoding",
+            "embed_dim, max_len",
+            &[max_len, embed_dim],
+        )?;
         let (encoding, learned_embedding) = match encoding_type {
             PositionalEncodingType::Sinusoidal => {
                 if !embed_dim.is_multiple_of(2) {

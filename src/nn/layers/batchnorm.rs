@@ -42,6 +42,7 @@ impl BatchNorm {
         momentum: f32,
     ) -> crate::Result<Self> {
         hyper::at_least_one(op, "num_features", num_features)?;
+        hyper::param_numel(op, "num_features", &[num_features])?;
         hyper::eps(op, eps)?;
         hyper::unit_interval(op, "momentum", momentum)?;
         let gamma = RawTensor::ones(&[num_features]);
@@ -247,6 +248,8 @@ impl BatchNorm2d {
     /// `VoltaError::InvalidParameter` naming the argument if `num_features` is zero,
     /// `eps` is zero, negative or not finite, or `momentum` is outside `[0, 1]` (a
     /// momentum of 7 made the running variance negative, #133).
+    /// A parameter of more than [`crate::shape::MAX_NUMEL`] elements is refused the same
+    /// way, before anything is allocated (#460).
     pub fn try_new_with_params(
         num_features: usize,
         eps: f32,
@@ -313,6 +316,8 @@ impl BatchNorm1d {
     /// `VoltaError::InvalidParameter` naming the argument if `num_features` is zero,
     /// `eps` is zero, negative or not finite, or `momentum` is outside `[0, 1]` (a
     /// momentum of 7 made the running variance negative, #133).
+    /// A parameter of more than [`crate::shape::MAX_NUMEL`] elements is refused the same
+    /// way, before anything is allocated (#460).
     pub fn try_new_with_params(
         num_features: usize,
         eps: f32,

@@ -663,6 +663,8 @@ impl Conv2d {
     /// `VoltaError::InvalidParameter` naming the argument if `in_ch`, `out_ch`, `kernel`
     /// or `stride` is zero. A zero stride used to be accepted here and to panic in
     /// `forward` (#133).
+    /// A parameter of more than [`crate::shape::MAX_NUMEL`] elements is refused the same
+    /// way, before anything is allocated (#460).
     pub fn try_new(
         in_ch: usize,
         out_ch: usize,
@@ -698,7 +700,12 @@ impl Conv2d {
         hyper::at_least_one(Self::OP, "in_ch", in_ch)?;
         hyper::at_least_one(Self::OP, "out_ch", out_ch)?;
         hyper::at_least_one(Self::OP, "kernel", kernel)?;
-        hyper::at_least_one(Self::OP, "stride", stride)
+        hyper::at_least_one(Self::OP, "stride", stride)?;
+        hyper::param_numel(
+            Self::OP,
+            "in_ch, out_ch, kernel",
+            &[in_ch, out_ch, kernel, kernel],
+        )
     }
 
     /// Create a new Conv2d layer on a specific device

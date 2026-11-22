@@ -79,6 +79,8 @@ impl LayerNorm {
     /// `VoltaError::InvalidParameter` naming the argument if `normalized_shape` is empty
     /// or has a zero dimension, or `eps` is zero, negative or not finite. An empty shape
     /// used to give a layer over one feature, and a negative `eps` ran (#133).
+    /// A parameter of more than [`crate::shape::MAX_NUMEL`] elements is refused the same
+    /// way, before anything is allocated (#460).
     pub fn try_new_with_eps(normalized_shape: Vec<usize>, eps: f32) -> crate::Result<Self> {
         if normalized_shape.is_empty() {
             return Err(crate::VoltaError::invalid(
@@ -91,6 +93,7 @@ impl LayerNorm {
             hyper::at_least_one("LayerNorm", "normalized_shape", d)?;
         }
         hyper::eps("LayerNorm", eps)?;
+        hyper::param_numel("LayerNorm", "normalized_shape", &normalized_shape)?;
         // Calculate total size of normalized dimensions
         let num_features: usize = normalized_shape.iter().product();
 

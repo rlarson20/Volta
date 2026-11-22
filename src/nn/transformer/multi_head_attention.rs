@@ -76,6 +76,8 @@ impl MultiHeadAttention {
     /// `VoltaError::InvalidParameter` naming the argument if `embed_dim` or `num_heads`
     /// is zero, `embed_dim` is not a multiple of `num_heads`, or `dropout` is not in
     /// `[0, 1]`.
+    /// A parameter of more than [`crate::shape::MAX_NUMEL`] elements is refused the same
+    /// way, before anything is allocated (#460).
     pub fn try_new(embed_dim: usize, num_heads: usize, dropout: f32) -> crate::Result<Self> {
         Self::check(embed_dim, num_heads, dropout)?;
         let head_dim = embed_dim / num_heads;
@@ -104,6 +106,7 @@ impl MultiHeadAttention {
                 format!("embed_dim ({embed_dim}) must be divisible by num_heads ({num_heads})"),
             ));
         }
+        hyper::param_numel(Self::OP, "embed_dim", &[embed_dim, embed_dim])?;
         hyper::unit_interval(Self::OP, "dropout", dropout)
     }
 

@@ -44,9 +44,17 @@ impl LSTMCell {
     /// # Errors
     /// `VoltaError::InvalidParameter` naming the argument if `input_size` or
     /// `hidden_size` is zero.
+    /// A parameter of more than [`crate::shape::MAX_NUMEL`] elements is refused the same
+    /// way, before anything is allocated (#460).
     pub fn try_new(input_size: usize, hidden_size: usize, bias: bool) -> crate::Result<Self> {
         hyper::at_least_one("LSTMCell", "input_size", input_size)?;
         hyper::at_least_one("LSTMCell", "hidden_size", hidden_size)?;
+        // weight_ih is [4H, in] and weight_hh is [4H, H].
+        hyper::param_numel(
+            "LSTMCell",
+            "input_size, hidden_size",
+            &[4, hidden_size, input_size.max(hidden_size)],
+        )?;
         // Initialize weights using Xavier/Glorot uniform
         let weight_ih = RawTensor::xavier_uniform(&[4 * hidden_size, input_size]);
         let weight_hh = RawTensor::xavier_uniform(&[4 * hidden_size, hidden_size]);
