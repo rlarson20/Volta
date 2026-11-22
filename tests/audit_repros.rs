@@ -336,17 +336,84 @@ fn mapper_rejects_a_zero_dim_entry_instead_of_hanging() {
 }
 
 /// #460: `try_new` validates user-supplied sizes (Invariant 8), so a size whose element
-/// count overflows is an `Err`, not a panic inside an initializer.
+/// count overflows, or passes `MAX_NUMEL`, is an `Err`, not a panic inside an
+/// initializer. Covers every layer with a `try_new` that allocates a parameter or buffer
+/// (`Dropout`, `MaxPool2d` and `PixelShuffle` allocate none).
 #[test]
-#[ignore = "#460: layer try_new checks each size >= 1 but not the element count"]
 fn layer_try_new_returns_err_on_an_overflowing_size() {
-    use volta::nn::{Embedding, Linear};
-    let linear = std::panic::catch_unwind(|| Linear::try_new(usize::MAX / 2, 4, true).is_err());
-    assert_eq!(linear.ok(), Some(true), "Linear::try_new must return Err");
-    let embedding = std::panic::catch_unwind(|| Embedding::try_new(1 << 40, 1 << 30).is_err());
-    assert_eq!(
-        embedding.ok(),
-        Some(true),
-        "Embedding::try_new must return Err"
-    );
+    /// A call that is true when `try_new` returned `Err` (it may panic before the fix).
+    type Case = Box<dyn Fn() -> bool + std::panic::RefUnwindSafe>;
+    use volta::nn::{
+        BatchNorm1d, BatchNorm2d, Conv2d, ConvTranspose2d, Embedding, FeedForward, LSTMCell,
+        LayerNorm, Linear, MultiHeadAttention, PositionalEncoding, PositionalEncodingType,
+        TransformerBlock,
+    };
+    let huge = usize::MAX / 2;
+    let over = volta::MAX_NUMEL + 1;
+    let cases: Vec<(&str, Case)> = vec![
+        (
+            "Linear",
+            Box::new(move || Linear::try_new(huge, 4, true).is_err()),
+        ),
+        (
+            "Linear (MAX_NUMEL)",
+            Box::new(move || Linear::try_new(over, 1, true).is_err()),
+        ),
+        (
+            "Embedding",
+            Box::new(|| Embedding::try_new(1 << 40, 1 << 30).is_err()),
+        ),
+        (
+            "LSTMCell",
+            Box::new(move || LSTMCell::try_new(4, huge / 2, true).is_err()),
+        ),
+        (
+            "LayerNorm",
+            Box::new(move || LayerNorm::try_new(vec![huge, 4]).is_err()),
+        ),
+        (
+            "BatchNorm1d",
+            Box::new(move || BatchNorm1d::try_new(over).is_err()),
+        ),
+        (
+            "BatchNorm2d",
+            Box::new(move || BatchNorm2d::try_new(over).is_err()),
+        ),
+        (
+            "Conv2d",
+            Box::new(move || Conv2d::try_new(huge, 4, 3, 1, 0, true).is_err()),
+        ),
+        (
+            "ConvTranspose2d",
+            Box::new(move || ConvTranspose2d::try_new(4, huge, 3, 1, 0, true).is_err()),
+        ),
+        (
+            "MultiHeadAttention",
+            Box::new(|| MultiHeadAttention::try_new(1 << 33, 1, 0.0).is_err()),
+        ),
+        (
+            "FeedForward",
+            Box::new(|| FeedForward::try_new(1 << 20, 1 << 30, 0.0).is_err()),
+        ),
+        (
+            "TransformerBlock",
+            Box::new(|| TransformerBlock::try_new(1 << 20, 1, 1 << 30, 0.0).is_err()),
+        ),
+        (
+            "PositionalEncoding (sinusoidal)",
+            Box::new(move || {
+                PositionalEncoding::try_new(2, huge, PositionalEncodingType::Sinusoidal).is_err()
+            }),
+        ),
+        (
+            "PositionalEncoding (learned)",
+            Box::new(move || {
+                PositionalEncoding::try_new(4, huge, PositionalEncodingType::Learned).is_err()
+            }),
+        ),
+    ];
+    for (name, case) in &cases {
+        let got = std::panic::catch_unwind(case);
+        assert_eq!(got.ok(), Some(true), "{name}::try_new must return Err");
+    }
 }

@@ -62,6 +62,8 @@ impl TransformerBlock {
     /// `VoltaError::InvalidParameter` from the sublayer that would refuse the argument
     /// ([`MultiHeadAttention::try_new`], [`FeedForward::try_new`]): a zero size,
     /// `embed_dim` not a multiple of `num_heads`, or `dropout` outside `[0, 1]`.
+    /// A parameter of more than [`crate::shape::MAX_NUMEL`] elements is refused the same
+    /// way, before anything is allocated (#460).
     pub fn try_new(
         embed_dim: usize,
         num_heads: usize,
