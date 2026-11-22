@@ -1037,3 +1037,13 @@ Autograd is a sequential graph walk over `Rc<RefCell<_>>`, and nothing in it is 
 - *Clippy stays local.* It's fast. CI's `stable` floats and can be newer than a local toolchain, so a local pass is a floor, not a guarantee.
 - *Touched tests stay local,* including GPU tests on lavapipe, because a failing test is faster to debug before a push than from a CI log.
 - *Real macOS is unchanged:* it runs after each merge ("macOS checks move off the PR gate"), and Metal still needs `just test-gpu` on the Mac.
+
+### `rust-version` stays 1.89; the measured floor is 1.88 (#453)
+
+**Decision:** `rust-version = "1.89.0"` stays, on purpose. On 2026-11-22 the measured floor was rustc 1.88.0, with `--no-default-features` and with `gpu,accelerate`, for the lockfile and for `-Zdirect-minimal-versions`. On 1.88 the lib checks, `cargo test` passes and the MSRV lane's clippy is clean. The method and results are in [#453](https://github.com/rlarson20/Volta/issues/453#issuecomment-7087270136).
+
+**What sets the floor:** Volta's own let-chains, stable in 1.88, at 18 sites (`autograd.rs`, `gpu/{buffer,pool,staging_pool}.rs`, `io.rs`, `io/mapping.rs`, `nn/layers/conv.rs`, `ops/matmul.rs`, `storage.rs`, `tensor.rs`). Below 1.87, const-fn uses of `Vec::len`/`is_empty` and `String::as_str` fail too. Dependencies are lower: wgpu and naga 30 declare 1.87. Among the dev-deps, trybuild declares 1.88.
+
+**Why not lower it to 1.88:** RJ chose to keep it (2026-11-22). Lowering it would rename the required `cpu-only (1.89)` check, which means a ruleset edit and `just rulesets` right before 0.4.0, for one release of extra reach. 1.89 is still a true promise, because CI builds, lints and tests on it.
+
+**Consequence:** the gap is one release, so a change that needs something new in 1.89 would make the floor match `rust-version` again. Anything needing a newer rustc raises `rust-version`, the CI lane, `.#msrv` in `flake.nix` and `dev-docs/DEVELOPMENT.md` together. Re-measure with the #453 commands when `rust-version` changes. STABILITY.md (#398) will state the MSRV policy.
