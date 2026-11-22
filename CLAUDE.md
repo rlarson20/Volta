@@ -10,6 +10,7 @@ In a cloud session (Linux, `CLAUDE_CODE_REMOTE` set, no `rtk`, no GPU), read `de
 
 Update this section when a phase lands or the merge gate changes. Keep it short; what landed is in the commit log and `DECISIONS.md`.
 
+- **Releases:** the [milestones](https://github.com/rlarson20/Volta/milestones) are the plan: v0.4.0 (what must land before `improvements` merges into `main`), v0.5.0 (Phase 4), v1.0.0 (breaking changes and readiness), Backlog. Breaking goes to v1.0.0 (v0.5.0 if Phase 4), must-precede-`main` to v0.4.0, anything else to Backlog. The State of Volta issue (#456) carries the latest digest.
 - **Roadmap:** `docs/plans/ADDENDUM.md` § Sequencing defines the phases. Phases 0–3 and 5 (dtypes and mixed precision, PRs #19–#28) are done. Phase 4 (arena graph, sealed `Backend` trait, proptest DAG checks) is optional and comes last.
 - **Open work lives in [GitHub issues](https://github.com/rlarson20/Volta/issues), nowhere else.** Each defect ID (`S<n>`, `A<n>`) has one issue naming its `#[ignore = "S<n>: ..."]` repro and its audit section. Pick work with `is:open label:P0 -label:blocked` (then P1, ...). The audits in `docs/audits/` are dated, append-only evidence, not status: correct them by appending, and tell the user (`.claude/rules/audits.md`). PyTorch fixtures are regenerated with `just torch-fixtures` (needs `uv`).
 - **Merge gate:** `improvements` merges into `main` when every [`merge-gate`](https://github.com/rlarson20/Volta/issues?q=is%3Aopen+label%3Amerge-gate) issue is closed (fixed, or closed as not planned with a reason). `just ci` passes and the library documents every item. Rulesets in `.github/rulesets/` (applied with `just rulesets`) enforce the PR and required CI checks on both branches (`DECISIONS.md`, "Rulesets enforce the merge gate"). PRs into `improvements` gate on Linux, including `macos-cross`. Real macOS (Metal, Accelerate) runs after each merge and on the PR into `main`; a post-merge failure opens a `merge-gate` issue (`DECISIONS.md`, "macOS checks move off the PR gate").
@@ -79,6 +80,15 @@ When you're corrected or discover something non-obvious, file it in exactly one 
 ## Scope
 
 Stay inside the current phase. Backlog features, refactors from later phases, and "while I'm here" cleanups get proposed as a new issue, not implemented.
+
+## Review and status
+
+Output can outrun what RJ can read. These rules keep approval and review the same thing.
+
+- **Every PR declares a review tier** in the template. *Mechanical* (tests, docs, lints, CI, a fix inside an existing contract) merges on green CI. *Design* (a public signature or type, a new trait, a reversed `DECISIONS.md` entry, a numerics or dtype change) waits until RJ has read the diff. When unsure, it is design. A stack of PRs holds at most four, and any design PR in it is read before the stack merges.
+- **Ask before designing.** Before adding a public type or trait, or reversing a `DECISIONS.md` entry, put the question to RJ (a decision card, or a comment on the issue) and wait. A reversal updates the superseded table at the top of `DECISIONS.md` in the same PR.
+- **Status lives in issues and milestones only.** No status files: a runbook (`dev-docs/FINISHING.md`) loses each step once it's done, and project-file plans move into the issue they serve. After a batch of merges, run `just status` and post its output as a comment on the State of Volta issue (#456).
+- **One outside audit per release,** by a different model, at the release boundary. RJ triages it before anything is filed, and severities are re-checked against the code first.
 
 ## Working an issue
 

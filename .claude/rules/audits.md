@@ -8,6 +8,7 @@ paths:
 An audit is a dated record of what was true when it was written. It stays readable as history, and it must not mislead a reader who trusts it today. Both hold only if corrections are appended, never made by editing.
 
 - **Never delete or rewrite original text.** Add to it. The only edits to existing lines are the inline pointers below.
+- **One exception: redaction.** When RJ asks, a private path, personal data or a stray scratch note can be removed or replaced in place. Each redaction gets a `## Corrections` entry that says what was removed and where, without repeating it, and states that no finding changed.
 - **A correction has two parts, and both go in.**
   1. An entry under `## Corrections` at the end of that file, numbered `C1`, `C2`, ... with a dated heading, then: what the text said (quote it, with its section or ID), what is true, why, how you know (command, measurement, commit), and the PR that fixes it, if any. Create the section if the file has none.
   2. An inline pointer right after the stale claim, `[corrected <YYYY-MM-DD>: see C<n>]`, so a reader sees the correction where the claim is and not only at the bottom.

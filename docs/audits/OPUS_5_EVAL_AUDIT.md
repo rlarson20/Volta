@@ -10,8 +10,7 @@ code at commit `75188fa` (branch `improvements`).
 **Method.** Claims were checked three ways: (1) reading the cited code, (2) counting with
 ripgrep, (3) running the code. For behavioral claims I wrote a throwaway integration test
 (`tests/zz_audit_probe.rs`, 11 probes) and ran it; the file has been removed from the repo and
-parked at
-`/private/tmp/claude-501/-Users-rjlarson-src-volta/ccadcedc-.../scratchpad/audit_probe.rs`.
+parked in that session's scratchpad, outside the repo [redacted 2026-11-22: see C2].
 Raw probe output is quoted inline below. One external fact (Muon's reference algorithm) was
 checked against published sources.
 
@@ -689,7 +688,7 @@ actual blocker Rc is untouched" ✅.
   `impl TensorOps for Tensor`, closing at 1208. The impl block is 138 lines; the range 1009–1208
   in the note is exact. Method count is **42**, not 40 — near enough.
   "now every example uses use volta::TensorOps" ✅.
-- "3 ways to call shit: static / trait / free funcs re-exported from crate root" ✅ —
+- "3 ways to call [things]: static / trait / free funcs re-exported from crate root" ✅ —
   `RawTensor::softmax(&t, 1)`, `t.softmax(1)`, and `volta::softmax(&t, 1)` all exist; `lib.rs:57`
   re-exports 19 free functions.
 - "module trait broken by own implementors":
@@ -745,7 +744,7 @@ SumGradFn, UnaryGradFn, WhereGradFn`.
 - "not hypothetical: B4 stayed silent bc broadcast_to maps OOR source indices through
   data.get(from_idx) => default (check bin.rs:519-523)" ✅ — the cited range is exact; see B4.
 - "curr policy: ships green behind [641] test suite" ✅.
-- "lint turning corruption into wrong numbers is shit for numerical code" 🔵 — I agree, and the
+- "lint turning corruption into wrong numbers is [bad] for numerical code" 🔵 — I agree, and the
   proposed `fetch()` returning `f32::NAN` in §"loud by default" is the right shape: NaN
   propagates through the FD comparison and fails loudly; 0.0 produces a plausible number.
 
@@ -943,7 +942,7 @@ silently invalidate the outstanding `&[f32]`.
 - "no-features doesn't check no-features" ✅ — neither step passes `--no-default-features`, and
   `default = ["gpu","accelerate"]`, so both steps compile **with** GPU. The step names are
   inverted from reality.
-- "-D warnings caused allow with excuses culture instead of fixing shit / warnings were errors,
+- "-D warnings caused allow with excuses culture instead of fixing [things] / warnings were errors,
   every issue gets a waiver rather than change" ✅ — supported by the 9 TODO-confession `reason =`
   strings and 15 `too_many_lines` allows.
 - "GPU feature check commented out (runners tend to lack GPUs)" ✅ — lines 41–42, with that
@@ -1125,10 +1124,6 @@ Collected for convenience:
 | 13  | check_grads contamination "err 1.02"                                       | 🟡 Measured 0.50 for one prior backward. Same defect.                                                                                                                                                                        |
 | 14  | "cfg gated code paths had no compiler looking from any direction"          | 🟡 The `gpu` arm _is_ compiled by CI (because the "no features" steps run with default features). Only the `not(gpu)` arm is unchecked — which is where all 5 errors are.                                                    |
 
-Claims handled so far:
-1 (partial): now have missing_docs set, need to doc... pretty much everything, should build tool to check doc coverage
-4: number of try_ pairs. was 6, also something to be handled with other shit
-5: still need to handle minigrad-react, but it's not in the repo public face
 
 | 1 | "missing docs are denied and honored" | ❌ `missing_docs` is not configured anywhere. `missing_panics_doc`/`missing_errors_doc` are — and are satisfied with placeholder text (`storage.rs:298` documents a panic in a function that returns `Option`). |
 | 4 | "try_/panic twin pattern exists for 4 funcs … bc_shape … panic only" | 🟠 Six twins exist, including `try_broadcast_shape` (binary.rs:438) — the one explicitly listed as absent. |
@@ -1198,3 +1193,13 @@ Appended after the original text, which is unchanged (`.claude/rules/audits.md`)
 
 - **Said** (line 7): "Evaluation of every claim in the **"new notes"** section of `notes/TODO.md`."
 - **True:** PR #87 (`b20a43f`) retired `notes/TODO.md`; the file is not in the working tree. The section this audit evaluated is in its last version, `git show 9d8aff5:notes/TODO.md`. Live status is in the GitHub issues, one per defect ID. The evaluation itself is unaffected.
+
+### C2 (2026-11-22): redactions, not corrections
+
+The only edits ever made to the original text. RJ asked for them after an outside review (Gemini, 2026-11-22, finding F41) flagged them. No finding, count or verdict changed.
+
+- **Method paragraph:** the probe file's absolute path in a local temp directory (`/private/tmp/...`) is replaced by "that session's scratchpad, outside the repo". The path was never reachable from the repo.
+- **§8, §CI and §"loud by default" quotes:** three profanities in quoted notes are replaced by bracketed words (`[things]`, `[bad]`). The meaning of each quote is unchanged.
+- **§16:** four lines of the author's working notes ("Claims handled so far: ...") are removed. They were scratch notes left under the table, not part of the audit, and the open items they named live in the GitHub issues.
+
+`.claude/rules/audits.md` now names redaction (private paths, personal data, scratch notes) as the one allowed edit to original text.

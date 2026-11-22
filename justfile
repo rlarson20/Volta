@@ -391,6 +391,10 @@ minimal-versions:
 	cargo check --all-targets --no-default-features
 	cargo check --all-targets {{full}}
 
+# Print the State of Volta digest (merges, design PRs, what waits on RJ, milestones) since a date
+status since='':
+	scripts/status.sh {{since}}
+
 # Search issues, open and closed, by title and body: run it before filing (`just issues "sum sequential"`)
 issues +terms:
 	gh issue list --state all --limit 30 --search "{{terms}} in:title,body"

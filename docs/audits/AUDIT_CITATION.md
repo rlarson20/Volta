@@ -15,13 +15,13 @@ The mapping below makes the coverage explicit rather than implying that a framew
 
 | Audit/TODO area                                                              | Local evidence                                                      | Intended contract / repair source in this ledger               |
 | ---------------------------------------------------------------------------- | ------------------------------------------------------------------- | -------------------------------------------------------------- |
-| B1–B3 graph dead ends                                                        | [audit](/Users/rjlarson/src/volta/OPUS_5_EVAL_AUDIT.md) §§B1–B3     | B1–B3                                                          |
-| B4 unequal-rank matmul                                                       | [audit](/Users/rjlarson/src/volta/OPUS_5_EVAL_AUDIT.md) §B4         | B4                                                             |
-| B5 CPU-only build, CI cfg                                                    | [audit](/Users/rjlarson/src/volta/OPUS_5_EVAL_AUDIT.md) §B5 and §CI | B5                                                             |
-| H1–H8 layer/kernel/state defects                                             | [audit](/Users/rjlarson/src/volta/OPUS_5_EVAL_AUDIT.md) §§H1–H8     | H1–H8                                                          |
-| Copies, convolution cost, GPU reduction/broadcast, gradcheck, tests          | [audit](/Users/rjlarson/src/volta/OPUS_5_EVAL_AUDIT.md) §3–§5       | Medium findings                                                |
-| RNG, dead config, dtype/device, Embedding, Sequential keys                   | [audit](/Users/rjlarson/src/volta/OPUS_5_EVAL_AUDIT.md) §3          | Medium findings                                                |
-| RefCell/public-state, traits, errors, unsafe, packaging, preventative design | [audit](/Users/rjlarson/src/volta/OPUS_5_EVAL_AUDIT.md) §7–§15      | Rust architecture and safety findings, plus B5/Medium findings |
+| B1–B3 graph dead ends                                                        | [audit](OPUS_5_EVAL_AUDIT.md) §§B1–B3     | B1–B3                                                          |
+| B4 unequal-rank matmul                                                       | [audit](OPUS_5_EVAL_AUDIT.md) §B4         | B4                                                             |
+| B5 CPU-only build, CI cfg                                                    | [audit](OPUS_5_EVAL_AUDIT.md) §B5 and §CI | B5                                                             |
+| H1–H8 layer/kernel/state defects                                             | [audit](OPUS_5_EVAL_AUDIT.md) §§H1–H8     | H1–H8                                                          |
+| Copies, convolution cost, GPU reduction/broadcast, gradcheck, tests          | [audit](OPUS_5_EVAL_AUDIT.md) §3–§5       | Medium findings                                                |
+| RNG, dead config, dtype/device, Embedding, Sequential keys                   | [audit](OPUS_5_EVAL_AUDIT.md) §3          | Medium findings                                                |
+| RefCell/public-state, traits, errors, unsafe, packaging, preventative design | [audit](OPUS_5_EVAL_AUDIT.md) §7–§15      | Rust architecture and safety findings, plus B5/Medium findings |
 
 The citations name the source used for each normative statement.
 Where there is no single standard (for example, a choice between returning an error or implementing a general GPU kernel),
@@ -385,3 +385,8 @@ Appended after the original text, which is unchanged (`.claude/rules/audits.md`)
 
 - **Said** (opening paragraph): "a durable research ledger for the findings in `OPUS_5_EVAL_AUDIT.md` and `notes/TODO.md`."
 - **True:** PR #87 (`b20a43f`) retired `notes/TODO.md`; the file is not in the working tree. Its last version is `git show 9d8aff5:notes/TODO.md`. Live status is in the GitHub issues, one per defect ID. The ledger's findings are unaffected.
+
+### C2 (2026-11-22): links pointed at a local checkout
+
+- **Said** (the evidence table, 7 rows): each `[audit](...)` link held an absolute path into the author's local checkout.
+- **True:** such a path resolves only on that machine, so each link was broken for every other reader. The audit sits next to this file, so the links now read `(OPUS_5_EVAL_AUDIT.md)`. This is a redaction under `.claude/rules/audits.md` (flagged as F41 by the 2026-11-22 outside review). No finding changed.

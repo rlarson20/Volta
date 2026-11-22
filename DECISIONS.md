@@ -1,7 +1,25 @@
 # DECISIONS.md — Design decisions
 
 Why the code is the way it is, and what was tried and rejected. What was done is in the commit log; what is open is in the GitHub issues.
-Updated: 2026-11-12
+Updated: 2026-11-22
+
+**Read this first.** Entries are kept when a later one reverses them, for the reasoning. A reversed entry, or a reversed choice inside one, carries a `**Superseded by:**` line that names the entry in force. Superseded so far:
+
+| Older entry or choice | In force |
+| --- | --- |
+| "Shape boundary: signatures, not the field" | "`RawTensor.shape` is a `Shape`" |
+| "Split layer traits": the sealed `IndexedLayer` | "I64 and Bool are data" (P5): `Embedding` is a `Layer` |
+| "Split layer traits": `load_state_dict` returns `()` | "Loads are atomic: plan, then apply" (#65) and "`Module::load_state_dict` is strict" (#344) |
+| "CPU storage: `Arc<[u8]>`": the byte layout | "Typed host buffer" (P1), then "`Storage` is an opaque struct" (#356) |
+| "GPU storage": GPU storage is f32-only | "GPU f16, bf16 and Bool" (P8) |
+| "`define_ops!`": Mod and Cmplt are non-differentiable | Cmplt removed in P5; Mod is differentiable (#45) |
+| "Pedantic cast lints": `needless_pass_by_value` allowed | "`unused_self` and `needless_pass_by_value` are denied" (#171) |
+| "Layers and optimizers in f64": saving stays f32-only | "`TensorData` stores bytes and a dtype" (#53) |
+| "Half types run the f32 kernels": half parameters step in every optimizer | "Adam refuses half parameters" (#317) |
+| "Implicit promotion": no scalars, `[1]` promotes fully | "Full reductions are rank-0" (#100) |
+| "Rulesets enforce the merge gate": `macos (stable)` on the `improvements` gate | "macOS checks move off the PR gate" (#233) |
+
+A new entry that reverses an older one adds a row here and a `**Superseded by:**` line to the older entry, in the same PR.
 
 ---
 
@@ -295,7 +313,7 @@ A size silently defaulting to 1 is the same class as `.get(i).unwrap_or(0.0)` (i
 
 **`cpu_only` is explicit.** An op with no kernel says so in its row, and `gpu_pipelines` returns `None`, so the caller takes the CPU path instead of the GPU function panicking. No current op uses it (Erf got real kernels); the binary table has no such clause because every binary op has a forward kernel.
 
-**Binary rows are two sections** (`differentiable { .. }`, `non_differentiable { .. }`) because one repetition can't alternate between two row shapes. Mod and Cmplt having no derivative is now part of the grammar: `is_trivial` is generated from the section, and `BinaryOp::backward` on one panics. *(P5 removed `Cmplt`; comparisons are `CmpOp`, returning Bool. #45 (S5) made `Mod` floored, as `torch.remainder`, and differentiable (`∂a = g`, `∂b = -g·floor(a/b)`), which leaves `non_differentiable {}` empty but in the grammar; the macro emits one arm per variant so an empty section compiles.)*
+**Binary rows are two sections** (`differentiable { .. }`, `non_differentiable { .. }`) because one repetition can't alternate between two row shapes. Mod and Cmplt having no derivative is now part of the grammar *(Superseded by: Cmplt was removed in P5, and Mod has a derivative since #45; the `non_differentiable` section is empty.)*: `is_trivial` is generated from the section, and `BinaryOp::backward` on one panics. *(P5 removed `Cmplt`; comparisons are `CmpOp`, returning Bool. #45 (S5) made `Mod` floored, as `torch.remainder`, and differentiable (`∂a = g`, `∂b = -g·floor(a/b)`), which leaves `non_differentiable {}` empty but in the grammar; the macro emits one arm per variant so an empty section compiles.)*
 
 **One generic binary CPU backward.** The row gives the per-element `(∂L/∂a, ∂L/∂b)` at the broadcast shape; `BinaryGradFn` broadcasts both operands, calls the row, and runs `sum_over_broadcast_dims` once per operand. This replaced about 170 lines of per-op copies of that reduction. Cost: Add and Sub now materialise `broadcast_to` copies of their operands, which they used to skip. Accepted ("correctness over speed"). Max ties go to the first operand, pinned by a test.
 
@@ -359,6 +377,8 @@ Choke points for whoever lands views: the operand reads in `RawTensor::matmul` (
 
 **Decision:** `Module` is the base trait (parameters, state dict, `zero_grad`, `to_device`, `train`/`eval`) and has no `forward`. `Layer: Module` adds `forward(&Tensor) -> Tensor`, and `Sequential` holds `Box<dyn Layer>`. `IndexedLayer: Module` (`Embedding::forward_indices(&[usize])`) and `RecurrentLayer: Module` (`LSTMCell`: `initial_state`, `step(x, &mut state) -> h`) are separate. Putting an `Embedding` in a `Sequential` is now a compile error (`tests/compile_fail/embedding_in_sequential.rs`), not a runtime panic. *(Superseded by P5: `IndexedLayer` is gone; `Embedding` is a `Layer` over I64/I32 index tensors, as the alternative in ADDENDUM §3.2 proposed once dtypes were real. Only `RecurrentLayer` is sealed.)*
 
+**Superseded by:** "I64 and Bool are data" (P5) for `IndexedLayer`, which is removed; "Loads are atomic" (#65) and "`Module::load_state_dict` is strict" (#344) for the load signature.
+
 **Departure from §3.1:** only `IndexedLayer` and `RecurrentLayer` are sealed (`RecurrentLayer` alone since P5). `Module` and `Layer` are open. There is no `GradFn::Custom` and `edge()` is `pub(crate)`, so a user-written `impl Layer` that composes built-in layers is the one extension path the library has, and it is how PyTorch users build models. Sealing it would also have broken `tests/improvements_test.rs` (`CountingModule`; renamed to `tests/safety_and_state_dict.rs` for #74), which is outside code and now doubles as the proof that the open traits stay open. The cost is that we can't add a required method to `Module` or `Layer` without a breaking change; provided methods are still free. The two sealed traits have no outside use case, and sealing them lets `State` and the step signature change within 0.x. Trybuild cases `seal_indexed_layer` and `seal_recurrent_layer` pin the seal. The marker is named `SealedLayer`, not `Sealed`: with the `gpu` feature a dependency (`unicode_width`) has its own private `Sealed`, and rustc adds a "similarly named trait" note that made the pinned `.stderr` differ by feature set.
 
 **LSTM:** `forward_step(x, Option<(&h, &c)>) -> (h, c)` was deleted rather than kept beside `step`. `State = (Tensor, Tensor)` carries `c`, which `Module::forward` used to drop. `step` still goes through `slice_gate`, so B2 (the severed graph) is untouched and its `assert_trainable!` test stays `#[ignore]`d, driven through a test-only one-step `Layer` wrapper.
@@ -370,6 +390,8 @@ Choke points for whoever lands views: the operand reads in `RawTensor::matmul` (
 **Not done:** `load_state_dict` still returns `()`, and the `*Layer` traits don't yet cover attention (`forward(x, causal, mask)` stays inherent on `MultiHeadAttention`).
 
 ### CPU storage: `Arc<[u8]>` copy-on-write (ADDENDUM §7)
+
+**Superseded by:** "Typed host buffer" (P1) for the byte layout, and "`Storage` is an opaque struct" (#356) for the representation.
 
 **Decision:** `Storage::Cpu` holds `Arc<[u8]>`. `clone` is a refcount bump, and the one write path (`as_f32_slice_mut` at the time, `as_host_f32_mut` since the `Deref` removal) calls `Arc::make_mut`, which copies only when another storage shares the buffer. Value semantics are unchanged: a write to one tensor is never visible through another. Before this, every `data.clone()` snapshot in an op prologue or a `GradFn` was a full memcpy, including `reshape`, whose comment claimed it was a view.
 
@@ -404,6 +426,8 @@ Before, `fetch(&s.data, i)`, `zip(&data)`, and `data.iter()` coerced silently, s
 **Public API:** this breaks `Storage` users that indexed, iterated, or coerced it (pre-1.0). In-repo, two integration tests changed (`coverage_fill`, `test_error_paths`).
 
 ### GPU storage: shared write-once host copy, copy-on-write writes (ADDENDUM §7, H3)
+
+**Superseded by:** "GPU f16, bf16 and Bool" (P8) for the f32-only GPU storage; the sharing and copy-on-write rules stand.
 
 **Decision:** `Storage::Gpu(Arc<GpuStorage>)`, where `GpuStorage { buffer: GpuBuffer, host: OnceLock<Vec<f32>> }`. `clone` is a refcount bump and shares the buffer *and* its host copy. The one GPU write path is `Storage::gpu_buffer_mut(&mut self)`: if the `Arc` is shared it copies the buffer on the device (`GpuBuffer::copy_region`) into a fresh `GpuStorage`, then drops the now-unique host copy. This is the CPU `Arc::make_mut` rule applied to a device buffer. `gpu_optimizer_step` takes `&mut Storage` for the parameter and both state buffers and writes only through it. It was the only kernel that writes a buffer it was handed: every other `GpuKernels` entry point returns a new buffer (checked by listing the `Option<()>`-returning kernels, and gradient accumulation goes through `gpu_add`).
 
@@ -520,6 +544,8 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 
 ### Pedantic cast lints: three denied, two allowed (2026-11-01)
 
+**Superseded by:** "`unused_self` and `needless_pass_by_value` are denied" (#171) for `needless_pass_by_value`; the cast lints stand.
+
 **Decision:** `cast_possible_truncation`, `cast_possible_wrap`, and `cast_sign_loss` are `deny`; `cast_precision_loss` and `needless_pass_by_value` are `allow` with the reason in `Cargo.toml`; `redundant_closure_for_method_calls` is `deny`.
 
 **Why the first three:** they are the silent-wrong-number class that `fetch`/`slot` closed for indexing, one step earlier: an `as` that wraps a window coordinate or truncates a kernel parameter produces a plausible index or dimension instead of a failure. The iGEMM batch offset bug lived in exactly that arithmetic. `Shape` caps a tensor at 1e8 elements, below `u32::MAX`, so none of the converted sites could fire, and the checked helpers (`signed`, `unsigned`, `pack_u32`) change no behavior today; they make the cap load-bearing in one place instead of assumed in 250. Where narrowing is the point (f64 to f32, float to an integer dtype), the function says so with `#[expect(.., reason)]`, which fails to compile if the lint stops firing.
@@ -595,7 +621,7 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 
 **Choices made here:**
 - **Loading casts.** `load_state_dict` casts the f32 `TensorData` to each parameter's dtype, exactly for f64, as PyTorch's `load_state_dict` (`copy_`) does. This replaces P1's refusal; an integer destination is still an error.
-- **Saving stays f32-only.** `state_dict()` on a non-f32 model panics in `TensorData::from_tensor`: `TensorData` is f32, and narrowing silently would lose the point of f64. A typed `TensorData` changes the bincode format, so it is a TODO, not part of P3b. *(Superseded by #53: `TensorData` carries its dtype; see "`TensorData` stores bytes and a dtype".)*
+- **Saving stays f32-only.** *(Superseded by: "`TensorData` stores bytes and a dtype", #53.)* `state_dict()` on a non-f32 model panics in `TensorData::from_tensor`: `TensorData` is f32, and narrowing silently would lose the point of f64. A typed `TensorData` changes the bincode format, so it is a TODO, not part of P3b. *(Superseded by #53: `TensorData` carries its dtype; see "`TensorData` stores bytes and a dtype".)*
 - **Optimizers step each parameter in its own dtype.** A mixed f32/f64 list is fine (as in PyTorch); a parameter with no kernel (f16, until P4 added half kernels) was refused before any parameter was updated. Optimizer state (Adam's moments, SGD's and Muon's velocity) is allocated on a parameter's first step, in its current dtype and device (S17), so a model converted with `to_dtype` or `to_device` after its optimizer was built still steps. A conversion after the first step panics ("convert the model before the optimizer's first step"): reallocating would silently reset the momentum. Adam counts steps per parameter, incremented only when that parameter has a gradient, as torch does.
 - **Hyperparameters stay f32.** `lr`, betas, eps, momentum, and weight decay are widened to the parameter's dtype, so `lr = 0.01` is `0.009999999776` in an f64 step. Training does not care; the torch f64 fixture uses powers of two so both sides agree exactly.
 - **Helper tensors follow the input.** Dropout's mask, the causal masks, and LSTM's zero state come from `constant_like` (input's device and dtype). BatchNorm's eval path reshapes the running statistics instead of `constant_like(.., data())`, which would have rounded f64 statistics through f32.
@@ -621,7 +647,7 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 **Guards against a missed site:** `edge()` asserts that an op's output has its inputs' dtype (except `Cast`), and `Tensor::accumulate_grad` already asserts that a gradient has its tensor's dtype. A kernel that forgets to round fails at the op, naming it, instead of leaking an f32 tensor into a half model. During P4 the gradient check caught the backward constructors the first conversion pass missed (matmul's gradients and the shrink/expand backward), on the first half fixture run.
 
 **Choices made here:**
-- **Optimizers round once per step.** A half parameter steps in f32 and its parameter and state are rounded once; PyTorch rounds after each in-place op of its update. The fixtures show no difference beyond 1 eps over three steps. State stays in the parameter's dtype; f32 master weights are P7.
+- **Optimizers round once per step.** *(Superseded for Adam by "Adam refuses half parameters", #317.)* A half parameter steps in f32 and its parameter and state are rounded once; PyTorch rounds after each in-place op of its update. The fixtures show no difference beyond 1 eps over three steps. State stays in the parameter's dtype; f32 master weights are P7.
 - **Halves save storage, not time or peak memory.** Each op decodes its inputs to f32 and builds its output in f32 before rounding, so a half op allocates about three times its tensors' half bytes transiently, and movement ops decode and re-encode (exactly) rather than copy bits. Native half kernels would need half arithmetic or a per-dtype kernel copy; neither matches the semantics better, and the GPU path (P8) is where speed is expected.
 - **No compile-time cost.** F16 and BF16 share the `f32` arm, so they add no monomorphized kernel copies.
 
@@ -649,7 +675,7 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 
 **Choices made here:**
 - **`DTypePolicy`, `Promote` by default.** Promotion is the one implicit conversion in the library, against the fail-loudly rule (ADDENDUM §8), so `with_dtype_policy(DTypePolicy::Strict)` turns it off for a scope: mixed operands panic, naming the op and "under DTypePolicy::Strict". It is a thread-local with a `!Send` restoring guard, the shape of `DevicePolicy` and `no_grad`. Strict refuses only mixed operands; `i64 / i64` in f32 is `div`'s definition, not a mix.
-- **No scalars, so `[1]` tensors promote fully** (decision (a)). Volta has no zero-dim tensors or scalar ops, so `f16[n] * f32[1]` is f32, exactly torch's rule for a `[1]` tensor. Torch keeps `f16 * 2.0` in f16 through its wrapped-number rule; scalar ops with that rule are a TODO. *(Superseded in part by #100: full reductions are rank-0 and zero-dim operands follow torch's rule; see "Full reductions are rank-0". A `[1]` tensor still promotes fully.)* The library's constants come from `constant_like` in the input's dtype, so only user code can widen a half model this way.
+- **No scalars, so `[1]` tensors promote fully** *(Superseded by: "Full reductions are rank-0", #100.)* (decision (a)). Volta has no zero-dim tensors or scalar ops, so `f16[n] * f32[1]` is f32, exactly torch's rule for a `[1]` tensor. Torch keeps `f16 * 2.0` in f16 through its wrapped-number rule; scalar ops with that rule are a TODO. *(Superseded in part by #100: full reductions are rank-0 and zero-dim operands follow torch's rule; see "Full reductions are rank-0". A `[1]` tensor still promotes fully.)* The library's constants come from `constant_like` in the input's dtype, so only user code can widen a half model this way.
 - **Integer arithmetic stays out** (decision on P5, kept): `i64 + i64` promotes to i64 and panics "no i64 kernel", while `i64 / i64` works. The asymmetry is noted in TODO until integer kernels land.
 - `where`'s condition stays Bool-only; only its branches promote.
 
