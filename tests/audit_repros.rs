@@ -259,7 +259,6 @@ fn try_to_tensor_refuses_requires_grad_on_integer_data() {
 /// error promptly. The map runs on a thread so that today's hang fails the test instead
 /// of stalling the suite.
 #[test]
-#[ignore = "#459: validate_entry accepts zero dims and transpose_2d loops usize::MAX times"]
 fn mapper_rejects_a_zero_dim_entry_instead_of_hanging() {
     use volta::io::TensorData;
     use volta::io::mapping::StateDictMapper;

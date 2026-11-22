@@ -137,12 +137,15 @@ impl TensorData {
         checked_numel(&self.shape).expect("TensorData::numel: shape product overflows usize")
     }
 
-    /// Checks that `data` holds exactly the bytes `shape` and `dtype` need, and that every
-    /// `Bool` byte is 0 or 1. Allocates nothing. `key` names the entry in the error.
+    /// Checks that `shape` is one a tensor can have (no zero dim, at most
+    /// [`crate::shape::MAX_NUMEL`] elements), that `data` holds exactly the bytes `shape`
+    /// and `dtype` need, and that every `Bool` byte is 0 or 1. Allocates nothing. `key`
+    /// names the entry in the error.
     ///
     /// # Errors
-    /// `VoltaError::StateDataLength` (counted in bytes; `expected` is `usize::MAX` when the
-    /// shape's size overflows) if the byte count is wrong, and
+    /// `VoltaError::InvalidParameter` if `shape` has a zero dim or more than `MAX_NUMEL`
+    /// elements, `VoltaError::StateDataLength` (counted in bytes; `expected` is
+    /// `usize::MAX` when the shape's size overflows) if the byte count is wrong, and
     /// `VoltaError::InvalidParameter` if a `Bool` byte is neither 0 nor 1.
     pub fn validate(&self, key: &str) -> crate::Result<()> {
         validate_entry(key, &self.data, &self.shape, self.dtype)
@@ -210,6 +213,26 @@ fn checked_numel(shape: &[usize]) -> Option<usize> {
 
 /// The check behind [`TensorData::validate`], on borrowed parts.
 fn validate_entry(key: &str, data: &[u8], shape: &[usize], dtype: DType) -> crate::Result<()> {
+    // The shape first: a zero dim makes numel 0, so `[0, usize::MAX]` with no bytes would
+    // pass the byte check below and then hang code that loops over a dim (#459). Volta's
+    // tensors have no zero dims (`Shape::from_dims`), so neither do its state dicts.
+    if shape.contains(&0) {
+        return Err(crate::VoltaError::invalid(
+            "TensorData::validate",
+            Some("shape"),
+            format!("state dict entry '{key}': shape {shape:?} has a zero dimension"),
+        ));
+    }
+    if checked_numel(shape).is_some_and(|n| n > crate::shape::MAX_NUMEL) {
+        return Err(crate::VoltaError::invalid(
+            "TensorData::validate",
+            Some("shape"),
+            format!(
+                "state dict entry '{key}': shape {shape:?} has more than {} elements",
+                crate::shape::MAX_NUMEL
+            ),
+        ));
+    }
     let expected = checked_numel(shape)
         .and_then(|n| n.checked_mul(dtype.size_of()))
         .unwrap_or(usize::MAX);
@@ -982,6 +1005,36 @@ mod io_tests {
             bad.try_to_tensor(false),
             Err(crate::VoltaError::StateDataLength { .. })
         ));
+    }
+
+    /// #459: a zero dim or more than `MAX_NUMEL` elements fails validation before the
+    /// byte count is looked at, so an empty `[0, usize::MAX]` entry is refused; saving
+    /// one is refused too.
+    #[test]
+    fn validate_rejects_zero_dims_and_oversized_shapes() {
+        for shape in [vec![0], vec![2, 0], vec![0, usize::MAX]] {
+            let td = TensorData::from_typed(Vec::<f32>::new(), shape.clone());
+            let err = td.validate("w").expect_err("zero dim");
+            assert!(
+                err.to_string().contains("zero dimension"),
+                "{shape:?}: {err}"
+            );
+            assert!(err.to_string().contains("'w'"), "{err}");
+        }
+        let big = TensorData {
+            data: vec![],
+            shape: vec![crate::shape::MAX_NUMEL + 1],
+            dtype: DType::U8,
+        };
+        let err = big.validate("w").expect_err("oversized");
+        assert!(err.to_string().contains("more than"), "{err}");
+        let state = StateDict::from([(
+            "w".to_string(),
+            TensorData::from_typed(Vec::<f32>::new(), vec![0, 4]),
+        )]);
+        let dir = std::env::temp_dir().join(format!("volta-459-{}", std::process::id()));
+        assert!(save_safetensors(&state, &dir).is_err());
+        assert!(!dir.exists(), "nothing written");
     }
 
     /// A bool entry whose byte is not 0 or 1 fails validation.
