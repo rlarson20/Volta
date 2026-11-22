@@ -5,8 +5,8 @@
 #
 #   scripts/status.sh [YYYY-MM-DD]
 #
-# The date is where the digest starts (default: 7 days ago). Needs `gh` signed in, and a
-# checkout whose `origin/improvements` is fetched.
+# The date is where the digest starts (default: 7 days ago). Needs `gh` signed in, `jq`, and
+# a checkout whose `origin/improvements` is fetched.
 set -euo pipefail
 
 repo=rlarson20/Volta
@@ -17,10 +17,15 @@ since=${1:-$(date -u -d '7 days ago' +%F 2>/dev/null || date -u -v-7d +%F)}
 }
 
 # One search query, printed as a Markdown list; "- none" when it matches nothing.
+# GitHub's search can return a partial result set under load (`incomplete_results`); say so
+# rather than print a short list as if it were the whole one.
 list() {
-	local out
-	out=$(gh api -X GET search/issues -f q="repo:$repo $1" -f per_page=100 \
-		--jq '.items[] | "- #\(.number) \(.title)"')
+	local json out
+	json=$(gh api -X GET search/issues -f q="repo:$repo $1" -f per_page=100)
+	if [[ $(jq -r .incomplete_results <<<"$json") == true ]]; then
+		echo "- (GitHub returned partial results for this list; rerun \`just status\`)"
+	fi
+	out=$(jq -r '.items[] | "- #\(.number) \(.title)"' <<<"$json")
 	if [[ -n $out ]]; then echo "$out"; else echo "- none"; fi
 }
 
