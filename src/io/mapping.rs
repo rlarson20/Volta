@@ -138,7 +138,9 @@ impl StateDictMapper {
     /// PyTorch Linear layers store weights as [`out_features`, `in_features`],
     /// while Volta stores them as [`in_features`, `out_features`].
     ///
-    /// This operation only affects 2D tensors. Non-2D tensors are left unchanged.
+    /// This operation only affects 2D tensors. Non-2D tensors are left unchanged. A
+    /// malformed 2-D entry makes [`StateDictMapper::try_apply`] return its
+    /// [`TensorData::validate`] error.
     pub fn transpose(mut self, key: impl Into<String>) -> Self {
         let key = key.into();
 
@@ -147,7 +149,7 @@ impl StateDictMapper {
                 if let Some(tensor_data) = state.get_mut(&key)
                     && tensor_data.shape.len() == 2
                 {
-                    transpose_2d(tensor_data);
+                    transpose_2d(&key, tensor_data)?;
                 }
                 Ok(())
             }));
@@ -191,8 +193,7 @@ impl StateDictMapper {
                         ),
                     ));
                 }
-                transpose_2d(tensor_data);
-                Ok(())
+                transpose_2d(&key, tensor_data)
             }));
         self
     }
@@ -218,7 +219,7 @@ impl StateDictMapper {
                     if let Some(tensor_data) = state.get_mut(&key)
                         && tensor_data.shape.len() == 2
                     {
-                        transpose_2d(tensor_data);
+                        transpose_2d(&key, tensor_data)?;
                     }
                 }
                 Ok(())
@@ -273,9 +274,11 @@ impl StateDictMapper {
     ///
     /// # Errors
     /// [`VoltaError::StateKeyCollision`] if a renaming step would give two entries the
-    /// same name, or [`VoltaError::InvalidParameter`] if a
-    /// [`StateDictMapper::transpose_linear`] key is missing or not 2-D. That step leaves
-    /// `state` as it was, but the steps before it have already been applied.
+    /// same name, [`VoltaError::InvalidParameter`] if a
+    /// [`StateDictMapper::transpose_linear`] key is missing or not 2-D, and the
+    /// [`TensorData::validate`] error if an entry a transpose step reaches is malformed.
+    /// That step leaves the failing entry as it was, but the steps before it have already
+    /// been applied.
     pub fn try_apply(&self, state: &mut StateDict) -> Result<()> {
         for transform in &self.transformations {
             transform(state)?;
@@ -355,14 +358,14 @@ fn rekey(state: &mut StateDict, new_name: impl Fn(&str) -> Option<String>) -> Re
 /// Transpose a row-major 2-D tensor in place: `[R, C]` -> `[C, R]`. Moves whole
 /// elements (`dtype.size_of()` bytes each), so it works for every dtype.
 ///
-/// # Panics
-/// If the entry's byte count does not match its shape and dtype (the loaders check
-/// that, so this is a caller-built entry).
-fn transpose_2d(tensor_data: &mut TensorData) {
+/// # Errors
+/// The [`TensorData::validate`] error, naming `key`, if the entry is malformed: a byte
+/// count that does not match its shape and dtype, or a zero or oversized dimension
+/// (#459: a `[0, usize::MAX]` entry passed the byte check and then looped `usize::MAX`
+/// times here). The entry is checked before anything is allocated.
+fn transpose_2d(key: &str, tensor_data: &mut TensorData) -> Result<()> {
+    tensor_data.validate(key)?;
     let [rows, cols] = fixed_dims::<2>(&tensor_data.shape);
-    if let Err(e) = tensor_data.validate("transpose") {
-        panic!("transpose_2d: {e}");
-    }
     let size = tensor_data.dtype.size_of();
     // Output row `j` is input column `j`: append its elements in order.
     let mut transposed = Vec::with_capacity(tensor_data.data.len());
@@ -374,6 +377,7 @@ fn transpose_2d(tensor_data: &mut TensorData) {
     }
     tensor_data.data = transposed;
     tensor_data.shape = vec![cols, rows];
+    Ok(())
 }
 
 impl Default for StateDictMapper {
@@ -520,6 +524,28 @@ mod tests {
         // Should not affect the state if key doesn't exist
         assert!(mapped.contains_key("weight"));
         assert!(!mapped.contains_key("new_key"));
+    }
+
+    /// #459: a transpose step returns the entry's validation error for a malformed entry
+    /// (a zero dim, or a byte count that doesn't match), from every transpose method,
+    /// instead of hanging or panicking.
+    #[test]
+    fn transpose_steps_reject_malformed_entries() {
+        let zero_dim = TensorData::from_typed(Vec::<f32>::new(), vec![0, 3]);
+        let mut short = TensorData::from_f32(vec![1.0; 4], vec![2, 2]);
+        short.data.truncate(12);
+        for (bad, want) in [(zero_dim, "zero dimension"), (short, "")] {
+            let state = || BTreeMap::from([("fc.weight".to_string(), bad.clone())]);
+            for mapper in [
+                StateDictMapper::new().transpose("fc.weight"),
+                StateDictMapper::new().transpose_linear("fc"),
+                StateDictMapper::new().transpose_pattern("weight"),
+            ] {
+                let err = mapper.try_map(state()).expect_err("malformed entry");
+                assert!(err.to_string().contains("fc.weight"), "{err}");
+                assert!(err.to_string().contains(want), "{err}");
+            }
+        }
     }
 
     #[test]
