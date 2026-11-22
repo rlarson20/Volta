@@ -111,11 +111,22 @@ fn bn1d_eval_uses_running_stats() {
 #[test]
 fn bn1d_gradcheck_input() {
     let layer = BatchNorm1d::new(2);
-    let x = RawTensor::new(vec![1.0, -1.0, 2.0, 0.0, 3.0, 1.0, 4.0, 2.0], &[4, 2], true);
+    let x = RawTensor::new(vec![1.0, -1.0, 2.5, 0.0, 3.0, 1.0, 4.0, 2.0], &[4, 2], true);
+    // Each channel of the normalized output sums to 0 (gamma = 1, beta = 0), so an
+    // unweighted `.sum()` has a zero gradient for any backward (#461). Weight it.
+    let w = RawTensor::new(
+        vec![0.3, -1.2, 0.7, 1.5, 0.2, -0.8, 1.1, 0.4],
+        &[4, 2],
+        false,
+    );
     // Use stricter epsilon on BN since it's mean-centered (small grads).
     let (_max_e, _mean_e, passed) = RawTensor::check_gradients(
         &x,
-        |t| <BatchNorm1d as Layer>::forward(&layer, t).sum(),
+        |t| {
+            <BatchNorm1d as Layer>::forward(&layer, t)
+                .elem_mul(&w)
+                .sum()
+        },
         1e-2,
         1e-2,
     );
@@ -180,9 +191,16 @@ fn bn2d_gradcheck_input() {
         data.push((i as f32) * 0.1 + 1.0);
     }
     let x = RawTensor::new(data, &[2, 2, 2, 2], true);
+    // As in `bn1d_gradcheck_input`, a plain `.sum()` is constant: weight it (#461).
+    let w_data: Vec<f32> = (0..16).map(|i| ((i * 7 % 11) as f32 - 5.0) * 0.3).collect();
+    let w = RawTensor::new(w_data, &[2, 2, 2, 2], false);
     let (_max_e, _mean_e, passed) = RawTensor::check_gradients(
         &x,
-        |t| <BatchNorm2d as Layer>::forward(&layer, t).sum(),
+        |t| {
+            <BatchNorm2d as Layer>::forward(&layer, t)
+                .elem_mul(&w)
+                .sum()
+        },
         1e-2,
         1e-2,
     );
