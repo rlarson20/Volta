@@ -71,7 +71,7 @@ Add Volta to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-volta = "0.3.0"
+volta = "0.4.0"
 ```
 
 The default build is CPU-only. Both backends are opt-in features, and they add to each other: `gpu` (the experimental WGPU backend, which compiles `wgpu`) and `accelerate` (Apple's Accelerate framework for matrix multiplication on macOS; a no-op on other platforms).
@@ -80,7 +80,7 @@ The default build is CPU-only. Both backends are opt-in features, and they add t
 
 ```toml
 [dependencies]
-volta = { version = "0.3.0", features = ["gpu", "accelerate"] }
+volta = { version = "0.4.0", features = ["gpu", "accelerate"] }
 ```
 
 Pick either one alone, for example `features = ["accelerate"]` for BLAS on macOS without the GPU backend.
