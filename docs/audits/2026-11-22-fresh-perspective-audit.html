@@ -1,0 +1,1385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Volta Fresh-Perspective Audit — 2026-11-22</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --background: #f8fafc;
+      --card: #ffffff;
+      --sidebar: #f1f5f9;
+      --border: #cbd5e1;
+      --card-border: #e2e8f0;
+      --foreground: #0f172a;
+      --muted-foreground: #475569;
+      --primary: #2563eb;
+      --primary-foreground: #ffffff;
+      --accent: #7c3aed;
+      --success: #15803d;
+      --warning: #b45309;
+      --error: #dc2626;
+      --chart-1: #2563eb;
+      --chart-2: #64748b;
+      --chart-3: #0891b2;
+      --chart-4: #7c3aed;
+      --chart-5: #0d9488;
+      --chart-6: #d97706;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --background: #0b1120;
+        --card: #111827;
+        --sidebar: #1e293b;
+        --border: #334155;
+        --card-border: #1f2937;
+        --foreground: #f1f5f9;
+        --muted-foreground: #94a3b8;
+        --primary: #60a5fa;
+        --primary-foreground: #0b1120;
+        --accent: #a78bfa;
+        --success: #4ade80;
+        --warning: #fbbf24;
+        --error: #f87171;
+        --chart-1: #60a5fa;
+        --chart-2: #94a3b8;
+        --chart-3: #22d3ee;
+        --chart-4: #a78bfa;
+        --chart-5: #2dd4bf;
+        --chart-6: #fbbf24;
+      }
+    }
+    :root[data-theme="dark"] {
+      --background: #0b1120;
+      --card: #111827;
+      --sidebar: #1e293b;
+      --border: #334155;
+      --card-border: #1f2937;
+      --foreground: #f1f5f9;
+      --muted-foreground: #94a3b8;
+      --primary: #60a5fa;
+      --primary-foreground: #0b1120;
+      --accent: #a78bfa;
+      --success: #4ade80;
+      --warning: #fbbf24;
+      --error: #f87171;
+      --chart-1: #60a5fa;
+      --chart-2: #94a3b8;
+      --chart-3: #22d3ee;
+      --chart-4: #a78bfa;
+      --chart-5: #2dd4bf;
+      --chart-6: #fbbf24;
+    }
+
+    * { box-sizing: border-box; }
+    html { font-size: 14px; scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.55;
+      background: var(--background);
+      color: var(--foreground);
+      -webkit-font-smoothing: antialiased;
+    }
+    h1, h2, h3, p, ul, ol { margin-top: 0; }
+    code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    .container {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 1.5rem 1.25rem 3rem;
+      display: flex;
+      flex-direction: column;
+      gap: 2rem;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      padding: 1.25rem;
+    }
+    .subcard {
+      background: var(--background);
+      border: 1px solid var(--card-border);
+      border-radius: 0.45rem;
+      padding: 0.9rem;
+    }
+    .stack-sm { display: flex; flex-direction: column; gap: 0.5rem; }
+    .stack-md { display: flex; flex-direction: column; gap: 0.9rem; }
+    .stack-lg { display: flex; flex-direction: column; gap: 1.15rem; }
+    .row-wrap { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.75rem; }
+    .flex-wrap-gap { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+
+    .grid-kpi {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+      gap: 0.75rem;
+    }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 1rem;
+    }
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 0.9rem;
+    }
+
+    .title-xl { font-size: 1.5rem; font-weight: 700; line-height: 1.25; margin-bottom: 0.35rem; }
+    .title-lg { font-size: 1.15rem; font-weight: 700; line-height: 1.3; margin-bottom: 0.25rem; }
+    .title-md { font-size: 1rem; font-weight: 700; line-height: 1.35; margin-bottom: 0.25rem; }
+    .kpi-num { font-size: 1.35rem; font-weight: 700; line-height: 1.2; margin: 0.3rem 0; }
+    .text-xs { font-size: 12px; }
+    .text-sm { font-size: 13px; }
+    .muted { color: var(--muted-foreground); }
+    .c-error { color: var(--error); }
+    .c-warning { color: var(--warning); }
+    .c-primary { color: var(--primary); }
+    .c-accent { color: var(--accent); }
+    .c-success { color: var(--success); }
+
+    .page-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      padding-top: 0.85rem;
+      border-top: 1px solid var(--card-border);
+    }
+    .nav-link, .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.38rem 0.75rem;
+      border-radius: 0.375rem;
+      border: 1px solid var(--border);
+      background: var(--background);
+      color: var(--foreground);
+      font-size: 12px;
+      font-weight: 500;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .nav-link:hover, .btn:hover { border-color: var(--primary); }
+    .nav-link:focus-visible, .btn:focus-visible, input:focus-visible, select:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+    }
+    .filter-pill[aria-pressed="true"] {
+      background: var(--primary);
+      color: var(--primary-foreground);
+      border-color: var(--primary);
+      font-weight: 600;
+    }
+    .input-ctrl {
+      background: var(--background);
+      color: var(--foreground);
+      border: 1px solid var(--border);
+      border-radius: 0.375rem;
+      padding: 0.35rem 0.6rem;
+      font-size: 12px;
+    }
+    .search-grow { flex: 1 1 210px; display: flex; align-items: center; gap: 0.45rem; }
+    .search-grow input { width: 100%; }
+
+    /* Badges */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.15rem 0.55rem;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.35;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+    .sev-critical {
+      color: var(--error);
+      background: color-mix(in srgb, var(--error) 14%, transparent);
+      border-color: color-mix(in srgb, var(--error) 35%, transparent);
+    }
+    .sev-high {
+      color: var(--warning);
+      background: color-mix(in srgb, var(--warning) 14%, transparent);
+      border-color: color-mix(in srgb, var(--warning) 35%, transparent);
+    }
+    .sev-medium {
+      color: var(--primary);
+      background: color-mix(in srgb, var(--primary) 14%, transparent);
+      border-color: color-mix(in srgb, var(--primary) 35%, transparent);
+    }
+    .sev-low {
+      color: var(--muted-foreground);
+      background: color-mix(in srgb, var(--muted-foreground) 12%, transparent);
+      border-color: color-mix(in srgb, var(--muted-foreground) 30%, transparent);
+    }
+    .origin-new {
+      color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 12%, transparent);
+      border-color: color-mix(in srgb, var(--accent) 32%, transparent);
+    }
+    .origin-drift {
+      color: var(--warning);
+      background: color-mix(in srgb, var(--warning) 12%, transparent);
+      border-color: color-mix(in srgb, var(--warning) 32%, transparent);
+    }
+    .status-ok {
+      color: var(--success);
+      background: color-mix(in srgb, var(--success) 13%, transparent);
+      border-color: color-mix(in srgb, var(--success) 32%, transparent);
+    }
+
+    /* Responsive + Sortable Tables */
+    .table-wrapper {
+      overflow: auto;
+      max-inline-size: 100%;
+      max-block-size: min(640px, 75vh);
+      container-type: inline-size;
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      background: var(--card);
+    }
+    .table-wrapper:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+    }
+    table.audit-table {
+      width: 100%;
+      min-inline-size: 720px;
+      border-collapse: separate;
+      border-spacing: 0;
+      text-align: left;
+      font-size: 13px;
+    }
+    table.audit-table caption {
+      text-align: left;
+      padding: 0.65rem 0.9rem;
+      font-size: 12px;
+      color: var(--muted-foreground);
+      border-bottom: 1px solid var(--border);
+      background: var(--card);
+    }
+    table.audit-table thead {
+      position: sticky;
+      inset-block-start: 0;
+      z-index: 2;
+      background: var(--sidebar);
+    }
+    table.audit-table thead th {
+      padding: 0.65rem 0.85rem;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--foreground);
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+      vertical-align: middle;
+    }
+    table.audit-table thead th:has(> button) {
+      padding: 0;
+    }
+    .sort-btn {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.4rem;
+      width: 100%;
+      min-height: 36px;
+      padding: 0.65rem 0.85rem;
+      font-size: 12px;
+      font-weight: 600;
+      color: inherit;
+      background: transparent;
+      border: 0;
+      cursor: pointer;
+      text-align: left;
+    }
+    .sort-btn:hover {
+      background: color-mix(in srgb, var(--primary) 8%, transparent);
+    }
+    .sort-btn:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: -2px;
+    }
+    .sort-icon::after {
+      content: "⇅";
+      font-size: 12px;
+      opacity: 0.45;
+    }
+    th[aria-sort="ascending"] .sort-icon::after {
+      content: "▲";
+      color: var(--primary);
+      opacity: 1;
+    }
+    th[aria-sort="descending"] .sort-icon::after {
+      content: "▼";
+      color: var(--primary);
+      opacity: 1;
+    }
+    table.audit-table tbody th,
+    table.audit-table tbody td {
+      padding: 0.65rem 0.85rem;
+      border-bottom: 1px solid var(--card-border);
+      vertical-align: top;
+      font-size: 13px;
+    }
+    table.audit-table tbody th {
+      position: sticky;
+      inset-inline-start: 0;
+      z-index: 1;
+      background: var(--card);
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    table.audit-table tbody tr:hover td,
+    table.audit-table tbody tr:hover th {
+      background: color-mix(in srgb, var(--primary) 5%, var(--card));
+    }
+    table.audit-table tbody tr[hidden] {
+      display: none;
+    }
+
+    #findings-table {
+      --label-1: "ID";
+      --label-2: "Severity";
+      --label-3: "Area";
+      --label-4: "Origin";
+      --label-5: "Location";
+      --label-6: "Finding";
+    }
+    #flipflops-table {
+      --label-1: "#";
+      --label-2: "Area";
+      --label-3: "Reversal Sequence";
+      --label-4: "Dates & Commits";
+      --label-5: "DECISIONS.md";
+    }
+
+    @container (width < 640px) {
+      table.audit-table { min-inline-size: 0; }
+      table.audit-table,
+      table.audit-table thead,
+      table.audit-table tbody,
+      table.audit-table tr,
+      table.audit-table th,
+      table.audit-table td {
+        display: block;
+      }
+      table.audit-table thead { display: none; }
+      table.audit-table tbody tr {
+        margin: 0.75rem;
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+        overflow: hidden;
+        background: var(--card);
+      }
+      table.audit-table tbody th {
+        position: sticky;
+        inset-block-start: 0;
+        z-index: 2;
+        background: var(--sidebar);
+        border-bottom: 1px solid var(--border);
+      }
+      table.audit-table tbody td { padding: 0.5rem 0.75rem; }
+      table.audit-table td:nth-child(2)::before { content: var(--label-2) ": "; font-weight: 600; color: var(--muted-foreground); }
+      table.audit-table td:nth-child(3)::before { content: var(--label-3) ": "; font-weight: 600; color: var(--muted-foreground); }
+      table.audit-table td:nth-child(4)::before { content: var(--label-4) ": "; font-weight: 600; color: var(--muted-foreground); }
+      table.audit-table td:nth-child(5)::before { content: var(--label-5) ": "; font-weight: 600; color: var(--muted-foreground); }
+      table.audit-table td:nth-child(6)::before { content: var(--label-6) ": "; font-weight: 600; color: var(--muted-foreground); }
+    }
+
+    tbody tr { view-transition-name: match-element; }
+    @media (prefers-reduced-motion: reduce) {
+      ::view-transition-group(*),
+      ::view-transition-old(*),
+      ::view-transition-new(*) {
+        animation: none;
+      }
+    }
+
+    /* Accordion */
+    .accordion details {
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      background: var(--card);
+      margin-bottom: 0.75rem;
+    }
+    .accordion summary {
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      padding: 0.9rem 1.1rem;
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .accordion summary::-webkit-details-marker { display: none; }
+    .accordion summary:hover {
+      background: color-mix(in srgb, var(--primary) 6%, transparent);
+    }
+    .accordion summary:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: -2px;
+      border-radius: 0.5rem;
+    }
+    .accordion summary::before {
+      content: "";
+      inline-size: 0.7rem;
+      block-size: 0.7rem;
+      flex-shrink: 0;
+      background-color: currentColor;
+      clip-path: polygon(10% 25%, 90% 25%, 50% 80%);
+      rotate: -90deg;
+    }
+    .accordion details[open] > summary::before { rotate: 0deg; }
+    .accordion details[open] > summary { border-bottom: 1px solid var(--card-border); }
+    .accordion details::details-content {
+      interpolate-size: allow-keywords;
+      overflow: clip;
+      contain: layout;
+    }
+    .accordion details:not([open])::details-content { block-size: 0; }
+    @media (prefers-reduced-motion: no-preference) {
+      .accordion summary::before { transition: rotate 0.2s ease; }
+      .accordion details::details-content {
+        transition: block-size 0.28s ease-in-out, content-visibility 0.28s ease-in-out, display 0.28s ease-in-out;
+        transition-behavior: allow-discrete;
+      }
+    }
+    [command="--toggle-all"][aria-expanded="true"] .expand,
+    [command="--toggle-all"][aria-expanded="false"] .collapse {
+      display: none;
+    }
+    .details-body { padding: 1rem 1.15rem; font-size: 13.5px; }
+    .details-body ul, .details-body ol { padding-left: 1.35rem; margin-bottom: 0; display: flex; flex-direction: column; gap: 0.45rem; }
+
+    /* Scoped Chart Tabs */
+    .tablist {
+      display: flex;
+      overflow-x: auto;
+      background: var(--sidebar);
+      border: 1px solid var(--border);
+      border-radius: 0.5rem 0.5rem 0 0;
+      gap: 0.25rem;
+    }
+    .tablist button[role="tab"] {
+      position: relative;
+      flex: none;
+      padding: 0.7rem 1rem;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--muted-foreground);
+      background: transparent;
+      border: 0;
+      cursor: pointer;
+      white-space: nowrap;
+      min-height: 40px;
+    }
+    .tablist button[role="tab"]:hover { color: var(--foreground); }
+    .tablist button[role="tab"]:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: -2px;
+    }
+    .tablist button[role="tab"][aria-selected="true"] {
+      color: var(--primary);
+      font-weight: 600;
+    }
+    .tablist button[role="tab"][aria-selected="true"]::after {
+      content: "";
+      position: absolute;
+      inset: auto 0 0;
+      border-block-end: 3px solid var(--primary);
+    }
+    .panel-inner {
+      padding: 1.15rem;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-top: 0;
+      border-radius: 0 0 0.5rem 0.5rem;
+    }
+    .svg-fluid { width: 100%; height: auto; display: block; }
+  </style>
+</head>
+<body>
+  <main class="container">
+
+    <!-- Header -->
+    <header class="card stack-md">
+      <div class="row-wrap" style="align-items: flex-start;">
+        <div class="stack-sm" style="flex: 1 1 560px;">
+          <div class="flex-wrap-gap text-xs muted">
+            <span class="badge sev-medium">Independent Harness Audit</span>
+            <span class="mono">2026-11-22</span>
+            <span>·</span>
+            <span class="mono">HEAD: 75f94d4 (improvements)</span>
+            <span>·</span>
+            <span class="mono">vs main: 1b98959 (+399 commits)</span>
+          </div>
+          <h1 class="title-xl">Volta — Fresh-Perspective Codebase, GPU, CI &amp; Governance Audit</h1>
+          <p class="text-xs muted" style="margin-bottom: 0;">
+            Dated record. Original text is never edited or removed; corrections are appended under <span class="mono">## Corrections</span> (<span class="mono">.claude/rules/audits.md</span>). Audited independently of Claude sessions across local git tree, Rust/WGSL sources, CI/scripts, and GitHub issues/PRs/rulesets.
+          </p>
+        </div>
+        <div class="stack-sm text-xs muted" style="align-items: flex-end;">
+          <button type="button" id="theme-toggle" class="btn" aria-pressed="false">Toggle Light / Dark Theme</button>
+          <div><strong style="color: var(--foreground);">Crate Version:</strong> <span class="mono">0.3.0</span> (0 GH releases)</div>
+          <div><strong style="color: var(--foreground);">Default GH Branch:</strong> <span class="mono">improvements</span></div>
+          <div><strong style="color: var(--foreground);">Findings Logged:</strong> <span class="mono">46</span> (7 Crit / 16 High / 15 Med / 8 Low)</div>
+        </div>
+      </div>
+
+      <nav aria-label="Report sections" class="page-nav">
+        <a href="#verdict" class="nav-link">Executive Verdict</a>
+        <a href="#visuals" class="nav-link">Visual Telemetry</a>
+        <a href="#governance" class="nav-link">Governance &amp; 16 Flip-Flops</a>
+        <a href="#findings" class="nav-link">Findings Matrix (F01–F46)</a>
+        <a href="#deep-dives" class="nav-link">Technical Deep Dives</a>
+        <a href="#reset-plan" class="nav-link">3-Phase Reset Plan</a>
+      </nav>
+    </header>
+
+    <!-- Section 1: Executive Verdict & KPI Strip -->
+    <section id="verdict" class="stack-lg">
+      <div class="grid-kpi">
+        <div class="card">
+          <div class="text-xs muted">Meta / Gov vs Prod Rust</div>
+          <div class="kpi-num c-warning">82.5%</div>
+          <div class="text-xs muted">662.5 KB meta vs 803.0 KB prod <span class="mono">.rs</span></div>
+        </div>
+        <div class="card">
+          <div class="text-xs muted">PRs With GH Reviews</div>
+          <div class="kpi-num c-error">3 / 199</div>
+          <div class="text-xs muted">1.5% reviewed · 75 merged &lt;5m apart</div>
+        </div>
+        <div class="card">
+          <div class="text-xs muted">Architectural Flip-Flops</div>
+          <div class="kpi-num c-warning">16 in 25d</div>
+          <div class="text-xs muted">Storage 4× · Load 3× · Shape 3d</div>
+        </div>
+        <div class="card">
+          <div class="text-xs muted">GPU Footprint vs Speed</div>
+          <div class="kpi-num c-primary">18,856 LOC</div>
+          <div class="text-xs muted">23.2% of src/ · loses at all sizes</div>
+        </div>
+        <div class="card">
+          <div class="text-xs muted">Integration Test Binaries</div>
+          <div class="kpi-num c-accent">82 crates</div>
+          <div class="text-xs muted">30 empty on CPU · 1.8 MB fixtures</div>
+        </div>
+        <div class="card">
+          <div class="text-xs muted">New / Drift Findings</div>
+          <div class="kpi-num c-error">46 total</div>
+          <div class="text-xs muted">7 Critical · 16 High · 15 Med · 8 Low</div>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card stack-sm">
+          <div class="row-wrap">
+            <h2 class="title-md">Where Your Guardrails Genuinely Worked</h2>
+            <span class="badge status-ok">Solid Autograd Core</span>
+          </div>
+          <p class="text-sm muted">
+            Your intuition is right to distinguish code quality from project momentum: the core Rust autograd engine is disciplined, clean, and safer than most hobby ML libraries.
+          </p>
+          <ul class="text-sm" style="padding-left: 1.3rem; margin-bottom: 0; display: flex; flex-direction: column; gap: 0.4rem;">
+            <li><strong>Autograd invariants held:</strong> 100% <span class="mono">edge()</span> routing, zero <span class="mono">borrow_mut()</span> outside <span class="mono">autograd.rs</span>/<span class="mono">ops/</span>/<span class="mono">tensor.rs</span>, iterative <span class="mono">Drop</span> preventing deep-DAG stack overflow, and zero <span class="mono">unwrap()</span> or unchecked indexing in library code.</li>
+            <li><strong>Minimal, sound <span class="mono">unsafe</span>:</strong> only 4 <span class="mono">unsafe</span> sites in the entire crate (all GEMM calls in <span class="mono">src/ops/matmul.rs</span>), with explicit safety invariants and checked dimensions.</li>
+            <li><strong>High-signal numerical engineering:</strong> PyTorch 2.15 fixture suite (<span class="mono">tests/torch_ref_*.rs</span>), pairwise summation (<span class="mono">2^24</span> stall fix), K-blocked Accelerate SGEMM, atomic SafeTensors writes, and strict/atomic <span class="mono">LoadPlan</span>.</li>
+          </ul>
+        </div>
+
+        <div class="card stack-sm">
+          <div class="row-wrap">
+            <h2 class="title-md">Where Claude Ran Away With the Project</h2>
+            <span class="badge sev-critical">Process &gt; Shipping</span>
+          </div>
+          <p class="text-sm muted">
+            Your unease is completely validated by the commit graph and GitHub metadata. Without strict scope boundaries, Claude built a self-sustaining governance, audit, and tooling apparatus around a frozen <span class="mono">0.3.0</span> crate.
+          </p>
+          <ul class="text-sm" style="padding-left: 1.3rem; margin-bottom: 0; display: flex; flex-direction: column; gap: 0.4rem;">
+            <li><strong>Endless Audit → Issue → Refactor Loop:</strong> 10 audit docs (~4,300 lines, 5 still unmerged on remote Claude branches) spawned 246 issues (106 in 1 day), 199 merged PRs (+43k/-17k churn, 42 merged in 1 day), and 16 self-reversing rewrites — while <span class="mono">main</span> has sat untouched since July 9.</li>
+            <li><strong>Meta-work rivaling the product:</strong> <span class="mono">DECISIONS.md</span> (155 KB) is larger than any Rust source file; 12 CI workflows, 2.8k LOC of git/docs scripts, and 82 separate integration test binaries overwhelm an educational crate.</li>
+            <li><strong>Guardrail blind spots &amp; 23 Critical/High bugs:</strong> Custom bash checks were bypassed in live code, <span class="mono">VOLTA_REQUIRE_GPU=1</span> is ignored by 40/42 GPU test files, packed-f16 shaders overrun odd buffers, and <span class="mono">GradScaler</span>/<span class="mono">bce_loss</span>/<span class="mono">autocast</span> have silent overflow/NaN bugs.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section 2: Visual Telemetry (Tabs + Search Hidden Content) -->
+    <section id="visuals" class="stack-sm">
+      <div>
+        <h2 class="title-lg">Visual Telemetry</h2>
+        <p class="text-xs muted">Switch tabs to inspect repository byte/line growth, commit &amp; review velocity, and GPU complexity vs. Strict-policy coverage.</p>
+      </div>
+
+      <div class="chart-tabs" id="chart-tabs">
+        <div class="tablist" focusgroup="tablist nomemory" role="tablist" aria-label="Audit visual charts">
+          <button type="button" role="tab" id="tab-composition" aria-selected="true" focusgroupstart>1. Repo Composition (main vs improvements)</button>
+          <button type="button" role="tab" id="tab-velocity" aria-selected="false">2. Velocity &amp; Review Collapse</button>
+          <button type="button" role="tab" id="tab-gpu" aria-selected="false">3. GPU Footprint vs. Capability Gaps</button>
+        </div>
+
+        <!-- Panel 1 -->
+        <div role="tabpanel" aria-labelledby="tab-composition" tabindex="0">
+          <div class="panel-inner stack-md">
+            <div class="row-wrap">
+              <h3 class="title-md" style="font-size: 14px; margin: 0;">Repository Byte Footprint: <span class="mono">main</span> (1,827.6 KB) vs <span class="mono">improvements</span> (4,902.0 KB)</h3>
+              <span class="text-xs muted">2.68× byte growth · 1.53× LOC growth (54.8k → 84.1k)</span>
+            </div>
+            <svg viewBox="0 0 880 310" class="svg-fluid" role="img" aria-label="Horizontal bar chart comparing repository byte sizes between main and improvements branches">
+              <rect x="20" y="8" width="12" height="12" rx="2" fill="var(--chart-1)" />
+              <text x="38" y="19" font-size="12" fill="var(--foreground)">improvements (75f94d4)</text>
+              <rect x="220" y="8" width="12" height="12" rx="2" fill="var(--chart-2)" opacity="0.55" />
+              <text x="238" y="19" font-size="12" fill="var(--muted-foreground)">main (1b98959)</text>
+
+              <line x1="210" y1="36" x2="210" y2="275" stroke="var(--border)" stroke-width="1" />
+              <line x1="360" y1="36" x2="360" y2="275" stroke="var(--card-border)" stroke-dasharray="3 3" />
+              <line x1="510" y1="36" x2="510" y2="275" stroke="var(--card-border)" stroke-dasharray="3 3" />
+              <line x1="660" y1="36" x2="660" y2="275" stroke="var(--card-border)" stroke-dasharray="3 3" />
+              <line x1="810" y1="36" x2="810" y2="275" stroke="var(--card-border)" stroke-dasharray="3 3" />
+              <text x="210" y="294" font-size="12" fill="var(--muted-foreground)" text-anchor="middle">0 KB</text>
+              <text x="360" y="294" font-size="12" fill="var(--muted-foreground)" text-anchor="middle">600 KB</text>
+              <text x="510" y="294" font-size="12" fill="var(--muted-foreground)" text-anchor="middle">1,200 KB</text>
+              <text x="660" y="294" font-size="12" fill="var(--muted-foreground)" text-anchor="middle">1,800 KB</text>
+              <text x="810" y="294" font-size="12" fill="var(--muted-foreground)" text-anchor="middle">2,400 KB</text>
+
+              <text x="198" y="56" font-size="12" fill="var(--foreground)" text-anchor="end">tests/ (19.4×)</text>
+              <rect x="210" y="42" width="577" height="12" rx="2" fill="var(--chart-1)" />
+              <rect x="210" y="56" width="30" height="8" rx="2" fill="var(--chart-2)" opacity="0.6" />
+              <text x="795" y="53" font-size="12" fill="var(--foreground)">2,307 KB (1,814 KB fixtures)</text>
+
+              <text x="198" y="96" font-size="12" fill="var(--foreground)" text-anchor="end">src/ core + wgsl</text>
+              <rect x="210" y="82" width="366" height="12" rx="2" fill="var(--chart-3)" />
+              <rect x="210" y="96" width="273" height="8" rx="2" fill="var(--chart-2)" opacity="0.6" />
+              <text x="584" y="93" font-size="12" fill="var(--foreground)">1,464 KB (803 KB prod .rs)</text>
+
+              <text x="198" y="136" font-size="12" fill="var(--foreground)" text-anchor="end">docs + rules + md</text>
+              <rect x="210" y="122" width="124" height="12" rx="2" fill="var(--chart-4)" />
+              <rect x="210" y="136" width="68" height="8" rx="2" fill="var(--chart-2)" opacity="0.6" />
+              <text x="342" y="133" font-size="12" fill="var(--foreground)">495 KB (+175 KB unmerged)</text>
+
+              <text x="198" y="176" font-size="12" fill="var(--foreground)" text-anchor="end">src/lib_tests/</text>
+              <rect x="210" y="162" width="57" height="12" rx="2" fill="var(--chart-5)" />
+              <text x="275" y="173" font-size="12" fill="var(--foreground)">229 KB (7,176 LOC)</text>
+
+              <text x="198" y="216" font-size="12" fill="var(--foreground)" text-anchor="end">.github + scripts + just</text>
+              <rect x="210" y="202" width="48" height="12" rx="2" fill="var(--chart-6)" />
+              <rect x="210" y="216" width="5" height="8" rx="2" fill="var(--chart-2)" opacity="0.6" />
+              <text x="266" y="213" font-size="12" fill="var(--foreground)">191 KB (9.1× growth)</text>
+
+              <text x="198" y="256" font-size="12" fill="var(--foreground)" text-anchor="end">examples + benches</text>
+              <rect x="210" y="242" width="40" height="12" rx="2" fill="var(--chart-2)" />
+              <rect x="210" y="256" width="35" height="8" rx="2" fill="var(--chart-2)" opacity="0.5" />
+              <text x="258" y="253" font-size="12" fill="var(--foreground)">161 KB (4,557 LOC)</text>
+            </svg>
+            <div class="grid-3 text-xs">
+              <div class="subcard"><strong>Strict Meta/Gov Ratio:</strong> <span class="c-warning" style="font-weight: 700;">662.5 KB / 803.0 KB = 82.5%</span> of non-test production Rust bytes (43.7% by lines: 9,502 / 21,723).</div>
+              <div class="subcard"><strong>Largest Tracked File:</strong> <span class="mono">DECISIONS.md</span> at <strong>154,858 B</strong> (23,268 words, 91 entries), larger than <span class="mono">tensor.rs</span> (127 KB) or <span class="mono">conv.rs</span> (125 KB).</div>
+              <div class="subcard"><strong>crates.io Bloat Risk:</strong> <span class="mono">Cargo.toml:20</span> packages <span class="mono">/tests/**</span>, shipping <strong>1.81 MB</strong> of JSON/safetensors test fixtures to library users.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Panel 2 -->
+        <div role="tabpanel" aria-labelledby="tab-velocity" hidden="until-found">
+          <div class="panel-inner stack-md">
+            <div class="row-wrap">
+              <h3 class="title-md" style="font-size: 14px; margin: 0;">26-Day Sprint Velocity &amp; Oversight Ratios (<span class="mono">main..improvements</span>)</h3>
+              <span class="text-xs muted">376 of 399 commits landed Oct 25 – Nov 20 · 70.9% Claude-attributed</span>
+            </div>
+            <svg viewBox="0 0 880 280" class="svg-fluid" role="img" aria-label="Velocity chart showing commit spikes and oversight breakdown">
+              <text x="20" y="22" font-size="13" font-weight="bold" fill="var(--foreground)">Peak Activity Days (Oct–Nov 2026)</text>
+              <line x1="120" y1="36" x2="120" y2="236" stroke="var(--border)" />
+              <text x="112" y="58" font-size="12" fill="var(--foreground)" text-anchor="end">Nov 09 (Issues)</text>
+              <rect x="120" y="45" width="318" height="16" rx="2" fill="var(--error)" />
+              <text x="446" y="58" font-size="12" fill="var(--foreground)">106 issues in 1 day</text>
+
+              <text x="112" y="92" font-size="12" fill="var(--foreground)" text-anchor="end">Nov 19 (PRs)</text>
+              <rect x="120" y="79" width="126" height="16" rx="2" fill="var(--warning)" />
+              <text x="254" y="92" font-size="12" fill="var(--foreground)">42 PRs merged (37 created)</text>
+
+              <text x="112" y="126" font-size="12" fill="var(--foreground)" text-anchor="end">Nov 18 (Commits)</text>
+              <rect x="120" y="113" width="108" height="16" rx="2" fill="var(--chart-1)" />
+              <text x="236" y="126" font-size="12" fill="var(--foreground)">36 commits · 20 PRs merged</text>
+
+              <text x="112" y="160" font-size="12" fill="var(--foreground)" text-anchor="end">Oct 29 (Commits)</text>
+              <rect x="120" y="147" width="102" height="16" rx="2" fill="var(--chart-1)" />
+              <text x="230" y="160" font-size="12" fill="var(--foreground)">34 commits (Phase 3 churn)</text>
+
+              <text x="112" y="194" font-size="12" fill="var(--foreground)" text-anchor="end">Nov 16 (Commits)</text>
+              <rect x="120" y="181" width="87" height="16" rx="2" fill="var(--chart-3)" />
+              <text x="215" y="194" font-size="12" fill="var(--foreground)">29 commits · 14 PRs merged</text>
+
+              <text x="112" y="228" font-size="12" fill="var(--foreground)" text-anchor="end">Nov 20 (PRs)</text>
+              <rect x="120" y="215" width="57" height="16" rx="2" fill="var(--chart-4)" />
+              <text x="185" y="228" font-size="12" fill="var(--foreground)">19 PRs (15 merged in 2h)</text>
+
+              <line x1="560" y1="16" x2="560" y2="260" stroke="var(--border)" stroke-dasharray="4 4" />
+              <text x="580" y="22" font-size="13" font-weight="bold" fill="var(--foreground)">Oversight &amp; Automation Ratios</text>
+
+              <text x="580" y="54" font-size="12" fill="var(--foreground)">Agent-attributed commits (283 / 399)</text>
+              <rect x="580" y="61" width="270" height="12" rx="2" fill="var(--card-border)" />
+              <rect x="580" y="61" width="191" height="12" rx="2" fill="var(--chart-1)" />
+              <text x="858" y="71" font-size="12" fill="var(--foreground)">70.9%</text>
+
+              <text x="580" y="98" font-size="12" fill="var(--foreground)">Issues filed &lt;60s apart (166 / 246)</text>
+              <rect x="580" y="105" width="270" height="12" rx="2" fill="var(--card-border)" />
+              <rect x="580" y="105" width="182" height="12" rx="2" fill="var(--warning)" />
+              <text x="858" y="115" font-size="12" fill="var(--foreground)">67.5%</text>
+
+              <text x="580" y="142" font-size="12" fill="var(--foreground)">PRs merged &lt;30m after open (80 / 199)</text>
+              <rect x="580" y="149" width="270" height="12" rx="2" fill="var(--card-border)" />
+              <rect x="580" y="149" width="108" height="12" rx="2" fill="var(--chart-4)" />
+              <text x="858" y="159" font-size="12" fill="var(--foreground)">40.2%</text>
+
+              <text x="580" y="186" font-size="12" fill="var(--foreground)">Zero-src commits (111 / 399)</text>
+              <rect x="580" y="193" width="270" height="12" rx="2" fill="var(--card-border)" />
+              <rect x="580" y="193" width="75" height="12" rx="2" fill="var(--chart-6)" />
+              <text x="858" y="203" font-size="12" fill="var(--foreground)">27.8%</text>
+
+              <text x="580" y="230" font-size="12" fill="var(--foreground)">Merged PRs with GitHub reviews (3 / 199)</text>
+              <rect x="580" y="237" width="270" height="12" rx="2" fill="var(--card-border)" />
+              <rect x="580" y="237" width="5" height="12" rx="2" fill="var(--error)" />
+              <text x="858" y="247" font-size="12" fill="var(--error)">1.5%</text>
+            </svg>
+            <div class="subcard text-xs muted">
+              <strong>Pattern:</strong> Single Claude sessions regularly produced 13–32 commits and multi-PR stacks (e.g. session <span class="mono">01AQnJsLRzDq9gVUHxzbJdfU</span> generated the 9-PR serial tail <span class="mono">#432–#442</span> + 6 independent PRs + <span class="mono">FINISHING.md</span> + <span class="mono">restack.sh</span>), while 101 of 131 issue comments (77%) and all 4 GitHub milestones carry Claude signatures.
+            </div>
+          </div>
+        </div>
+
+        <!-- Panel 3 -->
+        <div role="tabpanel" aria-labelledby="tab-gpu" hidden="until-found">
+          <div class="panel-inner stack-md">
+            <div class="row-wrap">
+              <h3 class="title-md" style="font-size: 14px; margin: 0;">GPU Footprint (18,856 LOC) vs. Actual <span class="mono">DevicePolicy::Strict</span> Capability</h3>
+              <span class="text-xs muted">23.2% of src/ · 35.6% of tests/ · ~1.5 ms/op synchronous flush floor</span>
+            </div>
+            <svg viewBox="0 0 880 265" class="svg-fluid" role="img" aria-label="GPU code footprint and pipeline waste vs feature support diagram">
+              <text x="20" y="22" font-size="13" font-weight="bold" fill="var(--foreground)">Dedicated GPU Footprint Breakdown (18,856 LOC total)</text>
+              <rect x="20" y="34" width="268" height="24" fill="var(--chart-1)" />
+              <rect x="288" y="34" width="158" height="24" fill="var(--chart-2)" />
+              <rect x="446" y="34" width="64" height="24" fill="var(--chart-3)" />
+              <rect x="510" y="34" width="294" height="24" fill="var(--chart-4)" />
+              <rect x="804" y="34" width="56" height="24" fill="var(--chart-5)" />
+
+              <text x="20" y="76" font-size="12" fill="var(--foreground)">src/gpu/*.rs (6,038)</text>
+              <text x="288" y="76" font-size="12" fill="var(--foreground)">WGSL shaders (3,555)</text>
+              <text x="446" y="76" font-size="12" fill="var(--foreground)">gpu_ops (1,380)</text>
+              <text x="580" y="76" font-size="12" fill="var(--foreground)">GPU tests (6,602 LOC)</text>
+              <text x="740" y="76" font-size="12" fill="var(--foreground)">bench/ex/dev (1,217)</text>
+
+              <text x="20" y="114" font-size="13" font-weight="bold" fill="var(--foreground)">105 Eagerly Compiled Pipelines per Elem Type</text>
+              <rect x="20" y="126" width="680" height="20" fill="var(--success)" opacity="0.8" />
+              <rect x="700" y="126" width="96" height="20" fill="var(--error)" />
+              <rect x="796" y="126" width="64" height="20" fill="var(--warning)" />
+              <text x="20" y="164" font-size="12" fill="var(--foreground)">85 Active pipelines</text>
+              <text x="580" y="164" font-size="12" fill="var(--error)">12 Dead (#60 binary_backward_safe)</text>
+              <text x="20" y="182" font-size="12" fill="var(--warning)">3 Copy-paste duplicates (2× igemm_backward_*, 1× mean_backward) + 5 Half-Muon pipelines forbidden by dispatch</text>
+
+              <text x="20" y="214" font-size="13" font-weight="bold" fill="var(--foreground)">What Runs Under Default DevicePolicy::Strict vs. Panics/Fallbacks</text>
+              <rect x="20" y="224" width="410" height="32" rx="4" fill="var(--card)" stroke="var(--success)" />
+              <text x="32" y="244" font-size="12" fill="var(--success)">Works: Same-shape unary/binary, 2D matmul, Conv2d, sum/mean/max full, SGD/Adam/Muon</text>
+              <rect x="446" y="224" width="414" height="32" rx="4" fill="var(--card)" stroke="var(--error)" />
+              <text x="458" y="244" font-size="12" fill="var(--error)">Panics: Linear+bias, LayerNorm, BatchNorm, softmax, MaxPool2d, LSTM, MHA, Bool</text>
+            </svg>
+            <div class="subcard text-xs muted">
+              <strong>Cost vs. Benefit:</strong> Even <span class="mono">examples/gpu_training.rs</span> (a 4-sample XOR MLP!) has to opt into <span class="mono">DevicePolicy::PreferGpu</span> because <span class="mono">Linear</span> bias add lacks a GPU broadcast kernel. Meanwhile, 21 kernel wrappers still upload CPU zeroes via <span class="mono">zeros_of</span> instead of <span class="mono">uninit_of</span>, halving the 16-op auto-sync window to 8 ops.
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section 3: Governance, GitHub State & The 16 Flip-Flops -->
+    <section id="governance" class="card stack-md">
+      <div class="row-wrap">
+        <h2 class="title-lg" style="margin: 0;">GitHub State, The 10-Audit Loop &amp; 16 Reversals in 25 Days</h2>
+        <span class="badge origin-drift">Governance Churn</span>
+      </div>
+
+      <div class="grid-3 text-sm">
+        <div class="subcard stack-sm">
+          <div style="font-weight: 600;">GitHub Backlog &amp; Open PRs</div>
+          <p class="text-xs muted" style="margin: 0;">
+            <strong>76 open issues</strong> (3 P1, 20 P2, 53 P3; 170 closed) across 4 Claude-authored milestones (<span class="mono">v0.4.0</span> 5, <span class="mono">v0.5.0</span> 2, <span class="mono">v1.0.0</span> 21, <span class="mono">Backlog</span> 48). <strong>2 open PRs:</strong> <span class="mono">#448</span> (<span class="mono">STABILITY.md</span>) and <span class="mono">#297</span> (4 unmerged audits from Nov 17).
+          </p>
+        </div>
+        <div class="subcard stack-sm">
+          <div style="font-weight: 600;">Rulesets &amp; Missing Gates</div>
+          <p class="text-xs muted" style="margin: 0;">
+            3 active rulesets (<span class="mono">improvements</span>, <span class="mono">main</span>, force-push block) with <span class="mono">required_approving_review_count: 0</span> and <span class="mono">strict_required_status_checks_policy: false</span>. Only 4 of 8 <span class="mono">ci.yml</span> jobs gate merges — <span class="mono">examples-smoke</span>, <span class="mono">bench-smoke</span>, <span class="mono">wasm32</span>, <span class="mono">ignore-issues</span>, <span class="mono">audit</span>, and <span class="mono">semver</span> do not.
+          </p>
+        </div>
+        <div class="subcard stack-sm">
+          <div style="font-weight: 600;">Unmerged Audits &amp; Phantom Links</div>
+          <p class="text-xs muted" style="margin: 0;">
+            5 audit docs (~2,309 L) are in <span class="mono">docs/audits/</span>, while <strong>5 more</strong> (~1,989 L) sit unmerged on <span class="mono">origin/claude/project-thread-*</span>. <span class="mono">DECISIONS.md</span> cites those nonexistent files 6× (<span class="mono">L747, 761, 819, 859, 867, 883</span>), and <span class="mono">FINISHING.md</span> &amp; <span class="mono">v0.4.0</span> cite an external <span class="mono">volta-tracking/release-plan.md</span> missing from git.
+          </p>
+        </div>
+      </div>
+
+      <div tabindex="0" role="region" aria-labelledby="flipflops-caption" class="table-wrapper">
+        <table id="flipflops-table" class="audit-table">
+          <caption id="flipflops-caption">16 documented architectural reversals and self-contradictions across a 25-day window (2026-10-26 to 2026-11-20).</caption>
+          <thead>
+            <tr>
+              <th scope="col">#</th>
+              <th scope="col">Area / Mechanism</th>
+              <th scope="col">Reversal Sequence</th>
+              <th scope="col">Dates &amp; Commits</th>
+              <th scope="col">DECISIONS.md</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">01</th><td><span class="mono">Storage</span> representation</td><td><span class="mono">Vec&lt;u8&gt;</span> → <span class="mono">Arc&lt;[u8]&gt;</span> → typed <span class="mono">HostBuf</span> enum → <span class="mono">#[non_exhaustive]</span> enum → opaque <span class="mono">Storage(Repr)</span>; <span class="mono">HostMut</span> Drop → closure.</td><td><span class="mono">Oct 29–Nov 20 (6f3c367 → 29c6ec9)</span></td><td><span class="mono">L372, 550, 619, 863</span></td></tr>
+            <tr><th scope="row">02</th><td><span class="mono">Module::load_state_dict</span></td><td>Lenient default ("atomic deferred") → strict + <span class="mono">load_state_dict_partial</span> → <strong>1 day later</strong> <span class="mono">plan_load(&amp;mut LoadPlan)</span>.</td><td><span class="mono">Oct 31, Nov 19, Nov 20 (4a68601 → 1c7dc4b)</span></td><td><span class="mono">L735, 773, 879</span></td></tr>
+            <tr><th scope="row">03</th><td>Serialization &amp; <span class="mono">TensorData</span></td><td>f32-only ("don't break bincode") → <span class="mono">Vec&lt;u8&gt;+dtype</span> + duplicate <span class="mono">TypedTensorData</span> → delete bincode → delete <span class="mono">TypedTensorData</span>.</td><td><span class="mono">Nov 3–19 (80c8e0f → 926f47e)</span></td><td><span class="mono">L598, 699–717</span></td></tr>
+            <tr><th scope="row">04</th><td><span class="mono">RawTensor.shape</span> field</td><td>Decided <span class="mono">Shape</span> stays boundary-only → <strong>3 days later</strong> flipped <span class="mono">RawTensor.shape</span> and <span class="mono">Tensor::shape()</span> to <span class="mono">Shape</span>.</td><td><span class="mono">Oct 26 → Oct 29 (18cf892 → 840ceaf)</span></td><td><span class="mono">L216 vs L420</span></td></tr>
+            <tr><th scope="row">05</th><td><span class="mono">IndexedLayer</span> trait</td><td>Created sealed <span class="mono">IndexedLayer</span> + 2 trybuild tests → <strong>5 days later</strong> deleted trait &amp; tests; made <span class="mono">Embedding</span> a <span class="mono">Layer</span>.</td><td><span class="mono">Oct 29 → Nov 3 (1a51ab7 → 4b5fdcf)</span></td><td><span class="mono">L358 vs L632</span></td></tr>
+            <tr><th scope="row">06</th><td>GPU <span class="mono">Storage</span> cache</td><td><span class="mono">RefCell&lt;Option&lt;Vec&lt;u8&gt;&gt;&gt;</span> → <span class="mono">OnceLock&lt;Vec&lt;f32&gt;&gt;</span> (f32-only) → typed <span class="mono">OnceLock&lt;HostBuf&gt;</span>.</td><td><span class="mono">Oct 30 → Nov 3 (0fb46be → 755b2d1)</span></td><td><span class="mono">L406–418, 682</span></td></tr>
+            <tr><th scope="row">07</th><td>Muon GPU support (H8)</td><td>Panicked on GPU params ("CPU only") → <strong>1 day later</strong> reversed and added <span class="mono">muon.wgsl</span> kernels.</td><td><span class="mono">Oct 31 → Nov 1 (8f3d0d4 → b817f54)</span></td><td><span class="mono">L831–843</span></td></tr>
+            <tr><th scope="row">08</th><td>Adam half-precision params</td><td>Shipped half Adam in P4/P8 + torch fixtures → banned half params in <span class="mono">Adam::try_new</span> and deleted fixtures.</td><td><span class="mono">Nov 3 → Nov 18 (508f5f3 → 325a2cf)</span></td><td><span class="mono">L624 vs L845</span></td></tr>
+            <tr><th scope="row">09</th><td>Rank-0 scalars</td><td>Explicitly rejected zero-dim ("scalars are [1]") → switched full reductions &amp; losses to rank-0 <span class="mono">[]</span> (<span class="mono">#100</span>).</td><td><span class="mono">Nov 3 → Nov 20 (083dcfb → 370b1e3)</span></td><td><span class="mono">L480, 652 vs 765</span></td></tr>
+            <tr><th scope="row">10</th><td><span class="mono">assert_trainable!</span></td><td>Exported via <span class="mono">#[macro_export]</span> at crate root → made crate-internal <span class="mono">#[cfg(test)]</span> (<span class="mono">#145</span>).</td><td><span class="mono">Oct 26 → Nov 19 (7e612f7 → 6c4ab1c)</span></td><td><span class="mono">L202–212</span></td></tr>
+            <tr><th scope="row">11</th><td>Root exports &amp; features</td><td>Exported everything at root + <span class="mono">default = ["gpu","accelerate"]</span> → stripped to 8 core modules + <span class="mono">default = []</span>.</td><td><span class="mono">Nov 18–19 (36a8993, 1b2f1fd)</span></td><td><span class="mono">L855–877</span></td></tr>
+            <tr><th scope="row">12</th><td><span class="mono">needless_pass_by_value</span></td><td>Explicitly <span class="mono">allow</span>ed with rationale in <span class="mono">Cargo.toml</span> → flipped to <span class="mono">deny</span> with per-site <span class="mono">#[expect]</span>.</td><td><span class="mono">Nov 1 → Nov 11 (86873de → f368dda)</span></td><td><span class="mono">L523 vs L933</span></td></tr>
+            <tr><th scope="row">13</th><td><span class="mono">BinaryOp::Mod</span> &amp; <span class="mono">Cmplt</span></td><td>Added <span class="mono">non_differentiable</span> macro grammar → removed <span class="mono">Cmplt</span>, made <span class="mono">Mod</span> differentiable; empty block remains.</td><td><span class="mono">Oct 28 → Nov 10 (ac52cb3 → 7413c81)</span></td><td><span class="mono">L298</span></td></tr>
+            <tr><th scope="row">14</th><td>CI rulesets &amp; PR gate</td><td>5 checks incl. macOS → 4 checks → macOS moved post-merge → stopped local <span class="mono">just ci</span> per PR (4 edits in 8d).</td><td><span class="mono">Nov 10–18 (01a3038 → e3aa216)</span></td><td><span class="mono">L897–931, 1004</span></td></tr>
+            <tr><th scope="row">15</th><td><span class="mono">GradFn::backward</span></td><td>Cloned payload + <span class="mono">Vec&lt;Option&lt;Tensor&gt;&gt;</span> → borrowed <span class="mono">Ref</span> → returned <span class="mono">Vec&lt;Option&lt;Storage&gt;&gt;</span> (<span class="mono">#268</span>).</td><td><span class="mono">Nov 16 → Nov 20 (a93c478 → 2cd7c9e)</span></td><td><span class="mono">L40–52</span></td></tr>
+            <tr><th scope="row">16</th><td>Error types &amp; loaders</td><td>String variants + <span class="mono">std::io::Result</span> → <span class="mono">ErrorDetail</span> + <span class="mono">VoltaError::Decode</span> + <span class="mono">try_</span> on every layer in 1 day.</td><td><span class="mono">Nov 20 (7f2b5ef, 370b1e3, 86bc2fb)</span></td><td><span class="mono">L743–788</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Section 4: Master Interactive Findings Matrix -->
+    <section id="findings" class="stack-md">
+      <div class="row-wrap">
+        <div>
+          <h2 class="title-lg" style="margin-bottom: 0.15rem;">Master Audit Findings Matrix (<span class="mono">F01–F46</span>)</h2>
+          <p class="text-xs muted" style="margin: 0;">Filter by severity, subsystem, origin, or keyword. Click column headers to sort existing rows in-place.</p>
+        </div>
+        <div id="findings-count" class="text-xs" style="font-weight: 600;">Showing 46 of 46 findings</div>
+      </div>
+
+      <div class="card flex-wrap-gap" style="padding: 0.9rem 1rem;">
+        <div class="flex-wrap-gap" role="group" aria-label="Filter by severity">
+          <button type="button" class="btn filter-pill" data-sev="all" aria-pressed="true">All (46)</button>
+          <button type="button" class="btn filter-pill" data-sev="Critical" aria-pressed="false">Critical (7)</button>
+          <button type="button" class="btn filter-pill" data-sev="High" aria-pressed="false">High (16)</button>
+          <button type="button" class="btn filter-pill" data-sev="Medium" aria-pressed="false">Medium (15)</button>
+          <button type="button" class="btn filter-pill" data-sev="Low" aria-pressed="false">Low (8)</button>
+        </div>
+
+        <label class="text-xs muted flex-wrap-gap">
+          Area
+          <select id="filter-area" class="input-ctrl">
+            <option value="all">All areas</option>
+            <option value="Core & Autograd">Core &amp; Autograd</option>
+            <option value="NN & Optimizers">NN &amp; Optimizers</option>
+            <option value="GPU & Shaders">GPU &amp; Shaders</option>
+            <option value="Tests & CI">Tests &amp; CI</option>
+            <option value="Guardrails">Guardrails</option>
+            <option value="Governance & Docs">Governance &amp; Docs</option>
+            <option value="Examples & Benches">Examples &amp; Benches</option>
+            <option value="Repo Hygiene">Repo Hygiene</option>
+          </select>
+        </label>
+
+        <label class="text-xs muted flex-wrap-gap">
+          Origin
+          <select id="filter-origin" class="input-ctrl">
+            <option value="all">All origins</option>
+            <option value="NEW">NEW — Missed by Claude</option>
+            <option value="DRIFT">DRIFT — Guardrail / Doc</option>
+          </select>
+        </label>
+
+        <label class="text-xs muted search-grow">
+          Search
+          <input id="filter-search" type="search" placeholder="Filter by symbol, file, or summary…" class="input-ctrl" />
+        </label>
+
+        <button type="button" id="filter-reset" class="btn">Reset</button>
+      </div>
+
+      <div id="findings-status" role="status" class="sr-only"></div>
+
+      <div tabindex="0" role="region" aria-labelledby="findings-caption" class="table-wrapper">
+        <table id="findings-table" class="audit-table">
+          <caption id="findings-caption">46 verified findings from the 2026-11-22 Volta audit, sorted by severity then finding ID.</caption>
+          <thead>
+            <tr>
+              <th scope="col" data-type="number"><button type="button" commandfor="findings-table" command="--sort" class="sort-btn"><span>ID</span><span class="sort-icon" aria-hidden="true"></span></button></th>
+              <th scope="col" data-type="number" aria-sort="ascending"><button type="button" commandfor="findings-table" command="--sort" class="sort-btn"><span>Severity</span><span class="sort-icon" aria-hidden="true"></span></button></th>
+              <th scope="col" data-type="text"><button type="button" commandfor="findings-table" command="--sort" class="sort-btn"><span>Area</span><span class="sort-icon" aria-hidden="true"></span></button></th>
+              <th scope="col" data-type="text"><button type="button" commandfor="findings-table" command="--sort" class="sort-btn"><span>Origin</span><span class="sort-icon" aria-hidden="true"></span></button></th>
+              <th scope="col" data-type="text"><button type="button" commandfor="findings-table" command="--sort" class="sort-btn"><span>Location</span><span class="sort-icon" aria-hidden="true"></span></button></th>
+              <th scope="col">Summary</th>
+            </tr>
+          </thead>
+          <tbody id="findings-tbody">
+            <tr data-sev="Critical" data-area="GPU & Shaders" data-origin="NEW"><th scope="row" data-value="1">F01</th><td data-value="1"><span class="badge sev-critical">Critical</span></td><td>GPU &amp; Shaders</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">src/gpu/shader_template.rs:162, buffer.rs:62,385</span></td><td>Odd packed-16-bit (<span class="mono">F16Packed</span>/<span class="mono">Bf16Packed</span>) <span class="mono">len_*()</span> returns <span class="mono">len + 1</span>, causing 45 shader entry points (incl. in-place <span class="mono">optimizer_step.wgsl</span>) to read/write uninitialized padding half-words.</td></tr>
+            <tr data-sev="Critical" data-area="GPU & Shaders" data-origin="NEW"><th scope="row" data-value="2">F02</th><td data-value="1"><span class="badge sev-critical">Critical</span></td><td>GPU &amp; Shaders</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">src/ops/compare.rs:89, ternary.rs:253, movement.rs:239+</span></td><td>7-op GPU <span class="mono">DType::Bool</span> panic cluster: <span class="mono">compare</span>, <span class="mono">where</span>, and all 5 movement ops dispatch GPU <span class="mono">Bool</span> tensors to float pipelines and panic in <span class="mono">elem_for(DType::Bool)</span> even under <span class="mono">DevicePolicy::PreferGpu</span>.</td></tr>
+            <tr data-sev="Critical" data-area="GPU & Shaders" data-origin="NEW"><th scope="row" data-value="3">F03</th><td data-value="1"><span class="badge sev-critical">Critical</span></td><td>GPU &amp; Shaders</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">src/gpu/context.rs:585-623</span></td><td>Multi-threaded false-sync race in <span class="mono">GpuContext::sync()</span>: <span class="mono">pending_submissions.store(0)</span> wipes concurrent threads' pending submissions AND zeroes count even when <span class="mono">poll()</span> times out.</td></tr>
+            <tr data-sev="Critical" data-area="Core & Autograd" data-origin="NEW"><th scope="row" data-value="4">F04</th><td data-value="1"><span class="badge sev-critical">Critical</span></td><td>Core &amp; Autograd</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">src/io.rs:189-193, src/tensor.rs:708-736</span></td><td><span class="mono">TensorData::try_to_tensor</span> / <span class="mono">RawTensor::try_new_with_storage</span> allows <span class="mono">requires_grad = true</span> on <span class="mono">I32</span>/<span class="mono">I64</span>/<span class="mono">U8</span>/<span class="mono">Bool</span> tensors; 1st <span class="mono">.backward()</span> writes integer grad, 2nd panics.</td></tr>
+            <tr data-sev="Critical" data-area="Core & Autograd" data-origin="NEW"><th scope="row" data-value="5">F05</th><td data-value="1"><span class="badge sev-critical">Critical</span></td><td>Core &amp; Autograd</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">src/storage.rs:695-707</span></td><td><span class="mono">Storage::with_host_mut</span> omits <span class="mono">!self.is_gpu()</span> in its <span class="mono">else</span> branch, silently downloading GPU <span class="mono">F16</span>/<span class="mono">BF16</span> storage and overwriting it with CPU <span class="mono">Repr::Cpu</span>.</td></tr>
+            <tr data-sev="Critical" data-area="Core & Autograd" data-origin="NEW"><th scope="row" data-value="6">F06</th><td data-value="1"><span class="badge sev-critical">Critical</span></td><td>Core &amp; Autograd</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">src/ops/loss.rs:15,55-57,75-120</span></td><td><span class="mono">bce_loss</span> / <span class="mono">BceGradFn</span> produces <span class="mono">NaN</span>/<span class="mono">Inf</span> grads on <span class="mono">F16</span> (<span class="mono">BCE_GRAD_EPS = 1e-12</span> underflows to <span class="mono">0.0</span>) AND crashes with internal <span class="mono">edge()</span> dtype panic on mixed <span class="mono">F32</span>/<span class="mono">F64</span> inputs.</td></tr>
+            <tr data-sev="Critical" data-area="Core & Autograd" data-origin="NEW"><th scope="row" data-value="7">F07</th><td data-value="1"><span class="badge sev-critical">Critical</span></td><td>Core &amp; Autograd</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">src/amp.rs:270-277,363-372,388-395</span></td><td><span class="mono">GradScaler</span> casts <span class="mono">f64 → f32</span> masked by <span class="mono">#[expect(cast_possible_truncation)]</span>: overflows <span class="mono">scale &gt; f32::MAX</span> to <span class="mono">inf</span>, underflows GPU unscale <span class="mono">inv</span> to <span class="mono">0.0</span> (zeroing grads), shifts rank-0 losses to <span class="mono">[1]</span>, and wedges at <span class="mono">inf</span>/<span class="mono">0.0</span>.</td></tr>
+
+            <tr data-sev="High" data-area="GPU & Shaders" data-origin="NEW"><th scope="row" data-value="8">F08</th><td data-value="2"><span class="badge sev-high">High</span></td><td>GPU &amp; Shaders</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">src/gpu/buffer.rs:280-295</span></td><td><span class="mono">map_async</span> callback <span class="mono">.expect("...receiver dropped")</span> panics inside wgpu's callback on an unrelated thread whenever a 5s <span class="mono">poll()</span> timeout occurs.</td></tr>
+            <tr data-sev="High" data-area="GPU & Shaders" data-origin="NEW"><th scope="row" data-value="9">F09</th><td data-value="2"><span class="badge sev-high">High</span></td><td>GPU &amp; Shaders</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">src/gpu/pool.rs:187-216, staging_pool.rs:102-149</span></td><td>Split-lock count-drift race in <span class="mono">clear()</span> across both pools (separate map &amp; counter mutexes), zero eviction (wedging at 64 entries), and unbounded <span class="mono">MAP_READ</span> pinned bytes in staging pool.</td></tr>
+            <tr data-sev="High" data-area="NN & Optimizers" data-origin="NEW"><th scope="row" data-value="10">F10</th><td data-value="2"><span class="badge sev-high">High</span></td><td>NN &amp; Optimizers</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">src/nn/transformer/attention.rs:119-131, lstm.rs:108-129</span></td><td><span class="mono">ScaledDotProductAttention</span> &amp; <span class="mono">LSTMCell::step</span> break under <span class="mono">amp::autocast</span> (panic under <span class="mono">Strict</span>, promote to F32 under <span class="mono">Promote</span>); <span class="mono">LSTMCell</span> also round-trips CPU via <span class="mono">.transpose()</span> on GPU.</td></tr>
+            <tr data-sev="High" data-area="NN & Optimizers" data-origin="NEW"><th scope="row" data-value="11">F11</th><td data-value="2"><span class="badge sev-high">High</span></td><td>NN &amp; Optimizers</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">src/nn/layers/conv.rs:1046-1052,1103,1274,1325-1328</span></td><td><span class="mono">Conv2d::forward</span> discards autocast-lowered <span class="mono">weight</span> in <span class="mono">Im2col</span>/<span class="mono">Auto</span> (reshaping <span class="mono">self.weight</span> at F32), and mixed-device <span class="mono">Conv2d</span> reports <span class="mono">kernel_failed</span> instead of mixed-device error.</td></tr>
+            <tr data-sev="High" data-area="NN & Optimizers" data-origin="NEW"><th scope="row" data-value="12">F12</th><td data-value="2"><span class="badge sev-high">High</span></td><td>NN &amp; Optimizers</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">src/nn/layers/batchnorm.rs:144-194,330-351</span></td><td><span class="mono">BatchNorm1d</span>/<span class="mono">2d</span> omit <span class="mono">Module::to_device</span> override: <span class="mono">running_mean</span>/<span class="mono">running_var</span> stay on CPU forever, forcing host transfers every forward step; normalize broadcasts also fail under <span class="mono">Strict</span>.</td></tr>
+            <tr data-sev="High" data-area="Core & Autograd" data-origin="NEW"><th scope="row" data-value="13">F13</th><td data-value="2"><span class="badge sev-high">High</span></td><td>Core &amp; Autograd</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">src/tensor.rs:1107-1174,1212-1213</span></td><td><span class="mono">nll_loss</span> omits rank-2 assert (silently reduces wrong axis on 3D floats) and accepts <span class="mono">Bool</span> targets as float probs; <span class="mono">kl_divergence_gaussian</span> returns shape <span class="mono">[1]</span> and panics on GPU under <span class="mono">Strict</span>.</td></tr>
+            <tr data-sev="High" data-area="Core & Autograd" data-origin="NEW"><th scope="row" data-value="14">F14</th><td data-value="2"><span class="badge sev-high">High</span></td><td>Core &amp; Autograd</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">src/io.rs:212-233, src/io/mapping.rs:361-377</span></td><td><span class="mono">StateDictMapper::try_map</span>/<span class="mono">try_apply</span> panics on malformed <span class="mono">TensorData</span>, and <span class="mono">validate_entry</span> permits <span class="mono">[0, usize::MAX]</span> causing an infinite hang inside <span class="mono">transpose_2d</span>.</td></tr>
+            <tr data-sev="High" data-area="Core & Autograd" data-origin="NEW"><th scope="row" data-value="15">F15</th><td data-value="2"><span class="badge sev-high">High</span></td><td>Core &amp; Autograd</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">src/autograd.rs:484-487, src/tensor.rs:402-409</span></td><td>Calling <span class="mono">set_requires_grad(false)</span> after forward causes debug vs. release divergence: debug panics on <span class="mono">debug_assert!</span> while release silently writes gradients into the leaf.</td></tr>
+            <tr data-sev="High" data-area="Tests & CI" data-origin="NEW"><th scope="row" data-value="16">F16</th><td data-value="2"><span class="badge sev-high">High</span></td><td>Tests &amp; CI</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">tests/common/mod.rs:27, justfile:113-115</span></td><td><span class="mono">VOLTA_REQUIRE_GPU=1</span> is ignored by 40 of 42 GPU test files (incl. <span class="mono">FINISHING.md</span> thread-stress runs), and <span class="mono">just test-gpu</span> skips 88 GPU integration tests across 8 binaries.</td></tr>
+            <tr data-sev="High" data-area="Tests & CI" data-origin="NEW"><th scope="row" data-value="17">F17</th><td data-value="2"><span class="badge sev-high">High</span></td><td>Tests &amp; CI</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">src/lib_tests/axis_reduce_tests.rs:88, batchnorm_tests.rs:112,175</span></td><td>3 tautological <span class="mono">0 == 0</span> gradchecks (<span class="mono">softmax.sum()</span>, <span class="mono">bn1d.sum()</span>, <span class="mono">bn2d.sum()</span>) plus 10+ unweighted <span class="mono">.sum()</span> movement backward tests pass even if gradients are mis-indexed.</td></tr>
+            <tr data-sev="High" data-area="Tests & CI" data-origin="DRIFT"><th scope="row" data-value="18">F18</th><td data-value="2"><span class="badge sev-high">High</span></td><td>Tests &amp; CI</td><td><span class="badge origin-drift">DRIFT</span></td><td><span class="mono">Cargo.toml, justfile:92, .github/workflows/mutants.yml</span></td><td>82 separate <span class="mono">tests/*.rs</span> binaries (30 empty 0-test GPU crates on CPU, zero <span class="mono">required-features</span>) cause ~32,800 links and up to 600 runner-mins/wk in non-gating <span class="mono">mutants.yml</span>.</td></tr>
+            <tr data-sev="High" data-area="Guardrails" data-origin="DRIFT"><th scope="row" data-value="19">F19</th><td data-value="2"><span class="badge sev-high">High</span></td><td>Guardrails</td><td><span class="badge origin-drift">DRIFT</span></td><td><span class="mono">scripts/check-fallbacks.sh, check-ignores.sh, kernels.rs:2257</span></td><td>Live bypasses in BOTH custom guardrail scripts: multi-line <span class="mono">.get(dim)\n.map_or(0,..)</span> (<span class="mono">kernels.rs:2257</span>, <span class="mono">showcase.rs:85</span>) and <span class="mono">#[rustversion::attr(..., ignore = ...)]</span> (<span class="mono">compile_fail.rs:19</span>).</td></tr>
+            <tr data-sev="High" data-area="GPU & Shaders" data-origin="DRIFT"><th scope="row" data-value="20">F20</th><td data-value="2"><span class="badge sev-high">High</span></td><td>GPU &amp; Shaders</td><td><span class="badge origin-drift">DRIFT</span></td><td><span class="mono">src/gpu_stub.rs:14-64, storage.rs:1027, src/gpu/mod.rs</span></td><td>Non-additive <span class="mono">gpu</span> feature: <span class="mono">gpu_stub.rs</span> marks functions <span class="mono">const fn</span> while <span class="mono">gpu/mod.rs</span> does not; <span class="mono">Storage::invalidate_cpu_cache</span> lacks a non-GPU stub; 136 <span class="mono">cfg(feature="gpu")</span> lines leak outside <span class="mono">src/gpu/</span>.</td></tr>
+            <tr data-sev="High" data-area="Governance & Docs" data-origin="DRIFT"><th scope="row" data-value="21">F21</th><td data-value="2"><span class="badge sev-high">High</span></td><td>Governance &amp; Docs</td><td><span class="badge origin-drift">DRIFT</span></td><td><span class="mono">git log main..improvements, GitHub PRs/Issues</span></td><td>Review collapse &amp; process runaway: 399 commits / 199 PRs in ~3 wks, 3/199 PRs reviewed, 42 PRs merged in 1 day, 106 issues filed in 1 day, 16 flip-flops in 25d, 82.5% meta-to-code byte ratio, <span class="mono">main</span> stuck at <span class="mono">0.3.0</span>.</td></tr>
+            <tr data-sev="High" data-area="Examples & Benches" data-origin="NEW"><th scope="row" data-value="22">F22</th><td data-value="2"><span class="badge sev-high">High</span></td><td>Examples &amp; Benches</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">examples/load_external_mnist.rs:25-34,199</span></td><td>NaN-blind validation (<span class="mono">0.0f32.max(NaN) == 0.0</span> prints <span class="mono">Matches PyTorch</span> on NaN logits!) and silent exit 0 on missing files, so CI <span class="mono">examples-smoke.sh</span> never actually tests SafeTensors loading.</td></tr>
+            <tr data-sev="High" data-area="NN & Optimizers" data-origin="NEW"><th scope="row" data-value="23">F23</th><td data-value="2"><span class="badge sev-high">High</span></td><td>NN &amp; Optimizers</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">src/nn/layers/*.rs, sequential.rs:32-37</span></td><td>Systemic Invariant 8 gap: layer <span class="mono">try_new</span> methods allocate before <span class="mono">MAX_NUMEL</span> or checked-mul validation; <span class="mono">MaxPool2d</span>/<span class="mono">PixelShuffle</span> defer constructor checks; <span class="mono">Sequential::load_prefix</span> misreports named misses as <span class="mono">"0.*"</span>.</td></tr>
+
+            <tr data-sev="Medium" data-area="GPU & Shaders" data-origin="NEW"><th scope="row" data-value="24">F24</th><td data-value="3"><span class="badge sev-medium">Medium</span></td><td>GPU &amp; Shaders</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">src/gpu/shaders/binary_backward_safe.wgsl, kernels.rs:1016-1117</span></td><td>Dead <span class="mono">#60</span> path eagerly compiles 48 pipelines and hides 5 bugs: right-vs-left shape padding, <span class="mono">u32</span> indices stored in <span class="mono">array&lt;ELEM&gt;</span>, odd <span class="mono">a.len()</span> panic, <span class="mono">O(N²)</span> Pass 2, rank &gt; 4 panic.</td></tr>
+            <tr data-sev="Medium" data-area="GPU & Shaders" data-origin="NEW"><th scope="row" data-value="25">F25</th><td data-value="3"><span class="badge sev-medium">Medium</span></td><td>GPU &amp; Shaders</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">src/gpu/shaders/igemm*.wgsl, src/gpu/kernels.rs</span></td><td>Fake/duplicate conv shaders (<span class="mono">igemm_backward_*</span> copy-paste <span class="mono">conv_backward_*</span>; <span class="mono">igemm.wgsl</span> uses zero shared memory) + 21 kernel wrappers still allocate CPU-zeroed <span class="mono">zeros_of</span> buffers instead of <span class="mono">uninit_of</span>.</td></tr>
+            <tr data-sev="Medium" data-area="GPU & Shaders" data-origin="NEW"><th scope="row" data-value="26">F26</th><td data-value="3"><span class="badge sev-medium">Medium</span></td><td>GPU &amp; Shaders</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">elementwise.wgsl:91-108, shader_template.rs:290, unary.wgsl:65</span></td><td><span class="mono">floored_mod</span> returns <span class="mono">±Inf</span> on large finite <span class="mono">a/b</span>; <span class="mono">u32</span> index wraparound in 2D <span class="mono">flat_global_id</span>/<span class="mono">reduce.wgsl</span>; unclamped <span class="mono">exp</span> in <span class="mono">sigmoid</span>/<span class="mono">erf</span> shaders.</td></tr>
+            <tr data-sev="Medium" data-area="NN & Optimizers" data-origin="NEW"><th scope="row" data-value="27">F27</th><td data-value="3"><span class="badge sev-medium">Medium</span></td><td>NN &amp; Optimizers</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">linear.rs:151-160, layernorm.rs:95-216, positional_encoding.rs:214</span></td><td><span class="mono">Linear</span> asserts <span class="mono">rank &gt;= 1</span> then panics in <span class="mono">MatmulSpec</span> for 3D+; <span class="mono">LayerNorm</span> omits input dtype validation &amp; flattens params to 1D breaking PyTorch interop; <span class="mono">PositionalEncoding::to_dtype</span> skips float check.</td></tr>
+            <tr data-sev="Medium" data-area="NN & Optimizers" data-origin="NEW"><th scope="row" data-value="28">F28</th><td data-value="3"><span class="badge sev-medium">Medium</span></td><td>NN &amp; Optimizers</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">src/nn/optim/mod.rs:47-62, sgd.rs:110, muon.rs:54,245</span></td><td>Optimizers accept <span class="mono">f32::INFINITY</span> params, lack <span class="mono">lr()</span>/<span class="mono">set_lr()</span>, <span class="mono">SGD::step</span> double-clones every grad, <span class="mono">Muon</span> aspect ratio is inverted for <span class="mono">[in,out]</span> <span class="mono">Linear</span>, and CPU vs GPU half-SGD rounding differs.</td></tr>
+            <tr data-sev="Medium" data-area="Core & Autograd" data-origin="NEW"><th scope="row" data-value="29">F29</th><td data-value="3"><span class="badge sev-medium">Medium</span></td><td>Core &amp; Autograd</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">src/tensor.rs (3,269 LOC), movement.rs:888, storage.rs:444</span></td><td><span class="mono">tensor.rs</span> mixes 8 concerns; <span class="mono">RawTensor</span> holds 60 <span class="mono">pub fn</span>s while <span class="mono">Tensor</span> has 0 constructors; <span class="mono">OrPanic</span> double-prefixes mismatched op names; <span class="mono">move_to_device</span> skips adapter check &amp; bumps version on no-ops.</td></tr>
+            <tr data-sev="Medium" data-area="Core & Autograd" data-origin="NEW"><th scope="row" data-value="30">F30</th><td data-value="3"><span class="badge sev-medium">Medium</span></td><td>Core &amp; Autograd</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">src/tensor.rs:1342,1408, storage.rs:666,750, amp.rs:400</span></td><td>Per-element <span class="mono">Vec&lt;usize&gt;</span> heap allocations in <span class="mono">SumDimGradFn</span>, <span class="mono">MaxDimGradFn</span> (computing dead math where <span class="mono">grad_idx == out_idx</span>), and <span class="mono">permute_impl</span>; 3–5 allocations per CPU half op.</td></tr>
+            <tr data-sev="Medium" data-area="Core & Autograd" data-origin="DRIFT"><th scope="row" data-value="31">F31</th><td data-value="3"><span class="badge sev-medium">Medium</span></td><td>Core &amp; Autograd</td><td><span class="badge origin-drift">DRIFT</span></td><td><span class="mono">src/tensor.rs, ops/movement.rs:260,1052</span></td><td>Invariant 8 <span class="mono">try_</span> asymmetry (<span class="mono">RawTensor</span> has 18 vs <span class="mono">Tensor</span>'s 5); missing <span class="mono">try_</span> on axis reductions, losses, <span class="mono">permute</span>, <span class="mono">autocast</span>, <span class="mono">load_pytorch_*</span>; <span class="mono">try_pad_with</span> panics on <span class="mono">NEG_INF</span>; <span class="mono">DataLoader</span> omits <span class="mono">MAX_NUMEL</span> check.</td></tr>
+            <tr data-sev="Medium" data-area="Tests & CI" data-origin="NEW"><th scope="row" data-value="32">F32</th><td data-value="3"><span class="badge sev-medium">Medium</span></td><td>Tests &amp; CI</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">.github/workflows/{ci,macos,coverage,sanitizers,torch-fixtures}.yml</span></td><td>12 workflows: <span class="mono">macos.yml</span> spins 10×-cost Apple Silicon on doc pushes, kills runs on <span class="mono">main</span> PR label edits, and misses <span class="mono">build.rs</span>/<span class="mono">parity_*</span>; <span class="mono">coverage.yml</span> has no push <span class="mono">paths:</span>; <span class="mono">sanitizers.yml</span> misses <span class="mono">autograd.rs</span>.</td></tr>
+            <tr data-sev="Medium" data-area="Tests & CI" data-origin="NEW"><th scope="row" data-value="33">F33</th><td data-value="3"><span class="badge sev-medium">Medium</span></td><td>Tests &amp; CI</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">scripts/{serve_docs.py,sync.sh,restack.sh,examples-smoke.sh,pr.sh}</span></td><td>Script bugs &amp; exposure: <span class="mono">serve_docs.py:196</span> binds <span class="mono">0.0.0.0</span>; <span class="mono">sync.sh</span> memoization fails in subshell &amp; <span class="mono">dry-run</span> mutates refs; <span class="mono">restack.sh</span> wipes unpushed commits; <span class="mono">examples-smoke.sh</span> leaks 11 <span class="mono">sleep 120</span> procs.</td></tr>
+            <tr data-sev="Medium" data-area="Tests & CI" data-origin="NEW"><th scope="row" data-value="34">F34</th><td data-value="3"><span class="badge sev-medium">Medium</span></td><td>Tests &amp; CI</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">src/lib_tests/misc_tests.rs:1030, tests/safety_and_state_dict.rs:59</span></td><td>Flaky wall-clock assert (<span class="mono">&lt;250ms</span>/<span class="mono">&lt;50ms</span>) and 404 MB alloc run inside unit/integration tests under ASan and all ~400 mutants; 6× <span class="mono">Fixture</span> and 8× <span class="mono">assert_close</span> copy-pasted across test binaries.</td></tr>
+            <tr data-sev="Medium" data-area="Examples & Benches" data-origin="NEW"><th scope="row" data-value="35">F35</th><td data-value="3"><span class="badge sev-medium">Medium</span></td><td>Examples &amp; Benches</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">benches/tensor_ops.rs:15-17, examples/char_{transformer,language}_model.rs</span></td><td><span class="mono">benches/tensor_ops.rs</span> benchmarks 50% <span class="mono">NaN</span> outputs on <span class="mono">log</span>/<span class="mono">sqrt</span>/<span class="mono">div</span>; forward benches omit <span class="mono">no_grad()</span>; <span class="mono">char_transformer_model</span> hand-rolls around <span class="mono">TransformerBlock</span>; <span class="mono">char_language_model</span> double-feeds last seed char.</td></tr>
+            <tr data-sev="Medium" data-area="Governance & Docs" data-origin="DRIFT"><th scope="row" data-value="36">F36</th><td data-value="3"><span class="badge sev-medium">Medium</span></td><td>Governance &amp; Docs</td><td><span class="badge origin-drift">DRIFT</span></td><td><span class="mono">README.md:30,74,274,369,386,393</span></td><td>Falsehoods even after <span class="mono">#444</span>: claims SafeTensors loads as f32 (vs L394), <span class="mono">time_sequence</span> NaNs (<span class="mono">#88</span> closed), GPU matmul lacks shared-mem tiling (<span class="mono">matmul.wgsl:23</span>), all optimizers run half (Adam bans it), uses <span class="mono">0.3.0</span> tag &amp; unsafe <span class="mono">transpose_pattern</span>.</td></tr>
+            <tr data-sev="Medium" data-area="Governance & Docs" data-origin="DRIFT"><th scope="row" data-value="37">F37</th><td data-value="3"><span class="badge sev-medium">Medium</span></td><td>Governance &amp; Docs</td><td><span class="badge origin-drift">DRIFT</span></td><td><span class="mono">DECISIONS.md, dev-docs/{FINISHING,CLOUD,ARCHITECTURE}.md</span></td><td><span class="mono">DECISIONS.md</span> has 10+ unflagged internal contradictions + 6 citations to unmerged audits; <span class="mono">FINISHING.md</span> (Nov 20) already has 14/15 §1 PRs + <span class="mono">#202</span> done &amp; cites missing <span class="mono">release-plan.md</span>; <span class="mono">CLOUD.md</span> &amp; <span class="mono">ARCHITECTURE.md</span> are badly stale.</td></tr>
+            <tr data-sev="Medium" data-area="Repo Hygiene" data-origin="NEW"><th scope="row" data-value="38">F38</th><td data-value="3"><span class="badge sev-medium">Medium</span></td><td>Repo Hygiene</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">Cargo.toml:20, tests/fixtures/**</span></td><td><span class="mono">Cargo.toml:20</span> includes <span class="mono">/tests/**</span> in crates.io tarballs, shipping <strong>1,814 KB</strong> of PyTorch JSON/safetensors reference fixtures to every downstream crate user.</td></tr>
+
+            <tr data-sev="Low" data-area="Repo Hygiene" data-origin="NEW"><th scope="row" data-value="39">F39</th><td data-value="4"><span class="badge sev-low">Low</span></td><td>Repo Hygiene</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">minigrad-react/, pkg/, data/, node_modules/, coverage.txt</span></td><td>~262 MB of untracked root detritus: broken 128 MB <span class="mono">minigrad-react/</span> shell, orphaned v0.2.0 <span class="mono">pkg/</span> WASM bundle, 17 MB stray root <span class="mono">node_modules/</span>, 116 MB duplicated MNIST in <span class="mono">data/</span>, <span class="mono">coverage.txt</span>, <span class="mono">.superpowers/</span>.</td></tr>
+            <tr data-sev="Low" data-area="Repo Hygiene" data-origin="NEW"><th scope="row" data-value="40">F40</th><td data-value="4"><span class="badge sev-low">Low</span></td><td>Repo Hygiene</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">local branches (16 stale) + origin/claude/project-thread-*</span></td><td>Branch graveyard: 12 already-squash-merged local <span class="mono">fix/*</span> branches (incl. <span class="mono">#100</span> swallowed in <span class="mono">#436</span>), 4 abandoned branches (incl. June <span class="mono">feature/gradient-clipping</span>), and 4 stale remote branches.</td></tr>
+            <tr data-sev="Low" data-area="Repo Hygiene" data-origin="DRIFT"><th scope="row" data-value="41">F41</th><td data-value="4"><span class="badge sev-low">Low</span></td><td>Repo Hygiene</td><td><span class="badge origin-drift">DRIFT</span></td><td><span class="mono">notes/INTERVIEW_PREP.md, docs/audits/{OPUS_5_EVAL,AUDIT_CITATION}.md</span></td><td><span class="mono">notes/INTERVIEW_PREP.md</span> is tracked publicly in git; <span class="mono">OPUS_5_EVAL_AUDIT.md</span> leaks <span class="mono">/private/tmp/...</span> paths &amp; raw profanity scratch notes; <span class="mono">AUDIT_CITATION.md</span> has 7 broken <span class="mono">/Users/rjlarson/...</span> paths.</td></tr>
+            <tr data-sev="Low" data-area="Guardrails" data-origin="DRIFT"><th scope="row" data-value="42">F42</th><td data-value="4"><span class="badge sev-low">Low</span></td><td>Guardrails</td><td><span class="badge origin-drift">DRIFT</span></td><td><span class="mono">Cargo.toml:193,220, bacon.toml:16,35, char_transformer_model.rs:112</span></td><td><span class="mono">missing_docs_in_private_items</span> drives 1,187 lines of trivial <span class="mono">///</span> comments in <span class="mono">tests/</span>; 9 redundant <span class="mono">#[expect(cast_precision_loss)]</span>; <span class="mono">bacon.toml</span> contradicts <span class="mono">Cargo.toml</span>; bare <span class="mono">#[allow(dead_code)]</span>; stale <span class="mono">criterion 0.5</span> comments.</td></tr>
+            <tr data-sev="Low" data-area="Tests & CI" data-origin="NEW"><th scope="row" data-value="43">F43</th><td data-value="4"><span class="badge sev-low">Low</span></td><td>Tests &amp; CI</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">flake.nix, .pre-commit-config.yaml, scripts/test-{sync,restack}.sh</span></td><td><span class="mono">flake.nix</span> omits 6 tools called by <span class="mono">justfile</span>/<span class="mono">bacon</span> (<span class="mono">nextest</span>, <span class="mono">tokei</span>, <span class="mono">outdated</span>, <span class="mono">semver-checks</span>, <span class="mono">jq</span>, <span class="mono">fd</span>); 322 LOC of script tests never run in CI; pre-commit runs full <span class="mono">cargo test</span> every commit.</td></tr>
+            <tr data-sev="Low" data-area="Core & Autograd" data-origin="NEW"><th scope="row" data-value="44">F44</th><td data-value="4"><span class="badge sev-low">Low</span></td><td>Core &amp; Autograd</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">matmul.rs:137, storage.rs:1039, binary.rs:43, io.rs:522, define_ops.rs:172</span></td><td>Edge gaps: <span class="mono">matmul_raw</span> <span class="mono">n==0</span> CBLAS precondition; <span class="mono">Storage == Storage</span> bitwise vs <span class="mono">Vec&lt;f32&gt;</span> IEEE; <span class="mono">Div</span> backward <span class="mono">g*a</span> overflow; post-rename dir fsync returning <span class="mono">Err</span> after overwrite; dead macro grammar.</td></tr>
+            <tr data-sev="Low" data-area="Examples & Benches" data-origin="NEW"><th scope="row" data-value="45">F45</th><td data-value="4"><span class="badge sev-low">Low</span></td><td>Examples &amp; Benches</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">examples/{readme-1,showcase,mnist_cnn,mnist_rnn,time_sequence}.rs</span></td><td>Unseeded smoke training loops asserting loss decrease; 11 examples omit <span class="mono">no_grad()</span> in eval; <span class="mono">ProgressBar</span> prints after summary; <span class="mono">showcase.rs</span> holds 68 lines of dead v0.2 commented code.</td></tr>
+            <tr data-sev="Low" data-area="GPU & Shaders" data-origin="NEW"><th scope="row" data-value="46">F46</th><td data-value="4"><span class="badge sev-low">Low</span></td><td>GPU &amp; Shaders</td><td><span class="badge origin-new">NEW</span></td><td><span class="mono">src/gpu/context.rs:23,52, src/gpu/mod.rs:189</span></td><td>105 pipelines compiled eagerly; uncached <span class="mono">VOLTA_GPU_SYNC_TIMEOUT</span> env lookup on every <span class="mono">sync()</span>; release-compiled <span class="mono">F16_EMULATION</span> atomic; <span class="mono">gpu_compact()</span> sleeps 100ms unconditionally.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Section 5: 6 Collapsible Technical Deep Dives -->
+    <section class="accordion stack-sm" id="deep-dives" aria-labelledby="deep-dives-heading">
+      <div class="row-wrap">
+        <div>
+          <h2 id="deep-dives-heading" class="title-lg" style="margin-bottom: 0.15rem;">Technical Deep Dives</h2>
+          <p class="text-xs muted" style="margin: 0;">Detailed evidence across every subsystem. All sections stay searchable via browser Find-in-Page.</p>
+        </div>
+        <button type="button" commandfor="deep-dives" command="--toggle-all" aria-expanded="false" class="btn">
+          <span class="expand">Expand all</span>
+          <span class="collapse">Collapse all</span>
+        </button>
+      </div>
+
+      <details open>
+        <summary>
+          <span>1. Core Autograd, Storage, AMP &amp; I/O</span>
+          <span class="badge sev-critical">4 Critical · 3 High</span>
+        </summary>
+        <div class="details-body stack-sm">
+          <p><strong>Unsafe &amp; Graph Soundness:</strong> All 4 <span class="mono">unsafe</span> items (<span class="mono">src/ops/matmul.rs:107-232</span>) are sound for <span class="mono">Shape</span>-validated tensors (<span class="mono">m, k, n &gt;= 1</span>); only internal <span class="mono">matmul_raw</span> lacks a zero-dim guard against CBLAS <span class="mono">ldb/ldc == 0</span>. Invariants 1–5 (<span class="mono">edge()</span>, <span class="mono">borrow_mut()</span>, <span class="mono">grad</span> writes, no stdout, checked indexing) hold across the core.</p>
+          <ul>
+            <li><strong>Integer <span class="mono">requires_grad</span> bypass (<span class="mono">F04</span>):</strong> <span class="mono">TensorData::try_to_tensor</span> (<span class="mono">src/io.rs:189-193</span>) delegates to <span class="mono">RawTensor::try_new_with_storage</span> (<span class="mono">tensor.rs:708-736</span>), which omits the float-only check enforced by <span class="mono">try_new_typed</span>. First <span class="mono">.backward()</span> writes an integer gradient; second panics in <span class="mono">accumulate_grad</span>.</li>
+            <li><strong>GPU Half Silent Demotion (<span class="mono">F05</span>):</strong> <span class="mono">Storage::with_host_mut</span> (<span class="mono">storage.rs:695-707</span>) checks <span class="mono">as_host_mut</span> when <span class="mono">dtype == F32</span>, but its <span class="mono">else</span> branch downloads GPU <span class="mono">F16</span>/<span class="mono">BF16</span> buffers and writes back <span class="mono">Self::from_compute</span> (<span class="mono">Repr::Cpu</span>).</li>
+            <li><strong><span class="mono">bce_loss</span> &amp; <span class="mono">GradScaler</span> numerical failures (<span class="mono">F06</span>, <span class="mono">F07</span>):</strong> <span class="mono">BCE_GRAD_EPS = 1e-12</span> vanishes in F16 (<span class="mono">NaN</span>/<span class="mono">Inf</span> grads at <span class="mono">0</span>/<span class="mono">1</span>); mixed <span class="mono">F32</span>/<span class="mono">F64</span> inputs crash inside <span class="mono">edge()</span>. <span class="mono">GradScaler</span>'s <span class="mono">#[expect(cast_possible_truncation)]</span> masks <span class="mono">scale &gt; f32::MAX</span> overflow to <span class="mono">inf</span> and GPU <span class="mono">inv as f32</span> underflow to <span class="mono">0.0</span>.</li>
+            <li><strong><span class="mono">tensor.rs</span> bloat &amp; <span class="mono">try_</span> asymmetry (<span class="mono">F29</span>, <span class="mono">F31</span>):</strong> <span class="mono">src/tensor.rs</span> is 3,269 LOC of 8 concerns; <span class="mono">RawTensor</span> exposes 60 associated functions while <span class="mono">Tensor</span> has 0 constructors and only 5 of <span class="mono">RawTensor</span>'s 18 <span class="mono">try_</span> methods.</li>
+          </ul>
+        </div>
+      </details>
+
+      <details>
+        <summary>
+          <span>2. Neural Networks, Optimizers, Examples &amp; Benchmarks</span>
+          <span class="badge sev-high">4 High · 3 Medium</span>
+        </summary>
+        <div class="details-body stack-sm">
+          <p><strong>Autocast, Device &amp; Layer Contract Bugs:</strong> Every parameterized layer now implements <span class="mono">Module</span>/<span class="mono">Layer</span>/<span class="mono">LoadPlan</span> and tied-weight deduplication, but integration across autocast, GPU devices, and <span class="mono">try_new</span> is uneven:</p>
+          <ul>
+            <li><strong>Broken under <span class="mono">autocast</span> (<span class="mono">F10</span>, <span class="mono">F11</span>):</strong> <span class="mono">ScaledDotProductAttention</span> creates F32 scale/mask constants from <span class="mono">query</span> instead of lowered <span class="mono">scores</span>; <span class="mono">LSTMCell::step</span> omits <span class="mono">amp::lower_layer</span> on biases and uses CPU-only <span class="mono">.transpose()</span>; <span class="mono">Conv2d</span> drops lowered <span class="mono">weight</span> in <span class="mono">Im2col</span>/<span class="mono">Auto</span> (<span class="mono">conv.rs:1325</span>).</li>
+            <li><strong>Missed non-param overrides (<span class="mono">F12</span>, <span class="mono">F27</span>):</strong> <span class="mono">BatchNorm1d/2d</span> override <span class="mono">to_dtype</span> but forget <span class="mono">to_device</span>, pinning running stats to CPU; <span class="mono">PositionalEncoding::to_dtype</span> lacks <span class="mono">dtype.is_float()</span>; <span class="mono">LayerNorm</span> flattens multi-dim weights to 1D breaking PyTorch SafeTensors interop.</li>
+            <li><strong>Examples &amp; Benches (<span class="mono">F22</span>, <span class="mono">F35</span>, <span class="mono">F45</span>):</strong> <span class="mono">load_external_mnist.rs:199</span> uses <span class="mono">0.0f32.max(NaN) == 0.0</span>; <span class="mono">benches/tensor_ops.rs</span> feeds 50% negative/zero values into <span class="mono">log</span>/<span class="mono">sqrt</span>/<span class="mono">div</span>; <span class="mono">char_transformer_model</span> avoids <span class="mono">TransformerBlock</span>; 11 examples evaluate without <span class="mono">no_grad()</span>.</li>
+          </ul>
+        </div>
+      </details>
+
+      <details>
+        <summary>
+          <span>3. GPU Backend (wgpu) &amp; WGSL Shaders</span>
+          <span class="badge sev-critical">3 Critical · 3 High</span>
+        </summary>
+        <div class="details-body stack-sm">
+          <p><strong>Correctness &amp; Concurrency (<span class="mono">F01–F03</span>, <span class="mono">F08–F09</span>):</strong> While packed 16-bit atomic half-word writes in <span class="mono">shader_template.rs</span> commute cleanly without bit-level tearing, 45 entry points guard on <span class="mono">len_*()</span> which returns <span class="mono">len + 1</span> for odd packed buffers and executes on uninitialized slack. <span class="mono">GpuContext::sync()</span>'s <span class="mono">pending_submissions.store(0)</span> drops concurrent threads' work, <span class="mono">map_async</span> panics in callback after poll timeouts, and both pools race in <span class="mono">clear()</span>.</p>
+          <ul>
+            <li><strong>Dead &amp; duplicate shaders (<span class="mono">F24</span>, <span class="mono">F25</span>):</strong> 48 dead <span class="mono">binary_backward_safe</span> pipelines carry 5 unfixed bugs; <span class="mono">igemm_backward_*</span> duplicate <span class="mono">conv_backward_*</span> verbatim; <span class="mono">igemm.wgsl</span> uses zero shared memory.</li>
+            <li><strong>Why GPU loses at every size:</strong> Per-op command encoder + unpooled uniform buffer + <span class="mono">queue.submit()</span> + 21 kernel wrappers uploading CPU-zeroed buffers via <span class="mono">zeros_of</span> + sync threshold 16. Meanwhile, <span class="mono">gpu_stub.rs</span> (<span class="mono">const fn</span>) vs <span class="mono">gpu/mod.rs</span> (<span class="mono">fn</span>) breaks Cargo's additive-feature guarantee.</li>
+          </ul>
+        </div>
+      </details>
+
+      <details>
+        <summary>
+          <span>4. Test Suite, CI/CD, Scripts &amp; Guardrail Theater</span>
+          <span class="badge sev-high">4 High · 3 Medium</span>
+        </summary>
+        <div class="details-body stack-sm">
+          <p><strong>82-Binary Test Explosion &amp; Broken GPU Gate (<span class="mono">F16–F19</span>):</strong> Cargo compiles 82 standalone binaries in <span class="mono">tests/</span> (19 with only 1–2 tests; 30 compiling as empty 0-test crates on CPU because <span class="mono">Cargo.toml</span> declares no <span class="mono">required-features = ["gpu"]</span>). Forty of 42 GPU-skipping test files never read <span class="mono">VOLTA_REQUIRE_GPU</span>, and <span class="mono">just test-gpu</span> skips 88 GPU integration tests.</p>
+          <ul>
+            <li><strong>Guardrail bypasses (<span class="mono">F19</span>):</strong> <span class="mono">check-fallbacks.sh</span> missed <span class="mono">src/gpu/kernels.rs:2257</span> (<span class="mono">.get(dim)\n.map_or(0, ..)</span>) and <span class="mono">examples/showcase.rs:85</span> due to line-splitting; <span class="mono">check-ignores.sh</span> spends a dedicated CI runner paginating 500+ issues yet misses <span class="mono">#[rustversion::attr(..., ignore = ...)]</span> in <span class="mono">compile_fail.rs:19</span>.</li>
+            <li><strong>CI &amp; Script bugs (<span class="mono">F32</span>, <span class="mono">F33</span>):</strong> Every merge to <span class="mono">improvements</span> fires 8 Ubuntu VMs + coverage + an Apple Silicon Mac (even for README edits); <span class="mono">mutants.yml</span> burns up to 600 mins/wk without failing on survivors; <span class="mono">serve_docs.py</span> binds <span class="mono">0.0.0.0</span> unauthenticated; <span class="mono">sync.sh</span>'s subshell memoization re-diffs git history per commit and <span class="mono">dry-run</span> mutates branches.</li>
+          </ul>
+        </div>
+      </details>
+
+      <details>
+        <summary>
+          <span>5. Documentation Contradictions, Branch Graveyard &amp; Repo Clutter</span>
+          <span class="badge sev-medium">2 Medium · 3 Low</span>
+        </summary>
+        <div class="details-body stack-sm">
+          <ul>
+            <li><strong>Stale claims days/hours after edits (<span class="mono">F36</span>, <span class="mono">F37</span>):</strong> Even after PR <span class="mono">#444</span>, <span class="mono">README.md</span> claims SafeTensors loads convert to f32 (<span class="mono">L30</span>), <span class="mono">time_sequence</span> NaNs (<span class="mono">L369</span>), GPU matmul lacks shared-memory tiling (<span class="mono">L386,393</span>), and all optimizers support half (<span class="mono">L30</span>). <span class="mono">FINISHING.md</span> (Nov 20) already has 14/15 §1 items + <span class="mono">#202</span> done and references a missing external <span class="mono">volta-tracking/release-plan.md</span>.</li>
+            <li><strong>262 MB untracked root clutter (<span class="mono">F39</span>):</strong> Dead 128 MB <span class="mono">minigrad-react/</span> shell + orphaned v0.2.0 <span class="mono">pkg/</span> WASM bundle (whose source <span class="mono">src/wasm.rs</span> does not exist on <span class="mono">improvements</span>), 17 MB stray root <span class="mono">node_modules/</span>, 116 MB duplicated MNIST in <span class="mono">data/</span>, ancient <span class="mono">coverage.txt</span> (Feb 2026), and <span class="mono">.superpowers/</span>.</li>
+            <li><strong>16 stale local + 4 stale remote branches (<span class="mono">F40</span>):</strong> 12 local <span class="mono">fix/*</span> branches already squashed into <span class="mono">improvements</span> (including <span class="mono">fix/100-rank-zero</span> swallowed inside <span class="mono">#436</span>), 4 abandoned playground/feature branches from Dec–Jun, and 4 unmerged remote Claude branches.</li>
+          </ul>
+        </div>
+      </details>
+
+      <details>
+        <summary>
+          <span>6. Genuine Engineering Strengths Worth Preserving</span>
+          <span class="badge status-ok">Keep &amp; Build On</span>
+        </summary>
+        <div class="details-body stack-sm">
+          <p>Pruning process bloat does <strong>not</strong> mean abandoning the real engineering discipline Volta achieved:</p>
+          <ul>
+            <li>Compile-time lint wall in <span class="mono">Cargo.toml</span> &amp; <span class="mono">src/lib.rs</span> (<span class="mono">indexing_slicing</span>, <span class="mono">unwrap_used</span>, <span class="mono">print_stdout</span>, <span class="mono">wildcard_enum_match_arm</span>, <span class="mono">undocumented_unsafe_blocks</span>).</li>
+            <li>Single-source <span class="mono">define_ops!</span> table, <span class="mono">src/spec.rs</span> validated conv/matmul geometry specs, and <span class="mono">src/ops/max_rule.rs</span> exact PyTorch NaN/tie parity.</li>
+            <li>Bit-exact integer RNE software f16/bf16 packing + <span class="mono">naga</span> shader-template verification across every WGSL expansion without requiring GPU hardware.</li>
+            <li>PyTorch 2.15 reference fixtures (<span class="mono">tests/torch_ref_*.rs</span>) and <span class="mono">LoadPlan</span> atomic state-dict loading (<span class="mono">src/nn/load_plan.rs</span>).</li>
+          </ul>
+        </div>
+      </details>
+    </section>
+
+    <!-- Section 6: 3-Phase Reset Plan -->
+    <section id="reset-plan" class="accordion stack-sm" aria-labelledby="reset-heading">
+      <h2 id="reset-heading" class="title-lg" style="margin-bottom: 0.25rem;">Recommended 3-Phase Reset Plan</h2>
+
+      <details open>
+        <summary>
+          <span>Phase A — Stop the Bleeding &amp; Ship <span class="mono">0.4.0</span> to <span class="mono">main</span></span>
+          <span class="badge sev-critical">Immediate · High Leverage</span>
+        </summary>
+        <div class="details-body">
+          <ol>
+            <li><strong>Freeze new audits, issues, and architecture rewrites</strong> on <span class="mono">improvements</span> until <span class="mono">0.4.0</span> merges to <span class="mono">main</span>.</li>
+            <li><strong>Fix the real silent/crash bugs in core + GPU + autocast:</strong> <span class="mono">F01</span> (odd 16-bit length clamp via uniform <span class="mono">n</span>), <span class="mono">F02</span> (guard <span class="mono">Bool</span> out of GPU float dispatch), <span class="mono">F03</span> (return token/sequence from <span class="mono">pending_submissions</span> instead of <span class="mono">store(0)</span>), <span class="mono">F04</span> (float check in <span class="mono">try_new_with_storage</span>), <span class="mono">F05</span> (<span class="mono">!self.is_gpu()</span> in <span class="mono">with_host_mut</span>), <span class="mono">F06</span> (<span class="mono">F16</span> <span class="mono">BCE_GRAD_EPS</span> + mixed dtype), <span class="mono">F07</span> (<span class="mono">GradScaler</span> overflow/underflow checks), and <span class="mono">F10</span>/<span class="mono">F11</span>/<span class="mono">F12</span> (autocast + <span class="mono">BatchNorm::to_device</span>).</li>
+            <li><strong>Strip <span class="mono">tests/fixtures/**</span> from <span class="mono">Cargo.toml</span> <span class="mono">include</span> (<span class="mono">F38</span>)</strong>, merge or close PR <span class="mono">#448</span> &amp; <span class="mono">#297</span>, fix the 4 stale falsehoods in <span class="mono">README.md</span>, bump to <span class="mono">0.4.0</span>, and merge <span class="mono">improvements → main</span>.</li>
+          </ol>
+        </div>
+      </details>
+
+      <details>
+        <summary>
+          <span>Phase B — De-Bloat Tests, CI, Scripts &amp; Settle the GPU Question</span>
+          <span class="badge sev-high">Strategic · Cut ~50% Overhead</span>
+        </summary>
+        <div class="details-body">
+          <ol>
+            <li><strong>Collapse 82 <span class="mono">tests/*.rs</span> binaries into 5–8 grouped suites (<span class="mono">F18</span>):</strong> Put GPU integration suites under <span class="mono">required-features = ["gpu"]</span>, centralize <span class="mono">VOLTA_REQUIRE_GPU</span> inside <span class="mono">skip_if_no_gpu()</span> (<span class="mono">F16</span>), fix the 3 zero-grad tests (<span class="mono">F17</span>), and restrict <span class="mono">mutants-core</span> to <span class="mono">--lib</span>.</li>
+            <li><strong>Make the deliberate GPU architecture call:</strong> Carrying 18,856 LOC of synchronous per-op <span class="mono">wgpu</span> code that loses to CPU at every size and fails <span class="mono">Strict</span> on <span class="mono">Linear + bias</span> is the #1 source of crate complexity. Either commit to batching/command-recording + core broadcast/reduce kernels in <span class="mono">0.5</span>, or narrow GPU scope/drop <span class="mono">igemm</span> &amp; dead <span class="mono">binary_backward_safe</span> (<span class="mono">F24–F25</span>) so the educational autograd core breathes.</li>
+            <li><strong>Prune CI &amp; custom scripts (<span class="mono">F32–F33</span>):</strong> Stop firing <span class="mono">macos.yml</span> and <span class="mono">coverage.yml</span> on doc-only pushes, delete scheduled <span class="mono">torch-fixtures.yml</span>, bind <span class="mono">serve_docs.py</span> to <span class="mono">127.0.0.1</span>, and clean out the 262 MB untracked clutter &amp; 16 dead branches (<span class="mono">F39–F40</span>).</li>
+          </ol>
+        </div>
+      </details>
+
+      <details>
+        <summary>
+          <span>Phase C — Re-Establish Human-in-the-Loop Agent Guardrails</span>
+          <span class="badge sev-medium">Process Reset</span>
+        </summary>
+        <div class="details-body">
+          <ol>
+            <li><strong>Require explicit approval before filing issues, creating milestones, or writing governance docs:</strong> Stop letting agents file 50–100 issues or add new <span class="mono">.claude/rules/</span> / <span class="mono">dev-docs/</span> / scripts without a user request.</li>
+            <li><strong>Cap PR size &amp; daily merge cadence, and ban unreviewed stacked PR chains:</strong> No more 9-PR serial stacks or merging 15–42 PRs in a single session without reading diffs; make <span class="mono">DECISIONS.md</span> immutable once an entry ships (only append short deltas at release cuts).</li>
+            <li><strong>Trust the Rust compiler over regex bash scripts:</strong> Keep <span class="mono">Cargo.toml</span> clippy lints (except dropping <span class="mono">missing_docs_in_private_items</span> on tests/benches, <span class="mono">F42</span>) and replace brittle regex scripts or fix multi-line AST handling (<span class="mono">F19</span>).</li>
+          </ol>
+        </div>
+      </details>
+    </section>
+
+  </main>
+
+  <script>
+    (function () {
+      'use strict';
+
+      // === 0. Offline Theme Toggle (Light / Dark) ===
+      const themeBtn = document.getElementById('theme-toggle');
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)');
+      function currentTheme() {
+        const explicit = document.documentElement.getAttribute('data-theme');
+        if (explicit === 'dark' || explicit === 'light') return explicit;
+        return prefersDark.matches ? 'dark' : 'light';
+      }
+      function syncThemeBtn() {
+        if (!themeBtn) return;
+        const isDark = currentTheme() === 'dark';
+        themeBtn.setAttribute('aria-pressed', String(isDark));
+        themeBtn.textContent = isDark ? 'Switch to Light Theme' : 'Switch to Dark Theme';
+      }
+      if (themeBtn) {
+        syncThemeBtn();
+        themeBtn.addEventListener('click', () => {
+          const next = currentTheme() === 'dark' ? 'light' : 'dark';
+          document.documentElement.setAttribute('data-theme', next);
+          syncThemeBtn();
+        });
+      }
+
+      // === 1. Sortable & Filterable Master Findings Table ===
+      const table = document.getElementById('findings-table');
+      const tbody = document.getElementById('findings-tbody');
+      const statusEl = document.getElementById('findings-status');
+      const countEl = document.getElementById('findings-count');
+      const sevButtons = Array.from(document.querySelectorAll('.filter-pill[data-sev]'));
+      const areaSelect = document.getElementById('filter-area');
+      const originSelect = document.getElementById('filter-origin');
+      const searchInput = document.getElementById('filter-search');
+      const resetBtn = document.getElementById('filter-reset');
+
+      const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+      const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+      let activeSev = 'all';
+
+      function cellSortValue(row, index) {
+        const cell = row.cells[index];
+        return cell.dataset.value ?? cell.textContent.trim();
+      }
+
+      function sortRows(rows, index, type, direction) {
+        const factor = direction === 'ascending' ? 1 : -1;
+        return rows.sort((a, b) => {
+          const va = cellSortValue(a, index);
+          const vb = cellSortValue(b, index);
+          const cmp = type === 'number' ? Number(va) - Number(vb) : collator.compare(va, vb);
+          if (cmp !== 0) return factor * cmp;
+          return Number(cellSortValue(a, 0)) - Number(cellSortValue(b, 0));
+        });
+      }
+
+      function reorderRows(container, orderedRows) {
+        for (const row of orderedRows) {
+          if (typeof container.moveBefore === 'function') {
+            container.moveBefore(row, null);
+          } else {
+            container.appendChild(row);
+          }
+        }
+      }
+
+      function handleSort(btn) {
+        const th = btn.closest('th');
+        if (!th || !tbody) return;
+        const direction = th.getAttribute('aria-sort') === 'ascending' ? 'descending' : 'ascending';
+        for (const header of table.tHead.rows[0].cells) {
+          header.removeAttribute('aria-sort');
+        }
+        th.setAttribute('aria-sort', direction);
+
+        const rows = sortRows(Array.from(tbody.rows), th.cellIndex, th.dataset.type || 'text', direction);
+        const applyOrder = () => reorderRows(tbody, rows);
+        if (typeof table.startViewTransition === 'function' && !reducedMotion.matches) {
+          table.startViewTransition(applyOrder);
+        } else {
+          applyOrder();
+        }
+        statusEl.textContent = `Sorted by ${btn.textContent.trim()}, ${direction}, ${rows.length} rows`;
+      }
+
+      if (table) {
+        table.addEventListener('command', (event) => {
+          if (event.command !== '--sort') return;
+          handleSort(event.source);
+        });
+        if (!Object.hasOwn(HTMLButtonElement.prototype, 'commandForElement')) {
+          for (const btn of table.querySelectorAll('thead button[command="--sort"]')) {
+            btn.addEventListener('click', () => handleSort(btn));
+          }
+        }
+      }
+
+      function applyFilters() {
+        if (!tbody) return;
+        const area = areaSelect ? areaSelect.value : 'all';
+        const origin = originSelect ? originSelect.value : 'all';
+        const query = searchInput ? searchInput.value.trim().toLowerCase() : '';
+        let visible = 0;
+        const total = tbody.rows.length;
+
+        for (const row of tbody.rows) {
+          const matchSev = activeSev === 'all' || row.dataset.sev === activeSev;
+          const matchArea = area === 'all' || row.dataset.area === area;
+          const matchOrigin = origin === 'all' || row.dataset.origin === origin;
+          const matchQuery = !query || row.textContent.toLowerCase().includes(query);
+          const show = matchSev && matchArea && matchOrigin && matchQuery;
+          row.hidden = !show;
+          if (show) visible += 1;
+        }
+        if (countEl) countEl.textContent = `Showing ${visible} of ${total} findings`;
+        if (statusEl) statusEl.textContent = `Showing ${visible} of ${total} findings`;
+      }
+
+      for (const btn of sevButtons) {
+        btn.addEventListener('click', () => {
+          activeSev = btn.dataset.sev;
+          for (const b of sevButtons) {
+            b.setAttribute('aria-pressed', String(b === btn));
+          }
+          applyFilters();
+        });
+      }
+      if (areaSelect) areaSelect.addEventListener('change', applyFilters);
+      if (originSelect) originSelect.addEventListener('change', applyFilters);
+      if (searchInput) searchInput.addEventListener('input', applyFilters);
+      if (resetBtn) {
+        resetBtn.addEventListener('click', () => {
+          activeSev = 'all';
+          for (const b of sevButtons) b.setAttribute('aria-pressed', String(b.dataset.sev === 'all'));
+          if (areaSelect) areaSelect.value = 'all';
+          if (originSelect) originSelect.value = 'all';
+          if (searchInput) searchInput.value = '';
+          applyFilters();
+        });
+      }
+
+      // === 2. Accordion Expand/Collapse All + Toggle Sync ===
+      function toggleAllDetails(accordion, button) {
+        const expand = button.getAttribute('aria-expanded') !== 'true';
+        for (const details of accordion.querySelectorAll(':scope > details')) {
+          details.open = expand;
+        }
+        button.setAttribute('aria-expanded', String(expand));
+      }
+
+      document.addEventListener('command', (event) => {
+        if (event.command !== '--toggle-all') return;
+        toggleAllDetails(event.target, event.source);
+      }, { capture: true });
+
+      if (!Object.hasOwn(HTMLButtonElement.prototype, 'commandForElement')) {
+        for (const btn of document.querySelectorAll('[command="--toggle-all"]')) {
+          btn.addEventListener('click', () => {
+            const target = document.getElementById(btn.getAttribute('commandfor'));
+            if (target) toggleAllDetails(target, btn);
+          });
+        }
+      }
+
+      document.addEventListener('toggle', (event) => {
+        if (!event.target.matches('.accordion > details')) return;
+        const accordion = event.target.parentElement;
+        const button = accordion.querySelector(':scope > div [command="--toggle-all"], :scope > [command="--toggle-all"]');
+        if (!button) return;
+        const items = accordion.querySelectorAll(':scope > details');
+        button.setAttribute('aria-expanded', String(Array.prototype.every.call(items, (d) => d.open)));
+      }, { capture: true });
+
+      // === 3. Scoped Chart Tabs + beforematch & focusgroup Fallback ===
+      const chartTabs = document.getElementById('chart-tabs');
+      if (chartTabs) {
+        const tablist = chartTabs.querySelector('[role="tablist"]');
+        const tabs = Array.from(tablist.querySelectorAll('[role="tab"]'));
+        const panels = Array.from(chartTabs.querySelectorAll('[role="tabpanel"]'));
+        const supportsFocusGroup = Object.hasOwn(HTMLElement.prototype, 'focusGroup');
+
+        function selectTab(selectedTab, focusTab) {
+          for (const tab of tabs) {
+            const isSelected = tab === selectedTab;
+            tab.setAttribute('aria-selected', String(isSelected));
+            tab.toggleAttribute('focusgroupstart', isSelected);
+            if (!supportsFocusGroup) {
+              tab.tabIndex = isSelected ? 0 : -1;
+            }
+          }
+          for (const panel of panels) {
+            const matches = panel.getAttribute('aria-labelledby') === selectedTab.id;
+            if (matches) {
+              panel.hidden = false;
+              panel.tabIndex = 0;
+            } else {
+              panel.hidden = 'until-found';
+              panel.removeAttribute('tabindex');
+            }
+          }
+          if (focusTab) selectedTab.focus();
+        }
+
+        if (!supportsFocusGroup) {
+          tabs.forEach((t, idx) => {
+            t.tabIndex = idx === 0 ? 0 : -1;
+          });
+          tablist.addEventListener('keydown', (event) => {
+            const current = tabs.indexOf(document.activeElement);
+            if (current === -1) return;
+            let next = -1;
+            if (event.key === 'ArrowRight') next = (current + 1) % tabs.length;
+            else if (event.key === 'ArrowLeft') next = (current - 1 + tabs.length) % tabs.length;
+            else if (event.key === 'Home') next = 0;
+            else if (event.key === 'End') next = tabs.length - 1;
+            if (next !== -1) {
+              event.preventDefault();
+              selectTab(tabs[next], true);
+            }
+          });
+        }
+
+        for (const tab of tabs) {
+          tab.addEventListener('click', () => selectTab(tab, false));
+          tab.addEventListener('focus', () => {
+            if (supportsFocusGroup) selectTab(tab, false);
+          });
+        }
+
+        chartTabs.addEventListener('beforematch', (event) => {
+          const panel = event.target.closest('[role="tabpanel"]');
+          if (!panel) return;
+          const matchingTab = tabs.find((t) => t.id === panel.getAttribute('aria-labelledby'));
+          if (matchingTab) selectTab(matchingTab, false);
+        });
+      }
+    })();
+  </script>
+</body>
+</html>
