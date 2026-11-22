@@ -7,6 +7,7 @@ Fixes #
 
 ## Checklist
 
+- [ ] Review tier: mechanical <!-- or "Review tier: design", which waits for RJ to read the diff: a public signature or type, a new trait, a reversed DECISIONS.md entry, a numerics or dtype change. When unsure, design. CLAUDE.md, "Review and status". -->
 - [ ] CI is green on this PR. Ran locally: <!-- clippy, and the tests the change touches -->
 - [ ] GPU: N/A, or touches `src/gpu/` and the tests ran with `VOLTA_REQUIRE_GPU=1` on: <!-- Apple GPU (local / CI macOS), lavapipe -->
 - [ ] Removed `#[ignore = "<ID>: ..."]`: none, or <!-- defect ID --> and its issue is in `Fixes` above
