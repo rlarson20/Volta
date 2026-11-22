@@ -240,7 +240,6 @@ fn grad_scaler_accepts_bf16_gradients() {
 /// #458: a state-dict entry of integer data is not differentiable, so building it with
 /// `requires_grad` must fail, as `try_new_typed` and `set_requires_grad` already do.
 #[test]
-#[ignore = "#458: try_to_tensor goes through try_new_with_storage, which skips the float check"]
 fn try_to_tensor_refuses_requires_grad_on_integer_data() {
     use volta::io::TensorData;
     let td = TensorData::from_typed(vec![1i64, 2, 3], vec![3]);
@@ -252,6 +251,64 @@ fn try_to_tensor_refuses_requires_grad_on_integer_data() {
         ),
         "an I64 entry with requires_grad must be refused"
     );
+}
+
+/// #458: every public way to build a leaf agrees on which dtypes may require grad: the
+/// float ones, as in PyTorch. Crosses each dtype with both `requires_grad` values through
+/// `TensorData::try_to_tensor`/`to_tensor`, `RawTensor::from_typed` plus
+/// `set_requires_grad`, and (f32 only) `RawTensor::try_new`.
+#[test]
+fn every_leaf_constructor_refuses_requires_grad_on_non_float_dtypes() {
+    use volta::io::TensorData;
+    /// One entry of each dtype, with two elements.
+    fn entries() -> Vec<TensorData> {
+        vec![
+            TensorData::from_typed(vec![1.0f32, 2.0], vec![2]),
+            TensorData::from_typed(vec![1.0f64, 2.0], vec![2]),
+            TensorData::from_typed(vec![half::f16::ONE, half::f16::ONE], vec![2]),
+            TensorData::from_typed(vec![half::bf16::ONE, half::bf16::ONE], vec![2]),
+            TensorData::from_typed(vec![1i32, 2], vec![2]),
+            TensorData::from_typed(vec![1i64, 2], vec![2]),
+            TensorData::from_typed(vec![1u8, 2], vec![2]),
+            TensorData::from_typed(vec![true, false], vec![2]),
+        ]
+    }
+    let all = entries();
+    assert_eq!(all.len(), 8, "one entry per DType");
+    for td in all {
+        let dtype = td.dtype;
+        let float = dtype.is_float();
+        // Off is always fine, and keeps the dtype.
+        let off = td.try_to_tensor(false).expect("requires_grad = false");
+        assert_eq!(off.dtype(), dtype);
+        assert!(!off.requires_grad());
+        // On: float dtypes build a leaf that requires grad; the rest are refused.
+        match td.try_to_tensor(true) {
+            Ok(t) => {
+                assert!(float, "{dtype:?} must be refused");
+                assert!(t.requires_grad());
+            }
+            Err(e) => {
+                assert!(!float, "{dtype:?} must be accepted, got {e}");
+                assert!(
+                    matches!(e, volta::VoltaError::NotDifferentiable { dtype: d } if d == dtype),
+                    "{dtype:?}: {e}"
+                );
+            }
+        }
+        let panicked =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| td.to_tensor(true))).is_err();
+        assert_eq!(panicked, !float, "to_tensor(true) on {dtype:?}");
+        // The same entry through set_requires_grad agrees.
+        let leaf = td.to_tensor(false);
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            leaf.set_requires_grad(true);
+        }))
+        .is_err();
+        assert_eq!(refused, !float, "set_requires_grad(true) on {dtype:?}");
+    }
+    assert!(RawTensor::try_new(vec![1.0, 2.0], &[2], true).is_ok());
+    assert!(RawTensor::try_new(vec![1.0, 2.0], &[2], false).is_ok());
 }
 
 /// #459: a `[0, usize::MAX]` entry has numel 0, passes `validate`, and then hangs

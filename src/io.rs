@@ -184,8 +184,10 @@ impl TensorData {
     /// `requires_grad`.
     ///
     /// # Errors
-    /// Whatever [`Self::validate`] returns, and whatever [`crate::shape::Shape::from_dims`]
-    /// returns for `shape` (a zero dim, or too many elements).
+    /// Whatever [`Self::validate`] returns, whatever [`crate::shape::Shape::from_dims`]
+    /// returns for `shape` (a zero dim, or too many elements), and
+    /// `VoltaError::NotDifferentiable` if `requires_grad` is true for an integer or bool
+    /// entry, as [`Tensor::set_requires_grad`] refuses it (#458).
     pub fn try_to_tensor(&self, requires_grad: bool) -> crate::Result<Tensor> {
         let storage = self.to_storage("")?;
         let shape = crate::shape::Shape::from_dims(self.shape.clone())?;

@@ -704,13 +704,25 @@ impl RawTensor {
         Self::try_new(data, shape, requires_grad).or_panic("new")
     }
 
-    /// Create a new tensor from Storage and shape (internal use for GPU ops, fallible)
+    /// Create a new tensor from Storage and shape (internal use for GPU ops, fallible).
+    ///
+    /// Every leaf reaches here or [`Self::try_new_typed`], so both refuse `requires_grad`
+    /// on a dtype that has no gradient (#458).
+    ///
+    /// # Errors
+    /// `VoltaError::NotDifferentiable` if `requires_grad` is true for an integer or bool
+    /// `data`, and `VoltaError::ShapeDataMismatch` if `data.len()` != `shape.numel()`.
     pub(crate) fn try_new_with_storage(
         data: crate::storage::Storage,
         shape: Shape,
         device: Device,
         requires_grad: bool,
     ) -> Result<Tensor> {
+        if requires_grad && !data.dtype().is_float() {
+            return Err(VoltaError::NotDifferentiable {
+                dtype: data.dtype(),
+            });
+        }
         if data.len() != shape.numel() {
             return Err(VoltaError::ShapeDataMismatch {
                 shape: shape.truncate_rank().to_vec(),
@@ -738,8 +750,9 @@ impl RawTensor {
     /// Create a new tensor from Storage and shape (internal use for GPU ops)
     ///
     /// # Panics
-    /// If `data.len()` != `shape.numel()`, or if the storage isn't where `device` says
-    /// it is (a device label is a promise; see `crate::device_policy`).
+    /// If `data.len()` != `shape.numel()`, if `requires_grad` is true for an integer or
+    /// bool `data`, or if the storage isn't where `device` says it is (a device label is
+    /// a promise; see `crate::device_policy`).
     pub(crate) fn new_with_storage(
         data: crate::storage::Storage,
         shape: Shape,
@@ -752,8 +765,7 @@ impl RawTensor {
             "tensor labeled {device} but its storage is on the {}",
             if data.is_gpu() { "GPU" } else { "CPU" }
         );
-        Self::try_new_with_storage(data, shape, device, requires_grad)
-            .expect("Data length must match shape")
+        Self::try_new_with_storage(data, shape, device, requires_grad).or_panic("new_with_storage")
     }
 
     /// CPU tensor from data and an already-validated `Shape` (op and backward code).
