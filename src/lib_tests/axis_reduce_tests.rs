@@ -86,8 +86,13 @@ fn test_softmax_forward() {
 
 #[test]
 fn test_gradcheck_softmax() {
-    let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], true);
-    let passed = RawTensor::check_gradients_simple(&x, |t| RawTensor::softmax(t, Axis(1)).sum());
+    // Each row of softmax sums to 1, so an unweighted `.sum()` is constant and its
+    // gradient is zero whatever the backward does (#461). Weight it.
+    let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0, -1.0, 0.5], &[2, 3], true);
+    let w = RawTensor::new(vec![0.3, -1.2, 0.7, 1.5, 0.2, -0.8], &[2, 3], false);
+    let passed = RawTensor::check_gradients_simple(&x, |t| {
+        RawTensor::softmax(t, Axis(1)).elem_mul(&w).sum()
+    });
     assert!(passed, "Softmax gradient check failed");
 }
 

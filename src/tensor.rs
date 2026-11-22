@@ -630,6 +630,12 @@ impl std::fmt::Debug for Tensor {
     }
 }
 
+/// Largest analytic-gradient magnitude that [`RawTensor::check_gradients`] still treats
+/// as zero when it rejects an all-zero gradient (#461). A loss that is constant in its
+/// input gets a backward of rounding noise (about 1e-8 in f32), while a real gradient
+/// through a weighted loss is many orders larger.
+const DEGENERATE_GRAD: f64 = 1e-6;
+
 // ===== TENSOR CONSTRUCTORS =====
 impl RawTensor {
     /// Create a new tensor from data and shape (fallible)
@@ -1811,6 +1817,13 @@ impl RawTensor {
     /// domain) fails the check: `passed` is `false` and `max_error` is that NaN or
     /// infinity, not the largest finite error.
     ///
+    /// # Degenerate losses
+    /// An analytic gradient whose every element is at most 1e-6 in magnitude fails the
+    /// check (#461). A loss that doesn't depend on `tensor`, such as `softmax(x).sum()`
+    /// (each row sums to 1) or a `BatchNorm` output's `.sum()`, has that gradient for
+    /// any backward, right or wrong, so a pass would prove nothing. Weight the output
+    /// with a fixed random tensor instead: `(y * w).sum()`.
+    ///
     /// # Panics
     /// If `tensor` is f16 or bf16: a finite-difference step can't be resolved at half
     /// precision, so the check would fail correct gradients. Cast the inputs to f32 or
@@ -1951,7 +1964,18 @@ impl RawTensor {
 
         let mean_error = total_error / analytical_grad.len() as f64;
         let max_error = non_finite.unwrap_or(max_error);
-        let passed = non_finite.is_none() && max_error < f64::from(tolerance);
+        // An all-zero analytic gradient agrees with any backward on a loss that is
+        // constant in `tensor` (`softmax(x).sum()`, a normalized output's `.sum()`), so
+        // it proves nothing and fails the check (#461). "Zero" allows rounding: such a
+        // loss's gradient comes out around 1e-8 in f32, not exactly 0.
+        let all_zero = analytical_grad.iter().all(|&g| g.abs() <= DEGENERATE_GRAD);
+        if all_zero {
+            log::warn!(
+                "check_gradients: the analytic gradient is all zeros, so the check proves \
+                 nothing; weight the loss, e.g. (y * w).sum() with a fixed random w"
+            );
+        }
+        let passed = non_finite.is_none() && !all_zero && max_error < f64::from(tolerance);
 
         #[expect(
             clippy::cast_possible_truncation,
@@ -3055,6 +3079,32 @@ mod tensor_tests {
         let (second_err, _, second_passed) = RawTensor::check_gradients(&x, loss_fn, 1e-2, 1e-3);
         assert!(first_passed, "first check failed: max_err={first_err}");
         assert!(second_passed, "repeat check failed: max_err={second_err}");
+    }
+
+    /// #461: a loss that is constant in its input has a zero gradient for any backward,
+    /// so the check fails it rather than pass a backward it never tested: `softmax.sum()`
+    /// (each row sums to 1) and a loss that ignores the input. A weighted loss through
+    /// the same op passes.
+    #[test]
+    fn check_gradients_fails_on_an_all_zero_gradient() {
+        let x = RawTensor::new(vec![1.0, 2.0, 3.0, -1.0, 0.5, 4.0], &[2, 3], true);
+        let (_, _, passed) =
+            RawTensor::check_gradients(&x, |t| t.softmax(Axis(1)).sum(), 1e-3, 1e-2);
+        assert!(
+            !passed,
+            "softmax(x).sum() is constant, so its check must fail"
+        );
+        let (_, _, passed) = RawTensor::check_gradients(
+            &x,
+            |t| t.elem_mul(&RawTensor::zeros(&[2, 3])).sum(),
+            1e-3,
+            1e-2,
+        );
+        assert!(!passed, "an exactly zero gradient must fail too");
+        let w = RawTensor::new(vec![0.3, -1.2, 0.7, 1.5, 0.2, -0.8], &[2, 3], false);
+        assert!(RawTensor::check_gradients_simple(&x, |t| {
+            t.softmax(Axis(1)).elem_mul(&w).sum()
+        }));
     }
 
     /// sqrt of negatives: both gradients are NaN. `f64::max` used to drop the NaN, so the
