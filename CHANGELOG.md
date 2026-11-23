@@ -17,8 +17,10 @@ Hand-written from the commit log; git-cliff flags only the 11 `!` commits. Each 
 - `Tensor` is opaque: `RawTensor` fields are hidden and `Tensor::from_raw` is removed. In-place updates go through `Tensor` methods (bfd4ec7, #376, #390, #393).
 - `Tensor::shape()` returns `Shape`, dim arguments take `Axis`, and `Shape::from_dims` rejects zero dims (merge of `shape-public-return`, 567946f, 31e2edd).
 - The `TensorOps` trait is deleted and its methods are inherent on `Tensor`. `TensorOps::backward` is replaced by `into_loss` / `ScalarLoss` (132790f, f1c07fe).
-- `Module` is split into `Module`, `Layer`, `IndexedLayer` and `RecurrentLayer` (1a51ab7).
-- Conv2d, ConvTranspose2d and MaxPool2d take validated spec structs (`Conv2dSpec`, `ConvTranspose2dSpec`, `Window2dSpec`); `Conv2d::set_algo` takes `&mut self` (82eecba, 8d6a037, aa43c66, #335).
+- `Module` is split into `Module`, `Layer`, `IndexedLayer` and `RecurrentLayer`: `forward` moves to `Layer`, and `LSTMCell::forward_step` becomes `RecurrentLayer::step` (1a51ab7).
+- Full reductions (`sum`, `mean`, `max`, the losses, a 1-D dot) return rank-0 tensors (shape `[]`, not `[1]`); zero-dim operands promote like `torch.result_type` (#438, squashed into #436).
+- The `GradFn` trait and the `*GradFn` structs are no longer public; the graph uses a closed enum (8ce5eae).
+- `Conv2d::set_algo` takes `&mut self` (#335).
 - One canonical path per item: the crate root re-exports only the core modules, and layers and optimizers live at `volta::nn::X` (#382).
 - Public enums and data structs are `#[non_exhaustive]` (#379, #365).
 - `Storage` is an opaque struct with no `Deref`/`Index`; host access is explicit and typed, and CPU storage is copy-on-write. `HostBuf` is crate-private (#4, #5, #20, #432).
@@ -26,7 +28,10 @@ Hand-written from the commit log; git-cliff flags only the 11 `!` commits. Each 
 - Default features are empty: `gpu` and `accelerate` are opt-in (#422).
 - Errors: functions fed by outside data return `Result<_, VoltaError>` and have `try_` forms; file loaders return `volta::Result`, and `VoltaError` variants carry an `ErrorDetail` (#435, #436, #440).
 - `Module::load_state_dict` is strict; the lenient form is `load_state_dict_partial` (#420).
-- Removed: bincode (safetensors is the only state-dict format, #256), `TypedTensorData` and its loader and saver (#412), the GPU monitors and `GpuContext` from the public API (#293, #338), and the public `assert_trainable!` macro (#388).
+- `BinaryOp::Cmplt` is removed; comparisons are `CmpOp` and return Bool (#25).
+- `io::mapping::load_pytorch_linear_weights` and `load_huggingface_weights` take the Linear layer names (c32fb28).
+- The `blas-src` feature is removed; `accelerate` gates the link itself (5cc8f29).
+- Removed: bincode (safetensors is the only state-dict format, #256), `TypedTensorData` and its loader and saver (#412), the GPU monitors, `GpuContext`, `GpuKernels` and the buffer pools from the public API (#293, #338, 55be134), and the public `assert_trainable!` macro (#388).
 - Tensors carry a dtype: kernels refuse a dtype they don't support, and mixed dtypes promote under `DTypePolicy` (#19–#25).
 
 ### Added
