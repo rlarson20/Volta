@@ -1,0 +1,38 @@
+name: Set up Rust
+description: >-
+  The toolchain, cargo tools and build cache every Rust job uses, in one place (#258). The
+  `dtolnay/rust-toolchain` pin is the one Dependabot cannot bump (no version tag), so it is
+  edited by hand here, once, instead of in every job. The caller checks out the repository
+  first: a local action is read from the checkout.
+
+inputs:
+  toolchain:
+    description: Toolchain to install, e.g. `stable` or `1.89`.
+    required: true
+  components:
+    description: Comma-separated rustup components (`clippy, rust-src`); empty for none.
+    default: ""
+  targets:
+    description: Comma-separated extra targets (`wasm32-unknown-unknown`); empty for none.
+    default: ""
+  tools:
+    description: Comma-separated tools for `taiki-e/install-action`; empty to install none.
+    default: just
+  cache:
+    description: "`true` to restore and save `Swatinem/rust-cache` with its default key."
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+      with:
+        toolchain: ${{ inputs.toolchain }}
+        components: ${{ inputs.components }}
+        targets: ${{ inputs.targets }}
+    - if: inputs.tools != ''
+      uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2
+      with:
+        tool: ${{ inputs.tools }}
+    - if: inputs.cache == 'true'
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2

@@ -1,0 +1,88 @@
+name: Mutants
+on:
+  # Mutation testing of the autograd core (`just mutants-core`: src/autograd.rs and src/ops/,
+  # CPU lane). Too slow for every PR (about 400 mutants at ~20 s each), so it runs weekly and by
+  # hand, in shards. A signal, not a gate: surviving ("missed") mutants are listed in each
+  # shard's job summary and do not fail the run.
+  schedule:
+    - cron: "0 3 * * 0" # Weekly on Sunday
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutants:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          components: rust-src
+          tools: cargo-mutants,just
+
+      # cargo-mutants exits 2 when a mutant survives and 3 when one times out: both are the
+      # signal this job reports. 1 (bad usage) and 4 (the unmutated tests fail) are real
+      # failures.
+      - name: Mutants (shard ${{ matrix.shard }}/8)
+        run: |
+          set +e
+          just mutants-core --shard ${{ matrix.shard }}/8 --no-shuffle
+          code=$?
+          set -e
+          echo "cargo-mutants exit: $code"
+          case $code in 0 | 2 | 3) ;; *) exit "$code" ;; esac
+
+      - name: Post to the job summary
+        if: always()
+        run: |
+          out=mutants.out
+          count() { if [ -f "$out/$1.txt" ]; then wc -l < "$out/$1.txt" | tr -d ' '; else echo 0; fi; }
+          {
+            echo "## Mutants, shard ${{ matrix.shard }}/8"
+            echo
+            echo "caught $(count caught), missed $(count missed), timeout $(count timeout), unviable $(count unviable)"
+            for kind in missed timeout; do
+              if [ -s "$out/$kind.txt" ]; then
+                echo
+                echo "### $kind"
+                echo
+                echo '```'
+                cat "$out/$kind.txt"
+                echo '```'
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The whole mutants.out (outcomes.json, caught/missed/timeout lists, per-mutant logs), so
+      # survivors can be triaged from the files instead of scraped from job logs (#389, #258).
+      - name: Upload mutants.out
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutants-out-shard-${{ matrix.shard }}
+          path: mutants.out
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # A scheduled failure is open work, so it becomes an issue (#258); without this a weekly or
+  # nightly job just goes red where nobody looks. Not `merge-gate`: only macOS gates main.
+  report-failure:
+    needs: mutants
+    if: always() && needs.mutants.result == 'failure' && github.event_name == 'schedule'
+    permissions:
+      actions: read
+      issues: write
+    uses: ./.github/workflows/report-failure.yml
+    with:
+      title: "Mutants scheduled failure on ${{ github.ref_name }}"
+      labels: kind:bug,area:ci,P1
+      workflow: mutants.yml
+      details: >-
+        A shard failed with a real error (exit 1 or 4: bad usage, or the unmutated tests fail); surviving mutants alone do not fail it. Reproduce with `just mutants-core`.

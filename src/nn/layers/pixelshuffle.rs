@@ -1,6 +1,9 @@
+use crate::error::OrPanic;
 use crate::io::StateDict;
-use crate::nn::Module;
-use crate::tensor::{Tensor, TensorOps};
+use crate::nn::hyper;
+use crate::nn::{Layer, Module};
+use crate::shape::Axis;
+use crate::tensor::Tensor;
 
 /// `PixelShuffle`: Rearranges elements from (B, C*r², H, W) to (B, C, H*r, W*r)
 ///
@@ -17,14 +20,17 @@ use crate::tensor::{Tensor, TensorOps};
 ///
 /// # Examples
 /// ```
-/// use volta::{RawTensor, PixelShuffle, nn::Module};
+/// use volta::RawTensor;
+/// use volta::nn::{PixelShuffle, Layer};
 ///
 /// let layer = PixelShuffle::new(2);
 /// let input = RawTensor::randn(&[1, 12, 4, 4]);  // 3 channels * 4
 /// let output = layer.forward(&input);
-/// assert_eq!(output.borrow().shape, vec![1, 3, 8, 8]);
+/// assert_eq!(output.shape(), vec![1, 3, 8, 8]);
 /// ```
+#[derive(Debug, Clone, Copy)]
 pub struct PixelShuffle {
+    /// Factor `r` by which each spatial side grows (channels shrink by `r^2`).
     upscale_factor: usize,
 }
 
@@ -35,33 +41,55 @@ impl PixelShuffle {
     /// * `upscale_factor` - Factor to increase spatial resolution by (must be > 0)
     ///
     /// # Panics
-    /// Panics if `upscale_factor` is 0
+    /// If `upscale_factor` is 0 (see [`Self::try_new`]).
     #[must_use]
+    #[track_caller]
     pub fn new(upscale_factor: usize) -> Self {
-        assert!(
-            upscale_factor > 0,
-            "PixelShuffle: upscale_factor must be positive, got {upscale_factor}",
-        );
-        Self { upscale_factor }
+        Self::try_new(upscale_factor).or_panic("PixelShuffle")
+    }
+
+    /// [`Self::new`], checking `upscale_factor` first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` if `upscale_factor` is 0.
+    pub fn try_new(upscale_factor: usize) -> crate::Result<Self> {
+        hyper::at_least_one("PixelShuffle", "upscale_factor", upscale_factor)?;
+        Ok(Self { upscale_factor })
     }
 }
 
 impl Module for PixelShuffle {
+    fn parameters(&self) -> Vec<Tensor> {
+        // PixelShuffle has no learnable parameters
+        vec![]
+    }
+
+    fn state_dict(&self) -> StateDict {
+        // No parameters to save
+        StateDict::new()
+    }
+
+    fn plan_load<'a>(&self, _plan: &mut crate::nn::LoadPlan<'a>) {}
+}
+
+impl Layer for PixelShuffle {
+    /// Rearranges `(B, C*r^2, H, W)` into `(B, C, H*r, W*r)`.
+    ///
+    /// # Panics
+    /// If `x` is not 4D, or its channels are not divisible by `upscale_factor^2`.
+    #[track_caller]
     fn forward(&self, x: &Tensor) -> Tensor {
         let x_ref = x.borrow();
         let shape = &x_ref.shape;
 
         // Validate input is 4D
         assert_eq!(
-            shape.len(),
+            shape.rank(),
             4,
             "PixelShuffle: expected 4D input (B, C, H, W), got shape {shape:?}",
         );
 
-        let batch_size = shape.first().copied().unwrap_or(1);
-        let in_channels = shape.get(1).copied().unwrap_or(1);
-        let height = shape.get(2).copied().unwrap_or(1);
-        let width = shape.get(3).copied().unwrap_or(1);
+        let [batch_size, in_channels, height, width] = shape.fixed::<4>();
         let r = self.upscale_factor;
         let r_squared = r * r;
 
@@ -79,24 +107,11 @@ impl Module for PixelShuffle {
         let x_reshaped = x.reshape(&[batch_size, out_channels, r, r, height, width]);
 
         // Step 2: Permute [0, 1, 4, 2, 5, 3] → (B, C, H, r, W, r)
-        let x_permuted = x_reshaped.permute(&[0, 1, 4, 2, 5, 3]);
+        let x_permuted =
+            x_reshaped.permute(&[Axis(0), Axis(1), Axis(4), Axis(2), Axis(5), Axis(3)]);
 
         // Step 3: Reshape (B, C, H, r, W, r) → (B, C, H*r, W*r)
         x_permuted.reshape(&[batch_size, out_channels, height * r, width * r])
-    }
-
-    fn parameters(&self) -> Vec<Tensor> {
-        // PixelShuffle has no learnable parameters
-        vec![]
-    }
-
-    fn state_dict(&self) -> StateDict {
-        // No parameters to save
-        StateDict::new()
-    }
-
-    fn load_state_dict(&mut self, _state: &StateDict) {
-        // No parameters to load
     }
 }
 
@@ -135,24 +150,5 @@ mod tests {
         let layer = PixelShuffle::new(2);
         let x = RawTensor::randn(&[12, 4, 4]); // 3D input
         layer.forward(&x);
-    }
-
-    #[test]
-    fn test_pixelshuffle_gradient_flow() {
-        let layer = PixelShuffle::new(2);
-        let x = RawTensor::randn(&[1, 4, 3, 3]);
-        x.borrow_mut().requires_grad = true;
-
-        let y = layer.forward(&x);
-        let loss = y.sum();
-        loss.backward();
-
-        let grad = x.grad();
-        assert!(
-            grad.is_some(),
-            "Gradient should flow back through PixelShuffle"
-        );
-        // Check gradient has correct number of elements: 1 * 4 * 3 * 3 = 36
-        assert_eq!(grad.unwrap().len(), 36);
     }
 }

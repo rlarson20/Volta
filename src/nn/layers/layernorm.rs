@@ -1,7 +1,9 @@
+use crate::error::OrPanic;
 use crate::io::{StateDict, TensorData};
-use crate::nn::Module;
-use crate::storage::Storage;
-use crate::tensor::{RawTensor, Tensor, TensorOps};
+use crate::nn::hyper;
+use crate::nn::{Layer, Module};
+use crate::shape::Axis;
+use crate::tensor::{RawTensor, Tensor};
 
 /// Layer Normalization layer.
 ///
@@ -17,7 +19,7 @@ use crate::tensor::{RawTensor, Tensor, TensorOps};
 ///
 /// # Example
 /// ```no_run
-/// # use volta::LayerNorm;
+/// # use volta::nn::LayerNorm;
 /// // For 2D input (B, C): normalize over C
 /// let ln = LayerNorm::new(vec![64]);
 ///
@@ -27,40 +29,87 @@ use crate::tensor::{RawTensor, Tensor, TensorOps};
 /// // For 4D input (B, H, W, C): normalize over H, W, C
 /// let ln = LayerNorm::new(vec![32, 32, 3]);
 /// ```
+#[derive(Debug)]
 pub struct LayerNorm {
+    /// Trailing dims the statistics are computed over.
     normalized_shape: Vec<usize>,
+    /// Added to the variance for numerical stability.
     eps: f32,
     // Learnable parameters
-    gamma: Tensor, // Scale parameter (initialized to 1)
-    beta: Tensor,  // Shift parameter (initialized to 0)
+    /// Learnable scale, initialized to 1.
+    gamma: Tensor,
+    /// Learnable shift, initialized to 0.
+    beta: Tensor,
 }
 
 impl LayerNorm {
     /// Create a new `LayerNorm` layer with default epsilon (1e-5)
+    ///
+    /// # Panics
+    /// As [`Self::new_with_eps`].
     #[must_use]
+    #[track_caller]
     pub fn new(normalized_shape: Vec<usize>) -> Self {
         Self::new_with_eps(normalized_shape, 1e-5)
     }
 
-    /// Create a new `LayerNorm` layer with specified epsilon
+    /// [`Self::new`], checking `normalized_shape` first.
+    ///
+    /// # Errors
+    /// As [`Self::try_new_with_eps`].
+    pub fn try_new(normalized_shape: Vec<usize>) -> crate::Result<Self> {
+        Self::try_new_with_eps(normalized_shape, 1e-5)
+    }
+
+    /// A `LayerNorm` over the trailing dimensions `normalized_shape`, with `eps` added to
+    /// the variance.
+    ///
+    /// # Panics
+    /// If `normalized_shape` is empty or has a zero, or `eps` is not finite and positive
+    /// (see [`Self::try_new_with_eps`]).
     #[must_use]
+    #[track_caller]
     pub fn new_with_eps(normalized_shape: Vec<usize>, eps: f32) -> Self {
+        Self::try_new_with_eps(normalized_shape, eps).or_panic("LayerNorm")
+    }
+
+    /// [`Self::new_with_eps`], checking the arguments first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` naming the argument if `normalized_shape` is empty
+    /// or has a zero dimension, or `eps` is zero, negative or not finite. An empty shape
+    /// used to give a layer over one feature, and a negative `eps` ran (#133).
+    /// A parameter of more than [`crate::shape::MAX_NUMEL`] elements is refused the same
+    /// way, before anything is allocated (#460).
+    pub fn try_new_with_eps(normalized_shape: Vec<usize>, eps: f32) -> crate::Result<Self> {
+        if normalized_shape.is_empty() {
+            return Err(crate::VoltaError::invalid(
+                "LayerNorm",
+                "normalized_shape",
+                "normalized_shape must have at least one dimension, got []",
+            ));
+        }
+        for &d in &normalized_shape {
+            hyper::at_least_one("LayerNorm", "normalized_shape", d)?;
+        }
+        hyper::eps("LayerNorm", eps)?;
+        hyper::param_numel("LayerNorm", "normalized_shape", &normalized_shape)?;
         // Calculate total size of normalized dimensions
         let num_features: usize = normalized_shape.iter().product();
 
         // Initialize gamma to 1, beta to 0
         let gamma = RawTensor::ones(&[num_features]);
-        gamma.borrow_mut().requires_grad = true;
+        gamma.set_requires_grad(true);
 
         let beta = RawTensor::zeros(&[num_features]);
-        beta.borrow_mut().requires_grad = true;
+        beta.set_requires_grad(true);
 
-        Self {
+        Ok(Self {
             normalized_shape,
             eps,
             gamma,
             beta,
-        }
+        })
     }
 
     /// Compute the dimension index to normalize over
@@ -73,65 +122,6 @@ impl LayerNorm {
 }
 
 impl Module for LayerNorm {
-    fn forward(&self, x: &Tensor) -> Tensor {
-        let input_shape = x.borrow().shape.clone();
-        let input_rank = input_shape.len();
-
-        // Validate that last N dimensions match normalized_shape
-        let norm_rank = self.normalized_shape.len();
-        assert!(
-            input_rank >= norm_rank,
-            "LayerNorm: input rank ({input_rank}) must be >= normalized_shape rank ({norm_rank})"
-        );
-
-        for (i, &expected_size) in self.normalized_shape.iter().enumerate() {
-            let actual_size = *input_shape.get(input_rank - norm_rank + i).unwrap_or(&1);
-            assert_eq!(
-                actual_size,
-                expected_size,
-                "LayerNorm: dimension {} mismatch: expected {}, got {}",
-                input_rank - norm_rank + i,
-                expected_size,
-                actual_size
-            );
-        }
-
-        // Compute mean and variance over the last N dimensions
-        let dim = self.normalize_dim(input_rank);
-
-        // Reshape to compute stats more efficiently:
-        // - Flatten leading dimensions: (B, T, ..., C) -> (B*T*..., C)
-        // - Then compute mean/var over the last dimension
-        let leading_dims: usize = input_shape.get(..dim).map_or(1, |s| s.iter().product());
-        let trailing_dims: usize = input_shape.get(dim..).map_or(1, |s| s.iter().product());
-
-        // Reshape to (leading_dims, trailing_dims)
-        let x_reshaped = x.reshape(&[leading_dims, trailing_dims]);
-
-        // Compute mean over dim=1 (the feature dimension)
-        let mean = x_reshaped.mean_dim(1, true); // (leading_dims, 1)
-
-        // Compute variance: E[(x - mean)^2]
-        let diff = x_reshaped.sub(&mean);
-        let sq_diff = diff.elem_mul(&diff);
-        let var = sq_diff.mean_dim(1, true); // (leading_dims, 1)
-
-        // Normalize: (x - mean) / sqrt(var + eps)
-        let eps_tensor = RawTensor::constant(self.eps, &[1]);
-        let denom = var.add(&eps_tensor).sqrt();
-        let x_norm = diff.div(&denom); // (leading_dims, trailing_dims)
-
-        // Reshape gamma and beta to broadcast correctly
-        let gamma_reshaped = self.gamma.reshape(&[1, trailing_dims]);
-        let beta_reshaped = self.beta.reshape(&[1, trailing_dims]);
-
-        // Scale and shift: gamma * x_norm + beta
-        let out = x_norm.elem_mul(&gamma_reshaped).add(&beta_reshaped);
-
-        // Reshape back to original shape
-        out.reshape(&input_shape)
-    }
-
     fn parameters(&self) -> Vec<Tensor> {
         vec![self.gamma.clone(), self.beta.clone()]
     }
@@ -143,21 +133,89 @@ impl Module for LayerNorm {
         state
     }
 
-    fn load_state_dict(&mut self, state: &StateDict) {
-        let params = [("gamma", &self.gamma), ("beta", &self.beta)];
-
-        for (key, tensor) in params {
-            if let Some(t) = state.get(key) {
-                let mut b = tensor.borrow_mut();
-                b.data = Storage::cpu(t.data.clone());
-                b.shape.clone_from(&t.shape);
-            }
-        }
+    fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+        plan.param("gamma", &self.gamma);
+        plan.param("beta", &self.beta);
     }
 
     fn train(&mut self, _mode: bool) {
         // LayerNorm has the same behavior in train and eval mode
         // (no running statistics, unlike BatchNorm)
+    }
+}
+
+impl Layer for LayerNorm {
+    fn forward(&self, x: &Tensor) -> Tensor {
+        // A half input normalizes in f32 and returns the input's dtype, as PyTorch's
+        // norm kernels do (audit A5, #316).
+        crate::nn::norm_mixed(x, self.gamma.dtype(), |x, dtype| self.forward_in(x, dtype))
+    }
+}
+
+impl LayerNorm {
+    /// The forward pass with `x` already in `dtype`, the dtype to compute in, which the
+    /// parameters are cast to ([`crate::nn::norm_mixed`]).
+    fn forward_in(&self, x: &Tensor, dtype: crate::DType) -> Tensor {
+        let input_shape = x.borrow().shape.clone();
+        let input_rank = input_shape.rank();
+
+        // Validate that last N dimensions match normalized_shape
+        let norm_rank = self.normalized_shape.len();
+        assert!(
+            input_rank >= norm_rank,
+            "LayerNorm({:?}): input rank ({input_rank}) must be >= normalized_shape rank ({norm_rank})",
+            self.normalized_shape
+        );
+
+        for (i, &expected_size) in self.normalized_shape.iter().enumerate() {
+            let actual_size = input_shape.dim_at(input_rank - norm_rank + i);
+            assert!(
+                actual_size == expected_size,
+                "LayerNorm({:?}): expected input [.., {}], got {:?}",
+                self.normalized_shape,
+                self.normalized_shape
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                input_shape.truncate_rank()
+            );
+        }
+
+        // Compute mean and variance over the last N dimensions
+        let dim = self.normalize_dim(input_rank);
+
+        // Reshape to compute stats more efficiently:
+        // - Flatten leading dimensions: (B, T, ..., C) -> (B*T*..., C)
+        // - Then compute mean/var over the last dimension
+        let leading_dims = input_shape.numel_before(dim);
+        let trailing_dims = input_shape.numel_from(dim);
+
+        // Reshape to (leading_dims, trailing_dims)
+        let x_reshaped = x.reshape(&[leading_dims, trailing_dims]);
+
+        // Compute mean over dim=1 (the feature dimension)
+        let mean = x_reshaped.mean_dim(Axis(1), true); // (leading_dims, 1)
+
+        // Compute variance: E[(x - mean)^2]
+        let diff = x_reshaped.sub(&mean);
+        let sq_diff = diff.elem_mul(&diff);
+        let var = sq_diff.mean_dim(Axis(1), true); // (leading_dims, 1)
+
+        // Normalize: (x - mean) / sqrt(var + eps)
+        let eps_tensor = x.constant_like(vec![self.eps], &[1]);
+        let denom = var.add(&eps_tensor).sqrt();
+        let x_norm = diff.div(&denom); // (leading_dims, trailing_dims)
+
+        // Reshape gamma and beta to broadcast correctly
+        let gamma_reshaped = self.gamma.to_dtype(dtype).reshape(&[1, trailing_dims]);
+        let beta_reshaped = self.beta.to_dtype(dtype).reshape(&[1, trailing_dims]);
+
+        // Scale and shift: gamma * x_norm + beta
+        let out = x_norm.elem_mul(&gamma_reshaped).add(&beta_reshaped);
+
+        // Reshape back to original shape
+        out.reshape(input_shape.truncate_rank())
     }
 }
 
@@ -177,5 +235,12 @@ mod tests {
     fn test_layernorm_with_eps() {
         let ln = LayerNorm::new_with_eps(vec![32], 1e-6);
         assert_eq!(ln.eps, 1e-6);
+    }
+
+    #[test]
+    fn test_layernorm_assert_trainable() {
+        let ln = LayerNorm::new(vec![4]);
+        let x = crate::macros::trainable_input(&[2, 4]);
+        crate::macros::assert_trainable!(ln, x);
     }
 }

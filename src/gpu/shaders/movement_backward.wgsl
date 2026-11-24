@@ -1,8 +1,8 @@
 // Movement operations backward pass
 // These compute gradients by inverting the forward movement operations
 
-@group(0) @binding(0) var<storage, read> out_grad: array<f32>;
-@group(0) @binding(1) var<storage, read_write> result: array<f32>;
+@group(0) @binding(0) var<storage, read> out_grad: array<ELEM>;
+@group(0) @binding(1) var<storage, read_write> result: array<ELEM>;
 
 // Parameters for movement operations (up to 4 dimensions)
 struct MovementParams {
@@ -67,7 +67,11 @@ fn compute_strides(shape: vec4<u32>, rank: u32) -> vec4<u32> {
 // Backward: old_coords[axes[i]] = new_coords[i]
 // This is equivalent to permuting with inverse axes
 @compute @workgroup_size(256)
-fn permute_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn permute_backward(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     let out_size = output_size(params.old_shape, params.rank);
 
@@ -85,7 +89,7 @@ fn permute_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let new_strides = compute_strides(params.new_shape, params.rank);
         let new_idx = coords_to_idx(new_coords, new_strides, params.rank);
-        result[idx] = out_grad[new_idx];
+        st_result(idx, ld_out_grad(new_idx));
     }
 }
 
@@ -93,7 +97,11 @@ fn permute_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
 // Forward: old_coords[i] = new_coords[i] * stride[i]
 // Backward: Place gradient at strided positions, zero elsewhere
 @compute @workgroup_size(256)
-fn stride_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn stride_backward(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     let out_size = output_size(params.old_shape, params.rank);
 
@@ -115,9 +123,9 @@ fn stride_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (is_strided) {
             let new_strides = compute_strides(params.new_shape, params.rank);
             let new_idx = coords_to_idx(new_coords, new_strides, params.rank);
-            result[idx] = out_grad[new_idx];
+            st_result(idx, ld_out_grad(new_idx));
         } else {
-            result[idx] = 0.0;
+            st_result(idx, 0.0);
         }
     }
 }
@@ -126,7 +134,11 @@ fn stride_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
 // Forward: old_coords[i] = new_coords[i] + range_start[i]
 // Backward: Place gradient in window, zero outside
 @compute @workgroup_size(256)
-fn shrink_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn shrink_backward(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     let out_size = output_size(params.old_shape, params.rank);
 
@@ -148,9 +160,9 @@ fn shrink_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (in_window) {
             let new_strides = compute_strides(params.new_shape, params.rank);
             let new_idx = coords_to_idx(new_coords, new_strides, params.rank);
-            result[idx] = out_grad[new_idx];
+            st_result(idx, ld_out_grad(new_idx));
         } else {
-            result[idx] = 0.0;
+            st_result(idx, 0.0);
         }
     }
 }
@@ -159,7 +171,11 @@ fn shrink_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
 // Forward: Adds padding around edges
 // Backward: Remove padding, extract center
 @compute @workgroup_size(256)
-fn pad_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn pad_backward(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     let out_size = output_size(params.old_shape, params.rank);
 
@@ -186,55 +202,94 @@ fn pad_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let new_strides = compute_strides(params.new_shape, params.rank);
         let new_idx = coords_to_idx(new_coords, new_strides, params.rank);
-        result[idx] = out_grad[new_idx];
+        st_result(idx, ld_out_grad(new_idx));
     }
 }
 
-// Expand Backward: Sum gradients over broadcast dimensions
-// Forward: Broadcasts dimensions from size 1 to larger sizes
-// Backward: Reduce gradients back to size 1 dimensions
-// This requires accumulation - we iterate over output gradient and accumulate into result
-@compute @workgroup_size(256)
-fn expand_backward(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let thread_idx = global_id.x;
-    let old_size = output_size(params.old_shape, params.rank);
+// Expand backward: each source element's gradient is the sum of `out_grad` over the
+// broadcast axes (old extent 1, new extent > 1). Only those axes are visited, so the work
+// is O(new_size), not O(old_size * new_size) (#308), and the terms are summed pairwise, not
+// in one f32 chain (#303, S6). Two entries; the host picks by the per-source term count:
+// `expand_backward` runs one thread per source element (few terms each), and
+// `expand_backward_wide` one workgroup per source element (many terms each, such as a conv
+// bias gradient over batch x H x W).
 
-    // Each thread handles one position in the result (original input shape)
-    if (thread_idx < old_size) {
-        let old_coords = idx_to_coords(thread_idx, params.old_shape, params.rank);
-        let old_strides = compute_strides(params.old_shape, params.rank);
-        let new_strides = compute_strides(params.new_shape, params.rank);
-        let new_size = output_size(params.new_shape, params.rank);
-
-        var sum: f32 = 0.0;
-
-        // Sum over all positions in the expanded gradient that map to this input position
-        for (var i: u32 = 0u; i < new_size; i = i + 1u) {
-            let new_coords = idx_to_coords(i, params.new_shape, params.rank);
-            var maps_to_this = true;
-
-            // Check if this output position maps to our input position
-            for (var j: u32 = 0u; j < params.rank; j = j + 1u) {
-                if (params.old_shape[j] == 1u) {
-                    // Broadcast dimension - any new coordinate maps to old coord 0
-                    if (old_coords[j] != 0u) {
-                        maps_to_this = false;
-                        break;
-                    }
-                } else {
-                    // Non-broadcast dimension - coordinates must match
-                    if (new_coords[j] != old_coords[j]) {
-                        maps_to_this = false;
-                        break;
-                    }
-                }
-            }
-
-            if (maps_to_this) {
-                sum = sum + out_grad[i];
-            }
+// The extents of the broadcast axes (1 elsewhere) and their product.
+fn broadcast_dims() -> vec4<u32> {
+    var dims = vec4<u32>(1u, 1u, 1u, 1u);
+    for (var j: u32 = 0u; j < params.rank; j = j + 1u) {
+        if (params.old_shape[j] == 1u) {
+            dims[j] = params.new_shape[j];
         }
+    }
+    return dims;
+}
 
-        result[thread_idx] = sum;
+// The index in `out_grad` of source element `src`'s first term (broadcast coordinates 0).
+fn expand_base(src: u32, new_strides: vec4<u32>) -> u32 {
+    let old_coords = idx_to_coords(src, params.old_shape, params.rank);
+    return coords_to_idx(old_coords, new_strides, params.rank);
+}
+
+// The offset of term `k` from a source's first term: `k` decoded over the broadcast axes.
+fn expand_offset(k: u32, bdims: vec4<u32>, new_strides: vec4<u32>) -> u32 {
+    return coords_to_idx(idx_to_coords(k, bdims, params.rank), new_strides, params.rank);
+}
+
+@compute @workgroup_size(256)
+fn expand_backward(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let src = flat_global_id(global_id_2d, num_wg).x;
+    if (src < output_size(params.old_shape, params.rank)) {
+        let new_strides = compute_strides(params.new_shape, params.rank);
+        let bdims = broadcast_dims();
+        let terms = output_size(bdims, params.rank);
+        let base = expand_base(src, new_strides);
+        var acc: PairwiseSum;
+        for (var k: u32 = 0u; k < terms; k = k + 1u) {
+            pairwise_push(&acc, ld_out_grad(base + expand_offset(k, bdims, new_strides)));
+        }
+        st_result(src, pairwise_total(&acc));
+    }
+}
+
+var<workgroup> sh_sum: array<f32, 256>;
+
+@compute @workgroup_size(256)
+fn expand_backward_wide(
+    @builtin(local_invocation_id) lid: vec3<u32>,
+    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    // One workgroup per source element; a launch past 65535 groups spreads over y.
+    let src = wid.x + wid.y * num_wg.x;
+    let in_range = src < output_size(params.old_shape, params.rank);
+    var partial = 0.0;
+    if (in_range) {
+        let new_strides = compute_strides(params.new_shape, params.rank);
+        let bdims = broadcast_dims();
+        let terms = output_size(bdims, params.rank);
+        let base = expand_base(src, new_strides);
+        // Thread `t` takes terms t, t + 256, ...: neighbouring threads read neighbouring
+        // terms, which are adjacent in memory when the innermost broadcast axis is last.
+        var acc: PairwiseSum;
+        for (var k: u32 = lid.x; k < terms; k = k + 256u) {
+            pairwise_push(&acc, ld_out_grad(base + expand_offset(k, bdims, new_strides)));
+        }
+        partial = pairwise_total(&acc);
+    }
+    // Combine the 256 partials in a fixed tree. Every thread reaches every barrier.
+    sh_sum[lid.x] = partial;
+    workgroupBarrier();
+    for (var s: u32 = 128u; s > 0u; s = s >> 1u) {
+        if (lid.x < s) {
+            sh_sum[lid.x] = sh_sum[lid.x] + sh_sum[lid.x + s];
+        }
+        workgroupBarrier();
+    }
+    if (in_range && lid.x == 0u) {
+        st_result(src, sh_sum[0]);
     }
 }

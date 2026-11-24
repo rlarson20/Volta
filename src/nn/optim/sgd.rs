@@ -1,3 +1,5 @@
+use crate::error::OrPanic;
+use crate::real::{Real, dispatch_real};
 use crate::storage::Storage;
 use crate::tensor::Tensor;
 
@@ -8,12 +10,21 @@ use crate::tensor::Tensor;
 /// - With momentum: v ← β·v - lr·∇θ, θ ← θ + v
 ///
 /// Momentum helps accelerate convergence and dampen oscillations.
+#[derive(Debug)]
 pub struct SGD {
-    params: Vec<Tensor>,
+    /// Parameters being optimized.
+    pub(super) params: Vec<Tensor>,
+    /// Learning rate.
     lr: f32,
+    /// Momentum coefficient; 0 disables momentum.
     momentum: f32,
+    /// L2 penalty.
     weight_decay: f32,
-    velocity: Vec<Storage>, // Can be CPU or GPU storage (empty if momentum=0)
+    /// Momentum buffer per parameter, allocated on the parameter's first step (`None` until
+    /// then, and always when `momentum` is 0), so a model converted with `to_device` or
+    /// `to_dtype` before that step is stepped in its new device and dtype. A conversion
+    /// after the first step panics instead.
+    velocity: Vec<Option<Storage>>,
 }
 
 impl SGD {
@@ -24,31 +35,45 @@ impl SGD {
     /// * `lr` - Learning rate (typical: 0.01 to 0.1)
     /// * `momentum` - Momentum coefficient (typical: 0.9, or 0.0 for no momentum)
     /// * `weight_decay` - L2 penalty (typical: 1e-4, or 0.0 for none)
+    ///
+    /// # Panics
+    /// If a hyperparameter is invalid; see [`Self::try_new`].
     #[must_use]
+    #[track_caller]
     pub fn new(params: Vec<Tensor>, lr: f32, momentum: f32, weight_decay: f32) -> Self {
-        // Create velocity state matching the device of each parameter
-        let velocity = if momentum > 0.0 {
-            params
-                .iter()
-                .map(|p| {
-                    let param = p.borrow();
-                    let len = param.data.len();
-                    let device = param.device.clone();
-                    drop(param);
-                    Storage::new_zeros(len, &device)
-                })
-                .collect()
-        } else {
-            vec![]
-        };
+        Self::try_new(params, lr, momentum, weight_decay).or_panic("SGD")
+    }
 
-        Self {
+    /// [`Self::new`], checking the hyperparameters first, as PyTorch does.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` if `lr`, `momentum` or `weight_decay` is negative
+    /// or NaN, or if the same tensor is listed twice in `params` (#101). A negative
+    /// momentum used to be ignored on the CPU and to panic on the GPU (audit A3).
+    /// A non-leaf parameter (one with a `grad_fn`) is rejected too (#102); a frozen leaf
+    /// (`requires_grad == false`) is accepted and skipped by `step`, as in PyTorch.
+    pub fn try_new(
+        params: Vec<Tensor>,
+        lr: f32,
+        momentum: f32,
+        weight_decay: f32,
+    ) -> crate::Result<Self> {
+        /// The op named in errors.
+        const OP: &str = "SGD::new";
+        super::check_unique(OP, &params)?;
+        super::check_leaves(OP, &params)?;
+        super::check_non_negative(OP, "lr", "learning rate", lr)?;
+        super::check_non_negative(OP, "momentum", "momentum", momentum)?;
+        super::check_non_negative(OP, "weight_decay", "weight_decay", weight_decay)?;
+        let velocity = params.iter().map(|_| None).collect();
+
+        Ok(Self {
             params,
             lr,
             momentum,
             weight_decay,
             velocity,
-        }
+        })
     }
 
     /// Zero all parameter gradients
@@ -57,19 +82,28 @@ impl SGD {
     /// across multiple batches.
     pub fn zero_grad(&self) {
         for param in &self.params {
-            param.borrow_mut().grad = None;
+            param.zero_grad();
         }
     }
 
     /// Perform one optimization step
     ///
     /// Updates all parameters using their accumulated gradients.
+    ///
     /// # Panics
-    /// unwrap params
+    /// If a parameter's dtype is not a float. This is checked for every parameter before
+    /// any is updated.
+    #[track_caller]
     pub fn step(&mut self) {
+        // Each parameter steps in its own dtype (a mixed list is fine, as in PyTorch);
+        // each must have a kernel. Checked for all before any is updated.
+        for param in &self.params {
+            crate::real::compute_dtype(|| "SGD step".to_string(), &[param.dtype()]);
+        }
+        super::assert_grad_lens("SGD", &self.params);
         // Process each parameter based on its device
         for i in 0..self.params.len() {
-            let param = self.params.get(i).unwrap();
+            let param = self.params.get(i).expect("SGD: a parameter per index");
             let p = param.borrow();
 
             // Skip parameters without gradients
@@ -90,162 +124,135 @@ impl SGD {
     }
 
     /// GPU-accelerated step for a single parameter
+    ///
+    /// # Panics
+    /// If the GPU kernel cannot run: a CPU fallback cannot write GPU storage, and skipping
+    /// the update would leave the parameter silently untrained.
     #[cfg(feature = "gpu")]
-    fn step_gpu_param(&self, i: usize) {
+    fn step_gpu_param(&mut self, i: usize) {
         use crate::gpu::OptimizerStepParams;
 
-        // For simple SGD (no momentum), use the simple path
-        if self.momentum == 0.0 {
-            return self.step_gpu_param_simple(i);
-        }
-
-        let op_code = 1; // SGD with momentum
-
-        let param = self.params.get(i).unwrap();
-        let p = param.borrow_mut();
-
-        let grad = match &p.grad {
-            Some(g) => g.clone(),
-            None => return,
+        let param = self.params.get(i).expect("SGD: a parameter per index");
+        let Some(grad) = param.grad_storage() else {
+            return;
         };
 
-        // Get velocity state (already on GPU)
-        let vel_state = self.velocity.get(i).unwrap();
-
-        // Dummy second state buffer (not used for SGD)
-        let dummy_state2 = Storage::new_zeros(p.data.len(), &p.device);
-
-        // Setup optimizer parameters
-        let opt_params = OptimizerStepParams {
-            op: op_code, // 0=SGD, 1=SGD+momentum
-            lr: self.lr,
-            beta1: self.momentum, // Used as momentum coefficient
-            beta2: 0.0,           // Not used for SGD
-            t: 0.0,               // Not used for SGD
-            eps: 0.0,             // Not used for SGD
-            weight_decay: self.weight_decay,
-            padding: 0.0,
+        // Plain SGD keeps no state: the kernel binds a cached placeholder for each state it
+        // doesn't use, so a step allocates nothing (#207).
+        let (op, beta1, state1) = if self.momentum == 0.0 {
+            (0, 0.0, None)
+        } else {
+            // Allocated on the parameter's first step, on its current device.
+            (
+                1,
+                self.momentum,
+                Some(
+                    self.velocity
+                        .get_mut(i)
+                        .expect("SGD: velocity slot per parameter")
+                        .get_or_insert_with(|| super::zeros_like(param)),
+                ),
+            )
         };
-
-        // Run GPU optimizer step (updates params and velocity in-place)
-        let success = crate::RawTensor::gpu_optimizer_step(
-            &p.data,
-            &grad,
-            vel_state,
-            &dummy_state2,
-            &opt_params,
-        )
-        .is_some();
-
-        // Invalidate CPU cache since parameter was updated on GPU
-        if success && let Storage::Gpu { ref cpu_cache, .. } = p.data {
-            *cpu_cache.borrow_mut() = None;
-        }
-    }
-
-    /// GPU step for simple SGD (no momentum)
-    #[cfg(feature = "gpu")]
-    fn step_gpu_param_simple(&self, i: usize) {
-        use crate::gpu::OptimizerStepParams;
-
-        let param = self.params.get(i).unwrap();
-        let p = param.borrow_mut();
-
-        let grad = match &p.grad {
-            Some(g) => g.clone(),
-            None => return,
-        };
-
-        // Create dummy state buffers
-        let dummy_state1 = Storage::new_zeros(p.data.len(), &p.device);
-        let dummy_state2 = Storage::new_zeros(p.data.len(), &p.device);
 
         let opt_params = OptimizerStepParams {
-            op: 0, // Simple SGD
+            op, // 0=SGD, 1=SGD+momentum
             lr: self.lr,
-            beta1: 0.0,
+            beta1, // Momentum coefficient
             beta2: 0.0,
-            t: 0.0,
+            m_hat_scale: 0.0,
             eps: 0.0,
             weight_decay: self.weight_decay,
-            padding: 0.0,
+            v_hat_scale: 0.0,
         };
 
-        let success = crate::RawTensor::gpu_optimizer_step(
-            &p.data,
-            &grad,
-            &dummy_state1,
-            &dummy_state2,
-            &opt_params,
-        )
-        .is_some();
-
-        if success && let Storage::Gpu { ref cpu_cache, .. } = p.data {
-            *cpu_cache.borrow_mut() = None;
-        }
+        // Updates the parameter (and velocity) in place, bumping its version (S9).
+        // `gpu_optimizer_step` unshares each buffer first and drops its host copy, so
+        // snapshots and later reads stay correct.
+        param
+            .update_data(|data| {
+                crate::RawTensor::gpu_optimizer_step(data, &grad, state1, None, &opt_params)
+            })
+            .expect("GPU SGD step failed: the parameter was not updated");
     }
 
     /// CPU update for a single parameter
-    #[cfg(feature = "gpu")]
     fn step_cpu_param(&mut self, i: usize) {
-        let param = self.params.get(i).unwrap();
-        let mut p = param.borrow_mut();
-
-        let grad = match &p.grad {
-            Some(g) => g.clone(),
-            None => return,
+        let param = self.params.get(i).expect("SGD: a parameter per index");
+        let Some(grad) = param.grad_storage() else {
+            return;
         };
 
-        // Apply weight decay to gradient
-        let mut active_grad = grad;
-        if self.weight_decay != 0.0 {
-            for (g, theta) in active_grad.iter_mut().zip(p.data.iter()) {
-                *g += self.weight_decay * *theta;
-            }
-        }
-
+        let dtype = param.dtype();
         if self.momentum > 0.0 {
-            // Get mutable access to CPU velocity state
-            let vel_slice = self
-                .velocity
+            // Allocated on the parameter's first step, in its current dtype.
+            self.velocity
                 .get_mut(i)
-                .and_then(|v| v.as_mut_slice())
-                .expect("Velocity should be CPU storage");
-
-            // Update velocity: v = momentum·v - lr·grad
-            for (v, &g) in vel_slice.iter_mut().zip(active_grad.iter()) {
-                *v = self.momentum.mul_add(*v, -(self.lr * g));
-            }
-
-            // Update parameters: θ = θ + v
-            let p_data = p
-                .data
-                .as_mut_slice()
-                .expect("Parameter should be CPU storage");
-            for (d, &v) in p_data.iter_mut().zip(vel_slice.iter()) {
-                *d += v;
-            }
-        } else {
-            // Simple SGD: θ = θ - lr·grad
-            let p_data = p
-                .data
-                .as_mut_slice()
-                .expect("Parameter should be CPU storage");
-            for (d, &g) in p_data.iter_mut().zip(active_grad.iter()) {
-                *d -= self.lr * g;
-            }
+                .expect("SGD: velocity slot per parameter")
+                .get_or_insert_with(|| super::zeros_like(param));
         }
+        // The step rewrites the parameter in place (S9; `update_data` bumps the version).
+        param.update_data(|data| {
+            dispatch_real!(dtype, T => {
+            let lr = T::from_f64(f64::from(self.lr));
+            let momentum = T::from_f64(f64::from(self.momentum));
+            let weight_decay = T::from_f64(f64::from(self.weight_decay));
+            // Apply weight decay to gradient
+            let mut active_grad = grad;
+            if self.weight_decay != 0.0 {
+                active_grad.with_host_mut::<T, _>(|g_host| {
+                    for (g, theta) in g_host.iter_mut().zip(data.host::<T>().iter()) {
+                        *g += weight_decay * *theta;
+                    }
+                });
+            }
+
+            if self.momentum > 0.0 {
+                let vel = self
+                    .velocity
+                    .get_mut(i)
+                    .and_then(Option::as_mut)
+                    .expect("SGD: velocity allocated above");
+                assert_eq!(
+                    vel.dtype(),
+                    dtype,
+                    "SGD velocity dtype; convert the model before the optimizer's first step"
+                );
+                vel.with_host_mut::<T, _>(|vel_slice| {
+                    // Update velocity: v = momentum·v - lr·grad
+                    for (v, &g) in vel_slice.iter_mut().zip(active_grad.host::<T>().iter()) {
+                        *v = momentum.mul_add(*v, -(lr * g));
+                    }
+
+                    // Update parameters: θ = θ + v
+                    data.with_host_mut::<T, _>(|p_data| {
+                        for (d, &v) in p_data.iter_mut().zip(vel_slice.iter()) {
+                            *d += v;
+                        }
+                    });
+                });
+            } else {
+                // Simple SGD: θ = θ - lr·grad
+                data.with_host_mut::<T, _>(|p_data| {
+                    for (d, &g) in p_data.iter_mut().zip(active_grad.host::<T>().iter()) {
+                        *d -= lr * g;
+                    }
+                });
+            }
+            });
+        });
     }
 }
 
 // Fallback when GPU feature is not enabled
 #[cfg(not(feature = "gpu"))]
 impl SGD {
+    /// Stub for builds without the `gpu` feature; a GPU parameter cannot exist there.
+    #[expect(
+        clippy::unused_self,
+        reason = "keeps the GPU variant's signature so the call site is the same with and without the feature"
+    )]
     fn step_gpu_param(&mut self, _i: usize) {
-        unreachable!("GPU step should not be called without GPU feature");
-    }
-
-    fn step_gpu_param_simple(&mut self, _i: usize) {
         unreachable!("GPU step should not be called without GPU feature");
     }
 }

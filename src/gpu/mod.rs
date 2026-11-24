@@ -8,38 +8,37 @@
 
 mod buffer;
 mod context;
-pub mod early_warning;
+#[deny(missing_docs, clippy::missing_docs_in_private_items)]
 mod kernels;
-pub mod monitor;
 mod pool;
-pub mod staging_pool;
-pub mod system_monitor;
+pub(crate) mod shader_template;
+/// Pool of `MAP_READ` staging buffers for GPU-to-CPU transfers.
+pub(crate) mod staging_pool;
 
 pub use buffer::GpuBuffer;
-pub use context::{GpuContext, GpuSyncError};
-pub use early_warning::{EarlyWarningSystem, HealthStatus as EarlyWarningHealthStatus, TrendData};
-pub use kernels::{GpuKernels, MovementParams, OptimizerStepParams};
-pub use monitor::{ResourceStatus, check_system_resources, get_process_memory_mb};
-pub use pool::{BufferPool, BufferPoolConfig};
-pub use staging_pool::{StagingBufferPool, StagingPoolStats};
-pub use system_monitor::{MonitorStats, SystemMonitor};
+pub(crate) use buffer::check_fits;
+pub(crate) use context::GpuContext;
+#[cfg(test)]
+pub(crate) use context::set_f16_emulation;
+pub(crate) use context::{BinaryBackwardPipelines, ComputePipelines};
+pub(crate) use kernels::{GpuKernels, MaxResult, OptimizerStepParams};
 
 use std::sync::OnceLock;
 
-// Global GPU context - initialized lazily on first use
+/// Global GPU context, initialized lazily on first use; `None` if no adapter was found.
 static GPU_CONTEXT: OnceLock<Option<GpuContext>> = OnceLock::new();
 
 /// Get the global GPU context, initializing it if necessary
 /// Returns None if GPU is not available
-pub fn get_gpu_context() -> Option<&'static GpuContext> {
+pub(crate) fn get_gpu_context() -> Option<&'static GpuContext> {
     GPU_CONTEXT
         .get_or_init(|| match GpuContext::new() {
             Ok(ctx) => {
-                println!("GPU initialized: {}", ctx.device_name());
+                log::info!("GPU initialized: {}", ctx.device_name());
                 Some(ctx)
             }
             Err(e) => {
-                eprintln!("GPU initialization failed: {e}. Falling back to CPU.");
+                log::warn!("GPU initialization failed: {e}. No GPU is available; to_device(GPU) will panic.");
                 None
             }
         })
@@ -50,6 +49,19 @@ pub fn get_gpu_context() -> Option<&'static GpuContext> {
 #[must_use]
 pub fn is_gpu_available() -> bool {
     get_gpu_context().is_some()
+}
+
+/// The largest tensor, in bytes on the GPU, that this machine's GPU can hold, or `None`
+/// without a GPU.
+///
+/// It is the adapter's `max_storage_buffer_binding_size` (every kernel binds a tensor as
+/// one storage buffer), which Volta requests in place of wgpu's 128 MiB default (#306).
+/// An f32 or bool element takes 4 bytes, and f16 and bf16 take 2, padded to a whole 4-byte
+/// word. [`crate::Tensor::try_to_device`] returns an error for a larger tensor before
+/// allocating anything; a kernel whose output would be larger panics.
+#[must_use]
+pub fn max_tensor_bytes() -> Option<u64> {
+    get_gpu_context().map(GpuContext::max_binding_bytes)
 }
 
 /// Force GPU synchronization - wait for all pending commands to complete.
@@ -67,12 +79,14 @@ pub fn is_gpu_available() -> bool {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use volta::{gpu_sync, RawTensor, TensorOps, Device};
+/// ```no_run
+/// use volta::{Device, randn};
+/// use volta::gpu::gpu_sync;
 ///
+/// let tensor = randn(&[64, 64]).to_device(Device::gpu().expect("a GPU"));
 /// // Run many GPU operations
 /// for _ in 0..100 {
-///     tensor.relu();
+///     let _ = tensor.relu();
 /// }
 ///
 /// // Ensure all work completes before timing next section
@@ -94,10 +108,11 @@ pub fn gpu_sync() -> bool {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use volta::{gpu_pending_count, RawTensor, TensorOps, Device};
+/// ```no_run
+/// use volta::{Device, randn};
+/// use volta::gpu::gpu_pending_count;
 ///
-/// let t = tensor.to_device(Device::gpu().unwrap());
+/// let t = randn(&[64, 64]).to_device(Device::gpu().expect("a GPU"));
 /// let _ = t.relu();
 /// println!("Pending ops: {}", gpu_pending_count());
 /// ```
@@ -129,8 +144,8 @@ pub fn gpu_sync_threshold() -> u32 {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use volta::gpu_cleanup;
+/// ```no_run
+/// use volta::gpu::gpu_cleanup;
 ///
 /// // After a batch of GPU operations
 /// gpu_cleanup();
@@ -163,8 +178,8 @@ pub fn gpu_cleanup() -> bool {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use volta::gpu_compact;
+/// ```no_run
+/// use volta::gpu::gpu_compact;
 ///
 /// // After a heavy benchmark group
 /// gpu_compact();
@@ -172,7 +187,6 @@ pub fn gpu_cleanup() -> bool {
 /// ```
 #[must_use]
 pub fn gpu_compact() -> bool {
-    #[allow(clippy::option_if_let_else)]
     if let Some(ctx) = get_gpu_context() {
         // Step 1: Clear buffer pools (drops wgpu::Buffer instances)
         ctx.buffer_pool().clear();
@@ -184,11 +198,12 @@ pub fn gpu_compact() -> bool {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Compaction Encoder"),
             });
-        ctx.queue().submit(Some(encoder.finish()));
+        let flush = ctx.queue().submit(Some(encoder.finish()));
 
-        // Step 3: Poll device to completion to ensure all pending work finishes
+        // Step 3: Poll until that submission (and everything before it) finishes; our own
+        // index, not `None`, so another thread's in-flight submit can't race it (#437).
         let _ = ctx.device().poll(wgpu::PollType::Wait {
-            submission_index: None,
+            submission_index: Some(flush.clone()),
             timeout: Some(std::time::Duration::from_secs(2)),
         });
 
@@ -197,7 +212,7 @@ pub fn gpu_compact() -> bool {
 
         // Step 5: Poll again to pick up any deferred cleanup
         let _ = ctx.device().poll(wgpu::PollType::Wait {
-            submission_index: None,
+            submission_index: Some(flush),
             timeout: Some(std::time::Duration::from_millis(500)),
         });
 
@@ -216,8 +231,8 @@ pub fn gpu_compact() -> bool {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use volta::gpu_pool_stats;
+/// ```no_run
+/// use volta::gpu::gpu_pool_stats;
 ///
 /// if let Some((buffers, staging)) = gpu_pool_stats() {
 ///     println!("Pooled buffers: {}, Staging buffers: {}", buffers, staging);
@@ -245,11 +260,12 @@ pub fn gpu_pool_stats() -> Option<(usize, usize)> {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use volta::{Device, TensorOps, Tensor, gpu::invalidate_all_tensor_caches};
+/// ```no_run
+/// use volta::{Device, gpu::invalidate_all_tensor_caches, randn};
 ///
-/// let a = tensor.to_device(Device::gpu().unwrap());
-/// let b = tensor.to_device(Device::gpu().unwrap());
+/// let gpu = Device::gpu().expect("a GPU");
+/// let a = randn(&[64, 64]).to_device(gpu.clone());
+/// let b = randn(&[64, 64]).to_device(gpu);
 ///
 /// // ... run benchmarks that may populate CPU caches ...
 ///
@@ -258,6 +274,6 @@ pub fn gpu_pool_stats() -> Option<(usize, usize)> {
 /// ```
 pub fn invalidate_all_tensor_caches(tensors: &[&crate::Tensor]) {
     for tensor in tensors {
-        tensor.borrow_mut().invalidate_gpu_cache();
+        tensor.invalidate_gpu_cache();
     }
 }

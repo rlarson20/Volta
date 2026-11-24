@@ -1,18 +1,33 @@
-#![allow(clippy::cast_precision_loss)]
-use volta::{
-    Conv2d, ConvTranspose2d, Flatten, Linear, Module, ProgressBar, RawTensor, SGD, Tanh, TensorOps,
-    bce_with_logits_loss, load_mnist_images, normalize, randn,
-};
+//! DCGAN on MNIST: a transposed-convolution `Generator` and a convolutional `Discriminator`, trained adversarially with `Adam` and `bce_with_logits_loss`.
+//!
+//! Needs the MNIST training images in `data/mnist/`; it exits with download instructions if they are missing, rather than train on made-up data.
+//!
+//! Images are normalized to `[-1, 1]` to match the generator's `Tanh` output. The example asserts that range before it trains, and exits if the losses go non-finite or the generator's output collapses to a constant.
+//!
+//! Each epoch prints the mean D/G losses and the generator's output statistics on a fixed noise batch.
+//! The number of epochs is the optional first argument (default 5): `cargo run --release --example dcgan -- 1`.
+#[path = "common/mnist.rs"]
+mod mnist;
+use volta::data::{load_mnist_images, normalize};
+use volta::nn::{Adam, Conv2d, ConvTranspose2d, Flatten, Layer, Linear, Module, Tanh};
+use volta::utils::ProgressBar;
+use volta::{RawTensor, Tensor, bce_with_logits_loss, randn};
 
 // Generator: noise -> fake images
+/// Generator: latent noise to a fake 28x28 image.
 struct Generator {
+    /// Projects the latent vector to `256 * 7 * 7` features.
     fc: Linear,
+    /// Upsamples `[256, 7, 7]` to `[128, 14, 14]`.
     deconv1: ConvTranspose2d,
+    /// Upsamples `[128, 14, 14]` to `[1, 28, 28]`.
     deconv2: ConvTranspose2d,
+    /// Squashes the output into `[-1, 1]`.
     tanh: Tanh,
 }
 
 impl Generator {
+    /// Builds the generator for `latent_dim`-wide noise.
     fn new(latent_dim: usize) -> Self {
         Self {
             fc: Linear::new(latent_dim, 256 * 7 * 7, true),
@@ -22,8 +37,12 @@ impl Generator {
         }
     }
 
+    /// Maps noise `[batch, latent_dim]` to images `[batch, 1, 28, 28]` in `[-1, 1]`.
     fn forward(&self, z: &volta::Tensor) -> volta::Tensor {
-        let batch = *z.borrow().shape.first().unwrap_or(&1);
+        let batch = z
+            .shape()
+            .dim(volta::Axis(0))
+            .expect("noise has a batch dim");
 
         // z: [batch, latent_dim] -> [batch, 256*7*7]
         let x = self.fc.forward(z).relu();
@@ -41,6 +60,7 @@ impl Generator {
         self.tanh.forward(&x)
     }
 
+    /// Trainable parameters of `fc`, `deconv1`, and `deconv2`.
     fn parameters(&self) -> Vec<volta::Tensor> {
         let mut params = Vec::new();
         params.extend(self.fc.parameters());
@@ -51,14 +71,20 @@ impl Generator {
 }
 
 // Discriminator: images -> real/fake classification
+/// Discriminator: a 28x28 image to a single real-vs-fake logit.
 struct Discriminator {
+    /// Downsamples `[1, 28, 28]` to `[64, 14, 14]`.
     conv1: Conv2d,
+    /// Downsamples `[64, 14, 14]` to `[128, 7, 7]`.
     conv2: Conv2d,
+    /// Flattens to `128 * 7 * 7` features.
     flatten: Flatten,
+    /// Maps the features to one logit. There is no sigmoid; the loss is `bce_with_logits_loss`.
     fc: Linear,
 }
 
 impl Discriminator {
+    /// Builds the discriminator.
     fn new() -> Self {
         Self {
             conv1: Conv2d::new(1, 64, 4, 2, 1, true),
@@ -68,6 +94,7 @@ impl Discriminator {
         }
     }
 
+    /// Maps images `[batch, 1, 28, 28]` to logits `[batch, 1]`.
     fn forward(&self, x: &volta::Tensor) -> volta::Tensor {
         // [batch, 1, 28, 28] -> [batch, 64, 14, 14]
         let x = self.conv1.forward(x).relu();
@@ -82,6 +109,7 @@ impl Discriminator {
         self.fc.forward(&x)
     }
 
+    /// Trainable parameters of `conv1`, `conv2`, and `fc`.
     fn parameters(&self) -> Vec<volta::Tensor> {
         let mut params = Vec::new();
         params.extend(self.conv1.parameters());
@@ -91,32 +119,59 @@ impl Discriminator {
     }
 }
 
-#[allow(clippy::similar_names)]
+/// Mean and standard deviation over every element of `t`.
+fn mean_std(t: &Tensor) -> (f32, f32) {
+    let data = t.data();
+    let n = data.len() as f32;
+    let mean = data.iter().sum::<f32>() / n;
+    let var = data.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / n;
+    (mean, var.sqrt())
+}
+
 fn main() {
     println!("=== DCGAN on MNIST ===\n");
 
     let latent_dim = 100;
     let batch_size = 64;
-    let num_epochs = 5;
+    let num_epochs: usize = match std::env::args().nth(1) {
+        None => 5,
+        Some(arg) => match arg.parse() {
+            Ok(n) if n > 0 => n,
+            _ => {
+                eprintln!("usage: dcgan [EPOCHS]  (EPOCHS is a positive integer, default 5)");
+                std::process::exit(2);
+            }
+        },
+    };
     let learning_rate = 0.0002;
 
     // Load MNIST data
-    let (train_images, num_train) =
-        if let Ok(images) = load_mnist_images("data/mnist/train-images-idx3-ubyte") {
-            let n = images.len() / 784;
-            println!("Loaded {n} MNIST training images");
-            (images, n)
-        } else {
-            println!("Could not load MNIST data from data/mnist/ directory");
-            println!("Generating synthetic data for demonstration...\n");
-            let n = 1000;
-            let images = vec![0.5; n * 784];
-            (images, n)
-        };
+    let train_images_path = "data/mnist/train-images-idx3-ubyte";
+    let train_images = match load_mnist_images(train_images_path) {
+        Ok(images) => images,
+        Err(err) => {
+            eprintln!("Could not load MNIST images from {train_images_path}: {err}");
+            mnist::print_download_hint();
+            std::process::exit(1);
+        }
+    };
+    let num_train = train_images.len() / 784;
+    println!("Loaded {num_train} MNIST training images");
 
-    // Normalize to [-1, 1] to match tanh output
+    // `load_mnist_images` already scales pixels to [0, 1]; map them to [-1, 1] to match tanh output.
     let mut train_data = train_images;
-    normalize(&mut train_data, 127.5, 127.5);
+    normalize(&mut train_data, 0.5, 0.5);
+    // MNIST contains both black (0) and white (255) pixels, so both ends of the range are hit.
+    // Checking both ends catches a double normalization, which stays inside [-1, 1] but collapses.
+    let (lo, hi) = train_data
+        .iter()
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &x| {
+            (lo.min(x), hi.max(x))
+        });
+    assert!(
+        (lo + 1.0).abs() < 1e-6 && (hi - 1.0).abs() < 1e-6,
+        "training images must span [-1, 1], found [{lo}, {hi}]"
+    );
 
     println!("Architecture:");
     println!("  Generator:");
@@ -134,8 +189,15 @@ fn main() {
     let generator = Generator::new(latent_dim);
     let discriminator = Discriminator::new();
 
-    let mut g_optimizer = SGD::new(generator.parameters(), learning_rate, 0.5, 0.0);
-    let mut d_optimizer = SGD::new(discriminator.parameters(), learning_rate, 0.5, 0.0);
+    // The DCGAN paper's settings: lr 2e-4 and beta1 0.5 are for Adam.
+    let betas = (0.5, 0.999);
+    let mut g_optimizer = Adam::new(generator.parameters(), learning_rate, betas, 1e-8, 0.0);
+    let mut d_optimizer = Adam::new(discriminator.parameters(), learning_rate, betas, 1e-8, 0.0);
+
+    // A fixed noise batch, so the generator's output can be compared before and after training.
+    let probe_noise = randn(&[16, latent_dim]);
+    let (mean_before, std_before) = mean_std(&generator.forward(&probe_noise));
+    println!("Generator output before training: mean={mean_before:.4}, std={std_before:.4}");
 
     let num_batches = num_train / batch_size;
     let mut progress = ProgressBar::new(num_epochs, "Training");
@@ -151,17 +213,17 @@ fn main() {
             // Real images
             let start = batch_idx * batch_size * 784;
             let end = start + batch_size * 784;
-            let batch_data = if let Some(slice) = train_data.get(start..end) {
-                slice.to_vec()
-            } else {
-                vec![0.0; batch_size * 784]
-            };
+            let batch_data = train_data
+                .get(start..end)
+                .expect("batch lies within the training set (num_batches = num_train / batch_size)")
+                .to_vec();
             let real_images = RawTensor::new(batch_data, &[batch_size, 1, 28, 28], false);
             let real_labels = RawTensor::ones(&[batch_size, 1]);
 
-            // Fake images
+            // Fake images. Detached: the discriminator step must not backpropagate into the
+            // generator, whose gradients `g_optimizer.zero_grad()` would discard anyway.
             let noise = randn(&[batch_size, latent_dim]);
-            let fake_images = generator.forward(&noise);
+            let fake_images = generator.forward(&noise).detach();
             let fake_labels = RawTensor::zeros(&[batch_size, 1]);
 
             // D(real) should be close to 1
@@ -174,9 +236,9 @@ fn main() {
 
             // Total discriminator loss
             let d_loss = d_loss_real.add(&d_loss_fake);
-            total_d_loss += d_loss.borrow().data.first().copied().unwrap_or(f32::NAN);
+            total_d_loss += d_loss.item();
 
-            d_loss.backward();
+            d_loss.into_loss().expect("scalar loss").backward();
             d_optimizer.step();
 
             // ===== Train Generator =====
@@ -190,31 +252,60 @@ fn main() {
             let d_fake = discriminator.forward(&fake_images);
             let g_loss = bce_with_logits_loss(&d_fake, &real_labels); // Use real labels
 
-            total_g_loss += g_loss.borrow().data.first().copied().unwrap_or(f32::NAN);
+            total_g_loss += g_loss.item();
 
-            g_loss.backward();
+            g_loss.into_loss().expect("scalar loss").backward();
             g_optimizer.step();
+
+            // An epoch takes a long time on the CPU, so report the running means as it goes.
+            let done = batch_idx + 1;
+            if done % 100 == 0 {
+                println!(
+                    "  epoch {} batch {done}/{num_batches}: D_loss={:.4}, G_loss={:.4}",
+                    epoch + 1,
+                    total_d_loss / done as f32,
+                    total_g_loss / done as f32
+                );
+            }
         }
 
         progress.update(epoch + 1);
 
         let avg_d_loss = total_d_loss / num_batches as f32;
         let avg_g_loss = total_g_loss / num_batches as f32;
-        println!(" D_loss={avg_d_loss:.4}, G_loss={avg_g_loss:.4}");
+        let (mean, std) = mean_std(&generator.forward(&probe_noise));
+        println!(
+            " epoch {}: D_loss={avg_d_loss:.4}, G_loss={avg_g_loss:.4}, generator output mean={mean:.4}, std={std:.4}",
+            epoch + 1
+        );
+        if !avg_d_loss.is_finite() || !avg_g_loss.is_finite() {
+            eprintln!("Training diverged: D_loss={avg_d_loss}, G_loss={avg_g_loss}");
+            std::process::exit(1);
+        }
+        // A generator that collapsed (or saturated tanh) emits one constant image.
+        if std < 1e-3 {
+            eprintln!("Generator output collapsed to a constant (std={std})");
+            std::process::exit(1);
+        }
     }
 
     println!("\n=== Training Complete ===");
+
+    let (mean_after, std_after) = mean_std(&generator.forward(&probe_noise));
+    println!("Generator output after training: mean={mean_after:.4}, std={std_after:.4}");
 
     // Generate sample images
     println!("\nGenerating sample images:");
     let noise = randn(&[1, latent_dim]);
     let generated = generator.forward(&noise);
-    let gen_data = &generated.borrow().data;
+    let gen_data = generated.data();
 
     // Show first 10 pixels
     println!(
         "Generated image (first 10 pixels): {:?}",
-        &gen_data.get(0..10).unwrap_or(&[])
+        gen_data
+            .get(0..10)
+            .expect("an image has at least 10 pixels")
     );
     println!("Values should be in [-1, 1] range (tanh output)");
 }

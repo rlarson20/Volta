@@ -9,7 +9,8 @@
 //! - **Inference**: Using the trained model to make predictions.
 //! - **Persistence**: Saving and loading the weights of a trained layer.
 
-use volta::{Adam, Linear, Module, RawTensor, ReLU, Sequential, Tensor, TensorOps, mse_loss};
+use volta::nn::{Adam, Layer, Linear, Module, ReLU, Sequential};
+use volta::{RawTensor, Tensor, mse_loss};
 
 fn main() {
     println!("--- Volta Showcase: Solving XOR with an MLP ---");
@@ -38,6 +39,8 @@ fn main() {
 
     // 4. The Training Loop
     println!("\n--- Starting Training ---");
+    let mut first_loss = f32::NAN;
+    let mut final_loss = f32::NAN;
     for epoch in 0..epochs {
         // Zero out gradients from the previous iteration
         opt.zero_grad();
@@ -47,40 +50,46 @@ fn main() {
 
         // Calculate loss (Mean Squared Error)
         let loss = mse_loss(&predictions, &y_data);
+        final_loss = loss.item();
+        if epoch == 0 {
+            first_loss = final_loss;
+        }
 
         // Backward pass: compute gradients for all parameters
-        loss.backward();
+        loss.clone().into_loss().expect("scalar loss").backward();
 
         // Update model weights using the computed gradients
         opt.step();
 
         if epoch % 20 == 0 {
-            let loss_val = loss.borrow().data.first().copied().unwrap_or(f32::NAN);
-            println!("Epoch {epoch:>3}: Loss = {loss_val:.6}");
+            println!("Epoch {epoch:>3}: Loss = {final_loss:.6}");
         }
     }
     println!("--- Training Complete ---");
+    // The CI smoke run (`just examples-smoke`) relies on this: a NaN or a loss that never
+    // drops exits non-zero.
+    assert!(
+        final_loss.is_finite() && final_loss < first_loss,
+        "training did not reduce the loss: first {first_loss}, final {final_loss}"
+    );
 
     // 5. Inference after Training
     // Let's see how well the model learned the XOR function.
     println!("\n--- Inference After Training ---");
     let final_predictions = model.forward(&x_data);
-    let x_data_borrowed = x_data.borrow();
-    let x_data_slice = &x_data_borrowed.data;
-    let y_data_borrowed = y_data.borrow();
-    let y_data_slice = &y_data_borrowed.data;
-    let final_borrowed = final_predictions.borrow();
-    let final_slice = &final_borrowed.data;
+    let x_data_slice = x_data.data();
+    let y_data_slice = y_data.data();
+    let final_slice = final_predictions.data();
 
     for i in 0..4 {
         let x_data_ref = x_data_slice.get(i * 2..(i * 2) + 2);
-        let y_val = y_data_slice.get(i).copied().unwrap_or(f32::NAN);
-        let pred_val = final_slice.get(i).copied().unwrap_or(f32::NAN);
+        let y_val = y_data_slice.get(i).copied().expect("index in range");
+        let pred_val = final_slice.get(i).copied().expect("index in range");
         if let Some(input_slice) = x_data_ref {
             println!(
                 "Input: [{:.0}, {:.0}] -> Target: {:.0}, Predicted: {:.4}",
-                input_slice.first().copied().unwrap_or(f32::NAN),
-                input_slice.get(1).copied().unwrap_or(f32::NAN),
+                input_slice.first().copied().expect("index in range"),
+                input_slice.get(1).copied().expect("index in range"),
                 y_val,
                 pred_val
             );

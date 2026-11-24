@@ -1,48 +1,204 @@
 name: CI
 on:
   push:
-    branches: [main]
+    branches: [main, improvements]
   pull_request:
 
+permissions:
+  contents: read
+
+# A superseded push to a PR branch is cancelled; runs on main and improvements always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Each step calls the justfile recipe that `just ci` uses, so local and CI checks cannot drift.
+# Toolchain, tools and cache come from the local action .github/actions/setup-rust (#258).
+#
+# Required checks (.github/rulesets/*.json): cpu-only (1.89), cpu-only (stable), linux-lavapipe
+# and macos-cross, plus macos (stable) into main. ignore-issues, examples-smoke, bench-smoke and
+# wasm32 run on every PR but are not required; making one required is a ruleset edit
+# (`.github/rulesets/`, applied with `just rulesets`).
+
 jobs:
-  test:
-    runs-on: ${{ matrix.os }}
+  # Honest "no features" lane (`--no-default-features`, which is also the default since #378).
+  # Everything here is CPU-only; the `gpu`
+  # feature is excluded from every step (wgpu is heavy and cannot run on
+  # GPU-less Linux runners). GPU wrappers have not-gpu stubs at their definition
+  # (ADDENDUM §9), so call sites carry no `cfg` and this lane's clippy is clean.
+  #
+  # The 1.89 (MSRV) entry builds, lints and tests: what can differ by compiler. The checks
+  # that don't depend on the compiler version (fmt, the fallback grep, rustdoc, the feature
+  # powerset) run on stable only (#258). Both entries keep their job names, which the
+  # rulesets require, so skipping steps needs no ruleset change.
+  cpu-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
         rust: [1.89, stable]
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-rust
         with:
           toolchain: ${{ matrix.rust }}
-          components: rustfmt, clippy
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          components: rustfmt, clippy, rust-src
+          tools: cargo-hack,just
 
       - name: Check formatting
+        if: matrix.rust == 'stable'
         run: cargo fmt --check
 
-      - name: Clippy (no features)
-        run: cargo clippy --all-targets -- -D warnings
+      - name: Check silent fallbacks
+        if: matrix.rust == 'stable'
+        run: just check-fallbacks
 
-      - name: Test (no features) #TODO: improve CI setup/reorganize, figure out way to run benches seperately
-        run: cargo test
+      - name: Clippy (no default features)
+        run: just lint-cpu
 
-      # macOS-specific: test accelerate feature
-      - name: Test (accelerate)
-        if: runner.os == 'macOS'
-        run: cargo test --features accelerate
+      - name: Test (no default features)
+        run: just test-cpu
 
-      # - name: Check (gpu feature) # Runners lack GPUs
-      #   run: cargo check --features gpu
+      - name: Build docs (no default features)
+        if: matrix.rust == 'stable'
+        run: just doc-cpu
 
-      - name: Doc tests
-        run: cargo test --doc
+      # Feature-combination rot check. `--feature-powerset` includes the
+      # empty-feature-set compile that would have caught B5. `gpu` is
+      # deliberately excluded on Linux.
+      - name: cargo-hack feature powerset (no gpu)
+        if: matrix.rust == 'stable'
+        run: just hack --exclude-features gpu
 
-      - name: Build docs
-        run: cargo doc --no-deps --all-features
+  # Every `#[ignore]` names a defect ID with an open issue (scripts/check-ignores.sh). Its own
+  # job, apart from the build lanes: it reads GitHub issues, needs no toolchain, and its result
+  # depends on issue state rather than on the code alone. VOLTA_REQUIRE_GH makes an unreachable
+  # issue list fail instead of skipping.
+  ignore-issues:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2
+        with:
+          tool: just
+
+      - name: Self-test the check
+        run: just test-check-ignores
+
+      - name: Check ignored tests name open issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VOLTA_REQUIRE_GH: "1"
+        run: just check-ignores
+
+  # Runs the quick, data-free examples (scripts/examples-smoke.sh): each must exit 0 within its
+  # time limit, print no NaN/inf, and pass its own final-loss assertion. clippy only builds
+  # them. Its own job, so a broken example reports apart from the build lanes.
+  examples-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+
+      - name: Examples smoke run
+        run: just examples-smoke
+
+  # Runs every CPU benchmark function once in Criterion's test mode (`just bench-smoke`), so a
+  # benchmark that panics fails the PR (#140 shipped one; clippy only compiles them). No timing
+  # is measured, so the shared runner's noise doesn't matter. Its own job, like examples-smoke.
+  bench-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+
+      - name: Bench smoke run
+        run: just bench-smoke
+
+  # The library builds for wasm32-unknown-unknown (`just wasm-check`: clippy, CPU features).
+  # `getrandom` needs its `wasm_js` backend there (Cargo.toml), so a dependency or `std` use
+  # that doesn't build for the browser fails here, not in the downstream WASM bindings (#64).
+  # Its own job, like bench-smoke.
+  wasm32:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+          components: clippy
+
+      - name: Clippy for wasm32-unknown-unknown
+        run: just wasm-check
+
+  # `gpu` and `accelerate` (`just test-full`) on Linux, with Mesa's lavapipe as the adapter: a software
+  # Vulkan device (shaderFloat16), so the gpu-gated tests run on every PR, including the
+  # f16/bf16 GPU tests and the naga validation of every shader expansion. Not Metal: the
+  # `macos` job (macos.yml) stays the Apple-GPU check. VOLTA_REQUIRE_GPU makes a missing adapter fail
+  # the run instead of letting every GPU test skip.
+  linux-lavapipe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          components: clippy, rust-src
+
+      - name: Install lavapipe
+        run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
+
+      - name: Test (gpu + accelerate, GPU on lavapipe)
+        env:
+          VOLTA_REQUIRE_GPU: "1"
+        run: just test-full
+
+      # The all-features halves of `just lint` and the docs. cpu-only runs only the
+      # no-features halves and macos-cross lints the aarch64-apple-darwin build, so
+      # without these a warning in Linux GPU code passed CI but failed `just ci` (#258).
+      - name: Clippy (gpu + accelerate)
+        run: just lint-full
+
+      - name: Build docs (gpu + accelerate)
+        run: just doc-full
+
+  # The macOS build, type-checked from Linux: clippy (all features, then none), rustdoc and the
+  # feature powerset for aarch64-apple-darwin, which covers the Accelerate matmul path, the Metal
+  # backend's dependencies and the macos cfgs. Required on every PR, in place of a macOS runner
+  # (scarce, slow to queue). Running Metal and Accelerate is the `macos` job in macos.yml:
+  # required into main, post-merge on improvements (DECISIONS.md, "macOS checks move off the PR
+  # gate"). ubuntu-latest ships clang, which compiles the one C build script (see the justfile).
+  macos-cross:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin
+          components: clippy, rust-src
+          tools: cargo-hack,just
+
+      - name: Clippy (aarch64-apple-darwin)
+        run: just lint-macos-cross
+
+      - name: Build docs (aarch64-apple-darwin)
+        run: just doc-macos-cross
+
+      - name: cargo-hack feature powerset (aarch64-apple-darwin)
+        run: just hack-macos-cross

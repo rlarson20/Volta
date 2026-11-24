@@ -1,8 +1,16 @@
-use crate::autograd::GradFn;
+use crate::autograd::{GradFn, edge};
+use crate::device::Device;
+use crate::dtype::DType;
+use crate::error::OrPanic;
+use crate::index::{fetch, slot, span};
 use crate::io::StateDict;
-use crate::nn::Module;
+use crate::nn::hyper;
+use crate::nn::{Layer, Module};
+use crate::real::{Real, dispatch_real};
+use crate::shape::Shape;
+use crate::storage::Storage;
 use crate::tensor::{RawTensor, Tensor, with_rng};
-use rand::Rng;
+use rand::RngExt;
 
 /// Embedding: Maps integer indices to dense vectors
 ///
@@ -15,22 +23,35 @@ use rand::Rng;
 /// * `embedding_dim` - Dimension of the embedding vectors
 ///
 /// # Shape
-/// - Input: Array of indices `[num_indices]`
-/// - Output: `[num_indices, embedding_dim]`
+/// - Input: I64 or I32 indices of any shape `[..]`
+/// - Output: `[.., embedding_dim]`, in the weight's dtype
 ///
 /// # Examples
 /// ```
-/// use volta::{RawTensor, Embedding, nn::Module};
+/// use volta::nn::{Embedding, Layer};
+/// use volta::RawTensor;
 ///
-/// let embedding = Embedding::new(100, 32);  // 100 vocab, 32-dim embeddings
-/// let indices = vec![5, 12, 7];
+/// let embedding = Embedding::new(100, 32); // 100 vocab, 32-dim embeddings
+/// let indices = RawTensor::from_typed(vec![5i64, 12, 7, 0, 1, 2], &[2, 3]);
 /// let embedded = embedding.forward(&indices);
-/// assert_eq!(embedded.borrow().shape, vec![3, 32]);
+/// assert_eq!(embedded.shape(), vec![2, 3, 32]);
 /// ```
-#[derive(Clone, Debug)]
+///
+/// Like every layer, `Embedding` is not `Clone`: [`Tensor`] is a shared handle, so a
+/// derived clone would share the weight instead of copying it (#108). Share a weight
+/// explicitly through the `weight` field.
+///
+/// ```compile_fail
+/// let e = volta::nn::Embedding::new(10, 4);
+/// let _copy = e.clone();
+/// ```
+#[derive(Debug)]
 pub struct Embedding {
+    /// Lookup table, shape `[vocab_size, dim]`.
     pub weight: Tensor,
+    /// Number of rows in the table.
     vocab_size: usize,
+    /// Width of each row.
     dim: usize,
 }
 
@@ -38,14 +59,32 @@ impl Embedding {
     /// Creates a new Embedding layer
     ///
     /// Weights are initialized uniformly in the range [-0.1, 0.1]
+    ///
     /// # Panics
-    /// positive vocab size, embedding dim
+    /// If `vocab_size` or `embedding_dim` is zero (see [`Self::try_new`]).
     #[must_use]
+    #[track_caller]
     pub fn new(vocab_size: usize, embedding_dim: usize) -> Self {
-        assert!(vocab_size > 0, "vocab_size must be positive");
-        assert!(embedding_dim > 0, "embedding_dim must be positive");
+        Self::try_new(vocab_size, embedding_dim).or_panic("Embedding")
+    }
 
-        // Initialize with uniform distribution [-0.1, 0.1] (PyTorch default)
+    /// [`Self::new`], checking the sizes first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` naming the argument if `vocab_size` or
+    /// `embedding_dim` is zero, or naming both if the weight would have more than
+    /// [`crate::shape::MAX_NUMEL`] elements.
+    pub fn try_new(vocab_size: usize, embedding_dim: usize) -> crate::Result<Self> {
+        hyper::at_least_one("Embedding", "vocab_size", vocab_size)?;
+        hyper::at_least_one("Embedding", "embedding_dim", embedding_dim)?;
+        hyper::param_numel(
+            "Embedding",
+            "vocab_size, embedding_dim",
+            &[vocab_size, embedding_dim],
+        )?;
+
+        // Uniform [-0.1, 0.1]. This is not PyTorch's default, which is N(0, 1)
+        // (docs/audits/2026-11-sweep.md, D2).
         let limit = 0.1;
         let data: Vec<f32> = with_rng(|rng| {
             (0..vocab_size * embedding_dim)
@@ -54,78 +93,102 @@ impl Embedding {
         });
 
         let weight = RawTensor::new(data, &[vocab_size, embedding_dim], false);
-        weight.borrow_mut().requires_grad = true;
+        weight.set_requires_grad(true);
 
-        Self {
+        Ok(Self {
             weight,
             vocab_size,
             dim: embedding_dim,
-        }
+        })
     }
+}
 
-    /// Forward pass: lookup embeddings for given indices
-    ///
-    /// # Arguments
-    /// * `indices` - Array of vocabulary indices to look up
-    ///
-    /// # Returns
-    /// Tensor of shape `[num_indices, embedding_dim]` containing the embeddings
+impl Embedding {
+    /// The rows `indices` (an I64 or I32 tensor) selects, as `usize`, checked in range.
     ///
     /// # Panics
-    /// Panics if any index is >= `vocab_size`
-    #[must_use]
-    pub fn forward(&self, indices: &[usize]) -> Tensor {
-        assert!(!indices.is_empty(), "indices cannot be empty");
-
-        let weight_borrowed = self.weight.borrow();
-        let weight_data = &weight_borrowed.data;
-
-        // Gather operation: select rows from weight matrix
-        let mut output_data = Vec::with_capacity(indices.len() * self.dim);
-
-        for &idx in indices {
-            assert!(
-                idx < self.vocab_size,
-                "Index {} out of bounds for vocab_size {}",
-                idx,
-                self.vocab_size
-            );
-            let start = idx * self.dim;
-            let end = start + self.dim;
-            if let Some(slice) = weight_data.get(start..end) {
-                output_data.extend_from_slice(slice);
+    /// If `indices` is not I64 or I32, or an index is negative or `>= vocab_size`.
+    #[track_caller]
+    fn rows(&self, indices: &Tensor) -> Vec<usize> {
+        let s = indices.borrow();
+        let wide: Vec<i64> = match s.data.dtype() {
+            DType::I64 => s.data.as_host::<i64>().expect("I64 checked").to_vec(),
+            DType::I32 => s
+                .data
+                .as_host::<i32>()
+                .expect("I32 checked")
+                .iter()
+                .map(|&i| i64::from(i))
+                .collect(),
+            other @ (DType::F16
+            | DType::BF16
+            | DType::F32
+            | DType::F64
+            | DType::U8
+            | DType::Bool) => panic!(
+                "Embedding: indices must be I64 or I32, got {other}; cast with \
+                 to_dtype(DType::I64)"
+            ),
+        };
+        // A loop, not a closure: a panic inside a closure reports the closure's location,
+        // not the caller's (`#[track_caller]` stops at closures).
+        let mut rows = Vec::with_capacity(wide.len());
+        for i in wide {
+            match usize::try_from(i) {
+                Ok(r) if r < self.vocab_size => rows.push(r),
+                _ => panic!(
+                    "Embedding: index {i} out of range for vocab_size {}",
+                    self.vocab_size
+                ),
             }
         }
+        rows
+    }
+}
 
+impl Layer for Embedding {
+    /// Looks up a row of `weight` for each index in `indices`, an I64 or I32 tensor of any
+    /// shape (PyTorch's `nn.Embedding`). The output has shape `[..indices.shape, dim]` and
+    /// the weight's dtype; the indices carry no gradient.
+    ///
+    /// # Panics
+    /// If `indices` is not I64 or I32, or an index is negative or `>= vocab_size`.
+    #[track_caller]
+    fn forward(&self, indices: &Tensor) -> Tensor {
+        let rows = self.rows(indices);
+        let weight_borrowed = self.weight.borrow();
+        let dtype = weight_borrowed.data.dtype();
+        let output = dispatch_real!(dtype, T => {
+            let weight_data = weight_borrowed.data.host::<T>();
+            // Gather: one weight row per index.
+            let mut output_data = Vec::with_capacity(rows.len() * self.dim);
+            for &row in &rows {
+                let start = row * self.dim;
+                output_data.extend_from_slice(span(&weight_data, start..start + self.dim));
+            }
+            Storage::from_compute(dtype, output_data)
+        });
         drop(weight_borrowed);
 
-        let output_shape = [indices.len(), self.dim];
-        let output = RawTensor::new(output_data, &output_shape, false);
+        let mut output_shape = indices.shape().truncate_rank().to_vec();
+        output_shape.push(self.dim);
 
-        // Attach gradient function if weight requires grad
-        if self.weight.borrow().requires_grad {
-            output.borrow_mut().requires_grad = true;
-            output.borrow_mut().parents = vec![self.weight.clone()];
-            output.borrow_mut().grad_fn = Some(Box::new(EmbeddingGradFn {
-                indices: indices.to_vec(),
+        // The indices are data, not a graph input: only the weight is a parent.
+        edge(
+            [self.weight.clone()],
+            output,
+            Shape::derived(output_shape),
+            Device::CPU,
+            GradFn::Embedding(EmbeddingGradFn {
+                indices: rows,
                 vocab_size: self.vocab_size,
                 embedding_dim: self.dim,
-            }));
-        }
-
-        output
+            }),
+        )
     }
 }
 
 impl Module for Embedding {
-    fn forward(&self, _x: &Tensor) -> Tensor {
-        // For compatibility with Module trait, we can't use indices directly
-        // This is a workaround - in practice, use the Embedding::forward method directly
-        panic!(
-            "Embedding layer should be called with Embedding::forward(&indices), not Module::forward"
-        );
-    }
-
     fn parameters(&self) -> Vec<Tensor> {
         vec![self.weight.clone()]
     }
@@ -137,19 +200,8 @@ impl Module for Embedding {
         state
     }
 
-    fn load_state_dict(&mut self, state: &StateDict) {
-        if let Some(weight_data) = state.get("weight") {
-            // Validate shape
-            assert_eq!(
-                weight_data.shape,
-                vec![self.vocab_size, self.dim],
-                "Weight shape mismatch"
-            );
-
-            let mut weight = self.weight.borrow_mut();
-            weight.data = crate::storage::Storage::cpu(weight_data.data.clone());
-            weight.shape.clone_from(&weight_data.shape);
-        }
+    fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+        plan.param("weight", &self.weight);
     }
 }
 
@@ -158,52 +210,86 @@ impl Module for Embedding {
 /// Scatters gradients from output back to the weight matrix at specific indices.
 /// Handles gradient accumulation for repeated indices.
 #[derive(Clone)]
-struct EmbeddingGradFn {
+pub(crate) struct EmbeddingGradFn {
+    /// Rows that were looked up, in output order (repeats allowed).
     indices: Vec<usize>,
+    /// Number of rows in the table.
     vocab_size: usize,
+    /// Width of each row.
     embedding_dim: usize,
 }
 
-impl GradFn for EmbeddingGradFn {
-    fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
+impl EmbeddingGradFn {
+    /// Scatters `out_grad` into a `[vocab_size, embedding_dim]` weight gradient, summing repeated indices.
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        _parents: &[Tensor],
+    ) -> Vec<Option<Storage>> {
         // out_grad: [num_indices, embedding_dim]
         // Scatter gradients to weight: [vocab_size, embedding_dim]
 
-        let mut grad_weight = vec![0.0; self.vocab_size * self.embedding_dim];
-
-        // Accumulate gradients for each index
-        for (i, &idx) in self.indices.iter().enumerate() {
-            for d in 0..self.embedding_dim {
-                let out_grad_idx = i * self.embedding_dim + d;
-                let weight_idx = idx * self.embedding_dim + d;
-                let grad_val = out_grad.data.get(out_grad_idx).copied().unwrap_or(0.0);
-                if let Some(slot) = grad_weight.get_mut(weight_idx) {
-                    *slot += grad_val;
+        // Accumulate gradients for each index, in the gradient's dtype
+        let grad_tensor = dispatch_real!(out_grad.data.dtype(), T => {
+            let mut grad_weight = vec![T::ZERO; self.vocab_size * self.embedding_dim];
+            let g_host = out_grad.data.host::<T>();
+            for (i, &idx) in self.indices.iter().enumerate() {
+                for d in 0..self.embedding_dim {
+                    let out_grad_idx = i * self.embedding_dim + d;
+                    let weight_idx = idx * self.embedding_dim + d;
+                    *slot(&mut grad_weight, weight_idx) += fetch(&g_host, out_grad_idx);
                 }
             }
-        }
-
-        let grad_tensor =
-            RawTensor::new(grad_weight, &[self.vocab_size, self.embedding_dim], false);
+            Storage::from_compute(out_grad.data.dtype(), grad_weight)
+        });
 
         vec![Some(grad_tensor)]
-    }
-
-    fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(self.clone())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tensor::TensorOps;
+
+    /// A 1-D I64 index tensor.
+    fn idx(v: &[i64]) -> Tensor {
+        RawTensor::from_typed(v.to_vec(), &[v.len()])
+    }
+
+    /// A negative index panics instead of wrapping (PyTorch raises `IndexError`).
+    #[test]
+    #[should_panic(expected = "Embedding: index -1 out of range for vocab_size 10")]
+    fn negative_index_panics() {
+        let _ = Embedding::new(10, 4).forward(&idx(&[-1]));
+    }
+
+    /// A float index tensor is refused, naming the cast.
+    #[test]
+    #[should_panic(expected = "Embedding: indices must be I64 or I32, got f32")]
+    fn float_indices_panic() {
+        let _ = Embedding::new(10, 4).forward(&RawTensor::new(vec![1.0], &[1], false));
+    }
+
+    /// Multi-dimensional I32 indices give `[..indices, dim]`, row by row.
+    #[test]
+    fn i32_indices_of_any_shape() {
+        let e = Embedding::new(6, 2);
+        let out = e.forward(&RawTensor::from_typed(vec![5i32, 0, 5, 3], &[2, 2]));
+        assert_eq!(out.shape(), vec![2, 2, 2]);
+        let w = e.weight.data();
+        let o = out.data();
+        for (k, &row) in [5usize, 0, 5, 3].iter().enumerate() {
+            for d in 0..2 {
+                assert_eq!(fetch(&o, k * 2 + d), fetch(&w, row * 2 + d));
+            }
+        }
+    }
 
     #[test]
     fn test_embedding_forward_shape() {
         let embedding = Embedding::new(100, 32);
         let indices = vec![5, 12, 7, 99];
-        let output = embedding.forward(&indices);
+        let output = embedding.forward(&idx(&indices));
 
         assert_eq!(output.borrow().shape, vec![4, 32]);
     }
@@ -212,25 +298,19 @@ mod tests {
     fn test_embedding_values() {
         let embedding = Embedding::new(10, 4);
         let indices = vec![0, 5, 9];
-        let output = embedding.forward(&indices);
+        let output = embedding.forward(&idx(&indices));
 
-        let weight_data = &embedding.weight.borrow().data;
-        let output_data = &output.borrow().data;
+        let weight_data = &embedding.weight.data();
+        let output_data = &output.data();
 
         // Check that the first embedding matches the first row of weight
         for i in 0..4 {
-            assert_eq!(
-                output_data.get(i).copied().unwrap_or(f32::NAN),
-                weight_data.get(i).copied().unwrap_or(f32::NAN)
-            );
+            assert_eq!(fetch(output_data, i), fetch(weight_data, i));
         }
 
         // Check that the second embedding (index 5) matches row 5 of weight
         for i in 0..4 {
-            assert_eq!(
-                output_data.get(4 + i).copied().unwrap_or(f32::NAN),
-                weight_data.get(5 * 4 + i).copied().unwrap_or(f32::NAN)
-            );
+            assert_eq!(fetch(output_data, 4 + i), fetch(weight_data, 5 * 4 + i));
         }
     }
 
@@ -238,11 +318,11 @@ mod tests {
     fn test_embedding_backward_flow() {
         let embedding = Embedding::new(10, 4);
         let indices = vec![2, 7, 2]; // Note: repeated index 2
-        let output = embedding.forward(&indices);
+        let output = embedding.forward(&idx(&indices));
 
         // Sum and backward
         let loss = output.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         // Check that weight has gradients
         let grad = embedding.weight.grad();
@@ -253,7 +333,7 @@ mod tests {
         // Each embedding contributes 1.0 per dimension (from sum)
         // So index 2 should have grad of 2.0 per dimension
         for d in 0..4 {
-            let grad_at_idx2 = grad_data.get(2 * 4 + d).copied().unwrap_or(f32::NAN);
+            let grad_at_idx2 = fetch(&grad_data, 2 * 4 + d);
             assert!(
                 (grad_at_idx2 - 2.0).abs() < 1e-5,
                 "Expected grad ~2.0 for repeated index, got {grad_at_idx2}"
@@ -262,7 +342,7 @@ mod tests {
 
         // Indices 7 should have grad of 1.0 per dimension
         for d in 0..4 {
-            let grad_at_idx7 = grad_data.get(7 * 4 + d).copied().unwrap_or(f32::NAN);
+            let grad_at_idx7 = fetch(&grad_data, 7 * 4 + d);
             assert!(
                 (grad_at_idx7 - 1.0).abs() < 1e-5,
                 "Expected grad ~1.0 for single index, got {grad_at_idx7}"
@@ -271,11 +351,11 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "out of bounds")]
+    #[should_panic(expected = "Embedding: index 15 out of range for vocab_size 10")]
     fn test_embedding_invalid_index() {
         let embedding = Embedding::new(10, 4);
         let indices = vec![5, 15]; // 15 is out of bounds
-        let _ = embedding.forward(&indices);
+        let _ = embedding.forward(&idx(&indices));
     }
 
     #[test]
@@ -286,4 +366,11 @@ mod tests {
         assert_eq!(params.len(), 1);
         assert_eq!(params.first().unwrap().borrow().shape, vec![50, 16]);
     }
+
+    // No `assert_trainable!` test here: `Module::forward` for `Embedding` is a
+    // deliberate panic stub (`Embedding::forward` takes `&[usize]`, not `&Tensor`,
+    // so it can't implement the `Module` trait's signature). `assert_trainable!`
+    // calls forward through that trait via UFCS, so it would always panic here.
+    // `test_embedding_backward_flow` above already checks the exact per-index
+    // accumulated gradient values, a strictly stronger check than "nonzero".
 }

@@ -12,9 +12,9 @@
 #![cfg(feature = "gpu")]
 #![allow(dead_code)] // each test file uses only a subset
 
+use std::collections::BTreeSet;
 use volta::gpu::is_gpu_available;
-use volta::tensor::TensorOps;
-use volta::{Device, RawTensor, Tensor};
+use volta::{Device, DevicePolicy, RawTensor, Tensor, take_fallback_events, with_device_policy};
 
 pub const TOL_FWD_GPU: f32 = 1e-5;
 pub const TOL_BWD_GPU: f32 = 1e-4;
@@ -28,9 +28,36 @@ pub fn skip_if_no_gpu() -> bool {
     !is_gpu_available()
 }
 
+/// Run `f` under `DevicePolicy::PreferGpu` and assert that the ops it ran on the CPU for
+/// GPU inputs (the device-policy gaps) are exactly `ops`, compared as a set of op names.
+///
+/// For tests of ops with no GPU kernel: the assertion changes when a kernel lands (the
+/// name drops out) or when a new gap appears. Without a GPU it does nothing.
+pub fn expect_gaps(ops: &[&str], f: impl FnOnce()) {
+    if skip_if_no_gpu() {
+        return;
+    }
+    let _prefer = with_device_policy(DevicePolicy::PreferGpu);
+    let _ = take_fallback_events();
+    f();
+    let got: BTreeSet<String> = take_fallback_events().into_iter().map(|e| e.op).collect();
+    let want: BTreeSet<String> = ops.iter().map(ToString::to_string).collect();
+    assert_eq!(got, want, "ops that ran on the CPU for GPU inputs");
+}
+
 #[must_use]
 pub fn gpu_device() -> Device {
-    Device::GPU("ParityTest".to_string())
+    Device::gpu().expect("call skip_if_no_gpu() first")
+}
+
+/// An independent GPU leaf with `t`'s values and `requires_grad`: PyTorch's
+/// `t.detach().to(gpu).requires_grad_(..)`. `t.to_device(gpu)` alone is a differentiable
+/// copy, so its gradient would flow back into `t` instead of staying on the GPU tensor.
+#[must_use]
+pub fn gpu_leaf(t: &Tensor) -> Tensor {
+    let leaf = t.detach().to_device(gpu_device());
+    leaf.set_requires_grad(t.requires_grad());
+    leaf
 }
 
 /// Build a deterministic CPU tensor with values linearly spaced over `range`.
@@ -74,17 +101,12 @@ where
         return;
     }
     let x_cpu = make_input(shape, false, range);
-    let x_gpu = x_cpu.to_device(gpu_device());
+    let x_gpu = gpu_leaf(&x_cpu);
 
     let y_cpu = op(&x_cpu);
     let y_gpu = op(&x_gpu).to_device(Device::CPU);
 
-    assert_close(
-        op_name,
-        &y_cpu.borrow().data.to_vec(),
-        &y_gpu.borrow().data.to_vec(),
-        tol,
-    );
+    assert_close(op_name, &y_cpu.data(), &y_gpu.data(), tol);
 }
 
 /// Forward + backward parity for a unary op: also compares ∂L/∂x with L = sum(y).
@@ -102,27 +124,22 @@ pub fn assert_unary_parity_backward<F>(
         return;
     }
     let x_cpu = make_input(shape, true, range);
-    let x_gpu = x_cpu.to_device(gpu_device());
+    let x_gpu = gpu_leaf(&x_cpu);
 
     let y_cpu = op(&x_cpu);
-    y_cpu.sum().backward();
+    y_cpu.sum().into_loss().expect("scalar loss").backward();
     let y_gpu = op(&x_gpu);
-    y_gpu.sum().backward();
+    y_gpu.sum().into_loss().expect("scalar loss").backward();
 
     assert_close(
         &format!("{op_name} fwd"),
-        &y_cpu.borrow().data.to_vec(),
-        &y_gpu.to_device(Device::CPU).borrow().data.to_vec(),
+        &y_cpu.data(),
+        &y_gpu.to_device(Device::CPU).data(),
         tol_fwd,
     );
 
     let g_cpu = x_cpu.grad().expect("CPU gradient missing");
-    let g_gpu = x_gpu
-        .borrow()
-        .grad
-        .as_ref()
-        .expect("GPU gradient missing")
-        .to_vec();
+    let g_gpu = x_gpu.grad_storage().expect("GPU gradient missing").to_vec();
     assert_close(&format!("{op_name} bwd"), &g_cpu, &g_gpu, tol_bwd);
 }
 
@@ -137,18 +154,13 @@ where
     let a_cpu = make_input(shape, false, range);
     // Slightly different value space for `b` to avoid degenerate cases.
     let b_cpu = make_input(shape, false, (range.0 + 0.1, range.1 - 0.1));
-    let a_gpu = a_cpu.to_device(gpu_device());
-    let b_gpu = b_cpu.to_device(gpu_device());
+    let a_gpu = gpu_leaf(&a_cpu);
+    let b_gpu = gpu_leaf(&b_cpu);
 
     let c_cpu = op(&a_cpu, &b_cpu);
     let c_gpu = op(&a_gpu, &b_gpu).to_device(Device::CPU);
 
-    assert_close(
-        op_name,
-        &c_cpu.borrow().data.to_vec(),
-        &c_gpu.borrow().data.to_vec(),
-        tol,
-    );
+    assert_close(op_name, &c_cpu.data(), &c_gpu.data(), tol);
 }
 
 /// Forward + backward parity for a binary op with matched shapes.
@@ -167,37 +179,27 @@ pub fn assert_binary_parity_backward<F>(
     }
     let a_cpu = make_input(shape, true, range);
     let b_cpu = make_input(shape, true, (range.0 + 0.1, range.1 - 0.1));
-    let a_gpu = a_cpu.to_device(gpu_device());
-    let b_gpu = b_cpu.to_device(gpu_device());
+    let a_gpu = gpu_leaf(&a_cpu);
+    let b_gpu = gpu_leaf(&b_cpu);
 
     let c_cpu = op(&a_cpu, &b_cpu);
-    c_cpu.sum().backward();
+    c_cpu.sum().into_loss().expect("scalar loss").backward();
     let c_gpu = op(&a_gpu, &b_gpu);
-    c_gpu.sum().backward();
+    c_gpu.sum().into_loss().expect("scalar loss").backward();
 
     assert_close(
         &format!("{op_name} fwd"),
-        &c_cpu.borrow().data.to_vec(),
-        &c_gpu.to_device(Device::CPU).borrow().data.to_vec(),
+        &c_cpu.data(),
+        &c_gpu.to_device(Device::CPU).data(),
         tol_fwd,
     );
 
     let ga_cpu = a_cpu.grad().expect("CPU a-grad missing");
-    let ga_gpu = a_gpu
-        .borrow()
-        .grad
-        .as_ref()
-        .expect("GPU a-grad missing")
-        .to_vec();
+    let ga_gpu = a_gpu.grad_storage().expect("GPU a-grad missing").to_vec();
     assert_close(&format!("{op_name} ∂/∂a"), &ga_cpu, &ga_gpu, tol_bwd);
 
     let gb_cpu = b_cpu.grad().expect("CPU b-grad missing");
-    let gb_gpu = b_gpu
-        .borrow()
-        .grad
-        .as_ref()
-        .expect("GPU b-grad missing")
-        .to_vec();
+    let gb_gpu = b_gpu.grad_storage().expect("GPU b-grad missing").to_vec();
     assert_close(&format!("{op_name} ∂/∂b"), &gb_cpu, &gb_gpu, tol_bwd);
 }
 
@@ -210,15 +212,10 @@ where
         return;
     }
     let x_cpu = make_input(shape, false, (-2.0, 2.0));
-    let x_gpu = x_cpu.to_device(gpu_device());
+    let x_gpu = gpu_leaf(&x_cpu);
     let y_cpu = op(&x_cpu);
     let y_gpu = op(&x_gpu).to_device(Device::CPU);
-    assert_close(
-        op_name,
-        &y_cpu.borrow().data.to_vec(),
-        &y_gpu.borrow().data.to_vec(),
-        tol,
-    );
+    assert_close(op_name, &y_cpu.data(), &y_gpu.data(), tol);
 }
 
 /// Forward + backward parity for matmul over a given (`a_shape`, `b_shape`) pair.
@@ -229,37 +226,51 @@ pub fn assert_matmul_parity(a_shape: &[usize], b_shape: &[usize], tol_fwd: f32, 
     }
     let a_cpu = make_input(a_shape, true, (-1.0, 1.0));
     let b_cpu = make_input(b_shape, true, (-1.0, 1.0));
-    let a_gpu = a_cpu.to_device(gpu_device());
-    let b_gpu = b_cpu.to_device(gpu_device());
+    let a_gpu = gpu_leaf(&a_cpu);
+    let b_gpu = gpu_leaf(&b_cpu);
 
     let c_cpu = a_cpu.matmul(&b_cpu);
-    c_cpu.sum().backward();
     let c_gpu = a_gpu.matmul(&b_gpu);
-    c_gpu.sum().backward();
+    // Only the rank >= 2 arm has a GPU kernel; the vector arms compute on the host and return a
+    // CPU tensor, so for them this checks GPU-resident operands, not a kernel.
+    if a_shape.len() >= 2 && b_shape.len() >= 2 {
+        assert!(
+            matches!(c_gpu.device(), Device::GPU(_)),
+            "GPU matmul fell back to the CPU, so this would compare the CPU with itself"
+        );
+    }
+
+    // A randomly weighted loss: `.sum()` makes dC all ones, which cannot tell dA = dC @ B^T
+    // from dA = dC @ B (or a swapped k/n) on shapes where the two agree.
+    volta::manual_seed(0x0A7B);
+    let w_cpu = volta::randn(c_cpu.shape().truncate_rank());
+    let w_gpu = gpu_leaf(&w_cpu);
+    c_cpu
+        .elem_mul(&w_cpu)
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
+    c_gpu
+        .elem_mul(&w_gpu)
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
 
     let label = format!("matmul {a_shape:?} @ {b_shape:?}");
     assert_close(
         &format!("{label} fwd"),
-        &c_cpu.borrow().data.to_vec(),
-        &c_gpu.to_device(Device::CPU).borrow().data.to_vec(),
+        &c_cpu.data(),
+        &c_gpu.to_device(Device::CPU).data(),
         tol_fwd,
     );
 
     let ga_cpu = a_cpu.grad().expect("CPU a-grad missing");
-    let ga_gpu = a_gpu
-        .borrow()
-        .grad
-        .as_ref()
-        .expect("GPU a-grad missing")
-        .to_vec();
+    let ga_gpu = a_gpu.grad_storage().expect("GPU a-grad missing").to_vec();
     assert_close(&format!("{label} ∂/∂a"), &ga_cpu, &ga_gpu, tol_bwd);
 
     let gb_cpu = b_cpu.grad().expect("CPU b-grad missing");
-    let gb_gpu = b_gpu
-        .borrow()
-        .grad
-        .as_ref()
-        .expect("GPU b-grad missing")
-        .to_vec();
+    let gb_gpu = b_gpu.grad_storage().expect("GPU b-grad missing").to_vec();
     assert_close(&format!("{label} ∂/∂b"), &gb_cpu, &gb_gpu, tol_bwd);
 }

@@ -1,26 +1,95 @@
-check:
-	cargo check
-	cargo build
-	cargo test
+# Every optional backend, `gpu` and `accelerate`. The default features are empty (CPU-only,
+# #378; DECISIONS.md, "Default features are CPU-only"), so a recipe that checks the GPU or
+# Accelerate code passes this. The `-cpu` recipes keep `--no-default-features`, which says
+# the same thing explicitly.
+full := "--features gpu,accelerate"
+
+md:
+	fd . --extension md | xargs nvim
+
+test-all:
+	cargo nextest run --no-fail-fast {{full}}
+
+# Run tests n times (default 10) to catch flakes; stops at the first failing run.
+# `filters` is one nextest filter or several separated by spaces (quote them):
+#   just test-repeat my_test
+#   just test-repeat "conv2d matmul" 25
+# Each test runs in its own process here; for a race between tests use test-repeat-threads.
+test-repeat filters n="10":
+	#!/usr/bin/env bash
+	set -euo pipefail
+	for i in $(seq 1 {{n}}); do
+		echo "run $i/{{n}}"
+		cargo nextest run --no-fail-fast {{full}} {{filters}} || { echo "FAILED on run $i/{{n}}"; exit 1; }
+	done
+	echo "all {{n}} runs passed"
+
+# Like test-repeat, but under `cargo test`: one process per test binary, so its tests run as
+# threads sharing one GPU context and buffer pool (what CI runs). nextest gives each test its
+# own process, so it cannot reproduce a race between tests (#244). `args` goes to `cargo test`
+# verbatim:
+#   just test-repeat-threads "--test gpu_reduce" 30
+test-repeat-threads args="" n="10":
+	#!/usr/bin/env bash
+	set -euo pipefail
+	for i in $(seq 1 {{n}}); do
+		echo "run $i/{{n}}"
+		cargo test {{full}} {{args}} || { echo "FAILED on run $i/{{n}}"; exit 1; }
+	done
+	echo "all {{n}} runs passed"
 
 # ===== CODE HEALTH & ANALYSIS =====
 
+# The nightly the sanitizer recipes use (#257). Pinned so a nightly regression can't turn
+# the scheduled job red on an untouched tree; bump it by hand, in a PR of its own.
+sanitizer_nightly := "nightly-2026-11-01"
+
+# Miri runs ~100x slower than native, so `miri` takes a test-name filter, not the whole
+# suite; the default covers the graph core, matmul's `unsafe` sgemm/dgemm calls, the specs,
+# dtype casts, storage and safetensors IO (about 6 minutes on a 4-core Linux box, nearly all
+# of it the matmul tests). Pass other filters to widen it (`just miri "nn::"`). Isolation is
+# off because the IO tests write temporary files. Both recipes need the
+# `sanitizer_nightly` toolchain with its `miri` and `rust-src` components
+# (`rustup toolchain install <that nightly> --component miri,rust-src`).
+# The `long_contraction` matmul tests sum 2^25 elements to check precision, not memory safety;
+# under Miri that is hours, so they are skipped (#213). They run in every other lane.
+# Miri (undefined behavior, memory still allocated at exit) over CPU-only library tests
+miri filters="autograd:: ops::matmul spec:: dtype:: storage:: io::":
+	MIRIFLAGS="-Zmiri-disable-isolation" rustup run {{sanitizer_nightly}} cargo miri test --no-default-features --lib -- {{filters}} --skip long_contraction
+
+# `asan` covers the CPU-only library and integration tests, Linux x86_64 only. Doctests and
+# the trybuild `compile_fail` test (it runs rustc itself, which the sanitizer flags break)
+# are left out. LeakSanitizer is what catches an `Rc` cycle in the graph.
+# AddressSanitizer and LeakSanitizer over the CPU-only tests (#257)
+asan:
+	RUSTFLAGS="-Zsanitizer=address" ASAN_OPTIONS=detect_leaks=1 rustup run {{sanitizer_nightly}} cargo test -Zbuild-std --target x86_64-unknown-linux-gnu --no-default-features --lib --tests -- --skip compile_fail
+
 # Run coverage with llvm-cov and open HTML report
 coverage:
-	cargo llvm-cov --html
+	cargo llvm-cov {{full}} --html
 	open target/llvm-cov/html/index.html
 
 # Terminal-only coverage summary
 coverage-summary:
-	cargo llvm-cov
+	cargo llvm-cov {{full}}
+
+# Per-file coverage table, no default features (the CPU lane; coverage.yml runs this)
+coverage-cpu:
+	cargo llvm-cov --no-default-features --summary-only
 
 # Fast targeted mutation testing (e.g. just mutants src/tensor.rs)
 mutants target="":
-	cargo mutants -- {{target}}
+	cargo mutants {{full}} -- {{target}}
 
 # Full mutation testing (WARNING: slow)
 mutants-all:
-	cargo mutants
+	cargo mutants {{full}}
+
+# Mutation testing of the autograd core on the CPU lane (mutants.yml runs this in shards, e.g.
+# `just mutants-core --shard 0/8`). gpu_ops.rs is excluded: it is compiled out without `gpu`,
+# so every mutant there would survive. About 400 mutants, ~20 s each on 4 cores.
+mutants-core *flags:
+	cargo mutants --no-default-features --file src/autograd.rs --file 'src/ops/**' --exclude src/ops/gpu_ops.rs {{flags}}
 
 # Find unused dependencies
 dead-deps:
@@ -38,30 +107,60 @@ expand mod:
 
 # Validate all WGSL shaders in src/gpu/shaders/
 validate-shaders:
-	@echo "Validating shaders..."
-	@for f in src/gpu/shaders/*.wgsl; do \
-		echo "Checking $f..."; \
-		naga $f || (echo "Failed: $f" && exit 1); \
-	done
-	@echo "All shaders valid."
+	cargo test {{full}} --lib shader_template
 
-# Run only GPU integration tests
+# Run the GPU tests: the gpu_* integration targets and the GPU lib tests (gpu_tests, gpu_half_tests)
 test-gpu:
-	cargo test --features gpu --test 'gpu_*' -- --nocapture
+	cargo test {{full}} --test 'gpu_*' -- --nocapture
+	cargo test {{full}} --lib gpu_ -- --nocapture
+
+# Regenerate the PyTorch reference fixtures in tests/fixtures/torch/ (needs uv; pinned torch)
+torch-fixtures:
+	uv run scripts/torch_ref/gen_fixtures.py
+
+# Download MNIST into data/mnist (ossci mirror) and check the files' SHA-256
+mnist-data:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	mkdir -p data/mnist
+	cd data/mnist
+	for f in train-images-idx3-ubyte train-labels-idx1-ubyte t10k-images-idx3-ubyte t10k-labels-idx1-ubyte; do
+		[ -f "$f" ] || { curl -sSfL -O "https://ossci-datasets.s3.amazonaws.com/mnist/$f.gz" && gunzip -f "$f.gz"; }
+	done
+	sha256sum -c - <<'SUMS'
+	ba891046e6505d7aadcbbe25680a0738ad16aec93bde7f9b65e87a2fc25776db  train-images-idx3-ubyte
+	65a50cbbf4e906d70832878ad85ccda5333a97f0f4c3dd2ef09a8a9eef7101c5  train-labels-idx1-ubyte
+	0fa7898d509279e482958e8ce81c8e77db3f2f8254e26661ceb7762c4d494ce7  t10k-images-idx3-ubyte
+	ff7bcfd416de33731a308c3f266cc351222c34898ecbeaf847f06e48f7ec33f2  t10k-labels-idx1-ubyte
+	SUMS
+
+# MNIST under bf16 autocast vs f32 (Phase 5 P7): 5 seeds, fails if the mean gap > 0.2 points
+mnist-autocast: mnist-data
+	cargo run --release --no-default-features --example mnist_autocast
 
 # Run all tests without GPU/Accelerate features
 test-cpu:
-	cargo test --no-default-features -- --nocapture
+	cargo test --no-default-features
+
+# Run all tests with `gpu` and `accelerate` (GPU tests run only when an adapter is present;
+# ci.yml's linux-lavapipe job sets VOLTA_REQUIRE_GPU=1 so a missing one fails)
+test-full:
+	cargo test {{full}}
 
 # ===== EXAMPLE & INTEGRATION QUALITY =====
 
 # Compile-check every example (catches API drift)
 examples-check:
-	cargo build --examples
+	cargo build --examples {{full}}
+
+# Run the quick, data-free examples (release, CPU) under a time limit; fail on a panic, a
+# timeout, or a printed NaN/inf. The set is in scripts/examples-smoke.sh and dev-docs/DEVELOPMENT.md
+examples-smoke:
+	./scripts/examples-smoke.sh
 
 # Run a single example by name
 example name:
-	cargo run --example {{name}}
+	cargo run {{full}} --example {{name}}
 
 # ===== PROJECT METRICS & HYGIENE =====
 
@@ -77,57 +176,273 @@ deps-tree:
 outdated:
 	cargo outdated --root-deps-only
 
-# Nuke all build artifacts and temporary files
+# Nuke all build artifacts and mutation-testing output
 clean:
 	cargo clean
-	-rm mutants.out/
-	-rm *.txt responses/context.md
-	@echo "Cleaned target, mutants output, and temporary text files."
+	-rm -rf mutants.out
+	@echo "Cleaned target and mutants output."
 
 # ===== AGGREGATE WORKFLOWS =====
 
-# Fast CI-like pipeline (fmt -> lint -> test -> docs -> examples)
+# Clippy over every target with no features, then with all of them; the single definition of
+# the lint gate (ci.yml and pre-commit call this too)
+lint: lint-cpu lint-full
+
+# Clippy over every target with `gpu` and `accelerate` (ci.yml's linux-lavapipe job)
+lint-full:
+	cargo clippy {{full}} --all-targets -- -D warnings
+
+# Clippy over every target with no default features (the CPU-only lane)
+lint-cpu:
+	cargo clippy --no-default-features --all-targets -- -D warnings
+
+# Rustdoc with warnings denied (a broken intra-doc link fails), `gpu` and `accelerate`
+doc-full:
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps {{full}}
+
+# Rustdoc with warnings denied, no default features
+doc-cpu:
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --no-default-features
+
+# Flags go to the script, e.g. `just serve-docs --port 9000 --rebuild-every 600 --pull`
+# (dev-docs/DEVELOPMENT.md, "Serving the built docs").
+# Build rustdoc and serve it over HTTP on port 7447 (needs uv)
+serve-docs *flags:
+	uv run scripts/serve_docs.py {{flags}}
+
+# Feature-combination rot check (e.g. `just hack --exclude-features gpu`); needs cargo-hack
+hack *flags:
+	cargo hack check --feature-powerset --no-dev-deps {{flags}}
+
+# `hack`, skipped with a notice when cargo-hack is not installed (`cargo install cargo-hack`)
+hack-if-installed:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	if command -v cargo-hack >/dev/null; then
+		just hack
+	else
+		echo "skipped: cargo-hack not installed (cargo +stable install cargo-hack --locked)"
+	fi
+
+# ----- macOS code checked from Linux (the `macos-cross` CI job) -----
+# Type-checks, lints and documents the macOS build (Accelerate, Metal, the macos cfgs in
+# gpu/monitor.rs) for aarch64-apple-darwin without a Mac. Nothing links, so no SDK is needed.
+# The one C build script (criterion's `alloca`, a dev-dependency) is compiled by clang with
+# its freestanding builtin headers. Needs `rustup target add aarch64-apple-darwin` and clang.
+# What only a Mac can check (Metal and Accelerate at run time) is the `macos` job (macos.yml).
+macos_cross_env := "CC_aarch64_apple_darwin=clang CFLAGS_aarch64_apple_darwin=-ffreestanding"
+
+# Clippy for aarch64-apple-darwin, all features then none
+lint-macos-cross:
+	{{macos_cross_env}} cargo clippy --target aarch64-apple-darwin --all-targets --all-features -- -D warnings
+	{{macos_cross_env}} cargo clippy --target aarch64-apple-darwin --all-targets --no-default-features -- -D warnings
+
+# Rustdoc for aarch64-apple-darwin with warnings denied, `gpu` and `accelerate`
+doc-macos-cross:
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps {{full}} --target aarch64-apple-darwin
+
+# Feature powerset for aarch64-apple-darwin; needs cargo-hack
+hack-macos-cross:
+	cargo hack check --feature-powerset --no-dev-deps --target aarch64-apple-darwin
+
+# The three above (what the `macos-cross` CI job runs)
+macos-cross: lint-macos-cross doc-macos-cross hack-macos-cross
+
+# `macos-cross` on a non-macOS host, skipped with a notice when the target, clang or cargo-hack
+# is missing (on a Mac, `just lint`/`doc-full`/`hack` already check this code natively)
+macos-cross-if-available:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	if [[ "$(uname -s)" == Darwin ]]; then
+		echo "skipped: macos-cross (native macOS; just lint/doc-full/hack cover it)"
+	elif rustup target list --installed | grep -qx aarch64-apple-darwin && command -v clang >/dev/null && command -v cargo-hack >/dev/null; then
+		just macos-cross
+	else
+		echo "skipped: macos-cross (needs: rustup target add aarch64-apple-darwin, clang, cargo-hack)"
+	fi
+
+# The library type-checks and lints for wasm32-unknown-unknown (#64), without and with
+# `accelerate` (a no-op off macOS). CPU only: the `gpu` feature would need wgpu's WebGPU
+# backend, which nothing here targets. Library only: tests, examples and benches use
+# dev-dependencies and `std::time::Instant`, which panics at run time on this target.
+wasm-check:
+	cargo clippy --lib --no-default-features --target wasm32-unknown-unknown -- -D warnings
+	cargo clippy --lib --no-default-features --features accelerate --target wasm32-unknown-unknown -- -D warnings
+
+# `wasm-check`, skipped with a notice when the target is not installed
+wasm-check-if-available:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	if rustup target list --installed | grep -qx wasm32-unknown-unknown; then
+		just wasm-check
+	else
+		echo "skipped: wasm-check (needs: rustup target add wasm32-unknown-unknown)"
+	fi
+
+# Fail on silent numeric fallbacks (`unwrap_or(0.0)`, `if let Some(slot) = v.get_mut(i)`)
+check-fallbacks:
+	./scripts/check-fallbacks.sh
+
+# Fail on an `#[ignore]` without a defect ID, or whose ID names no open issue (the issue half
+# needs `gh` and skips with a notice without it; `just check-ignores --offline` skips it)
+check-ignores *flags:
+	./scripts/check-ignores.sh {{flags}}
+
+# Check scripts/check-ignores.sh against a scratch repo and a stub gh
+test-check-ignores:
+	./scripts/test-check-ignores.sh
+
+# CI-like pipeline (fmt -> fallbacks -> ignores -> lint, both feature sets -> tests, both feature
+# sets -> docs with -D warnings, both feature sets -> examples, built then the smoke set run ->
+# each CPU bench run once in test mode -> feature powerset when cargo-hack is installed -> macOS cross-check on a non-Mac host when its
+# tools are installed)
 ci:
 	cargo fmt --check
-	cargo clippy --all-targets -- -D warnings
-	cargo test
-	cargo doc --no-deps
-	cargo build --examples
+	just check-fallbacks
+	just test-check-ignores
+	just check-ignores
+	just lint
+	just test-full
+	just test-cpu
+	just doc-full
+	just doc-cpu
+	just examples-check
+	just examples-smoke
+	just bench-smoke
+	just hack-if-installed
+	just macos-cross-if-available
+	just wasm-check-if-available
 	@echo "CI check passed!"
 
+# Apply .github/rulesets/*.json to GitHub (create or update by name; needs admin `gh` auth)
+rulesets:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+	for f in .github/rulesets/*.json; do
+		name=$(jq -r .name "$f")
+		id=$(gh api "repos/$repo/rulesets" --jq ".[] | select(.name == \"$name\") | .id")
+		if [[ -n "$id" ]]; then
+			gh api -X PUT "repos/$repo/rulesets/$id" --input "$f" --silent
+			echo "updated: $name ($id)"
+		else
+			gh api -X POST "repos/$repo/rulesets" --input "$f" --silent
+			echo "created: $name"
+		fi
+	done
+
+# ===== GIT & PR WORKFLOW (dev-docs/WORKFLOW.md) =====
+
+# Turn staged changes and/or commits ahead of origin/improvements into a pull request (e.g. `just pr`, `just pr fix/my-branch`; non-interactive: `just pr -m "msg" --body-file body.md fix/my-branch`, see `scripts/pr.sh --help`)
+[positional-arguments]
+pr *args:
+	./scripts/pr.sh "$@"
+
+# After merges: fast-forward improvements and delete local branches it already holds, saying why each kept one stays (`just sync dry-run` lists them first)
+sync mode="":
+	./scripts/sync.sh {{mode}}
+
+# Check `just sync`'s delete and keep rules against a scratch repo and a stub gh
+test-sync:
+	./scripts/test-sync.sh
+
+# Rebase a stack of PRs after each squash merge: `just restack save <branch>...` once (bottom first), then `just restack next` after each merge (scripts/restack.sh)
+restack *args:
+	./scripts/restack.sh {{args}}
+
+# Check `just restack` against a scratch repo and a stub gh
+test-restack:
+	./scripts/test-restack.sh
+
+# Your open PRs and the checks on the current branch's PR
+prs:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	gh pr status
+	b=$(git branch --show-current)
+	if [[ -n "$b" ]] && gh pr view "$b" >/dev/null 2>&1; then
+		echo
+		gh pr checks "$b" || true
+	fi
+
+# Breaking changes since the last crates.io release (#397). Needs `cargo install
+# cargo-semver-checks --locked` and network access for the baseline. semver.yml runs it on PRs
+# into main (the release point) and by hand.
+# The check builds the baseline with the same features as the current crate. 0.3.0 does not
+# build without `gpu` (its default was `gpu,accelerate`, and its imports assume `gpu`), so
+# only the `gpu` build can be compared with it. Once 0.4.0 is on crates.io, also run
+# `cargo semver-checks check-release --only-explicit-features` to cover the CPU-only build.
+# Check for semver breaks against the last published version
+semver:
+	cargo semver-checks check-release --only-explicit-features --features gpu
+
+# Resolve every direct dependency at its declared lower bound, then build (#443), so a bound
+# in Cargo.toml that can never resolve (as `log = "0.4"` did under wgpu's `^0.4.29`) fails
+# here instead of going unnoticed. Only the resolve needs the nightly; the check runs on
+# stable. The lockfile is restored afterwards, so the tree is left as it was.
+# Build with every direct dependency at its minimum version (both feature sets)
+minimal-versions:
+	#!/usr/bin/env bash
+	set -euo pipefail
+	cp Cargo.lock Cargo.lock.minimal-versions-backup
+	trap 'mv Cargo.lock.minimal-versions-backup Cargo.lock' EXIT
+	rustup toolchain install {{sanitizer_nightly}} --profile minimal
+	rustup run {{sanitizer_nightly}} cargo update -Zdirect-minimal-versions
+	cargo check --all-targets --no-default-features
+	cargo check --all-targets {{full}}
+
+# Print the State of Volta digest (merges, design PRs, what waits on RJ, milestones) since a date
+status since='':
+	scripts/status.sh {{since}}
+
+# Search issues, open and closed, by title and body: run it before filing (`just issues "sum sequential"`)
+issues +terms:
+	gh issue list --state all --limit 30 --search "{{terms}} in:title,body"
+
+# Licenses, RustSec advisories, duplicate versions, and sources (needs network for the advisory db)
+deny:
+	cargo deny check
+
 # Comprehensive pre-release checklist
-pre-release: ci validate-shaders dead-deps coverage-summary examples-check
+pre-release: ci validate-shaders dead-deps coverage-summary
 	@echo "Pre-release checks complete."
 
 
 # ===== BENCHMARKING =====
 # Run all benchmarks
-bench: # NOT FOR USE, RUNS THE GPU_COMPARISON
-	cargo bench --bench tensor_ops --
-	cargo bench --bench neural_networks --
-	cargo bench --bench gpu_comparison --
-	cargo bench --bench conv_algorithms --
+# Run the CPU benchmarks (gpu_comparison is slow and needs a GPU: use `just bench-gpu`)
+bench:
+	cargo bench {{full}} --bench tensor_ops --
+	cargo bench {{full}} --bench neural_networks --
+	cargo bench {{full}} --bench conv_algorithms --
+
+# Run every CPU benchmark function once in Criterion's test mode (`-- --test`): no
+# measurement, so it says nothing about speed and is safe on shared runners. It fails when a
+# benchmark panics, which `clippy --all-targets` (compile only) cannot catch (#140, #192).
+# `gpu_comparison` needs a GPU and is left out.
+bench-smoke:
+	cargo bench --no-default-features --bench tensor_ops -- --test
+	cargo bench --no-default-features --bench neural_networks -- --test
+	cargo bench --no-default-features --bench conv_algorithms -- --test
 
 # Run convolution algorithm comparison benchmarks
 bench-conv:
-	cargo bench --bench conv_algorithms --
+	cargo bench {{full}} --bench conv_algorithms --
 
 # Run specific benchmark
 bench-name name:
-	cargo bench --bench {{name}} --
+	cargo bench {{full}} --bench {{name}} --
 
 # Benchmark CPU only (no features)
 bench-cpu:
 	cargo bench --bench tensor_ops --no-default-features --
 	cargo bench --bench neural_networks --no-default-features --
-	cargo bench --bench gpu_comparison --no-default-features --
 	cargo bench --bench conv_algorithms --no-default-features --
 
 # Benchmark with Accelerate (macOS BLAS)
 bench-accel:
 	cargo bench --features accelerate --no-default-features --bench tensor_ops --
 	cargo bench --features accelerate --no-default-features --bench neural_networks --
-	cargo bench --features accelerate --no-default-features --bench gpu_comparison --
 	cargo bench --features accelerate --no-default-features --bench conv_algorithms --
 
 # Benchmark GPU comparison
@@ -136,124 +451,30 @@ bench-gpu:
 
 # Save benchmark results for comparison
 bench-save:
-	cargo bench --bench tensor_ops -- --save-baseline main
-	cargo bench --bench neural_networks -- --save-baseline main
-	cargo bench --bench gpu_comparison -- --save-baseline main
-	cargo bench --bench conv_algorithms -- --save-baseline main
+	cargo bench {{full}} --bench tensor_ops -- --save-baseline main
+	cargo bench {{full}} --bench neural_networks -- --save-baseline main
+	cargo bench {{full}} --bench conv_algorithms -- --save-baseline main
 
-# Compare against saved baseline (DO NOT USE, RUNNING)
+# Compare against baseline saved by `just bench-save`
 bench-compare:
-	cargo bench --bench tensor_ops -- --baseline main
-	cargo bench --bench neural_networks -- --baseline main
-	cargo bench --bench gpu_comparison -- --baseline main
-	cargo bench --bench conv_algorithms -- --baseline main
+	cargo bench {{full}} --bench tensor_ops -- --baseline main
+	cargo bench {{full}} --bench neural_networks -- --baseline main
+	cargo bench {{full}} --bench conv_algorithms -- --baseline main
+
+# Time the 256x256 `matmul_raw` smoke test N times in release and average (was bench.sh).
+# A quick regression check, not a benchmark: use `just bench` for criterion numbers.
+bench-matmul runs="10" *flags="":
+	#!/usr/bin/env bash
+	set -euo pipefail
+	total=0
+	for ((i = 1; i <= {{runs}}; i++)); do
+		line=$(cargo test --release --lib {{flags}} bench_matmul_speedup -- --nocapture 2>&1 | grep '256x256 matmul:' || true)
+		ms=$(printf '%s' "$line" | sed -nE 's/.*matmul: ([0-9.]+)ms.*/\1/p')
+		if [[ -z "$ms" ]]; then echo "run $i: no timing line (did the test build or fail?)" >&2; exit 1; fi
+		echo "run $i: ${ms}ms"
+		total=$(awk -v t="$total" -v m="$ms" 'BEGIN {print t + m}')
+	done
+	awk -v t="$total" -v n="{{runs}}" 'BEGIN {printf "average: %.3fms over %d runs\n", t / n, n}'
 
 bench-report:
 	open './target/criterion/report/index.html'
-
-# ===== LLM ASSISTED DEV =====
-
-ask-gpu model:
-	@echo "Cleaning!"
-	-rm err.txt tests.txt
-	-rm responses/context.md
-	@echo "Asking!"
-	-cargo build &> err.txt
-	-cargo test &> tests.txt
-	files-to-prompt Cargo.toml src/ tests/ err.txt tests.txt responses/claude-on-gpu-integration.md responses/status-report.md README.md > responses/context.md
-	cat responses/context.md | llm --model "openrouter/{{model}}" --system "`cat sys-prompts/gpu-sys-prompt.md`" -o reasoning_effort high > responses/gpu-recommendations.md
-	nvim responses/gpu-recommendations.md
-
-ask-codex:
-	@echo "Cleaning!"
-	-rm err.txt tests.txt
-	-rm responses/context.md
-	@echo "Asking!"
-	-cargo build &> err.txt
-	-cargo test &> tests.txt
-	files-to-prompt Cargo.toml src/ tests/ err.txt tests.txt  responses/status-report.md README.md > responses/context.md
-	cat responses/context.md | llm --model "openrouter/openai/gpt-5.1-codex" --system "`cat sys-prompts/sys-prompt.md`" -o reasoning_effort high > responses/recommendations.md
-	@echo "Finished!"
-
-ask-codex-mini:
-	@echo "Cleaning!"
-	-rm err.txt tests.txt
-	-rm responses/context.md
-	@echo "Asking!"
-	-cargo build &> err.txt
-	-cargo test &> tests.txt
-	files-to-prompt Cargo.toml src/ tests/ err.txt tests.txt  responses/status-report.md README.md > responses/context.md
-	cat responses/context.md | llm --model "openrouter/openai/gpt-5.1-codex-mini" --system "`cat sys-prompts/sys-prompt.md`" -o reasoning_effort high > responses/recommendations.md
-	@echo "Finished!"
-
-
-ask-readme model:
-	@echo "Cleaning!"
-	-rm err.txt tests.txt
-	-rm responses/context.md
-	@echo "Asking!"
-	-cargo build &> err.txt
-	-cargo test &> tests.txt
-	files-to-prompt Cargo.toml src/ tests/ err.txt tests.txt responses/status-report.md README.md > responses/context.md
-	cat responses/context.md | llm --model "openrouter/{{model}}" --system "`cat sys-prompts/readme-sys-prompt.md`" > responses/updates-to-readme.md
-	@echo "Finished!"
-
-
-ask-custom model prompt filename:
-	@echo "Cleaning!"
-	-rm err.txt tests.txt
-	-rm responses/context.md
-	@echo "Asking!"
-	-cargo build &> err.txt
-	-cargo test &> tests.txt
-	files-to-prompt Cargo.toml src/ tests/ err.txt tests.txt responses/status-report.md README.md > responses/context.md
-	cat responses/context.md | llm --model "openrouter/{{model}}" --system "{{prompt}}" > responses/{{filename}}.md
-	@echo "Finished!"
-
-
-ask-err-file model file:
-	@echo "Cleaning!"
-	-rm err.txt tests.txt
-	-rm responses/context.md
-	-rm err-recommendations.md
-	@echo "Asking!"
-	-cargo build &> err.txt
-	-cargo test &> tests.txt
-	files-to-prompt Cargo.toml src/{{file}} tests/ err.txt tests.txt responses/status-report.md README.md > responses/context.md
-	cat responses/context.md | llm --model "openrouter/{{model}}" --system "`cat sys-prompts/err-sys-prompt.md`" > responses/err-recommendations.md
-	@echo "Finished!"
-
-ask-err model:
-	@echo "Cleaning!"
-	-rm err.txt tests.txt
-	-rm responses/context.md
-	-rm responses/err-recommendations.md
-	@echo "Asking!"
-	-cargo build &> err.txt
-	-cargo test &> tests.txt
-	files-to-prompt Cargo.toml src/ tests/ err.txt tests.txt responses/status-report.md README.md > responses/context.md
-	cat responses/context.md | llm --model "openrouter/{{model}}" --system "`cat sys-prompts/err-sys-prompt.md`" > responses/err-recommendations.md
-	@echo "Finished!"
-
-
-ask-status model:
-	@echo "Cleaning!"
-	-rm err.txt tests.txt
-	-rm responses/context.md
-	@echo "Asking!"
-	-cargo build &> err.txt
-	-cargo test &> tests.txt
-	files-to-prompt Cargo.toml src/ tests/ err.txt tests.txt  responses/status-report.md README.md > responses/context.md
-	cat responses/context.md | llm --model "openrouter/{{model}}" --system "`cat sys-prompts/status-sys-prompt.md`" > responses/status-report.md
-	@echo "Finished!"
-
-ask model:
-	@echo "Cleaning!"
-	-rm err.txt tests.txt
-	-rm responses/context.md
-	@echo "Asking!"
-	-cargo build &> err.txt
-	-cargo test &> tests.txt
-	files-to-prompt Cargo.toml src/ tests/ err.txt tests.txt  responses/status-report.md README.md > responses/context.md
-	cat responses/context.md | llm --model "openrouter/{{model}}" --system "`cat sys-prompts/sys-prompt.md`" > responses/recommendations.md
-	@echo "Finished!"

@@ -1,0 +1,214 @@
+//! Safety and serialization checks: device handling, the tensor size cap, invalid `Conv2d` parameters, `Sequential` state dicts (stateless layers skipped, each layer called once), `load_state_dict_checked` reporting differences, and broadcast shape errors.
+use std::cell::Cell;
+use std::rc::Rc;
+use volta::io::{StateDict, TensorData, load_state_dict_checked};
+use volta::nn::{Layer, Linear, Module, ReLU, Sequential};
+use volta::*;
+
+struct CountingModule {
+    counter: Rc<Cell<usize>>,
+}
+
+impl Module for CountingModule {
+    fn parameters(&self) -> Vec<Tensor> {
+        vec![]
+    }
+
+    fn state_dict(&self) -> StateDict {
+        self.counter.set(self.counter.get() + 1);
+        let mut state = StateDict::new();
+        state.insert(
+            "dummy".to_string(),
+            TensorData::from_f32(vec![1.0], vec![1]),
+        );
+        state
+    }
+
+    fn plan_load(&self, _plan: &mut volta::nn::LoadPlan<'_>) {}
+}
+
+impl Layer for CountingModule {
+    fn forward(&self, x: &Tensor) -> Tensor {
+        x.clone()
+    }
+}
+
+#[test]
+fn test_device_safety_improvements() {
+    // Test CPU device
+    let cpu_device = Device::CPU;
+    assert!(cpu_device.is_cpu());
+    assert!(!cpu_device.is_gpu());
+    assert_eq!(cpu_device.name(), "CPU");
+    assert_eq!(cpu_device.to_string(), "CPU");
+
+    // Test GPU device with name
+    let gpu_device = Device::GPU("CUDA".to_string());
+    assert!(!gpu_device.is_cpu());
+    assert!(gpu_device.is_gpu());
+    assert_eq!(gpu_device.name(), "CUDA");
+    assert_eq!(gpu_device.to_string(), "CUDA");
+}
+
+#[test]
+fn test_tensor_size_validation() {
+    // Test that reasonable tensors work
+    let small_tensor = RawTensor::new(vec![1.0, 2.0, 3.0], &[3], true);
+    assert_eq!(small_tensor.data().len(), 3);
+
+    // Test that very large tensors are rejected
+    let large_data = vec![0.0; 101_000_000]; // Over limit
+    let result = std::panic::catch_unwind(|| {
+        let _ = RawTensor::new(large_data, &[101_000_000], false);
+    });
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_conv2d_safety_improvements() {
+    use crate::nn::Conv2d;
+
+    // Test that invalid parameters are caught
+    let result = std::panic::catch_unwind(|| {
+        let _ = Conv2d::new(3, 16, 5, 1, 1, true); // Valid
+        let _ = Conv2d::new(3, 16, 0, 1, 1, true); // Invalid kernel size 0
+    });
+    assert!(result.is_err()); // Should panic on invalid kernel size
+}
+
+#[test]
+fn test_sequential_serialization_improvements() {
+    use crate::nn::{Linear, ReLU, Sequential};
+
+    // Create a model with mixed stateless and stateful layers
+    let model = Sequential::new(vec![
+        Box::new(Linear::new(2, 3, true)),
+        Box::new(ReLU), // Stateless layer
+        Box::new(Linear::new(3, 1, true)),
+    ]);
+
+    // Get state dict - should only include stateful layers
+    let state = model.state_dict();
+
+    // Should have exactly 2 stateful layers (Linear layers)
+    assert_eq!(state.len(), 4); // 2 weights + 2 biases
+
+    // Verify keys are properly formatted
+    for key in state.keys() {
+        assert!(
+            key.contains('.'),
+            "State dict keys should contain layer index"
+        );
+    }
+}
+
+#[test]
+fn test_sequential_state_dict_calls_layer_once() {
+    let counter = Rc::new(Cell::new(0));
+    let layer = CountingModule {
+        counter: counter.clone(),
+    };
+    let model = Sequential::new(vec![Box::new(layer)]);
+
+    let _ = model.state_dict();
+    assert_eq!(
+        counter.get(),
+        1,
+        "Each layer's state_dict should be invoked exactly once"
+    );
+}
+
+#[test]
+fn test_load_state_dict_checked_reports_differences() {
+    let mut model = Sequential::new(vec![
+        Box::new(Linear::new(2, 3, true)),
+        Box::new(ReLU),
+        Box::new(Linear::new(3, 1, true)),
+    ]);
+
+    let mut corrupted_state = model.state_dict();
+    corrupted_state.remove("0.bias");
+    corrupted_state.insert(
+        "unexpected".to_string(),
+        TensorData::from_f32(vec![0.0], vec![1]),
+    );
+    if let Some(weight) = corrupted_state.get_mut("0.weight") {
+        // shape mismatch while keeping data length = 6
+        *weight = TensorData::from_f32(vec![0.0; 6], vec![3, 2]);
+    }
+
+    let diff = load_state_dict_checked(&mut model, &corrupted_state)
+        .expect("a shape mismatch is reported in the diff, not raised");
+
+    assert!(
+        diff.missing_keys.contains(&"0.bias".to_string()),
+        "Missing keys should be reported"
+    );
+    assert!(
+        diff.unexpected_keys.contains(&"unexpected".to_string()),
+        "Unexpected keys should be reported"
+    );
+    let has_shape_mismatch = diff.shape_mismatches.iter().any(|(key, expected, loaded)| {
+        key == "0.weight" && expected == &vec![2, 3] && loaded == &vec![3, 2]
+    });
+    assert!(has_shape_mismatch, "Shape mismatches should be reported");
+}
+
+#[test]
+fn test_load_state_dict_checked_returns_empty_for_matching_state() {
+    let mut model = Sequential::new(vec![
+        Box::new(Linear::new(2, 3, true)),
+        Box::new(ReLU),
+        Box::new(Linear::new(3, 1, true)),
+    ]);
+
+    let state = model.state_dict();
+    let diff = load_state_dict_checked(&mut model, &state).expect("matching state loads");
+
+    assert!(
+        diff.is_empty(),
+        "No diff should be reported when state dict matches"
+    );
+}
+
+#[test]
+fn test_broadcast_safety_improvements() {
+    // Test that reasonable broadcasting works
+    let a = RawTensor::new(vec![1.0, 2.0], &[2], true);
+    let b = RawTensor::new(vec![3.0], &[1], true);
+    let c = a.add(&b);
+
+    assert_eq!(c.shape(), vec![2]);
+    assert_eq!(c.data(), vec![4.0, 5.0]);
+
+    // Test that incompatible broadcasting still fails appropriately
+    let _result = std::panic::catch_unwind(|| {
+        let a = RawTensor::new(vec![1.0, 2.0], &[2], true);
+        let b = RawTensor::new(vec![3.0, 4.0], &[2], true);
+        let _ = RawTensor::broadcast_shape(&[2], &[3]); // Incompatible
+        let _ = a.add(&b);
+    });
+    // Should handle gracefully
+}
+#[test]
+fn test_tensor_to_device_updates_device_and_preserves_data() {
+    let t = RawTensor::new(vec![1.0, 2.0], &[2], false);
+
+    // CPU -> CPU should be a cheap no-op in terms of semantics
+    let t_cpu = t.to_device(Device::CPU);
+    assert_eq!(t_cpu.device(), Device::CPU);
+    assert_eq!(t_cpu.shape(), vec![2]);
+    assert_eq!(t_cpu.data(), vec![1.0, 2.0]);
+
+    // Move to the GPU, when there is one: the device field reflects it, the storage is
+    // really on the GPU, and the data is preserved. Without a GPU, `to_device` panics
+    // (`device_policy` tests), so there is nothing more to check here.
+    let Some(gpu) = Device::gpu() else {
+        return;
+    };
+    let t_gpu = t.to_device(gpu.clone());
+    assert_eq!(t_gpu.shape(), vec![2]);
+    assert_eq!(t_gpu.data(), vec![1.0, 2.0]);
+    assert_eq!(t_gpu.device(), gpu);
+    assert!(t_gpu.grad_storage().is_none_or(|g| g.is_gpu()));
+}

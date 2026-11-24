@@ -3,54 +3,116 @@
 //! This module contains the logic for dispatching compute shaders.
 //! Each operation creates a command buffer, binds the appropriate
 //! pipeline and buffers, and submits work to the GPU.
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::too_many_lines,
-    clippy::many_single_char_names
-)]
-use super::{GpuBuffer, get_gpu_context};
+use super::shader_template::Elem;
+use super::{GpuBuffer, GpuContext, get_gpu_context};
+use crate::dtype::DType;
+use crate::index::slot;
+use crate::ops::CmpOp;
+use crate::ops::{BinaryOp, UnaryOp};
+use crate::real::Real;
+use crate::spec::PadValue;
 
 /// Parameters for matrix dimensions (used in matmul shader)
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MatMulParams {
-    pub m: u32,        // Rows of A / rows of C
-    pub k: u32,        // Cols of A / rows of B
-    pub n: u32,        // Cols of B / cols of C
-    pub _padding: u32, // Align to 16 bytes
+    /// Rows of `A` and of `C`.
+    pub m: u32,
+    /// Columns of `A` and rows of `B`.
+    pub k: u32,
+    /// Columns of `B` and of `C`.
+    pub n: u32,
+    /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
+    pub _padding: u32,
 }
 
-/// Parameters for reduction operations
+impl MatMulParams {
+    /// The `m x k @ k x n` dims packed for the shaders.
+    ///
+    /// # Panics
+    /// If a dimension does not fit a `u32`.
+    fn new(m: usize, k: usize, n: usize) -> Self {
+        Self {
+            m: pack_u32(m),
+            k: pack_u32(k),
+            n: pack_u32(n),
+            _padding: 0,
+        }
+    }
+}
+
+/// Parameters for one pass of a reduction (`reduce.wgsl`)
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ReduceParams {
-    pub input_size: u32,
-    pub _padding: [u32; 3],
+    /// Number of values this pass reads.
+    pub n: u32,
+    /// Each output of the pass is divided by this: 1.0, except the last pass of a mean.
+    pub divisor: f32,
+    /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
+    pub _padding: [u32; 2],
+}
+
+/// What [`GpuKernels::max`] leaves on the device.
+pub struct MaxResult {
+    /// The maximum, one element in the input's dtype.
+    pub max: GpuBuffer,
+    /// The maximum again, one f32 (NaN if the input held a NaN), for `max_backward`.
+    pub value: GpuBuffer,
+    /// How many elements equal the maximum (every NaN, for a NaN maximum), one `u32`.
+    pub count: GpuBuffer,
 }
 
 /// Parameters for reduction backward operations
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ReduceBackwardParams {
+    /// Number of elements in the reduction input, which is the size of the gradient produced.
     pub input_size: u32,
-    pub op: u32, // 0 = sum, 1 = mean, 2 = max
-    pub grad_value: f32,
-    pub _padding: u32,
+    /// Reduction being differentiated: 0 = sum, 1 = mean (a max has its own entry point).
+    pub op: u32,
+    /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
+    pub _padding: [u32; 2],
 }
 
 /// Parameters for optimizer step operations
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct OptimizerStepParams {
-    pub op: u32,           // 0=SGD, 1=SGD+momentum, 2=Adam
-    pub lr: f32,           // Learning rate
-    pub beta1: f32,        // Adam beta1 or momentum coefficient
-    pub beta2: f32,        // Adam beta2
-    pub t: f32,            // Timestep for bias correction (Adam)
-    pub eps: f32,          // Adam epsilon
-    pub weight_decay: f32, // L2 regularization
-    pub padding: f32,
+    /// Update rule: 0 = SGD, 1 = SGD with momentum, 2 = Adam.
+    pub op: u32,
+    /// Learning rate.
+    pub lr: f32,
+    /// Momentum coefficient for op 1, or Adam's first-moment decay for op 2.
+    pub beta1: f32,
+    /// Adam's second-moment decay; unused by the SGD ops.
+    pub beta2: f32,
+    /// Adam's first-moment bias correction `1 / (1 - beta1^t)`, computed on the host in
+    /// `f64` and narrowed (#304); zero for the SGD ops.
+    pub m_hat_scale: f32,
+    /// Adam's epsilon, added to the denominator.
+    pub eps: f32,
+    /// L2 coefficient: when nonzero, `weight_decay * param` is added to the gradient before the update.
+    pub weight_decay: f32,
+    /// Adam's second-moment bias correction `1 / (1 - beta2^t)`, computed like
+    /// `m_hat_scale`; zero for the SGD ops. Also brings the struct to 32 bytes, a multiple
+    /// of 16 as a WGSL uniform requires.
+    pub v_hat_scale: f32,
+}
+
+/// Parameters for the Muon kernels
+/// Must match the `MuonParams` struct in muon.wgsl
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct MuonParams {
+    /// Element count
+    n: u32,
+    /// Momentum: 1 for the Nesterov update
+    flag: u32,
+    /// Momentum: coefficient; normalize: epsilon; axpby: scale of `x`
+    alpha: f32,
+    /// Axpby: scale of `y`
+    beta: f32,
 }
 
 /// Parameters for movement operations
@@ -58,90 +120,130 @@ pub struct OptimizerStepParams {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MovementParams {
+    /// Shape of the input; only the first `rank` entries are read.
     pub old_shape: [u32; 4],
+    /// Shape of the output; only the first `rank` entries are read.
     pub new_shape: [u32; 4],
-    pub op_params: [u32; 4], // Operation-specific (permute axes, strides, etc.)
+    /// Per-operation values. Permute: the axis order. Shrink: the range start per axis. Stride: the stride per axis. Pad: `[left0, right0, left1, right1]` for dims 0 and 1.
+    pub op_params: [u32; 4],
+    /// Number of valid dimensions in the shapes, at most 4.
     pub rank: u32,
-    pub padding2: u32, // Packed padding for dims 2,3
+    /// Pad only: the left and right padding of dim 2, packed as `left << 16 | right` (16 bits each). Zero for other operations.
+    pub padding2: u32,
+    /// `padding[0]` packs the pad amounts of dim 3 the same way as `padding2`; `padding[1]` only keeps the struct 16-byte aligned. Zero for operations other than pad.
     pub padding: [u32; 2],
 }
 
-/// Parameters for im2col operation
-/// Must match the `Im2colParams` struct in im2col.wgsl
+/// The geometry of a 2-D convolution: the uniform of `direct_conv`, `conv_backward_input`,
+/// `conv_backward_weight`, `igemm_backward_input` and `igemm_backward_weight`.
+/// Must match the one `ConvParams` WGSL struct, in `shader_template::SHARED_STRUCTS`.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Im2colParams {
+pub struct ConvParams {
+    /// Batch size `N`.
     pub batch_size: u32,
-    pub channels: u32,
-    pub height: u32,
-    pub width: u32,
-    pub kernel_h: u32,
-    pub kernel_w: u32,
-    pub stride_h: u32,
-    pub stride_w: u32,
-    pub h_out: u32,
-    pub w_out: u32,
-    pub _padding: [u32; 2],
-}
-
-/// Parameters for col2im operation
-/// Must match the `Col2imParams` struct in col2im.wgsl
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Col2imParams {
-    pub batch_size: u32,
-    pub channels: u32,
-    pub height: u32,
-    pub width: u32,
-    pub kernel_h: u32,
-    pub kernel_w: u32,
-    pub stride_h: u32,
-    pub stride_w: u32,
-    pub h_out: u32,
-    pub w_out: u32,
-    pub _padding: [u32; 2],
-}
-
-/// Parameters for direct convolution operation
-/// Must match the `DirectConvParams` struct in `direct_conv.wgsl`
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct DirectConvParams {
-    pub batch_size: u32,
+    /// Input channels `C_in`.
     pub in_channels: u32,
+    /// Output channels `C_out`.
     pub out_channels: u32,
+    /// Input height `H`.
     pub height: u32,
+    /// Input width `W`.
     pub width: u32,
+    /// Kernel height.
     pub kernel_h: u32,
+    /// Kernel width.
     pub kernel_w: u32,
+    /// Stride along the height.
     pub stride_h: u32,
+    /// Stride along the width.
     pub stride_w: u32,
+    /// Zero padding added to each of the top and bottom of the input.
     pub pad_h: u32,
+    /// Zero padding added to each of the left and right of the input.
     pub pad_w: u32,
+    /// Output height, computed on the host.
     pub h_out: u32,
+    /// Output width, computed on the host.
     pub w_out: u32,
+    /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
     pub _padding: u32,
 }
 
-/// Parameters for convolution backward input operation
-/// Must match the `ConvBackwardInputParams` struct in `conv_backward_input.wgsl`
+impl ConvParams {
+    /// `spec` packed for the shaders.
+    ///
+    /// # Panics
+    /// If a dimension does not fit a `u32`.
+    fn new(spec: &crate::spec::Conv2dSpec) -> Self {
+        Self {
+            batch_size: pack_u32(spec.batch),
+            in_channels: pack_u32(spec.in_ch),
+            out_channels: pack_u32(spec.out_ch),
+            height: pack_u32(spec.in_h),
+            width: pack_u32(spec.in_w),
+            kernel_h: pack_u32(spec.kernel_h),
+            kernel_w: pack_u32(spec.kernel_w),
+            stride_h: pack_u32(spec.stride_h),
+            stride_w: pack_u32(spec.stride_w),
+            pad_h: pack_u32(spec.pad_h),
+            pad_w: pack_u32(spec.pad_w),
+            h_out: pack_u32(spec.out_h),
+            w_out: pack_u32(spec.out_w),
+            _padding: 0,
+        }
+    }
+}
+
+/// The geometry of an unpadded sliding window: the uniform of `im2col` and `col2im`.
+/// Must match the one `WindowParams` WGSL struct, in `shader_template::SHARED_STRUCTS`.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct ConvBackwardInputParams {
+pub struct WindowParams {
+    /// Batch size `N`.
     pub batch_size: u32,
-    pub in_channels: u32,
-    pub out_channels: u32,
+    /// Image channels `C`.
+    pub channels: u32,
+    /// Input height `H`.
     pub height: u32,
+    /// Input width `W`.
     pub width: u32,
+    /// Kernel height.
     pub kernel_h: u32,
+    /// Kernel width.
     pub kernel_w: u32,
+    /// Stride along the height.
     pub stride_h: u32,
+    /// Stride along the width.
     pub stride_w: u32,
-    pub pad_h: u32,
-    pub pad_w: u32,
+    /// Output height, computed on the host.
     pub h_out: u32,
+    /// Output width, computed on the host.
     pub w_out: u32,
-    pub _padding: u32,
+    /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
+    pub _padding: [u32; 2],
+}
+
+impl WindowParams {
+    /// `spec` packed for the shaders.
+    ///
+    /// # Panics
+    /// If a dimension does not fit a `u32`.
+    fn new(spec: &crate::spec::Window2dSpec) -> Self {
+        Self {
+            batch_size: pack_u32(spec.batch),
+            channels: pack_u32(spec.channels),
+            height: pack_u32(spec.in_h),
+            width: pack_u32(spec.in_w),
+            kernel_h: pack_u32(spec.kernel_h),
+            kernel_w: pack_u32(spec.kernel_w),
+            stride_h: pack_u32(spec.stride_h),
+            stride_w: pack_u32(spec.stride_w),
+            h_out: pack_u32(spec.out_h),
+            w_out: pack_u32(spec.out_w),
+            _padding: [0, 0],
+        }
+    }
 }
 
 /// Parameters for iGEMM convolution operation
@@ -149,86 +251,40 @@ pub struct ConvBackwardInputParams {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct IGEMMParams {
+    /// Batch size `N`.
     pub batch_size: u32,
+    /// Input channels `C_in`.
     pub in_channels: u32,
+    /// Output channels `C_out`.
     pub out_channels: u32,
+    /// Input height `H`.
     pub height: u32,
+    /// Input width `W`.
     pub width: u32,
+    /// Kernel height.
     pub kernel_h: u32,
+    /// Kernel width.
     pub kernel_w: u32,
+    /// Stride along the height.
     pub stride_h: u32,
+    /// Stride along the width.
     pub stride_w: u32,
+    /// Zero padding added to each of the top and bottom of the input.
     pub pad_h: u32,
+    /// Zero padding added to each of the left and right of the input.
     pub pad_w: u32,
+    /// Output height, computed on the host.
     pub h_out: u32,
+    /// Output width, computed on the host.
     pub w_out: u32,
     // Tile configuration
-    pub oc_tile: u32, // Output channels per tile
-    pub ic_tile: u32, // Input channels per tile
-    pub s_tile: u32,  // Spatial positions per tile
-    pub _padding: u32,
-}
-
-/// Parameters for convolution backward weight operation
-/// Must match the `ConvBackwardWeightParams` struct in `conv_backward_weight.wgsl`
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct ConvBackwardWeightParams {
-    pub batch_size: u32,
-    pub in_channels: u32,
-    pub out_channels: u32,
-    pub height: u32,
-    pub width: u32,
-    pub kernel_h: u32,
-    pub kernel_w: u32,
-    pub stride_h: u32,
-    pub stride_w: u32,
-    pub pad_h: u32,
-    pub pad_w: u32,
-    pub h_out: u32,
-    pub w_out: u32,
-    pub _padding: u32,
-}
-
-/// Parameters for iGEMM convolution backward input operation
-/// Must match the `IGEMMBackwardInputParams` struct in `igemm_backward_input.wgsl`
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct IGEMMBackwardInputParams {
-    pub batch_size: u32,
-    pub in_channels: u32,
-    pub out_channels: u32,
-    pub height: u32,
-    pub width: u32,
-    pub kernel_h: u32,
-    pub kernel_w: u32,
-    pub stride_h: u32,
-    pub stride_w: u32,
-    pub pad_h: u32,
-    pub pad_w: u32,
-    pub h_out: u32,
-    pub w_out: u32,
-    pub _padding: u32,
-}
-
-/// Parameters for iGEMM convolution backward weight operation
-/// Must match the `IGEMMBackwardWeightParams` struct in `igemm_backward_weight.wgsl`
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct IGEMMBackwardWeightParams {
-    pub batch_size: u32,
-    pub in_channels: u32,
-    pub out_channels: u32,
-    pub height: u32,
-    pub width: u32,
-    pub kernel_h: u32,
-    pub kernel_w: u32,
-    pub stride_h: u32,
-    pub stride_w: u32,
-    pub pad_h: u32,
-    pub pad_w: u32,
-    pub h_out: u32,
-    pub w_out: u32,
+    /// Output channels per tile.
+    pub oc_tile: u32,
+    /// Input channels per tile.
+    pub ic_tile: u32,
+    /// Spatial positions per tile.
+    pub s_tile: u32,
+    /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
     pub _padding: u32,
 }
 
@@ -237,228 +293,603 @@ pub struct IGEMMBackwardWeightParams {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct BinaryBackwardParams {
+    /// Broadcast output shape; only the first `out_rank` entries are read.
     pub out_shape: [u32; 4],
+    /// Shape of the first input; only the first `a_rank` entries are read.
     pub a_shape: [u32; 4],
+    /// Shape of the second input; only the first `b_rank` entries are read.
     pub b_shape: [u32; 4],
+    /// Rank of the output.
     pub out_rank: u32,
+    /// Rank of the first input.
     pub a_rank: u32,
+    /// Rank of the second input.
     pub b_rank: u32,
+    /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
     pub _padding: u32,
 }
 
-/// Run a reduction operation that returns a scalar f32 value
-fn reduce_scalar(input: &GpuBuffer, pipeline: &wgpu::ComputePipeline) -> Option<f32> {
+/// Which full-tensor reduction [`reduce_to_scalar`] runs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reduction {
+    /// Sum of the elements.
+    Sum,
+    /// Sum divided by the element count (the division is part of the last pass).
+    Mean,
+    /// Sum of the squares of the elements.
+    SumSquares,
+    /// Maximum, with the number of elements equal to it.
+    Max,
+    /// Largest magnitude, `Max` of `abs(x)` (the count is computed and unused).
+    AbsMax,
+}
+
+/// Elements one workgroup of `reduce.wgsl` consumes per pass (256 threads x 4).
+const REDUCE_PER_GROUP: usize = 1024;
+
+/// Reduce `input` to one f32 on the device, in as many passes as it takes
+/// (`ceil(n / 1024)` partials per pass, until one is left), all in one command buffer.
+///
+/// Returns the f32 result as a one-element buffer, and for [`Reduction::Max`] the number of
+/// elements equal to the maximum (every NaN, when it is NaN) as a one-element buffer of
+/// `u32` bits (typed Bool, one word per element, like the `found` flag of `amp_unscale`).
+/// Nothing is read back.
+///
+/// # Panics
+/// If `input` is empty, or has too many elements for a pass's offsets to fit in a `u32`.
+fn reduce_to_scalar(input: &GpuBuffer, kind: Reduction) -> Option<(GpuBuffer, Option<GpuBuffer>)> {
     let ctx = get_gpu_context()?;
-    let result_buffer = GpuBuffer::zeros(1)?;
+    let pipelines = ctx.pipelines_for(input.dtype());
+    let (first, next) = match kind {
+        Reduction::Sum | Reduction::Mean => (&pipelines.sum_first, &pipelines.sum_next),
+        Reduction::SumSquares => (&pipelines.sumsq_first, &pipelines.sum_next),
+        Reduction::Max => (&pipelines.max_first, &pipelines.max_next),
+        Reduction::AbsMax => (&pipelines.absmax_first, &pipelines.max_next),
+    };
+    let total = input.len();
+    assert!(total > 0, "GPU reduction of an empty buffer");
+    // A workgroup's first offset, `group * 1024`, is below `n + 1024`.
+    pack_u32(total + REDUCE_PER_GROUP);
 
-    // Create uniform buffer with input size (pad to 32 bytes for wgpu min uniform buffer size)
-    // Shader only reads first 4 u32s, but buffer must be at least 32 bytes
-    let params = [input.len() as u32, 0, 0, 0];
-    let mut padded_params = [0u32; 8];
-    padded_params[..4].copy_from_slice(&params);
-    let params_buffer = ctx
-        .device()
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Params Buffer"),
-            contents: bytemuck::bytes_of(&padded_params),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    // Every pass's outputs and uniform, made before any pass is recorded, so all of them
+    // outlive the one submit (#244).
+    let mut levels: Vec<ReduceLevel> = Vec::new();
+    let mut n = total;
+    loop {
+        let groups = n.div_ceil(REDUCE_PER_GROUP);
+        let count = match kind {
+            Reduction::Max | Reduction::AbsMax => Some(GpuBuffer::zeros_of(DType::Bool, groups)?),
+            Reduction::Sum | Reduction::Mean | Reduction::SumSquares => None,
+        };
+        let divisor = if kind == Reduction::Mean && groups == 1 {
+            <f32 as Real>::from_usize(total)
+        } else {
+            1.0
+        };
+        let params = ReduceParams {
+            n: pack_u32(n),
+            divisor,
+            _padding: [0; 2],
+        };
+        levels.push(ReduceLevel {
+            groups: pack_u32(groups),
+            out: GpuBuffer::zeros(groups)?,
+            count,
+            params: uniform_buffer(ctx, bytemuck::bytes_of(&params)),
         });
-
-    // Create bind group
-    let bind_group_layout = pipeline.get_bind_group_layout(0);
-    let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Reduce Bind Group"),
-        layout: &bind_group_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: input.buffer().as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: result_buffer.buffer().as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: params_buffer.as_entire_binding(),
-            },
-        ],
-    });
-
-    // Create command encoder and dispatch
-    let mut encoder = ctx
-        .device()
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Reduce Encoder"),
-        });
-
-    {
-        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Reduce Pass"),
-            timestamp_writes: None,
-        });
-
-        compute_pass.set_pipeline(pipeline);
-        compute_pass.set_bind_group(0, &bind_group, &[]);
-        compute_pass.dispatch_workgroups(1, 1, 1);
+        if groups == 1 {
+            break;
+        }
+        n = groups;
     }
 
+    // Exactly the bindings each entry point uses (the pipelines use an auto layout): the
+    // first pass reads `input`, each later one the previous pass's partials (and counts).
+    let previous = std::iter::once(None).chain(levels.iter().map(Some));
+    let passes: Vec<Pass> = previous
+        .zip(&levels)
+        .map(|(prev, level)| {
+            let mut bindings: Vec<(u32, wgpu::BindingResource<'_>)> = Vec::with_capacity(5);
+            let pipeline = match prev {
+                None => {
+                    bindings.push((0, input.binding()));
+                    first
+                }
+                Some(prev) => {
+                    bindings.push((1, prev.out.binding()));
+                    bindings.extend(prev.count.as_ref().map(|c| (3, c.binding())));
+                    next
+                }
+            };
+            bindings.push((2, level.out.binding()));
+            bindings.extend(level.count.as_ref().map(|c| (4, c.binding())));
+            bindings.push((5, level.params.as_entire_binding()));
+            Pass {
+                pipeline,
+                bindings,
+                groups: Groups::Flat(level.groups),
+            }
+        })
+        .collect();
+    run_passes(ctx, "Reduce", &passes);
+    drop(passes);
+    let last = levels.pop().expect("a reduction runs at least one pass");
+    Some((last.out, last.count))
+}
+
+/// One pass of [`reduce_to_scalar`]: its workgroup count, its partial results, and its
+/// uniform.
+struct ReduceLevel {
+    /// Workgroups, one partial each.
+    groups: u32,
+    /// The partial values (f32), one per workgroup.
+    out: GpuBuffer,
+    /// For max, how many elements equal each partial maximum.
+    count: Option<GpuBuffer>,
+    /// The pass's [`ReduceParams`].
+    params: wgpu::Buffer,
+}
+
+/// What `max_backward` reads beside the upstream gradient: the saved input, and the
+/// maximum with the number of elements equal to it, both from [`GpuKernels::max`].
+struct MaxSaved<'a> {
+    /// The reduced input, in the gradient's dtype.
+    input: &'a GpuBuffer,
+    /// The maximum, one f32 (NaN if the input held a NaN).
+    value: &'a GpuBuffer,
+    /// How many elements are a maximum, one `u32`.
+    count: &'a GpuBuffer,
+}
+
+/// Broadcast a scalar gradient back to `input_size` elements: `op` 0 = sum, 1 = mean
+/// (divided by the count), or, with `max` given, the max rule (the gradient divided by the
+/// number of maximum elements, and the others zero).
+///
+/// The gradient is read on the device (`out_grad` at binding 0), never fetched to the host.
+/// The result has `out_grad`'s dtype.
+fn reduce_backward(
+    op: u32,
+    out_grad: &GpuBuffer,
+    input_size: usize,
+    max: Option<&MaxSaved>,
+) -> Option<GpuBuffer> {
+    let ctx = get_gpu_context()?;
+    let dtype = out_grad.dtype();
+    let result = GpuBuffer::zeros_of(dtype, input_size)?;
+    let params = ReduceBackwardParams {
+        input_size: pack_u32(input_size),
+        op,
+        _padding: [0; 2],
+    };
+    let params_buffer = uniform_buffer(ctx, bytemuck::bytes_of(&params));
+    let pipelines = ctx.pipelines_for(dtype);
+    let pipeline = match (op, max) {
+        (_, Some(_)) => &pipelines.max_backward,
+        (0, None) => &pipelines.sum_backward,
+        (_, None) => &pipelines.mean_backward,
+    };
+    // Exactly the bindings the entry point uses (the pipelines use an auto layout).
+    let mut bindings: Vec<(u32, wgpu::BindingResource<'_>)> = vec![
+        (0, out_grad.binding()),
+        (2, result.binding()),
+        (3, params_buffer.as_entire_binding()),
+    ];
+    if let Some(saved) = max {
+        assert_same_dtype("max_backward", &[out_grad, saved.input]);
+        bindings.push((1, saved.count.binding()));
+        bindings.push((4, saved.input.binding()));
+        bindings.push((5, saved.value.binding()));
+    }
+    run_passes(
+        ctx,
+        "Reduce Backward",
+        &[Pass {
+            pipeline,
+            bindings,
+            groups: Groups::cover(input_size),
+        }],
+    );
+    Some(result)
+}
+
+/// Panics unless every buffer in `buffers` has one dtype: a kernel's pipeline is chosen
+/// by its first input's element type, so another type bound beside it would be read with
+/// the wrong layout.
+#[track_caller]
+fn assert_same_dtype(kernel: &str, buffers: &[&GpuBuffer]) {
+    let first = buffers.first().map(|b| b.dtype());
+    for b in buffers {
+        assert!(
+            Some(b.dtype()) == first,
+            "GPU {kernel}: a {} buffer beside a {:?} one (a kernel binds one element type)",
+            b.dtype(),
+            first
+        );
+    }
+}
+
+/// The `{ n, pad, pad, pad }` uniform of the cast, compare and where shaders.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct CountParams {
+    /// Elements to process.
+    n: u32,
+    /// Padding to 16 bytes.
+    pad: [u32; 3],
+}
+
+/// Run `pipeline` over `n` elements, `buffers` bound at 0, 1, .. and a [`CountParams`]
+/// uniform at the next binding.
+fn dispatch_counted(
+    label: &str,
+    pipeline: &wgpu::ComputePipeline,
+    buffers: &[&GpuBuffer],
+    n: usize,
+) -> Option<()> {
+    let params = CountParams {
+        n: pack_u32(n),
+        pad: [0; 3],
+    };
+    run_kernel(
+        label,
+        pipeline,
+        buffers,
+        bytemuck::bytes_of(&params),
+        Groups::cover(n),
+    )
+}
+
+/// Panics unless every buffer in `buffers` has one length. These kernels read all of them
+/// at the same index, and WGSL clamps or zero-fills an out-of-bounds access instead of
+/// failing, so a short buffer would be a silent wrong answer (#131).
+#[track_caller]
+fn assert_same_len(kernel: &str, buffers: &[&GpuBuffer]) {
+    let lens: Vec<usize> = buffers.iter().map(|b| b.len()).collect();
+    assert!(
+        lens.windows(2).all(|w| w.first() == w.last()),
+        "GPU {kernel}: buffer lengths {lens:?} differ (the kernel reads them at one index)"
+    );
+}
+
+/// [`with_unused_state`]'s placeholders, one pair per GPU element type (f32, f16, bf16,
+/// bool). Process-wide and never dropped: a `thread_local!` dropped its `GpuBuffer`s in a
+/// TLS destructor, after wgpu-core's own thread-local could already be gone, which aborted
+/// the process at thread exit (#433).
+static UNUSED_STATE: UnusedState = UnusedState {
+    f32: std::sync::OnceLock::new(),
+    f16: std::sync::OnceLock::new(),
+    bf16: std::sync::OnceLock::new(),
+    bool: std::sync::OnceLock::new(),
+};
+
+/// One placeholder pair per GPU element type, each set once.
+struct UnusedState {
+    /// For f32 parameters.
+    f32: std::sync::OnceLock<[GpuBuffer; 2]>,
+    /// For f16 parameters.
+    f16: std::sync::OnceLock<[GpuBuffer; 2]>,
+    /// For bf16 parameters.
+    bf16: std::sync::OnceLock<[GpuBuffer; 2]>,
+    /// For bool buffers (no optimizer uses it today; kept so every GPU dtype has a slot).
+    bool: std::sync::OnceLock<[GpuBuffer; 2]>,
+}
+
+/// The [`UNUSED_STATE`] slot for `dtype`.
+///
+/// # Panics
+/// If `dtype` has no GPU representation.
+fn unused_state_slot(dtype: DType) -> &'static std::sync::OnceLock<[GpuBuffer; 2]> {
+    match dtype {
+        DType::F32 => &UNUSED_STATE.f32,
+        DType::F16 => &UNUSED_STATE.f16,
+        DType::BF16 => &UNUSED_STATE.bf16,
+        DType::Bool => &UNUSED_STATE.bool,
+        other @ (DType::F64 | DType::I32 | DType::I64 | DType::U8) => {
+            panic!("GPU buffers hold f32, f16, bf16 or bool, not {other}")
+        }
+    }
+}
+
+/// Runs `f` with two one-element `dtype` buffers for the optimizer kernel's state
+/// bindings that a step does not use (plain SGD binds both, SGD with momentum the second).
+/// The shader never touches them, so their size and contents don't matter; they are two
+/// buffers, not one, because WebGPU refuses one buffer bound to two writable bindings.
+/// Allocated once per element type for the process, so a stateless step allocates nothing
+/// (#207). `None` if no GPU is available or the allocation fails; a failed allocation is
+/// not cached, so a later call tries again.
+fn with_unused_state<R>(dtype: DType, f: impl FnOnce(&GpuBuffer, &GpuBuffer) -> R) -> Option<R> {
+    let slot = unused_state_slot(dtype);
+    if slot.get().is_none() {
+        let pair = [
+            GpuBuffer::zeros_of(dtype, 1)?,
+            GpuBuffer::zeros_of(dtype, 1)?,
+        ];
+        // A thread that lost the race drops its own pair here, on a live thread.
+        let _ = slot.set(pair);
+    }
+    let [a, b] = slot.get().expect("the pair for `dtype` was set above");
+    Some(f(a, b))
+}
+
+/// Panics unless `buffer` holds `expected` elements, the length its kernel's geometry
+/// implies; as for [`assert_same_len`], the shader itself would not notice.
+#[track_caller]
+fn assert_len(kernel: &str, what: &str, buffer: &GpuBuffer, expected: usize) {
+    assert_eq!(
+        buffer.len(),
+        expected,
+        "GPU {kernel}: `{what}` buffer length vs. the kernel's geometry"
+    );
+}
+
+/// How many workgroups a pass launches.
+#[derive(Clone, Copy)]
+enum Groups {
+    /// This many workgroups of a 256-wide 1-D kernel, spread over two dimensions past
+    /// 65535 by [`dispatch_flat`].
+    Flat(u32),
+    /// `(x, y)` tiles of a 16x16 kernel that maps its workgroup to a tile with
+    /// `tile_global_id` (`shader_template`). The `x * y` tiles go out as a flat list, spread
+    /// over two dimensions like [`Groups::Flat`], so neither output axis is capped at
+    /// 65535 tiles (#305).
+    Tiles(u32, u32),
+}
+
+impl Groups {
+    /// The [`Groups::Flat`] launch that covers `len` elements.
+    fn cover(len: usize) -> Self {
+        Self::Flat(workgroups_for(len))
+    }
+}
+
+/// One compute pass: its pipeline, exactly the buffers its entry point binds in group 0 as
+/// `(binding, resource)` (the pipelines use auto layouts, which hold only what the entry
+/// point uses), and its launch grid. A data buffer is bound by [`GpuBuffer::binding`], its
+/// tensor's bytes only, never the pooled allocation's slack (#306).
+struct Pass<'a> {
+    /// The compute pipeline.
+    pipeline: &'a wgpu::ComputePipeline,
+    /// Group-0 bindings.
+    bindings: Vec<(u32, wgpu::BindingResource<'a>)>,
+    /// The launch grid.
+    groups: Groups,
+}
+
+/// A uniform buffer holding `bytes`.
+fn uniform_buffer(ctx: &GpuContext, bytes: &[u8]) -> wgpu::Buffer {
+    ctx.device()
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Kernel Params"),
+            contents: bytes,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        })
+}
+
+/// Record `passes`, in order, in one command buffer and submit it, then count it as
+/// pending (`increment_pending`) and let the throttle decide whether to wait
+/// (`maybe_sync`). Every kernel submits through here, so none can skip either step (#131).
+///
+/// A pass borrows the `wgpu::Buffer`s it binds, so the caller holds every `GpuBuffer` it binds past
+/// this call: dropping one returns it to the shared pool, where another thread could write
+/// it before the submit (#244).
+fn run_passes(ctx: &GpuContext, label: &str, passes: &[Pass<'_>]) {
+    let mut encoder = ctx
+        .device()
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
+    for p in passes {
+        let entries: Vec<wgpu::BindGroupEntry> = p
+            .bindings
+            .iter()
+            .map(|(binding, resource)| wgpu::BindGroupEntry {
+                binding: *binding,
+                resource: resource.clone(),
+            })
+            .collect();
+        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout: &p.pipeline.get_bind_group_layout(0),
+            entries: &entries,
+        });
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some(label),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(p.pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        match p.groups {
+            Groups::Flat(n) => dispatch_flat(&mut pass, n),
+            Groups::Tiles(x, y) => {
+                let Some(tiles) = x.checked_mul(y) else {
+                    panic!("GPU {label}: {x} x {y} tiles exceed u32")
+                };
+                dispatch_flat(&mut pass, tiles);
+            }
+        }
+    }
     ctx.queue().submit(Some(encoder.finish()));
     ctx.increment_pending();
     ctx.maybe_sync();
+}
 
-    // Read back the result
-    result_buffer.to_vec().first().copied()
+/// Run `pipeline` once over `groups`, with `buffers` bound at 0, 1, .. and, unless
+/// `uniform` is empty, a uniform buffer holding it at the next binding.
+fn run_kernel(
+    label: &str,
+    pipeline: &wgpu::ComputePipeline,
+    buffers: &[&GpuBuffer],
+    uniform: &[u8],
+    groups: Groups,
+) -> Option<()> {
+    let ctx = get_gpu_context()?;
+    let params = (!uniform.is_empty()).then(|| uniform_buffer(ctx, uniform));
+    let mut bindings: Vec<(u32, wgpu::BindingResource<'_>)> = buffers
+        .iter()
+        .zip(0u32..)
+        .map(|(b, binding)| (binding, b.binding()))
+        .collect();
+    bindings.extend(
+        params
+            .as_ref()
+            .map(|p| (pack_u32(buffers.len()), p.as_entire_binding())),
+    );
+    run_passes(
+        ctx,
+        label,
+        &[Pass {
+            pipeline,
+            bindings,
+            groups,
+        }],
+    );
+    Some(())
 }
 
 /// High-level interface for GPU kernel execution
 pub struct GpuKernels;
 
 impl GpuKernels {
+    /// `input` converted to `target` on the device: between F32, F16 and BF16 (rounded to
+    /// nearest-even), and between those and Bool (nonzero, NaN included, is true).
+    ///
+    /// # Panics
+    /// If `target` or the input's dtype is not one the GPU holds, or both are the same.
+    #[must_use]
+    pub(crate) fn cast(input: &GpuBuffer, target: DType) -> Option<GpuBuffer> {
+        let ctx = get_gpu_context()?;
+        let source = input.dtype();
+        assert_ne!(source, target, "GPU cast to the same dtype");
+        let (pipeline, n) = match (source, target) {
+            (DType::Bool, t) => (
+                ctx.cast_pipeline(Elem::F32, ctx.elem_for(t), "from_bool"),
+                input.len(),
+            ),
+            (s, DType::Bool) => (
+                ctx.cast_pipeline(ctx.elem_for(s), Elem::F32, "to_bool"),
+                input.len(),
+            ),
+            (s, t) => (
+                ctx.cast_pipeline(ctx.elem_for(s), ctx.elem_for(t), "cast_elements"),
+                input.len(),
+            ),
+        };
+        let out = GpuBuffer::uninit_of(target, n)?; // every element written
+        dispatch_counted("Cast", &pipeline, &[input, &out], n)?;
+        Some(out)
+    }
+
+    /// `grad * inv` in `grad`'s type, and whether any rounded result is inf or NaN
+    /// (`GradScaler::unscale`). One `u32` is read back.
+    #[must_use]
+    pub(crate) fn amp_unscale(grad: &GpuBuffer, inv: f32) -> Option<(GpuBuffer, bool)> {
+        let ctx = get_gpu_context()?;
+        let out = GpuBuffer::uninit_of(grad.dtype(), grad.len())?; // every element written
+        // `found` stays zeroed: the shader only ever sets it.
+        let found = GpuBuffer::zeros_of(DType::Bool, 1)?;
+        let params = [pack_u32(grad.len()), inv.to_bits(), 0, 0];
+        run_kernel(
+            "Unscale",
+            &ctx.pipelines_for(grad.dtype()).amp_unscale,
+            &[grad, &out, &found],
+            bytemuck::cast_slice(&params),
+            Groups::cover(grad.len()),
+        )?;
+        let crate::storage::HostBuf::Bool(flag) = found.to_host() else {
+            unreachable!("a Bool buffer downloads as Bool")
+        };
+        Some((out, *flag.first().expect("a one-element flag buffer")))
+    }
+
+    /// `a <op> b` for equal-length buffers of one float dtype, as a Bool buffer.
+    ///
+    /// # Panics
+    /// If the lengths or dtypes differ.
+    #[must_use]
+    pub(crate) fn compare(a: &GpuBuffer, b: &GpuBuffer, op: CmpOp) -> Option<GpuBuffer> {
+        assert_same_len("compare", &[a, b]);
+        assert_same_dtype("compare", &[a, b]);
+        let ctx = get_gpu_context()?;
+        let p = ctx.pipelines_for(a.dtype());
+        let pipeline = match op {
+            CmpOp::Lt => &p.cmp_lt,
+            CmpOp::Le => &p.cmp_le,
+            CmpOp::Gt => &p.cmp_gt,
+            CmpOp::Ge => &p.cmp_ge,
+            CmpOp::Eq => &p.cmp_eq,
+            CmpOp::Ne => &p.cmp_ne,
+        };
+        let out = GpuBuffer::uninit_of(DType::Bool, a.len())?; // every element written
+        dispatch_counted("Compare", pipeline, &[a, b, &out], a.len())?;
+        Some(out)
+    }
+
+    /// `where(cond, x, y)` for equal lengths: `cond` Bool, `x` and `y` one float dtype.
+    ///
+    /// # Panics
+    /// If the lengths or dtypes don't fit.
+    #[must_use]
+    pub(crate) fn where_select(
+        cond: &GpuBuffer,
+        x: &GpuBuffer,
+        y: &GpuBuffer,
+    ) -> Option<GpuBuffer> {
+        assert_eq!(cond.dtype(), DType::Bool, "GPU where: Bool condition");
+        assert_same_dtype("where", &[x, y]);
+        assert_same_len("where", &[cond, x, y]);
+        let ctx = get_gpu_context()?;
+        let out = GpuBuffer::uninit_of(x.dtype(), x.len())?; // every element written
+        dispatch_counted(
+            "Where",
+            &ctx.pipelines_for(x.dtype()).where_select,
+            &[cond, x, y, &out],
+            x.len(),
+        )?;
+        Some(out)
+    }
+
     /// Execute an element-wise binary operation
     ///
     /// # Arguments
     /// * `a` - First input buffer
     /// * `b` - Second input buffer (must be same size as a)
-    /// * `op` - Which operation to perform ("add", "sub", "mul", "div")
+    /// * `op` - Which operation to perform
     ///
     /// # Returns
     /// A new buffer containing the result
+    ///
     /// # Panics
-    /// Mismatched buffer sizes
+    /// If `a` and `b` differ in dtype or length.
     #[must_use]
-    pub fn binary_op(a: &GpuBuffer, b: &GpuBuffer, op: &str) -> Option<GpuBuffer> {
-        assert_eq!(a.len(), b.len(), "Buffer sizes must match for binary ops");
-
+    pub fn binary_op(a: &GpuBuffer, b: &GpuBuffer, op: BinaryOp) -> Option<GpuBuffer> {
+        assert_same_dtype("binary_op", &[a, b]);
+        assert_same_len("binary_op", &[a, b]);
         let ctx = get_gpu_context()?;
-        let result = GpuBuffer::zeros(a.len())?;
-
-        // Select the appropriate pipeline
-        let pipeline = match op {
-            "add" => &ctx.pipelines().add,
-            "sub" => &ctx.pipelines().sub,
-            "mul" => &ctx.pipelines().mul,
-            "div" => &ctx.pipelines().div,
-            "max" => &ctx.pipelines().max,
-            "mod" => &ctx.pipelines().mod_op,
-            "cmplt" => &ctx.pipelines().cmplt,
-            _ => panic!("Unknown binary op: {op}"),
-        };
-
-        // Create bind group - this connects our buffers to the shader
-        let bind_group_layout = pipeline.get_bind_group_layout(0);
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Binary Op Bind Group"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: a.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: b.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: result.buffer().as_entire_binding(),
-                },
-            ],
-        });
-
-        // Create command encoder and dispatch
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Binary Op Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Binary Op Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            // Dispatch workgroups
-            // Each workgroup processes 256 elements (defined in shader)
-            let workgroup_count = (a.len() as u32).div_ceil(256);
-            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
-        }
-
-        // Submit to GPU with throttling
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
+        let result = GpuBuffer::uninit_of(a.dtype(), a.len())?; // every element written
+        let pipeline = op.gpu_forward(ctx.pipelines_for(a.dtype()));
+        run_kernel(
+            "Binary Op",
+            pipeline,
+            &[a, b, &result],
+            &[],
+            Groups::cover(a.len()),
+        )?;
         Some(result)
     }
 
     /// Execute a unary operation
-    /// # Panics
-    /// Unknown unary op
+    ///
+    /// Returns `None` if the op is `cpu_only` (no GPU kernel) or no GPU is available.
     #[must_use]
-    pub fn unary_op(input: &GpuBuffer, op: &str) -> Option<GpuBuffer> {
+    pub fn unary_op(input: &GpuBuffer, op: UnaryOp) -> Option<GpuBuffer> {
         let ctx = get_gpu_context()?;
-        let result = GpuBuffer::zeros(input.len())?;
-
-        let pipeline = match op {
-            "neg" => &ctx.pipelines().neg,
-            "exp" => &ctx.pipelines().exp,
-            "log" => &ctx.pipelines().log,
-            "relu" => &ctx.pipelines().relu,
-            "sigmoid" => &ctx.pipelines().sigmoid,
-            "tanh" => &ctx.pipelines().tanh,
-            "sqrt" => &ctx.pipelines().sqrt,
-            "recip" => &ctx.pipelines().recip,
-            "exp2" => &ctx.pipelines().exp2,
-            "log2" => &ctx.pipelines().log2,
-            "sin" => &ctx.pipelines().sin,
-            "cos" => &ctx.pipelines().cos,
-            _ => return None, // Unsupported op falls back to CPU
-        };
-
-        let bind_group_layout = pipeline.get_bind_group_layout(0);
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Unary Op Bind Group"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: input.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: result.buffer().as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Unary Op Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Unary Op Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            let workgroup_count = (input.len() as u32).div_ceil(256);
-            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
-        }
-
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
+        let (pipeline, _) = op.gpu_pipelines(ctx.pipelines_for(input.dtype()))?;
+        let result = GpuBuffer::uninit_of(input.dtype(), input.len())?; // every element written
+        run_kernel(
+            "Unary Op",
+            pipeline,
+            &[input, &result],
+            &[],
+            Groups::cover(input.len()),
+        )?;
         Some(result)
     }
 
@@ -469,82 +900,28 @@ impl GpuKernels {
     /// # Arguments
     /// * `out_grad` - Gradient of the output (upstream gradient)
     /// * `x` - Input tensor from the forward pass
-    /// * `op` - Which operation to perform (`"exp_backward"`, `"relu_backward"`, etc.)
+    /// * `op` - Which operation's derivative to apply
     ///
     /// # Returns
-    /// A new buffer containing the gradient with respect to x
+    /// A new buffer containing the gradient with respect to x, or `None` if the op is
+    /// `cpu_only` or no GPU is available.
+    ///
     /// # Panics
-    /// `out_grad` and `x` size mismatch
+    /// If `out_grad` and `x` differ in dtype or length.
     #[must_use]
-    pub fn unary_backward(out_grad: &GpuBuffer, x: &GpuBuffer, op: &str) -> Option<GpuBuffer> {
-        assert_eq!(
-            out_grad.len(),
-            x.len(),
-            "out_grad and x must have same size for unary backward"
-        );
-
+    pub fn unary_backward(out_grad: &GpuBuffer, x: &GpuBuffer, op: UnaryOp) -> Option<GpuBuffer> {
+        assert_same_dtype("unary_backward", &[out_grad, x]);
+        assert_same_len("unary_backward", &[out_grad, x]);
         let ctx = get_gpu_context()?;
-        let result = GpuBuffer::zeros(out_grad.len())?;
-
-        let pipeline = match op {
-            "neg_backward" => &ctx.pipelines().neg_backward,
-            "exp_backward" => &ctx.pipelines().exp_backward,
-            "log_backward" => &ctx.pipelines().log_backward,
-            "relu_backward" => &ctx.pipelines().relu_backward,
-            "sigmoid_backward" => &ctx.pipelines().sigmoid_backward,
-            "tanh_backward" => &ctx.pipelines().tanh_backward,
-            "sqrt_backward" => &ctx.pipelines().sqrt_backward,
-            "recip_backward" => &ctx.pipelines().recip_backward,
-            "exp2_backward" => &ctx.pipelines().exp2_backward,
-            "log2_backward" => &ctx.pipelines().log2_backward,
-            "sin_backward" => &ctx.pipelines().sin_backward,
-            "cos_backward" => &ctx.pipelines().cos_backward,
-            _ => panic!("Unknown unary backward op: {op}"),
-        };
-
-        let bind_group_layout = pipeline.get_bind_group_layout(0);
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Unary Backward Bind Group"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: out_grad.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: x.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: result.buffer().as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Unary Backward Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Unary Backward Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            let workgroup_count = (out_grad.len() as u32).div_ceil(256);
-            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
-        }
-
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
+        let (_, pipeline) = op.gpu_pipelines(ctx.pipelines_for(out_grad.dtype()))?;
+        let result = GpuBuffer::uninit_of(out_grad.dtype(), out_grad.len())?; // every element written
+        run_kernel(
+            "Unary Backward",
+            pipeline,
+            &[out_grad, x, &result],
+            &[],
+            Groups::cover(out_grad.len()),
+        )?;
         Some(result)
     }
 
@@ -554,89 +931,32 @@ impl GpuKernels {
     /// * `out_grad` - Gradient of the output (upstream gradient)
     /// * `a` - First input from forward pass
     /// * `b` - Second input from forward pass (needed for mul/div/max)
-    /// * `op` - Which operation (`"add_backward_a"`, `"mul_backward_a"`, etc.)
+    /// * `op` - Which operation; returns `None` if it is non-differentiable
     ///
     /// # Returns
     /// A new buffer containing the gradient with respect to a
+    ///
     /// # Panics
-    /// `out_grad` and `a` shape mismatch
+    /// If `out_grad`, `a` and `b` differ in dtype or length.
     #[must_use]
     pub fn binary_backward_a(
         out_grad: &GpuBuffer,
         a: &GpuBuffer,
         b: &GpuBuffer,
-        op: &str,
+        op: BinaryOp,
     ) -> Option<GpuBuffer> {
-        assert_eq!(
-            out_grad.len(),
-            a.len(),
-            "out_grad and a must have same size for binary backward"
-        );
-        assert_eq!(
-            out_grad.len(),
-            b.len(),
-            "out_grad and b must have same size for binary backward"
-        );
-
+        assert_same_dtype("binary_backward_a", &[out_grad, a, b]);
+        assert_same_len("binary_backward_a", &[out_grad, a, b]);
         let ctx = get_gpu_context()?;
-        let result = GpuBuffer::zeros(out_grad.len())?;
-
-        let pipeline = match op {
-            "add_backward_a" => &ctx.pipelines().add_backward_a,
-            "sub_backward_a" => &ctx.pipelines().sub_backward_a,
-            "mul_backward_a" => &ctx.pipelines().mul_backward_a,
-            "div_backward_a" => &ctx.pipelines().div_backward_a,
-            "max_backward_a" => &ctx.pipelines().max_backward_a,
-            _ => panic!("Unknown binary backward op for a: {op}"),
-        };
-
-        let bind_group_layout = pipeline.get_bind_group_layout(0);
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Binary Backward A Bind Group"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: out_grad.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: a.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: b.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: result.buffer().as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Binary Backward A Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Binary Backward A Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            let workgroup_count = (out_grad.len() as u32).div_ceil(256);
-            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
-        }
-
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
+        let result = GpuBuffer::uninit_of(out_grad.dtype(), out_grad.len())?; // every element written
+        let pipeline = op.gpu_backward(ctx.pipelines_for(out_grad.dtype()))?.a;
+        run_kernel(
+            "Binary Backward A",
+            pipeline,
+            &[out_grad, a, b, &result],
+            &[],
+            Groups::cover(out_grad.len()),
+        )?;
         Some(result)
     }
 
@@ -646,242 +966,33 @@ impl GpuKernels {
     /// * `out_grad` - Gradient of the output (upstream gradient)
     /// * `a` - First input from forward pass (needed for mul/div/max)
     /// * `b` - Second input from forward pass
-    /// * `op` - Which operation (`"add_backward_b"`, `"mul_backward_b"`, etc.)
+    /// * `op` - Which operation; returns `None` if it is non-differentiable
     ///
     /// # Returns
     /// A new buffer containing the gradient with respect to b
+    ///
     /// # Panics
-    /// `out_grad` and `b` must have same shape
+    /// If `out_grad`, `a` and `b` differ in dtype or length.
     #[must_use]
     pub fn binary_backward_b(
         out_grad: &GpuBuffer,
         a: &GpuBuffer,
         b: &GpuBuffer,
-        op: &str,
+        op: BinaryOp,
     ) -> Option<GpuBuffer> {
-        assert_eq!(
-            out_grad.len(),
-            b.len(),
-            "out_grad and b must have same size for binary backward"
-        );
-        assert_eq!(
-            out_grad.len(),
-            a.len(),
-            "out_grad and a must have same size for binary backward"
-        );
-
+        assert_same_dtype("binary_backward_b", &[out_grad, a, b]);
+        assert_same_len("binary_backward_b", &[out_grad, a, b]);
         let ctx = get_gpu_context()?;
-        let result = GpuBuffer::zeros(out_grad.len())?;
-
-        let pipeline = match op {
-            "add_backward_b" => &ctx.pipelines().add_backward_b,
-            "sub_backward_b" => &ctx.pipelines().sub_backward_b,
-            "mul_backward_b" => &ctx.pipelines().mul_backward_b,
-            "div_backward_b" => &ctx.pipelines().div_backward_b,
-            "max_backward_b" => &ctx.pipelines().max_backward_b,
-            _ => panic!("Unknown binary backward op for b: {op}"),
-        };
-
-        let bind_group_layout = pipeline.get_bind_group_layout(0);
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Binary Backward B Bind Group"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: out_grad.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: a.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: b.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: result.buffer().as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Binary Backward B Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Binary Backward B Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            let workgroup_count = (out_grad.len() as u32).div_ceil(256);
-            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
-        }
-
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
+        let result = GpuBuffer::uninit_of(out_grad.dtype(), out_grad.len())?; // every element written
+        let pipeline = op.gpu_backward(ctx.pipelines_for(out_grad.dtype()))?.b;
+        run_kernel(
+            "Binary Backward B",
+            pipeline,
+            &[out_grad, a, b, &result],
+            &[],
+            Groups::cover(out_grad.len()),
+        )?;
         Some(result)
-    }
-
-    /// Execute a binary backward operation with broadcasting support
-    ///
-    /// This computes gradients for both inputs simultaneously, handling broadcasting
-    /// by reducing gradients over broadcasted dimensions.
-    ///
-    /// # Arguments
-    /// * `out_grad` - Gradient of the output (upstream gradient)
-    /// * `a` - First input from forward pass
-    /// * `b` - Second input from forward pass
-    /// * `op` - Which operation ("add", "sub", "mul", "div", "max")
-    /// * `out_shape` - Shape of the output tensor
-    /// * `a_shape` - Shape of the first input tensor
-    /// * `b_shape` - Shape of the second input tensor
-    ///
-    /// # Returns
-    /// A tuple of (gradient wrt a, gradient wrt b)
-    /// # Panics
-    /// Unknown binary backward op
-    #[must_use]
-    pub fn binary_backward_broadcast(
-        out_grad: &GpuBuffer,
-        a: &GpuBuffer,
-        b: &GpuBuffer,
-        op: &str,
-        out_shape: &[usize],
-        a_shape: &[usize],
-        b_shape: &[usize],
-    ) -> Option<(GpuBuffer, GpuBuffer)> {
-        let ctx = get_gpu_context()?;
-
-        // Create unified result buffer (concatenated a_grad and b_grad)
-        // The shader uses atomic adds, so we need to zero-initialize
-        let result_grad = GpuBuffer::zeros(a.len() + b.len())?;
-
-        // Prepare shape parameters (pad to 4D)
-        let mut out_shape_padded = [1u32; 4];
-        let mut a_shape_padded = [1u32; 4];
-        let mut b_shape_padded = [1u32; 4];
-
-        let out_rank = out_shape.len() as u32;
-        let a_rank = a_shape.len() as u32;
-        let b_rank = b_shape.len() as u32;
-
-        // Pad shapes to match (align to right for NumPy-style broadcasting)
-        let out_offset = 4usize.saturating_sub(out_shape.len());
-        let a_offset = 4usize.saturating_sub(a_shape.len());
-        let b_offset = 4usize.saturating_sub(b_shape.len());
-
-        for (i, &dim) in out_shape.iter().enumerate() {
-            let idx = out_offset + i;
-            if let Some(slot) = out_shape_padded.get_mut(idx) {
-                *slot = dim as u32;
-            }
-        }
-        for (i, &dim) in a_shape.iter().enumerate() {
-            let idx = a_offset + i;
-            if let Some(slot) = a_shape_padded.get_mut(idx) {
-                *slot = dim as u32;
-            }
-        }
-        for (i, &dim) in b_shape.iter().enumerate() {
-            let idx = b_offset + i;
-            if let Some(slot) = b_shape_padded.get_mut(idx) {
-                *slot = dim as u32;
-            }
-        }
-
-        let params = BinaryBackwardParams {
-            out_shape: out_shape_padded,
-            a_shape: a_shape_padded,
-            b_shape: b_shape_padded,
-            out_rank,
-            a_rank,
-            b_rank,
-            _padding: 0,
-        };
-
-        let params_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Binary Backward Broadcast Params"),
-                contents: bytemuck::bytes_of(&params),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-
-        let pipeline = match op {
-            "add" => &ctx.pipelines().add_broadcast,
-            "sub" => &ctx.pipelines().sub_broadcast,
-            "mul" => &ctx.pipelines().mul_broadcast,
-            "div" => &ctx.pipelines().div_broadcast,
-            "max" => &ctx.pipelines().max_broadcast,
-            _ => panic!("Unknown binary backward op: {op}"),
-        };
-
-        let bind_group_layout = pipeline.get_bind_group_layout(0);
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Binary Backward Broadcast Bind Group"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: out_grad.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: a.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: b.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: result_grad.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Binary Backward Broadcast Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Binary Backward Broadcast Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            let workgroup_count = (out_grad.len() as u32).div_ceil(256);
-            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
-        }
-
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
-        // Split the concatenated result into two separate buffers
-        let a_grad = result_grad.copy_region(0, a.len())?;
-        let b_grad = result_grad.copy_region(a.len(), b.len())?;
-
-        Some((a_grad, b_grad))
     }
 
     /// Execute a binary backward operation with RACE-FREE broadcasting support
@@ -894,49 +1005,52 @@ impl GpuKernels {
     /// * `out_grad` - Gradient of the output (upstream gradient)
     /// * `a` - First input from forward pass
     /// * `b` - Second input from forward pass
-    /// * `op` - Which operation ("add", "sub", "mul", "div", "max")
+    /// * `op` - Which operation; returns `None` if it is non-differentiable
     /// * `out_shape` - Shape of the output tensor
     /// * `a_shape` - Shape of the first input tensor
     /// * `b_shape` - Shape of the second input tensor
     ///
     /// # Returns
     /// A tuple of (gradient wrt a, gradient wrt b)
-    /// # Panics
-    /// Unknown binary backward op
     #[must_use]
     pub fn binary_backward_broadcast_safe(
         out_grad: &GpuBuffer,
         a: &GpuBuffer,
         b: &GpuBuffer,
-        op: &str,
+        op: BinaryOp,
         out_shape: &[usize],
         a_shape: &[usize],
         b_shape: &[usize],
     ) -> Option<(GpuBuffer, GpuBuffer)> {
+        assert_same_dtype("binary_backward_broadcast_safe", &[out_grad, a, b]);
+        let kernel = "binary_backward_broadcast_safe";
+        assert_len(kernel, "out_grad", out_grad, out_shape.iter().product());
+        assert_len(kernel, "a", a, a_shape.iter().product());
+        assert_len(kernel, "b", b, b_shape.iter().product());
         let ctx = get_gpu_context()?;
 
         // Calculate temporary buffer size
         // For add/sub: 3 floats per output (idx_a, idx_b, val)
         // For mul/div: 3 floats per output (idx_a, idx_b, val) - values read in pass2
         // For max: 5 floats per output (idx_a, idx_b, val, a_val, b_val)
-        let temp_size = if op == "max" {
+        let temp_size = if op == BinaryOp::Max {
             out_grad.len() * 5
         } else {
             out_grad.len() * 3
         };
-        let temp_buffer = GpuBuffer::zeros(temp_size)?;
+        let temp_buffer = GpuBuffer::zeros_of(out_grad.dtype(), temp_size)?;
 
         // Create unified result buffer (concatenated a_grad and b_grad)
-        let result_grad = GpuBuffer::zeros(a.len() + b.len())?;
+        let result_grad = GpuBuffer::zeros_of(out_grad.dtype(), a.len() + b.len())?;
 
         // Prepare shape parameters (pad to 4D)
         let mut out_shape_padded = [1u32; 4];
         let mut a_shape_padded = [1u32; 4];
         let mut b_shape_padded = [1u32; 4];
 
-        let out_rank = out_shape.len() as u32;
-        let a_rank = a_shape.len() as u32;
-        let b_rank = b_shape.len() as u32;
+        let out_rank = pack_u32(out_shape.len());
+        let a_rank = pack_u32(a_shape.len());
+        let b_rank = pack_u32(b_shape.len());
 
         // Pad shapes to match (align to right for NumPy-style broadcasting)
         let out_offset = 4usize.saturating_sub(out_shape.len());
@@ -945,21 +1059,15 @@ impl GpuKernels {
 
         for (i, &dim) in out_shape.iter().enumerate() {
             let idx = out_offset + i;
-            if let Some(slot) = out_shape_padded.get_mut(idx) {
-                *slot = dim as u32;
-            }
+            *slot(&mut out_shape_padded, idx) = pack_u32(dim);
         }
         for (i, &dim) in a_shape.iter().enumerate() {
             let idx = a_offset + i;
-            if let Some(slot) = a_shape_padded.get_mut(idx) {
-                *slot = dim as u32;
-            }
+            *slot(&mut a_shape_padded, idx) = pack_u32(dim);
         }
         for (i, &dim) in b_shape.iter().enumerate() {
             let idx = b_offset + i;
-            if let Some(slot) = b_shape_padded.get_mut(idx) {
-                *slot = dim as u32;
-            }
+            *slot(&mut b_shape_padded, idx) = pack_u32(dim);
         }
 
         let params = BinaryBackwardParams {
@@ -972,140 +1080,34 @@ impl GpuKernels {
             _padding: 0,
         };
 
-        let params_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Binary Backward Safe Params"),
-                contents: bytemuck::bytes_of(&params),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-
-        // Select pipelines for both passes
-        let (pass1_pipeline, pass2_pipeline) = match op {
-            "add" => (
-                &ctx.pipelines().add_broadcast_pass1,
-                &ctx.pipelines().add_broadcast_pass2,
-            ),
-            "sub" => (
-                &ctx.pipelines().sub_broadcast_pass1,
-                &ctx.pipelines().sub_broadcast_pass2,
-            ),
-            "mul" => (
-                &ctx.pipelines().mul_broadcast_pass1,
-                &ctx.pipelines().mul_broadcast_pass2,
-            ),
-            "div" => (
-                &ctx.pipelines().div_broadcast_pass1,
-                &ctx.pipelines().div_broadcast_pass2,
-            ),
-            "max" => (
-                &ctx.pipelines().max_broadcast_pass1,
-                &ctx.pipelines().max_broadcast_pass2,
-            ),
-            _ => panic!("Unknown binary backward op: {op}"),
-        };
-
-        // ============ PASS 1: Scatter ============
-        let pass1_bind_group_layout = pass1_pipeline.get_bind_group_layout(0);
-        let pass1_bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Binary Backward Safe Pass1 Bind Group"),
-            layout: &pass1_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: out_grad.buffer().as_entire_binding(),
+        let params_buffer = uniform_buffer(ctx, bytemuck::bytes_of(&params));
+        let backward = op.gpu_backward(ctx.pipelines_for(out_grad.dtype()))?;
+        let bindings = vec![
+            (0, out_grad.binding()),
+            (1, a.binding()),
+            (2, b.binding()),
+            (3, temp_buffer.binding()),
+            (4, result_grad.binding()),
+            (5, params_buffer.as_entire_binding()),
+        ];
+        run_passes(
+            ctx,
+            "Binary Backward Safe",
+            &[
+                // Pass 1 scatters (target index in a, in b, gradient value) per output.
+                Pass {
+                    pipeline: backward.pass1,
+                    bindings: bindings.clone(),
+                    groups: Groups::cover(out_grad.len()),
                 },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: a.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: b.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: temp_buffer.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: result_grad.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: params_buffer.as_entire_binding(),
+                // Pass 2 reduces the contributions to each gradient position.
+                Pass {
+                    pipeline: backward.pass2,
+                    bindings,
+                    groups: Groups::cover(a.len().max(b.len())),
                 },
             ],
-        });
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Binary Backward Safe Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Binary Backward Safe Pass1"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pass1_pipeline);
-            compute_pass.set_bind_group(0, &pass1_bind_group, &[]);
-
-            let workgroup_count = (out_grad.len() as u32).div_ceil(256);
-            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
-        }
-
-        // ============ PASS 2: Reduce ============
-        let pass2_bind_group_layout = pass2_pipeline.get_bind_group_layout(0);
-        let pass2_bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Binary Backward Safe Pass2 Bind Group"),
-            layout: &pass2_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: out_grad.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: a.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: b.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: temp_buffer.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: result_grad.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Binary Backward Safe Pass2"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pass2_pipeline);
-            compute_pass.set_bind_group(0, &pass2_bind_group, &[]);
-
-            let max_size = (a.len().max(b.len()) as u32).div_ceil(256);
-            compute_pass.dispatch_workgroups(max_size, 1, 1);
-        }
-
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
+        );
 
         // Split the concatenated result into two separate buffers
         let a_grad = result_grad.copy_region(0, a.len())?;
@@ -1119,85 +1121,36 @@ impl GpuKernels {
     /// # Arguments
     /// * `a` - Matrix A with shape (m, k)
     /// * `b` - Matrix B with shape (k, n)
-    /// * `m` - Number of rows in A
-    /// * `k` - Number of columns in A / rows in B
-    /// * `n` - Number of columns in B
+    /// * `spec` - Validated `m x k @ k x n` geometry; must not be batched
     /// # Panics
-    /// Buffer size doesn't match dims
+    /// If `spec` is batched, or a buffer size doesn't match dims
     #[must_use]
-    pub fn matmul(a: &GpuBuffer, b: &GpuBuffer, m: usize, k: usize, n: usize) -> Option<GpuBuffer> {
+    pub(crate) fn matmul(
+        a: &GpuBuffer,
+        b: &GpuBuffer,
+        spec: &crate::spec::MatmulSpec,
+    ) -> Option<GpuBuffer> {
+        assert_same_dtype("matmul", &[a, b]);
+        assert!(
+            !spec.is_batched(),
+            "GPU matmul kernels are 2D only; batched products run on the CPU path"
+        );
+        let (m, k, n) = (spec.m, spec.k, spec.n);
         assert_eq!(a.len(), m * k, "A buffer size doesn't match dimensions");
         assert_eq!(b.len(), k * n, "B buffer size doesn't match dimensions");
 
         let ctx = get_gpu_context()?;
-        let result = GpuBuffer::zeros(m * n)?;
+        // Every element written: the tiles cover (m, n) and each in-bounds thread stores.
+        let result = GpuBuffer::uninit_of(a.dtype(), m * n)?;
 
-        // Create uniform buffer for dimensions
-        let params = MatMulParams {
-            m: m as u32,
-            k: k as u32,
-            n: n as u32,
-            _padding: 0,
-        };
-
-        let params_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("MatMul Params"),
-                contents: bytemuck::bytes_of(&params),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-
-        let pipeline = &ctx.pipelines().matmul;
-        let bind_group_layout = pipeline.get_bind_group_layout(0);
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("MatMul Bind Group"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: a.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: b.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: result.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("MatMul Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("MatMul Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            // Dispatch one workgroup per 16x16 tile of the output
-            let workgroups_x = (n as u32).div_ceil(16);
-            let workgroups_y = (m as u32).div_ceil(16);
-            compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
-        }
-
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
+        run_kernel(
+            "MatMul",
+            &ctx.pipelines_for(a.dtype()).matmul,
+            &[a, b, &result],
+            bytemuck::bytes_of(&MatMulParams::new(m, k, n)),
+            // One workgroup per 16x16 tile of the (m, n) output.
+            Groups::Tiles(pack_u32(n).div_ceil(16), pack_u32(m).div_ceil(16)),
+        )?;
         Some(result)
     }
 
@@ -1209,19 +1162,23 @@ impl GpuKernels {
     /// # Arguments
     /// * `grad` - Output gradient with shape (m, n)
     /// * `b` - Matrix B from forward pass with shape (k, n)
-    /// * `m` - Number of rows in grad / rows in dA
-    /// * `k` - Number of columns in grad / rows in B
-    /// * `n` - Number of columns in B / columns in grad
+    /// * `spec` - Validated `m x k @ k x n` geometry; must not be batched
+    ///
     /// # Panics
-    /// Grad buffer size doesn't match dimensions
+    /// If `grad` and `b` differ in dtype, `spec` is batched, `grad.len()` is not `m * n`, or
+    /// `b.len()` is not `k * n`.
     #[must_use]
-    pub fn matmul_backward_a(
+    pub(crate) fn matmul_backward_a(
         grad: &GpuBuffer,
         b: &GpuBuffer,
-        m: usize,
-        k: usize,
-        n: usize,
+        spec: &crate::spec::MatmulSpec,
     ) -> Option<GpuBuffer> {
+        assert_same_dtype("matmul_backward_a", &[grad, b]);
+        assert!(
+            !spec.is_batched(),
+            "GPU matmul kernels are 2D only; batched products run on the CPU path"
+        );
+        let (m, k, n) = (spec.m, spec.k, spec.n);
         assert_eq!(
             grad.len(),
             m * n,
@@ -1230,74 +1187,16 @@ impl GpuKernels {
         assert_eq!(b.len(), k * n, "B buffer size doesn't match dimensions");
 
         let ctx = get_gpu_context()?;
-        let result = GpuBuffer::zeros(m * k)?;
+        let result = GpuBuffer::zeros_of(grad.dtype(), m * k)?;
 
-        // Create uniform buffer for dimensions
-        let params = MatMulParams {
-            m: m as u32,
-            k: k as u32,
-            n: n as u32,
-            _padding: 0,
-        };
-
-        let params_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("MatMul Backward A Params"),
-                contents: bytemuck::bytes_of(&params),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-
-        let pipeline = &ctx.pipelines().matmul_backward_a;
-        let bind_group_layout = pipeline.get_bind_group_layout(0);
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("MatMul Backward A Bind Group"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: grad.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: b.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: result.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("MatMul Backward A Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("MatMul Backward A Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            // Output is (m, k), dispatch one workgroup per 16x16 tile
-            let workgroups_x = (k as u32).div_ceil(16);
-            let workgroups_y = (m as u32).div_ceil(16);
-            compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
-        }
-
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
+        run_kernel(
+            "MatMul Backward A",
+            &ctx.pipelines_for(grad.dtype()).matmul_backward_a,
+            &[grad, b, &result],
+            bytemuck::bytes_of(&MatMulParams::new(m, k, n)),
+            // One workgroup per 16x16 tile of the (m, k) output.
+            Groups::Tiles(pack_u32(k).div_ceil(16), pack_u32(m).div_ceil(16)),
+        )?;
         Some(result)
     }
 
@@ -1309,19 +1208,23 @@ impl GpuKernels {
     /// # Arguments
     /// * `a` - Matrix A from forward pass with shape (m, k)
     /// * `grad` - Output gradient with shape (m, n)
-    /// * `m` - Number of rows in A / rows in grad
-    /// * `k` - Number of columns in A / rows in dB
-    /// * `n` - Number of columns in grad / columns in B
+    /// * `spec` - Validated `m x k @ k x n` geometry; must not be batched
+    ///
     /// # Panics
-    /// `A` buffer size doesn't match dimensions
+    /// If `a` and `grad` differ in dtype, `spec` is batched, `a.len()` is not `m * k`, or
+    /// `grad.len()` is not `m * n`.
     #[must_use]
-    pub fn matmul_backward_b(
+    pub(crate) fn matmul_backward_b(
         a: &GpuBuffer,
         grad: &GpuBuffer,
-        m: usize,
-        k: usize,
-        n: usize,
+        spec: &crate::spec::MatmulSpec,
     ) -> Option<GpuBuffer> {
+        assert_same_dtype("matmul_backward_b", &[a, grad]);
+        assert!(
+            !spec.is_batched(),
+            "GPU matmul kernels are 2D only; batched products run on the CPU path"
+        );
+        let (m, k, n) = (spec.m, spec.k, spec.n);
         assert_eq!(a.len(), m * k, "A buffer size doesn't match dimensions");
         assert_eq!(
             grad.len(),
@@ -1330,362 +1233,105 @@ impl GpuKernels {
         );
 
         let ctx = get_gpu_context()?;
-        let result = GpuBuffer::zeros(k * n)?;
+        let result = GpuBuffer::zeros_of(a.dtype(), k * n)?;
 
-        // Create uniform buffer for dimensions
-        let params = MatMulParams {
-            m: m as u32,
-            k: k as u32,
-            n: n as u32,
-            _padding: 0,
-        };
-
-        let params_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("MatMul Backward B Params"),
-                contents: bytemuck::bytes_of(&params),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-
-        let pipeline = &ctx.pipelines().matmul_backward_b;
-        let bind_group_layout = pipeline.get_bind_group_layout(0);
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("MatMul Backward B Bind Group"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: a.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: grad.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: result.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("MatMul Backward B Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("MatMul Backward B Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            // Output is (k, n), dispatch one workgroup per 16x16 tile
-            let workgroups_x = (n as u32).div_ceil(16);
-            let workgroups_y = (k as u32).div_ceil(16);
-            compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
-        }
-
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
+        run_kernel(
+            "MatMul Backward B",
+            &ctx.pipelines_for(a.dtype()).matmul_backward_b,
+            &[a, grad, &result],
+            bytemuck::bytes_of(&MatMulParams::new(m, k, n)),
+            // One workgroup per 16x16 tile of the (k, n) output.
+            Groups::Tiles(pack_u32(n).div_ceil(16), pack_u32(k).div_ceil(16)),
+        )?;
         Some(result)
     }
 
-    /// Sum all elements in a buffer
+    /// Sum all elements of a buffer, as a one-element buffer of the input's dtype. The
+    /// sum is never read back: a gradient that flows from it stays on the device.
     #[must_use]
-    pub fn sum(input: &GpuBuffer) -> Option<f32> {
-        let ctx = get_gpu_context()?;
-        reduce_scalar(input, &ctx.pipelines().sum_reduce)
+    pub fn sum(input: &GpuBuffer) -> Option<GpuBuffer> {
+        let (value, _) = reduce_to_scalar(input, Reduction::Sum)?;
+        Self::round_to(value, input.dtype())
     }
 
-    /// Find the maximum value in a buffer
+    /// The maximum of a buffer, as `torch.max()` (NaN if any element is NaN), with what
+    /// backward needs: a one-element buffer of the input's dtype, a copy of the maximum in
+    /// f32, and the number of elements equal to it (every NaN, for a NaN maximum) as a
+    /// one-element `u32` buffer. The last two are not tensors; they are only ever bound to
+    /// `max_backward`. The rule is the single `combine` function in `reduce.wgsl`.
     #[must_use]
-    pub fn max(input: &GpuBuffer) -> Option<f32> {
-        let ctx = get_gpu_context()?;
-        reduce_scalar(input, &ctx.pipelines().max_reduce)
+    pub fn max(input: &GpuBuffer) -> Option<MaxResult> {
+        let (value, count) = reduce_to_scalar(input, Reduction::Max)?;
+        // `round_to` hands an f32 result on as it is, so backward keeps its own copy.
+        let kept = value.copy_region(0, 1)?;
+        Some(MaxResult {
+            max: Self::round_to(value, input.dtype())?,
+            value: kept,
+            count: count?,
+        })
     }
 
-    /// Compute the mean of all elements in a buffer
+    /// The mean of all elements of a buffer, as a one-element buffer of the input's dtype.
     #[must_use]
-    pub fn mean(input: &GpuBuffer) -> Option<f32> {
-        let ctx = get_gpu_context()?;
-        reduce_scalar(input, &ctx.pipelines().mean_reduce)
+    pub fn mean(input: &GpuBuffer) -> Option<GpuBuffer> {
+        let (value, _) = reduce_to_scalar(input, Reduction::Mean)?;
+        Self::round_to(value, input.dtype())
     }
 
-    /// Sum backward: broadcast scalar gradient to all elements
+    /// The sum of squares of an f32 buffer, as a one-element f32 buffer (the Muon
+    /// Frobenius norm).
+    ///
+    /// # Panics
+    /// If `input` is not f32.
     #[must_use]
-    pub fn sum_backward(grad: f32, input_size: usize) -> Option<GpuBuffer> {
-        let ctx = get_gpu_context()?;
-        let result = GpuBuffer::zeros(input_size)?;
+    pub(crate) fn sum_squares(input: &GpuBuffer) -> Option<GpuBuffer> {
+        assert_eq!(input.dtype(), DType::F32, "sum_squares: an f32 buffer");
+        Some(reduce_to_scalar(input, Reduction::SumSquares)?.0)
+    }
 
-        let params = ReduceBackwardParams {
-            input_size: input_size as u32,
-            op: 0, // sum
-            grad_value: grad,
-            _padding: 0,
-        };
-
-        let grad_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Grad Buffer"),
-                contents: bytemuck::bytes_of(&grad),
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            });
-
-        let max_indices_buffer =
-            ctx.device()
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Max Indices Buffer"),
-                    contents: bytemuck::cast_slice(&[0u32; 1]),
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                });
-
-        let params_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Reduce Backward Params"),
-                contents: bytemuck::bytes_of(&params),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-
-        let pipeline = &ctx.pipelines().sum_backward;
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Sum Backward Bind Group"),
-            layout: &pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: grad_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: max_indices_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: result.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Sum Backward Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Sum Backward Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            let workgroup_count = (input_size as u32).div_ceil(256);
-            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
+    /// An f32 reduction result rounded once to `dtype`, as the CPU rounds a half
+    /// reduction.
+    fn round_to(value: GpuBuffer, dtype: DType) -> Option<GpuBuffer> {
+        if dtype == DType::F32 {
+            Some(value)
+        } else {
+            Self::cast(&value, dtype)
         }
-
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
-        Some(result)
     }
 
-    /// Mean backward: broadcast scalar gradient / count to all elements
+    /// Sum backward: broadcast the scalar gradient `out_grad` to `input_size` elements.
     #[must_use]
-    pub fn mean_backward(grad: f32, input_size: usize) -> Option<GpuBuffer> {
-        let ctx = get_gpu_context()?;
-        let result = GpuBuffer::zeros(input_size)?;
-
-        let params = ReduceBackwardParams {
-            input_size: input_size as u32,
-            op: 1, // mean
-            grad_value: grad,
-            _padding: 0,
-        };
-
-        let grad_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Grad Buffer"),
-                contents: bytemuck::bytes_of(&grad),
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            });
-
-        let max_indices_buffer =
-            ctx.device()
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Max Indices Buffer"),
-                    contents: bytemuck::cast_slice(&[0u32; 1]),
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                });
-
-        let params_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Reduce Backward Params"),
-                contents: bytemuck::bytes_of(&params),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-
-        let pipeline = &ctx.pipelines().mean_backward;
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Mean Backward Bind Group"),
-            layout: &pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: grad_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: max_indices_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: result.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Mean Backward Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Mean Backward Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            let workgroup_count = (input_size as u32).div_ceil(256);
-            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
-        }
-
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
-        Some(result)
+    pub fn sum_backward(out_grad: &GpuBuffer, input_size: usize) -> Option<GpuBuffer> {
+        reduce_backward(0, out_grad, input_size, None)
     }
 
-    /// Max backward: sparse gradient - only max element receives gradient
+    /// Mean backward: broadcast the scalar gradient / count to all elements.
     #[must_use]
-    pub fn max_backward(grad: f32, input_size: usize, max_index: usize) -> Option<GpuBuffer> {
-        let ctx = get_gpu_context()?;
-        let result = GpuBuffer::zeros(input_size)?;
+    pub fn mean_backward(out_grad: &GpuBuffer, input_size: usize) -> Option<GpuBuffer> {
+        reduce_backward(1, out_grad, input_size, None)
+    }
 
-        let params = ReduceBackwardParams {
-            input_size: input_size as u32,
-            op: 2, // max
-            grad_value: grad,
-            _padding: 0,
-        };
-
-        let grad_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Grad Buffer"),
-                contents: bytemuck::bytes_of(&grad),
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            });
-
-        // Create max indices buffer
-        let mut indices = vec![0u32; input_size.div_ceil(256)];
-        if let Some(slot) = indices.get_mut(0) {
-            *slot = max_index as u32;
-        }
-        let max_indices_buffer =
-            ctx.device()
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Max Indices Buffer"),
-                    contents: bytemuck::cast_slice(&indices),
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                });
-
-        let params_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Reduce Backward Params"),
-                contents: bytemuck::bytes_of(&params),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-
-        let pipeline = &ctx.pipelines().max_backward;
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Max Backward Bind Group"),
-            layout: &pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: grad_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: max_indices_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: result.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Max Backward Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Max Backward Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            let workgroup_count = (input_size as u32).div_ceil(256);
-            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
-        }
-
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
-        Some(result)
+    /// Max backward: the scalar gradient `out_grad`, split evenly over the elements of
+    /// `input` equal to the maximum (`value` and `count` from [`Self::max`]); the rest get
+    /// zero.
+    #[must_use]
+    pub fn max_backward(
+        out_grad: &GpuBuffer,
+        input_size: usize,
+        input: &GpuBuffer,
+        value: &GpuBuffer,
+        count: &GpuBuffer,
+    ) -> Option<GpuBuffer> {
+        reduce_backward(
+            2,
+            out_grad,
+            input_size,
+            Some(&MaxSaved {
+                input,
+                value,
+                count,
+            }),
+        )
     }
 
     /// Permute tensor axes
@@ -1698,18 +1344,23 @@ impl GpuKernels {
     ) -> Option<GpuBuffer> {
         let ctx = get_gpu_context()?;
         let output_size = new_shape.iter().product::<usize>();
-        let result = GpuBuffer::zeros(output_size)?;
+        let result = GpuBuffer::zeros_of(input.dtype(), output_size)?;
 
         let params = MovementParams {
             old_shape: pad_to_u32_4(old_shape),
             new_shape: pad_to_u32_4(new_shape),
             op_params: pad_to_u32_4(axes),
-            rank: old_shape.len() as u32,
+            rank: pack_u32(old_shape.len()),
             padding2: 0,
             padding: [0, 0],
         };
 
-        movement_op(input, result, &params, &ctx.pipelines().permute)
+        movement_op(
+            input,
+            result,
+            &params,
+            &ctx.pipelines_for(input.dtype()).permute,
+        )
     }
 
     /// Expand (broadcast) tensor to larger shape
@@ -1721,79 +1372,62 @@ impl GpuKernels {
     ) -> Option<GpuBuffer> {
         let ctx = get_gpu_context()?;
         let output_size = new_shape.iter().product::<usize>();
-        let result = GpuBuffer::zeros(output_size)?;
+        let result = GpuBuffer::zeros_of(input.dtype(), output_size)?;
 
         // For expand, op_params represents which dimensions were broadcast (size 1 -> N)
         let mut broadcast_flags = [0u32; 4];
         for (i, (&old, &new)) in old_shape.iter().zip(new_shape).take(4).enumerate() {
-            if let Some(slot) = broadcast_flags.get_mut(i) {
-                *slot = u32::from(old == 1 && new > 1);
-            }
+            *slot(&mut broadcast_flags, i) = u32::from(old == 1 && new > 1);
         }
 
         let params = MovementParams {
             old_shape: pad_to_u32_4(old_shape),
             new_shape: pad_to_u32_4(new_shape),
             op_params: broadcast_flags,
-            rank: old_shape.len() as u32,
+            rank: pack_u32(old_shape.len()),
             padding2: 0,
             padding: [0, 0],
         };
 
-        movement_op(input, result, &params, &ctx.pipelines().expand)
+        movement_op(
+            input,
+            result,
+            &params,
+            &ctx.pipelines_for(input.dtype()).expand,
+        )
     }
 
-    /// Pad tensor with zeros
+    /// Pad tensor, filling the border with `value`
     #[must_use]
-    pub fn pad(
+    pub(crate) fn pad(
         input: &GpuBuffer,
         old_shape: &[usize],
         new_shape: &[usize],
         padding: &[(usize, usize)],
+        value: PadValue,
     ) -> Option<GpuBuffer> {
         let ctx = get_gpu_context()?;
         let output_size = new_shape.iter().product::<usize>();
-        let result = GpuBuffer::zeros(output_size)?;
+        let result = GpuBuffer::zeros_of(input.dtype(), output_size)?;
 
-        // Pack padding into op_params for all dimensions (up to 4)
-        // op_params: [left0, right0, left1, right1] for dims 0,1
-        // padding2: [left2 | right2] for dim 2 (16 bits each)
-        // _padding: [left3 | right3] for dim 3 (16 bits each)
-        let mut pad_params = [0u32; 4];
-        for (i, &(left, right)) in padding.iter().enumerate().take(2) {
-            let idx = i * 2;
-            if let Some(slot) = pad_params.get_mut(idx) {
-                *slot = left as u32;
-            }
-            if let Some(slot) = pad_params.get_mut(idx + 1) {
-                *slot = right as u32;
-            }
-        }
-
-        // Pack dim 2 into padding2 (left in upper 16 bits, right in lower 16 bits)
-        let padding2 = if let Some(&(left2, right2)) = padding.get(2) {
-            (left2 as u32) << 16 | (right2 as u32)
-        } else {
-            0
-        };
-
-        // Pack dim 3 into _padding[0] (left in upper 16 bits, right in lower 16 bits)
-        let padding3 = if let Some(&(left3, right3)) = padding.get(3) {
-            (left3 as u32) << 16 | (right3 as u32)
-        } else {
-            0
-        };
+        let (pad_params, padding2, padding3) = pack_pad_widths(padding);
 
         let params = MovementParams {
             old_shape: pad_to_u32_4(old_shape),
             new_shape: pad_to_u32_4(new_shape),
             op_params: pad_params,
-            rank: old_shape.len() as u32,
+            rank: pack_u32(old_shape.len()),
             padding2,
-            padding: [padding3, 0],
+            // padding[1] carries the fill value bits, read by `pad` in movement.wgsl
+            padding: [padding3, value.get().to_bits()],
         };
 
-        movement_op(input, result, &params, &ctx.pipelines().pad)
+        movement_op(
+            input,
+            result,
+            &params,
+            &ctx.pipelines_for(input.dtype()).pad,
+        )
     }
 
     /// Shrink tensor to subregion
@@ -1806,7 +1440,7 @@ impl GpuKernels {
     ) -> Option<GpuBuffer> {
         let ctx = get_gpu_context()?;
         let output_size = new_shape.iter().product::<usize>();
-        let result = GpuBuffer::zeros(output_size)?;
+        let result = GpuBuffer::zeros_of(input.dtype(), output_size)?;
 
         // op_params contains range starts - convert to usize first
         let starts: Vec<usize> = ranges.iter().map(|(start, _)| *start).collect();
@@ -1815,12 +1449,17 @@ impl GpuKernels {
             old_shape: pad_to_u32_4(old_shape),
             new_shape: pad_to_u32_4(new_shape),
             op_params: pad_to_u32_4(&starts),
-            rank: old_shape.len() as u32,
+            rank: pack_u32(old_shape.len()),
             padding2: 0,
             padding: [0, 0],
         };
 
-        movement_op(input, result, &params, &ctx.pipelines().shrink)
+        movement_op(
+            input,
+            result,
+            &params,
+            &ctx.pipelines_for(input.dtype()).shrink,
+        )
     }
 
     /// Stride (subsample) tensor
@@ -1833,18 +1472,23 @@ impl GpuKernels {
     ) -> Option<GpuBuffer> {
         let ctx = get_gpu_context()?;
         let output_size = new_shape.iter().product::<usize>();
-        let result = GpuBuffer::zeros(output_size)?;
+        let result = GpuBuffer::zeros_of(input.dtype(), output_size)?;
 
         let params = MovementParams {
             old_shape: pad_to_u32_4(old_shape),
             new_shape: pad_to_u32_4(new_shape),
             op_params: pad_to_u32_4(strides),
-            rank: old_shape.len() as u32,
+            rank: pack_u32(old_shape.len()),
             padding2: 0,
             padding: [0, 0],
         };
 
-        movement_op(input, result, &params, &ctx.pipelines().stride)
+        movement_op(
+            input,
+            result,
+            &params,
+            &ctx.pipelines_for(input.dtype()).stride,
+        )
     }
 
     // ===== MOVEMENT BACKWARD OPERATIONS =====
@@ -1859,21 +1503,30 @@ impl GpuKernels {
     ) -> Option<GpuBuffer> {
         let ctx = get_gpu_context()?;
         let output_size = old_shape.iter().product::<usize>();
-        let result = GpuBuffer::zeros(output_size)?;
+        let result = GpuBuffer::zeros_of(out_grad.dtype(), output_size)?;
 
         let params = MovementParams {
             old_shape: pad_to_u32_4(old_shape),
             new_shape: pad_to_u32_4(new_shape),
             op_params: pad_to_u32_4(axes),
-            rank: old_shape.len() as u32,
+            rank: pack_u32(old_shape.len()),
             padding2: 0,
             padding: [0, 0],
         };
 
-        movement_op(out_grad, result, &params, &ctx.pipelines().permute_backward)
+        movement_op(
+            out_grad,
+            result,
+            &params,
+            &ctx.pipelines_for(out_grad.dtype()).permute_backward,
+        )
     }
 
-    /// Expand backward: sum gradients over broadcast dimensions
+    /// Expand backward: each source element's gradient summed over the broadcast axes.
+    ///
+    /// Only the broadcast axes are visited (#308), and each source's terms are summed
+    /// pairwise (#303). Sources with at least [`EXPAND_WIDE_TERMS`] terms get a workgroup
+    /// each; fewer, a thread each.
     #[must_use]
     pub fn expand_backward(
         out_grad: &GpuBuffer,
@@ -1882,18 +1535,34 @@ impl GpuKernels {
     ) -> Option<GpuBuffer> {
         let ctx = get_gpu_context()?;
         let output_size = old_shape.iter().product::<usize>();
-        let result = GpuBuffer::zeros(output_size)?;
+        let result = GpuBuffer::zeros_of(out_grad.dtype(), output_size)?;
 
         let params = MovementParams {
             old_shape: pad_to_u32_4(old_shape),
             new_shape: pad_to_u32_4(new_shape),
             op_params: [0, 0, 0, 0],
-            rank: old_shape.len() as u32,
+            rank: pack_u32(old_shape.len()),
             padding2: 0,
             padding: [0, 0],
         };
 
-        movement_op(out_grad, result, &params, &ctx.pipelines().expand_backward)
+        let terms: usize = old_shape
+            .iter()
+            .zip(new_shape)
+            .map(|(&old, &new)| if old == 1 { new } else { 1 })
+            .product();
+        let pipelines = ctx.pipelines_for(out_grad.dtype());
+        if terms < EXPAND_WIDE_TERMS {
+            return movement_op(out_grad, result, &params, &pipelines.expand_backward);
+        }
+        run_kernel(
+            "Movement",
+            &pipelines.expand_backward_wide,
+            &[out_grad, &result],
+            bytemuck::bytes_of(&params),
+            Groups::Flat(pack_u32(output_size)),
+        )?;
+        Some(result)
     }
 
     /// Pad backward: extract center region from gradient (remove padding)
@@ -1906,44 +1575,25 @@ impl GpuKernels {
     ) -> Option<GpuBuffer> {
         let ctx = get_gpu_context()?;
         let output_size = old_shape.iter().product::<usize>();
-        let result = GpuBuffer::zeros(output_size)?;
+        let result = GpuBuffer::zeros_of(out_grad.dtype(), output_size)?;
 
-        // Pack padding into params (same as forward pad operation)
-        let mut op_params = [0u32; 4];
-        let mut padding2 = 0u32;
-        #[allow(clippy::used_underscore_binding)] //TEMP!!!
-        let mut _padding = [0u32; 2];
-
-        for (i, &(left, right)) in padding.iter().enumerate().take(4) {
-            match i {
-                0 => {
-                    op_params[0] = left as u32;
-                    op_params[1] = right as u32;
-                }
-                1 => {
-                    op_params[2] = left as u32;
-                    op_params[3] = right as u32;
-                }
-                2 => {
-                    padding2 = ((left as u32) << 16) | (right as u32);
-                }
-                3 => {
-                    _padding[0] = ((left as u32) << 16) | (right as u32);
-                }
-                _ => {}
-            }
-        }
+        let (op_params, padding2, padding3) = pack_pad_widths(padding);
 
         let params = MovementParams {
             old_shape: pad_to_u32_4(old_shape),
             new_shape: pad_to_u32_4(new_shape),
             op_params,
-            rank: old_shape.len() as u32,
+            rank: pack_u32(old_shape.len()),
             padding2,
-            padding: _padding,
+            padding: [padding3, 0],
         };
 
-        movement_op(out_grad, result, &params, &ctx.pipelines().pad_backward)
+        movement_op(
+            out_grad,
+            result,
+            &params,
+            &ctx.pipelines_for(out_grad.dtype()).pad_backward,
+        )
     }
 
     /// Shrink backward: pad gradient back to original size
@@ -1956,26 +1606,29 @@ impl GpuKernels {
     ) -> Option<GpuBuffer> {
         let ctx = get_gpu_context()?;
         let output_size = old_shape.iter().product::<usize>();
-        let result = GpuBuffer::zeros(output_size)?;
+        let result = GpuBuffer::zeros_of(out_grad.dtype(), output_size)?;
 
         // Pack range starts into op_params
         let mut range_starts = [0usize; 4];
         for (i, &(start, _)) in ranges.iter().enumerate().take(4) {
-            if let Some(slot) = range_starts.get_mut(i) {
-                *slot = start;
-            }
+            *slot(&mut range_starts, i) = start;
         }
 
         let params = MovementParams {
             old_shape: pad_to_u32_4(old_shape),
             new_shape: pad_to_u32_4(new_shape),
             op_params: pad_to_u32_4(&range_starts),
-            rank: old_shape.len() as u32,
+            rank: pack_u32(old_shape.len()),
             padding2: 0,
             padding: [0, 0],
         };
 
-        movement_op(out_grad, result, &params, &ctx.pipelines().shrink_backward)
+        movement_op(
+            out_grad,
+            result,
+            &params,
+            &ctx.pipelines_for(out_grad.dtype()).shrink_backward,
+        )
     }
 
     /// Stride backward: upsample gradient (inverse of striding/downsampling)
@@ -1988,18 +1641,23 @@ impl GpuKernels {
     ) -> Option<GpuBuffer> {
         let ctx = get_gpu_context()?;
         let output_size = old_shape.iter().product::<usize>();
-        let result = GpuBuffer::zeros(output_size)?;
+        let result = GpuBuffer::zeros_of(out_grad.dtype(), output_size)?;
 
         let params = MovementParams {
             old_shape: pad_to_u32_4(old_shape),
             new_shape: pad_to_u32_4(new_shape),
             op_params: pad_to_u32_4(strides),
-            rank: old_shape.len() as u32,
+            rank: pack_u32(old_shape.len()),
             padding2: 0,
             padding: [0, 0],
         };
 
-        movement_op(out_grad, result, &params, &ctx.pipelines().stride_backward)
+        movement_op(
+            out_grad,
+            result,
+            &params,
+            &ctx.pipelines_for(out_grad.dtype()).stride_backward,
+        )
     }
 
     /// Optimizer step: update parameters using gradients and optimizer state
@@ -2009,80 +1667,203 @@ impl GpuKernels {
     /// # Arguments
     /// * `params` - Parameters to update (read/write)
     /// * `grads` - Gradients for each parameter (read)
-    /// * `state1` - First state buffer: velocity (SGD) or m (Adam) (read/write)
-    /// * `state2` - Second state buffer: v (Adam only), unused for SGD (read/write)
+    /// * `state1` - First state buffer: velocity (SGD with momentum) or m (Adam)
+    ///   (read/write); `None` for plain SGD
+    /// * `state2` - Second state buffer: v (Adam only, read/write); `None` for SGD
     /// * `opt_params` - Optimizer hyperparameters
+    ///
+    /// A state the op keeps no state in (`None`) is bound to a one-element placeholder the
+    /// shader never reads or writes, cached per element type, so a stateless step
+    /// allocates nothing (#207).
+    ///
+    /// # Panics
+    /// If the op needs a state that is `None` (op 1 needs `state1`, op 2 both), or the
+    /// buffers that are bound for real differ in length or dtype.
     #[must_use]
     pub fn optimizer_step(
         params: &GpuBuffer,
         grads: &GpuBuffer,
-        state1: &GpuBuffer,
-        state2: &GpuBuffer,
+        state1: Option<&GpuBuffer>,
+        state2: Option<&GpuBuffer>,
         opt_params: &OptimizerStepParams,
     ) -> Option<()> {
+        let (needs1, needs2) = match opt_params.op {
+            0 => (false, false),
+            1 => (true, false),
+            _ => (true, true),
+        };
+        assert!(
+            (!needs1 || state1.is_some()) && (!needs2 || state2.is_some()),
+            "GPU optimizer_step: op {} needs {} state buffer(s)",
+            opt_params.op,
+            u8::from(needs1) + u8::from(needs2)
+        );
+        let mut used = vec![params, grads];
+        used.extend(state1);
+        used.extend(state2);
+        assert_same_dtype("optimizer_step", &used);
+        assert_same_len("optimizer_step", &used);
         let ctx = get_gpu_context()?;
+        with_unused_state(params.dtype(), |unused1, unused2| {
+            run_kernel(
+                "Optimizer Step",
+                &ctx.pipelines_for(params.dtype()).optimizer_step,
+                &[
+                    params,
+                    grads,
+                    state1.unwrap_or(unused1),
+                    state2.unwrap_or(unused2),
+                ],
+                bytemuck::bytes_of(opt_params),
+                Groups::cover(params.len()),
+            )
+        })?
+    }
 
-        // Create uniform buffer with optimizer parameters
-        let params_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Optimizer Params"),
-                contents: bytemuck::bytes_of(opt_params),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
+    /// Muon momentum: `v ← μ·v + g`, returning `update = μ·v + g` (Nesterov) or `v`.
+    ///
+    /// `velocity` is updated in place, like the parameter in [`Self::optimizer_step`], so
+    /// the caller must have got it through the unsharing write path.
+    ///
+    /// # Panics
+    /// If `velocity` and `grad` differ in length.
+    #[must_use]
+    pub(crate) fn muon_momentum(
+        velocity: &GpuBuffer,
+        grad: &GpuBuffer,
+        momentum: f32,
+        nesterov: bool,
+    ) -> Option<GpuBuffer> {
+        assert_eq!(velocity.len(), grad.len(), "Muon velocity/grad length");
+        let ctx = get_gpu_context()?;
+        let update = GpuBuffer::zeros(grad.len())?;
+        let params = MuonParams {
+            n: pack_u32(grad.len()),
+            flag: u32::from(nesterov),
+            alpha: momentum,
+            beta: 0.0,
+        };
+        muon_dispatch(
+            &ctx.pipelines().muon_momentum,
+            &[(0, velocity), (1, grad), (2, &update)],
+            &params,
+            workgroups_for(grad.len()),
+        )?;
+        Some(update)
+    }
 
-        let pipeline = &ctx.pipelines().optimizer_step;
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Optimizer Step Bind Group"),
-            layout: &pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: params.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: grads.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: state1.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: state2.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
+    /// Approximately orthogonalize the `rows × cols` row-major matrix `g` with `steps`
+    /// quintic Newton-Schulz iterations, on the device. `g` is not modified.
+    ///
+    /// The same computation as the CPU `Muon::newton_schulz`: Frobenius normalization, a
+    /// tall matrix transposed so the Gram matrix is on the smaller side, then
+    /// `X ← a·X + (b·A + c·A²)·X` with `A = X Xᵀ`, then the transpose back. `coeffs` is
+    /// `[a, b, c]` and `eps` the normalization epsilon; the optimizer owns both, so the
+    /// kernel and the CPU path cannot drift apart.
+    ///
+    /// # Panics
+    /// If `g.len() != rows * cols`, or either dimension is 0.
+    #[must_use]
+    pub(crate) fn muon_newton_schulz(
+        g: &GpuBuffer,
+        rows: usize,
+        cols: usize,
+        steps: usize,
+        coeffs: [f32; 3],
+        eps: f32,
+    ) -> Option<GpuBuffer> {
+        assert!(
+            rows > 0 && cols > 0,
+            "Newton-Schulz needs a non-empty matrix"
+        );
+        assert_eq!(g.len(), rows * cols, "Newton-Schulz buffer vs dimensions");
+        let [a, b, c] = coeffs;
+        let transposed = rows > cols;
+        let (m, n) = if transposed {
+            (cols, rows)
+        } else {
+            (rows, cols)
+        };
 
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Optimizer Step Encoder"),
-            });
+        let x0 = if transposed {
+            Self::permute(g, &[rows, cols], &[cols, rows], &[1, 0])?
+        } else {
+            g.copy_region(0, g.len())?
+        };
 
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Optimizer Step Pass"),
-                timestamp_writes: None,
-            });
+        // Frobenius normalization, all on the device, as the CPU's `frobenius_norm`
+        // (#373): divide by the largest magnitude `m` before squaring, so an entry past
+        // about 1.8e19 does not square to inf, then norm = m * sqrt(sum((x / m)^2)). An
+        // all-zero or infinite `m` takes the plain sum; NaN propagates.
+        let ctx = get_gpu_context()?;
+        let len = pack_u32(x0.len());
+        let (abs_max, _) = reduce_to_scalar(&x0, Reduction::AbsMax)?;
+        let scaled = GpuBuffer::zeros(x0.len())?;
+        muon_dispatch(
+            &ctx.pipelines().muon_scale,
+            &[(0, &x0), (1, &abs_max), (2, &scaled)],
+            &MuonParams {
+                n: len,
+                flag: 0,
+                alpha: 0.0,
+                beta: 0.0,
+            },
+            workgroups_for(x0.len()),
+        )?;
+        let scaled_sq = Self::sum_squares(&scaled)?;
+        drop(scaled);
+        let norm = GpuBuffer::zeros(1)?;
+        muon_dispatch(
+            &ctx.pipelines().muon_norm,
+            &[(0, &abs_max), (1, &scaled_sq), (2, &norm)],
+            &MuonParams {
+                n: 1,
+                flag: 0,
+                alpha: 0.0,
+                beta: 0.0,
+            },
+            1,
+        )?;
+        let mut x = GpuBuffer::zeros(x0.len())?;
+        muon_dispatch(
+            &ctx.pipelines().muon_normalize,
+            &[(0, &x0), (1, &norm), (2, &x)],
+            &MuonParams {
+                n: len,
+                flag: 0,
+                alpha: eps,
+                beta: 0.0,
+            },
+            workgroups_for(x0.len()),
+        )?;
 
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
+        let spec = |lhs: &[usize], rhs: &[usize]| {
+            use crate::shape::Shape;
+            crate::spec::MatmulSpec::new(
+                &Shape::from_dims(lhs).expect("valid Newton-Schulz dims"),
+                &Shape::from_dims(rhs).expect("valid Newton-Schulz dims"),
+            )
+            .expect("valid Newton-Schulz matmul")
+        };
+        let gram_spec = spec(&[m, n], &[n, m]);
+        let square_spec = spec(&[m, m], &[m, m]);
+        let apply_spec = spec(&[m, m], &[m, n]);
 
-            let workgroup_count = (params.len() as u32).div_ceil(256);
-            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
+        for _ in 0..steps {
+            // A = X Xᵀ (m×m), B = b·A + c·A², X ← a·X + B·X
+            let xt = Self::permute(&x, &[m, n], &[n, m], &[1, 0])?;
+            let gram = Self::matmul(&x, &xt, &gram_spec)?;
+            let gram_sq = Self::matmul(&gram, &gram, &square_spec)?;
+            let poly = muon_axpby(&gram, b, &gram_sq, c)?;
+            let poly_x = Self::matmul(&poly, &x, &apply_spec)?;
+            x = muon_axpby(&x, a, &poly_x, 1.0)?;
         }
 
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
-        Some(())
+        if transposed {
+            Self::permute(&x, &[m, n], &[n, m], &[1, 0])
+        } else {
+            Some(x)
+        }
     }
 
     /// Image-to-column transformation for GPU convolution
@@ -2091,110 +1872,33 @@ impl GpuKernels {
     /// where each row represents a flattened receptive field for one output position.
     ///
     /// # Arguments
-    /// * `input` - 4D input tensor (batch, channels, height, width)
-    /// * `batch_size` - Batch size (B)
-    /// * `channels` - Number of input channels (C)
-    /// * `height` - Input height (H)
-    /// * `width` - Input width (W)
-    /// * `kernel_h` - Kernel height
-    /// * `kernel_w` - Kernel width
-    /// * `stride_h` - Vertical stride
-    /// * `stride_w` - Horizontal stride
-    /// * `h_out` - Output height
-    /// * `w_out` - Output width
+    /// * `input` - 4D input tensor `(B, C, H, W)`, contiguous
+    /// * `spec` - The window geometry: batch, channels, input and output height and width,
+    ///   kernel size and stride (no padding; the caller pads first)
     ///
     /// # Returns
     /// A 2D matrix of shape (B*`H_out`*`W_out`, C*`K_h`*`K_w`)
-    #[allow(clippy::too_many_arguments)]
     #[must_use]
-    pub fn im2col(
-        input: &GpuBuffer,
-        batch_size: usize,
-        channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        h_out: usize,
-        w_out: usize,
-    ) -> Option<GpuBuffer> {
+    pub(crate) fn im2col(input: &GpuBuffer, spec: &crate::spec::Window2dSpec) -> Option<GpuBuffer> {
+        let rows = spec.batch * spec.out_h * spec.out_w;
+        let cols = spec.channels * spec.kernel_h * spec.kernel_w;
+        assert_len(
+            "im2col",
+            "input",
+            input,
+            spec.batch * spec.channels * spec.in_h * spec.in_w,
+        );
         let ctx = get_gpu_context()?;
-
-        // Output matrix size: (B*H_out*W_out, C*K_h*K_w)
-        let rows = batch_size * h_out * w_out;
-        let cols = channels * kernel_h * kernel_w;
-        let output_size = rows * cols;
-        let result = GpuBuffer::zeros(output_size)?;
-
-        // Create uniform buffer with im2col parameters
-        let params = Im2colParams {
-            batch_size: batch_size as u32,
-            channels: channels as u32,
-            height: height as u32,
-            width: width as u32,
-            kernel_h: kernel_h as u32,
-            kernel_w: kernel_w as u32,
-            stride_h: stride_h as u32,
-            stride_w: stride_w as u32,
-            h_out: h_out as u32,
-            w_out: w_out as u32,
-            _padding: [0, 0],
-        };
-
-        let params_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Im2col Params"),
-                contents: bytemuck::bytes_of(&params),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-
-        let pipeline = &ctx.pipelines().im2col;
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Im2col Bind Group"),
-            layout: &pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: input.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: result.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Im2col Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Im2col Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            // Each workgroup handles one output row (one output position)
-            let workgroup_count = (rows as u32).div_ceil(256);
-            compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
-        }
-
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
+        // Output matrix: (B*H_out*W_out, C*K_h*K_w)
+        let result = GpuBuffer::zeros_of(input.dtype(), rows * cols)?;
+        run_kernel(
+            "Im2col",
+            &ctx.pipelines_for(input.dtype()).im2col,
+            &[input, &result],
+            bytemuck::bytes_of(&WindowParams::new(spec)),
+            // One thread per output row (one output position).
+            Groups::cover(rows),
+        )?;
         Some(result)
     }
 
@@ -2205,215 +1909,71 @@ impl GpuKernels {
     ///
     /// # Arguments
     /// * `col` - 2D col matrix of shape `(B*H_out*W_out, C*K_h*K_w)`
-    /// * `batch_size` - Batch size (B)
-    /// * `channels` - Number of input channels (C)
-    /// * `height` - Input height (H)
-    /// * `width` - Input width (W)
-    /// * `kernel_h` - Kernel height
-    /// * `kernel_w` - Kernel width
-    /// * `stride_h` - Vertical stride
-    /// * `stride_w` - Horizontal stride
-    /// * `h_out` - Output height
-    /// * `w_out` - Output width
+    /// * `spec` - The same window geometry `im2col` took
     ///
     /// # Returns
     /// A 4D tensor of shape (B, C, H, W)
-    #[allow(clippy::too_many_arguments)]
     #[must_use]
-    pub fn col2im(
-        col: &GpuBuffer,
-        batch_size: usize,
-        channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        h_out: usize,
-        w_out: usize,
-    ) -> Option<GpuBuffer> {
+    pub(crate) fn col2im(col: &GpuBuffer, spec: &crate::spec::Window2dSpec) -> Option<GpuBuffer> {
+        let image = spec.batch * spec.in_h * spec.in_w;
+        assert_len(
+            "col2im",
+            "col",
+            col,
+            spec.batch * spec.out_h * spec.out_w * spec.channels * spec.kernel_h * spec.kernel_w,
+        );
         let ctx = get_gpu_context()?;
-
-        // Output tensor size: (B, C, H, W)
-        let output_size = batch_size * channels * height * width;
-        let result = GpuBuffer::zeros(output_size)?;
-
-        // Create uniform buffer with col2im parameters
-        let params = Col2imParams {
-            batch_size: batch_size as u32,
-            channels: channels as u32,
-            height: height as u32,
-            width: width as u32,
-            kernel_h: kernel_h as u32,
-            kernel_w: kernel_w as u32,
-            stride_h: stride_h as u32,
-            stride_w: stride_w as u32,
-            h_out: h_out as u32,
-            w_out: w_out as u32,
-            _padding: [0, 0],
-        };
-
-        let params_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Col2im Params"),
-                contents: bytemuck::bytes_of(&params),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-
-        let pipeline = &ctx.pipelines().col2im;
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Col2im Bind Group"),
-            layout: &pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: col.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: result.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Col2im Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Col2im Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            // Workgroup size is (16, 16, 1)
-            // x dimension: channels, y dimension: batch * height * width
-            let workgroup_x = (channels as u32).div_ceil(16);
-            let workgroup_y = ((batch_size * height * width) as u32).div_ceil(16);
-            compute_pass.dispatch_workgroups(workgroup_x, workgroup_y, 1);
-        }
-
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
+        // Output tensor: (B, C, H, W)
+        let result = GpuBuffer::zeros_of(col.dtype(), image * spec.channels)?;
+        run_kernel(
+            "Col2im",
+            &ctx.pipelines_for(col.dtype()).col2im,
+            &[col, &result],
+            bytemuck::bytes_of(&WindowParams::new(spec)),
+            // 16x16 workgroups: x over channels, y over batch * height * width.
+            Groups::Tiles(
+                pack_u32(spec.channels).div_ceil(16),
+                pack_u32(image).div_ceil(16),
+            ),
+        )?;
         Some(result)
     }
 
     /// Direct convolution without im2col intermediate
     /// Each thread computes one output pixel
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
-    pub fn direct_conv(
+    pub(crate) fn direct_conv(
         input: &GpuBuffer,
         weight: &GpuBuffer,
-        batch_size: usize,
-        in_channels: usize,
-        out_channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
-        h_out: usize,
-        w_out: usize,
+        spec: &crate::spec::Conv2dSpec,
     ) -> Option<GpuBuffer> {
+        assert_same_dtype("direct_conv", &[input, weight]);
+        let s = spec;
+        assert_len(
+            "direct_conv",
+            "input",
+            input,
+            s.batch * s.in_ch * s.in_h * s.in_w,
+        );
+        assert_len(
+            "direct_conv",
+            "weight",
+            weight,
+            s.out_ch * s.in_ch * s.kernel_h * s.kernel_w,
+        );
         let ctx = get_gpu_context()?;
-
-        // Output size: [B, out_channels, h_out, w_out]
-        let output_size = batch_size * out_channels * h_out * w_out;
-        let result = GpuBuffer::zeros(output_size)?;
-
-        // Create uniform buffer with direct conv parameters
-        let params = DirectConvParams {
-            batch_size: batch_size as u32,
-            in_channels: in_channels as u32,
-            out_channels: out_channels as u32,
-            height: height as u32,
-            width: width as u32,
-            kernel_h: kernel_h as u32,
-            kernel_w: kernel_w as u32,
-            stride_h: stride_h as u32,
-            stride_w: stride_w as u32,
-            pad_h: pad_h as u32,
-            pad_w: pad_w as u32,
-            h_out: h_out as u32,
-            w_out: w_out as u32,
-            _padding: 0,
-        };
-
-        let params_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Direct Conv Params"),
-                contents: bytemuck::bytes_of(&params),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-
-        let pipeline = &ctx.pipelines().direct_conv;
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Direct Conv Bind Group"),
-            layout: &pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: input.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: weight.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: result.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Direct Conv Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Direct Conv Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            // Workgroup dimensions: (out_channels, batch * h_out * w_out, 1)
-            // Each thread handles one output pixel
-            let workgroups_x = (out_channels as u32).div_ceil(16);
-            let workgroups_y = ((batch_size * h_out * w_out) as u32).div_ceil(16);
-            compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
-        }
-
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
+        let result = GpuBuffer::zeros_of(input.dtype(), s.batch * s.out_ch * s.out_h * s.out_w)?;
+        run_kernel(
+            "direct_conv",
+            &ctx.pipelines_for(input.dtype()).direct_conv,
+            &[input, weight, &result],
+            bytemuck::bytes_of(&ConvParams::new(spec)),
+            // One thread per output pixel: x over output channels, y over batch * h_out * w_out.
+            Groups::Tiles(
+                pack_u32(s.out_ch).div_ceil(16),
+                pack_u32(s.batch * s.out_h * s.out_w).div_ceil(16),
+            ),
+        )?;
         Some(result)
     }
 
@@ -2421,29 +1981,40 @@ impl GpuKernels {
     /// Balances memory usage and performance by avoiding im2col materialization
     /// while using tiling for better cache efficiency
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
-    pub fn igemm(
+    pub(crate) fn igemm(
         input: &GpuBuffer,
         weight: &GpuBuffer,
-        batch_size: usize,
-        in_channels: usize,
-        out_channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
-        h_out: usize,
-        w_out: usize,
+        spec: &crate::spec::Conv2dSpec,
     ) -> Option<GpuBuffer> {
+        assert_same_dtype("igemm", &[input, weight]);
+        let s = spec;
+        assert_len("igemm", "input", input, s.batch * s.in_ch * s.in_h * s.in_w);
+        assert_len(
+            "igemm",
+            "weight",
+            weight,
+            s.out_ch * s.in_ch * s.kernel_h * s.kernel_w,
+        );
+        let crate::spec::Conv2dSpec {
+            batch: batch_size,
+            in_ch: in_channels,
+            out_ch: out_channels,
+            in_h: height,
+            in_w: width,
+            kernel_h,
+            kernel_w,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            out_h: h_out,
+            out_w: w_out,
+        } = *spec;
         let ctx = get_gpu_context()?;
 
         // Output size: [B, out_channels, h_out, w_out]
         let output_size = batch_size * out_channels * h_out * w_out;
-        let result = GpuBuffer::zeros(output_size)?;
+        let result = GpuBuffer::zeros_of(input.dtype(), output_size)?;
 
         // Tile configuration (can be tuned based on GPU architecture)
         let oc_tile: u32 = 16; // Output channels per tile
@@ -2452,515 +2023,252 @@ impl GpuKernels {
 
         // Create uniform buffer with iGEMM parameters
         let params = IGEMMParams {
-            batch_size: batch_size as u32,
-            in_channels: in_channels as u32,
-            out_channels: out_channels as u32,
-            height: height as u32,
-            width: width as u32,
-            kernel_h: kernel_h as u32,
-            kernel_w: kernel_w as u32,
-            stride_h: stride_h as u32,
-            stride_w: stride_w as u32,
-            pad_h: pad_h as u32,
-            pad_w: pad_w as u32,
-            h_out: h_out as u32,
-            w_out: w_out as u32,
+            batch_size: pack_u32(batch_size),
+            in_channels: pack_u32(in_channels),
+            out_channels: pack_u32(out_channels),
+            height: pack_u32(height),
+            width: pack_u32(width),
+            kernel_h: pack_u32(kernel_h),
+            kernel_w: pack_u32(kernel_w),
+            stride_h: pack_u32(stride_h),
+            stride_w: pack_u32(stride_w),
+            pad_h: pack_u32(pad_h),
+            pad_w: pack_u32(pad_w),
+            h_out: pack_u32(h_out),
+            w_out: pack_u32(w_out),
             oc_tile,
             ic_tile,
             s_tile,
             _padding: 0,
         };
 
-        let params_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("iGEMM Params"),
-                contents: bytemuck::bytes_of(&params),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-
-        let pipeline = &ctx.pipelines().igemm;
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("iGEMM Bind Group"),
-            layout: &pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: input.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: weight.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: result.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("iGEMM Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("iGEMM Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            // Calculate number of tiles
-            let num_oc_tiles = (out_channels as u32).div_ceil(oc_tile);
-            let total_spatial = (batch_size * h_out * w_out) as u32;
-            let num_spatial_tiles = total_spatial.div_ceil(s_tile);
-            let num_tiles = num_oc_tiles * num_spatial_tiles;
-
-            // Workgroup dimensions: (oc_tile, s_tile, num_tiles)
-            // Each workgroup processes one tile
-            compute_pass.dispatch_workgroups(oc_tile, s_tile, num_tiles);
-        }
-
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
+        // One 16x16 workgroup per (output-channel tile, spatial tile), so each output is
+        // computed once (#307: the old (16, 16, tiles) grid computed each up to 256 times).
+        let num_oc_tiles = pack_u32(out_channels).div_ceil(oc_tile);
+        let num_spatial_tiles = pack_u32(batch_size * h_out * w_out).div_ceil(s_tile);
+        run_kernel(
+            "iGEMM",
+            &ctx.pipelines_for(input.dtype()).igemm,
+            &[input, weight, &result],
+            bytemuck::bytes_of(&params),
+            Groups::Tiles(num_oc_tiles, num_spatial_tiles),
+        )?;
         Some(result)
     }
 
     /// GPU-accelerated convolution backward: gradient with respect to input
     /// Computes: ∂L/∂X\[b,ic,ih,iw\] = Σ ∂L/∂Y\[b,oc,oh,ow\] * W\[oc,ic,kh,kw\]
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
-    pub fn conv_backward_input(
+    pub(crate) fn conv_backward_input(
         out_grad: &GpuBuffer,
         weight: &GpuBuffer,
-        batch_size: usize,
-        in_channels: usize,
-        out_channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
-        h_out: usize,
-        w_out: usize,
+        spec: &crate::spec::Conv2dSpec,
     ) -> Option<GpuBuffer> {
+        assert_same_dtype("conv_backward_input", &[out_grad, weight]);
+        let s = spec;
+        assert_len(
+            "conv_backward_input",
+            "out_grad",
+            out_grad,
+            s.batch * s.out_ch * s.out_h * s.out_w,
+        );
+        assert_len(
+            "conv_backward_input",
+            "weight",
+            weight,
+            s.out_ch * s.in_ch * s.kernel_h * s.kernel_w,
+        );
         let ctx = get_gpu_context()?;
-
-        // Output size: [B, in_channels, height, width]
-        let output_size = batch_size * in_channels * height * width;
-        let result = GpuBuffer::zeros(output_size)?;
-
-        let params = ConvBackwardInputParams {
-            batch_size: batch_size as u32,
-            in_channels: in_channels as u32,
-            out_channels: out_channels as u32,
-            height: height as u32,
-            width: width as u32,
-            kernel_h: kernel_h as u32,
-            kernel_w: kernel_w as u32,
-            stride_h: stride_h as u32,
-            stride_w: stride_w as u32,
-            pad_h: pad_h as u32,
-            pad_w: pad_w as u32,
-            h_out: h_out as u32,
-            w_out: w_out as u32,
-            _padding: 0,
-        };
-
-        let params_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Conv Backward Input Params"),
-                contents: bytemuck::bytes_of(&params),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-
-        let pipeline = &ctx.pipelines().conv_backward_input;
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Conv Backward Input Bind Group"),
-            layout: &pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: out_grad.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: weight.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: result.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Conv Backward Input Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Conv Backward Input Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            // Workgroup: (in_channels, batch * height * width, 1)
-            let workgroups_x = (in_channels as u32).div_ceil(16);
-            let workgroups_y = ((batch_size * height * width) as u32).div_ceil(16);
-            compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
-        }
-
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
+        let result = GpuBuffer::zeros_of(out_grad.dtype(), s.batch * s.in_ch * s.in_h * s.in_w)?;
+        run_kernel(
+            "conv_backward_input",
+            &ctx.pipelines_for(out_grad.dtype()).conv_backward_input,
+            &[out_grad, weight, &result],
+            bytemuck::bytes_of(&ConvParams::new(spec)),
+            // One thread per input-gradient element: x over input channels, y over batch * height * width.
+            Groups::Tiles(
+                pack_u32(s.in_ch).div_ceil(16),
+                pack_u32(s.batch * s.in_h * s.in_w).div_ceil(16),
+            ),
+        )?;
         Some(result)
     }
 
     /// GPU-accelerated convolution backward: gradient with respect to weights
     /// Computes: ∂L/∂W\[oc,ic,kh,kw\] = Σ X\[b,ic,oh*sh+kh-ph,ow*sw+kw-pw\] * ∂L/∂Y\[b,oc,oh,ow\]
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
-    pub fn conv_backward_weight(
+    pub(crate) fn conv_backward_weight(
         out_grad: &GpuBuffer,
         input: &GpuBuffer,
-        batch_size: usize,
-        in_channels: usize,
-        out_channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
-        h_out: usize,
-        w_out: usize,
+        spec: &crate::spec::Conv2dSpec,
     ) -> Option<GpuBuffer> {
+        assert_same_dtype("conv_backward_weight", &[out_grad, input]);
+        let s = spec;
+        assert_len(
+            "conv_backward_weight",
+            "out_grad",
+            out_grad,
+            s.batch * s.out_ch * s.out_h * s.out_w,
+        );
+        assert_len(
+            "conv_backward_weight",
+            "input",
+            input,
+            s.batch * s.in_ch * s.in_h * s.in_w,
+        );
         let ctx = get_gpu_context()?;
-
-        // Output size: [out_channels, in_channels, kernel_h, kernel_w]
-        let output_size = out_channels * in_channels * kernel_h * kernel_w;
-        let result = GpuBuffer::zeros(output_size)?;
-
-        let params = ConvBackwardWeightParams {
-            batch_size: batch_size as u32,
-            in_channels: in_channels as u32,
-            out_channels: out_channels as u32,
-            height: height as u32,
-            width: width as u32,
-            kernel_h: kernel_h as u32,
-            kernel_w: kernel_w as u32,
-            stride_h: stride_h as u32,
-            stride_w: stride_w as u32,
-            pad_h: pad_h as u32,
-            pad_w: pad_w as u32,
-            h_out: h_out as u32,
-            w_out: w_out as u32,
-            _padding: 0,
-        };
-
-        let params_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Conv Backward Weight Params"),
-                contents: bytemuck::bytes_of(&params),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-
-        let pipeline = &ctx.pipelines().conv_backward_weight;
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Conv Backward Weight Bind Group"),
-            layout: &pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: out_grad.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: input.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: result.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Conv Backward Weight Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Conv Backward Weight Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            // Workgroup: (out_channels, in_channels * kernel_h * kernel_w, 1)
-            let workgroups_x = (out_channels as u32).div_ceil(16);
-            let workgroups_y = ((in_channels * kernel_h * kernel_w) as u32).div_ceil(16);
-            compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
-        }
-
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
+        let result = GpuBuffer::zeros_of(
+            out_grad.dtype(),
+            s.out_ch * s.in_ch * s.kernel_h * s.kernel_w,
+        )?;
+        run_kernel(
+            "conv_backward_weight",
+            &ctx.pipelines_for(out_grad.dtype()).conv_backward_weight,
+            &[out_grad, input, &result],
+            bytemuck::bytes_of(&ConvParams::new(spec)),
+            // One thread per weight-gradient element: x over output channels, y over in_ch * kernel_h * kernel_w.
+            Groups::Tiles(
+                pack_u32(s.out_ch).div_ceil(16),
+                pack_u32(s.in_ch * s.kernel_h * s.kernel_w).div_ceil(16),
+            ),
+        )?;
         Some(result)
     }
 
     /// iGEMM convolution backward: gradient with respect to input
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
-    pub fn igemm_backward_input(
+    pub(crate) fn igemm_backward_input(
         out_grad: &GpuBuffer,
         weight: &GpuBuffer,
-        batch_size: usize,
-        in_channels: usize,
-        out_channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
-        h_out: usize,
-        w_out: usize,
+        spec: &crate::spec::Conv2dSpec,
     ) -> Option<GpuBuffer> {
+        assert_same_dtype("igemm_backward_input", &[out_grad, weight]);
+        let s = spec;
+        assert_len(
+            "igemm_backward_input",
+            "out_grad",
+            out_grad,
+            s.batch * s.out_ch * s.out_h * s.out_w,
+        );
+        assert_len(
+            "igemm_backward_input",
+            "weight",
+            weight,
+            s.out_ch * s.in_ch * s.kernel_h * s.kernel_w,
+        );
         let ctx = get_gpu_context()?;
-
-        // Output size: [B, in_channels, height, width]
-        let output_size = batch_size * in_channels * height * width;
-        let result = GpuBuffer::zeros(output_size)?;
-
-        let params = IGEMMBackwardInputParams {
-            batch_size: batch_size as u32,
-            in_channels: in_channels as u32,
-            out_channels: out_channels as u32,
-            height: height as u32,
-            width: width as u32,
-            kernel_h: kernel_h as u32,
-            kernel_w: kernel_w as u32,
-            stride_h: stride_h as u32,
-            stride_w: stride_w as u32,
-            pad_h: pad_h as u32,
-            pad_w: pad_w as u32,
-            h_out: h_out as u32,
-            w_out: w_out as u32,
-            _padding: 0,
-        };
-
-        let params_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("iGEMM Backward Input Params"),
-                contents: bytemuck::bytes_of(&params),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-
-        let pipeline = &ctx.pipelines().igemm_backward_input;
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("iGEMM Backward Input Bind Group"),
-            layout: &pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: out_grad.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: weight.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: result.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("iGEMM Backward Input Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("iGEMM Backward Input Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            // Workgroup: (in_channels, batch * height * width, 1)
-            let workgroups_x = (in_channels as u32).div_ceil(16);
-            let workgroups_y = ((batch_size * height * width) as u32).div_ceil(16);
-            compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
-        }
-
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
+        let result = GpuBuffer::zeros_of(out_grad.dtype(), s.batch * s.in_ch * s.in_h * s.in_w)?;
+        run_kernel(
+            "igemm_backward_input",
+            &ctx.pipelines_for(out_grad.dtype()).igemm_backward_input,
+            &[out_grad, weight, &result],
+            bytemuck::bytes_of(&ConvParams::new(spec)),
+            // One thread per input-gradient element: x over input channels, y over batch * height * width.
+            Groups::Tiles(
+                pack_u32(s.in_ch).div_ceil(16),
+                pack_u32(s.batch * s.in_h * s.in_w).div_ceil(16),
+            ),
+        )?;
         Some(result)
     }
 
     /// iGEMM convolution backward: gradient with respect to weights
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
-    pub fn igemm_backward_weight(
+    pub(crate) fn igemm_backward_weight(
         out_grad: &GpuBuffer,
         input: &GpuBuffer,
-        batch_size: usize,
-        in_channels: usize,
-        out_channels: usize,
-        height: usize,
-        width: usize,
-        kernel_h: usize,
-        kernel_w: usize,
-        stride_h: usize,
-        stride_w: usize,
-        pad_h: usize,
-        pad_w: usize,
-        h_out: usize,
-        w_out: usize,
+        spec: &crate::spec::Conv2dSpec,
     ) -> Option<GpuBuffer> {
+        assert_same_dtype("igemm_backward_weight", &[out_grad, input]);
+        let s = spec;
+        assert_len(
+            "igemm_backward_weight",
+            "out_grad",
+            out_grad,
+            s.batch * s.out_ch * s.out_h * s.out_w,
+        );
+        assert_len(
+            "igemm_backward_weight",
+            "input",
+            input,
+            s.batch * s.in_ch * s.in_h * s.in_w,
+        );
         let ctx = get_gpu_context()?;
-
-        // Output size: [out_channels, in_channels, kernel_h, kernel_w]
-        let output_size = out_channels * in_channels * kernel_h * kernel_w;
-        let result = GpuBuffer::zeros(output_size)?;
-
-        let params = IGEMMBackwardWeightParams {
-            batch_size: batch_size as u32,
-            in_channels: in_channels as u32,
-            out_channels: out_channels as u32,
-            height: height as u32,
-            width: width as u32,
-            kernel_h: kernel_h as u32,
-            kernel_w: kernel_w as u32,
-            stride_h: stride_h as u32,
-            stride_w: stride_w as u32,
-            pad_h: pad_h as u32,
-            pad_w: pad_w as u32,
-            h_out: h_out as u32,
-            w_out: w_out as u32,
-            _padding: 0,
-        };
-
-        let params_buffer = ctx
-            .device()
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("iGEMM Backward Weight Params"),
-                contents: bytemuck::bytes_of(&params),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-
-        let pipeline = &ctx.pipelines().igemm_backward_weight;
-        let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("iGEMM Backward Weight Bind Group"),
-            layout: &pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: out_grad.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: input.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: result.buffer().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        let mut encoder = ctx
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("iGEMM Backward Weight Encoder"),
-            });
-
-        {
-            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("iGEMM Backward Weight Pass"),
-                timestamp_writes: None,
-            });
-
-            compute_pass.set_pipeline(pipeline);
-            compute_pass.set_bind_group(0, &bind_group, &[]);
-
-            // Workgroup: (out_channels, in_channels * kernel_h * kernel_w, 1)
-            let workgroups_x = (out_channels as u32).div_ceil(16);
-            let workgroups_y = ((in_channels * kernel_h * kernel_w) as u32).div_ceil(16);
-            compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
-        }
-
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
-
+        let result = GpuBuffer::zeros_of(
+            out_grad.dtype(),
+            s.out_ch * s.in_ch * s.kernel_h * s.kernel_w,
+        )?;
+        run_kernel(
+            "igemm_backward_weight",
+            &ctx.pipelines_for(out_grad.dtype()).igemm_backward_weight,
+            &[out_grad, input, &result],
+            bytemuck::bytes_of(&ConvParams::new(spec)),
+            // One thread per weight-gradient element: x over output channels, y over in_ch * kernel_h * kernel_w.
+            Groups::Tiles(
+                pack_u32(s.out_ch).div_ceil(16),
+                pack_u32(s.in_ch * s.kernel_h * s.kernel_w).div_ceil(16),
+            ),
+        )?;
         Some(result)
     }
 }
 
-/// Helper to pad a slice to exactly 4 u32 values
+/// Pack up to four movement-kernel values (dims, axes, strides, or offsets) into the
+/// `[u32; 4]` uniform slots, zero-filling the rest.
+///
+/// # Panics
+/// More than four values, or a value over `u32::MAX`. The movement ops route rank > 4 to
+/// the CPU (`gpu_movement_supported`), so either is a dispatch bug, not data to truncate.
 fn pad_to_u32_4(values: &[usize]) -> [u32; 4] {
+    assert!(
+        values.len() <= 4,
+        "GPU movement kernels take rank <= 4, got {values:?}"
+    );
     let mut result = [0u32; 4];
-    for (i, &v) in values.iter().take(4).enumerate() {
-        if let Some(slot) = result.get_mut(i) {
-            *slot = v as u32;
-        }
+    for (out, &v) in result.iter_mut().zip(values) {
+        let Ok(packed) = u32::try_from(v) else {
+            panic!("GPU movement param {v} exceeds u32")
+        };
+        *out = packed;
     }
     result
 }
+
+/// Pack `pad`'s widths as `movement.wgsl` reads them: dims 0 and 1 as
+/// `[left0, right0, left1, right1]`, and dims 2 and 3 each as `left << 16 | right` (the
+/// second and third values).
+///
+/// # Panics
+/// Rank > 4, or a dim-2 or dim-3 width over 16 bits. `gpu_pad_supported` routes both to the
+/// CPU, so either is a dispatch bug; unchecked, the shift would silently corrupt the width.
+fn pack_pad_widths(padding: &[(usize, usize)]) -> ([u32; 4], u32, u32) {
+    assert!(
+        padding.len() <= 4,
+        "GPU pad takes rank <= 4, got {} dims",
+        padding.len()
+    );
+    let half =
+        |w: usize| {
+            u32::from(u16::try_from(w).unwrap_or_else(|_| {
+                panic!("GPU pad width {w} on dim 2 or 3 does not fit in 16 bits")
+            }))
+        };
+    let packed = |dim: usize| {
+        padding
+            .get(dim)
+            .map_or(0, |&(left, right)| half(left) << 16 | half(right))
+    };
+    let mut low = [0usize; 4];
+    for (i, &(left, right)) in padding.iter().take(2).enumerate() {
+        *slot(&mut low, 2 * i) = left;
+        *slot(&mut low, 2 * i + 1) = right;
+    }
+    (pad_to_u32_4(&low), packed(2), packed(3))
+}
+
+/// Broadcast terms per source element from which [`GpuKernels::expand_backward`] gives
+/// each source a 256-thread workgroup rather than one thread.
+const EXPAND_WIDE_TERMS: usize = 256;
 
 /// Run a movement operation with parameters
 fn movement_op(
@@ -2969,66 +2277,641 @@ fn movement_op(
     params: &MovementParams,
     pipeline: &wgpu::ComputePipeline,
 ) -> Option<GpuBuffer> {
-    let ctx = get_gpu_context()?;
-
-    // Create uniform buffer with parameters
-    let params_buffer = ctx
-        .device()
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Movement Params"),
-            contents: bytemuck::bytes_of(params),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-    let bind_group_layout = pipeline.get_bind_group_layout(0);
-    let bind_group = ctx.device().create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Movement Bind Group"),
-        layout: &bind_group_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: input.buffer().as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: result.buffer().as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: params_buffer.as_entire_binding(),
-            },
-        ],
-    });
-
-    let mut encoder = ctx
-        .device()
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Movement Encoder"),
-        });
-
-    {
-        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Movement Pass"),
-            timestamp_writes: None,
-        });
-
-        compute_pass.set_pipeline(pipeline);
-        compute_pass.set_bind_group(0, &bind_group, &[]);
-
-        // Only multiply actual dimensions (based on rank), not the padded zeros
-        let output_size = (0..params.rank as usize)
-            .filter_map(|i| params.new_shape.get(i))
-            .product::<u32>();
-        let workgroup_count = output_size.div_ceil(256);
-        compute_pass.dispatch_workgroups(workgroup_count, 1, 1);
-    }
-
-    ctx.queue().submit(Some(encoder.finish()));
-    ctx.increment_pending();
-    ctx.maybe_sync();
-
-    // Return the result buffer (now filled by GPU computation)
+    // Every movement kernel, forward and backward, runs one thread per element of the
+    // buffer it writes. In a backward wrapper `new_shape` is the incoming gradient and
+    // `result` is shaped like the forward input, which `shrink` and `stride` make larger,
+    // so the launch covers `result`, not `new_shape` (#301).
+    let output_size = result.len();
+    run_kernel(
+        "Movement",
+        pipeline,
+        &[input, &result],
+        bytemuck::bytes_of(params),
+        Groups::cover(output_size),
+    )?;
     Some(result)
 }
 
+/// Converts an index, extent, or length to the `u32` a kernel parameter holds, panicking if it
+/// does not fit instead of truncating.
+///
+/// # Panics
+///
+/// If `v > u32::MAX`.
+#[track_caller]
+fn pack_u32(v: usize) -> u32 {
+    let Ok(packed) = u32::try_from(v) else {
+        panic!("kernel parameter {v} does not fit u32 (index-mapping bug)")
+    };
+    packed
+}
+
+/// Workgroups (256 threads each) that cover `len` elements; `dispatch_flat` spreads more
+/// than 65535 of them over two dimensions.
+fn workgroups_for(len: usize) -> u32 {
+    pack_u32(len).div_ceil(256)
+}
+
+/// Dispatch `groups` workgroups of a 256-wide 1-D kernel. wgpu caps each dimension at
+/// 65535 workgroups (16,776,960 invocations), so a larger launch spreads over `y`; the
+/// kernel rebuilds its flat index with `flat_global_id` (`shader_template`), and extra
+/// invocations past the end fail their bounds check like any trailing ones (audit A2).
+///
+/// # Panics
+/// If `groups` needs more than 65535 rows (over 2^32 invocations), which `pack_u32` on
+/// the element count already rules out.
+fn dispatch_flat(pass: &mut wgpu::ComputePass<'_>, groups: u32) {
+    const MAX: u32 = 65_535;
+    let (x, y) = if groups <= MAX {
+        (groups, 1)
+    } else {
+        (MAX, groups.div_ceil(MAX))
+    };
+    assert!(
+        y <= MAX,
+        "GPU dispatch of {groups} workgroups exceeds a 65535 x 65535 grid"
+    );
+    pass.dispatch_workgroups(x, y, 1);
+}
+
+/// `out = alpha·x + beta·y`, elementwise, into a new buffer.
+fn muon_axpby(x: &GpuBuffer, alpha: f32, y: &GpuBuffer, beta: f32) -> Option<GpuBuffer> {
+    assert_eq!(x.len(), y.len(), "axpby operand lengths");
+    let ctx = get_gpu_context()?;
+    let out = GpuBuffer::zeros(x.len())?;
+    let params = MuonParams {
+        n: pack_u32(x.len()),
+        flag: 0,
+        alpha,
+        beta,
+    };
+    muon_dispatch(
+        &ctx.pipelines().muon_axpby,
+        &[(0, x), (1, y), (2, &out)],
+        &params,
+        workgroups_for(x.len()),
+    )?;
+    Some(out)
+}
+
+/// Bind `buffers` (binding index, buffer) and `params` to a `muon.wgsl` pipeline and
+/// dispatch it.
+fn muon_dispatch(
+    pipeline: &wgpu::ComputePipeline,
+    buffers: &[(u32, &GpuBuffer)],
+    params: &MuonParams,
+    workgroups: u32,
+) -> Option<()> {
+    // Muon's kernels compute on f32 buffers; half parameters are cast around them
+    // (`optim::muon`), so its scratch never rounds to 16 bits.
+    for &(binding, buffer) in buffers {
+        assert_eq!(
+            buffer.dtype(),
+            DType::F32,
+            "Muon kernel: binding {binding} is a {} buffer, not f32",
+            buffer.dtype()
+        );
+    }
+    let ctx = get_gpu_context()?;
+    let params_buffer = uniform_buffer(ctx, bytemuck::bytes_of(params));
+    let mut bindings: Vec<(u32, wgpu::BindingResource<'_>)> =
+        buffers.iter().map(|&(i, b)| (i, b.binding())).collect();
+    bindings.push((3, params_buffer.as_entire_binding()));
+    run_passes(
+        ctx,
+        "Muon",
+        &[Pass {
+            pipeline,
+            bindings,
+            groups: Groups::Flat(workgroups),
+        }],
+    );
+    Some(())
+}
+
 use wgpu::util::DeviceExt;
+
+#[cfg(test)]
+mod packing_tests {
+    use super::{pack_pad_widths, pack_u32, pad_to_u32_4};
+
+    #[test]
+    fn pack_u32_converts_in_range_values_exactly() {
+        assert_eq!(pack_u32(0), 0);
+        assert_eq!(pack_u32(u32::MAX as usize), u32::MAX);
+    }
+
+    #[test]
+    #[should_panic(expected = "does not fit u32")]
+    fn pack_u32_over_u32_panics() {
+        let _ = pack_u32(u32::MAX as usize + 1);
+    }
+
+    #[test]
+    fn pad_widths_pack_as_the_shader_reads_them() {
+        let (low, dim2, dim3) = pack_pad_widths(&[(1, 2), (3, 4), (5, 6), (65535, 7)]);
+        assert_eq!(low, [1, 2, 3, 4]);
+        assert_eq!(dim2, 5 << 16 | 6);
+        assert_eq!(dim3, 65535 << 16 | 7);
+        assert_eq!(pack_pad_widths(&[(1, 2)]), ([1, 2, 0, 0], 0, 0));
+    }
+
+    #[test]
+    #[should_panic(expected = "GPU pad width 65536 on dim 2 or 3 does not fit in 16 bits")]
+    fn pad_width_over_16_bits_panics() {
+        let _ = pack_pad_widths(&[(0, 0), (0, 0), (0, 65536)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "GPU pad takes rank <= 4")]
+    fn pad_rank_5_panics() {
+        let _ = pack_pad_widths(&[(0, 0); 5]);
+    }
+
+    #[test]
+    #[should_panic(expected = "GPU movement kernels take rank <= 4")]
+    fn movement_rank_5_panics() {
+        let _ = pad_to_u32_4(&[1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    #[should_panic(expected = "exceeds u32")]
+    fn movement_param_over_u32_panics() {
+        let _ = pad_to_u32_4(&[usize::try_from(u64::from(u32::MAX) + 1).expect("64-bit usize")]);
+    }
+}
+
+#[cfg(test)]
+mod matmul_tests {
+    use super::{GpuBuffer, GpuKernels};
+    use crate::gpu;
+    use crate::shape::Shape;
+    use crate::spec::MatmulSpec;
+
+    fn spec(a: &[usize], b: &[usize]) -> MatmulSpec {
+        MatmulSpec::new(&Shape::from_dims(a).unwrap(), &Shape::from_dims(b).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn test_gpu_matmul() {
+        if !gpu::is_gpu_available() {
+            return;
+        }
+
+        // 2x2 @ 2x2
+        let a = GpuBuffer::from_slice(&[1.0, 2.0, 3.0, 4.0]).unwrap();
+        let b = GpuBuffer::from_slice(&[5.0, 6.0, 7.0, 8.0]).unwrap();
+
+        let c = GpuKernels::matmul(&a, &b, &spec(&[2, 2], &[2, 2])).unwrap();
+
+        // Expected: [[1*5+2*7, 1*6+2*8], [3*5+4*7, 3*6+4*8]]
+        //         = [[19, 22], [43, 50]]
+        assert_eq!(c.to_vec(), vec![19.0, 22.0, 43.0, 50.0]);
+    }
+
+    #[test]
+    fn test_gpu_matmul_non_square_uses_the_right_dims() {
+        if !gpu::is_gpu_available() {
+            return;
+        }
+
+        // (2x3) @ (3x4): m, k, n are all different, so a swapped pair gives wrong values.
+        let a = GpuBuffer::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+        let b =
+            GpuBuffer::from_slice(&[1.0, 0.0, 2.0, 0.0, 0.0, 1.0, 0.0, 3.0, 1.0, 1.0, 1.0, 1.0])
+                .unwrap();
+
+        let c = GpuKernels::matmul(&a, &b, &spec(&[2, 3], &[3, 4])).unwrap();
+
+        assert_eq!(c.to_vec(), vec![4.0, 5.0, 5.0, 9.0, 10.0, 11.0, 14.0, 21.0]);
+    }
+
+    #[test]
+    fn test_gpu_matmul_rejects_a_batched_spec() {
+        if !gpu::is_gpu_available() {
+            return;
+        }
+        let a = GpuBuffer::from_slice(&[0.0; 12]).unwrap();
+        let b = GpuBuffer::from_slice(&[0.0; 12]).unwrap();
+        let batched = spec(&[2, 2, 3], &[2, 3, 2]);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            GpuKernels::matmul(&a, &b, &batched)
+        }));
+        let Err(payload) = result else {
+            panic!("a batched spec must not reach the 2D kernel");
+        };
+        let msg = payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+            .expect("panic payload should be a string");
+        assert!(msg.contains("2D only"), "{msg}");
+    }
+}
+
+/// Direct `GpuKernels` checks against fixed expected values, run on `GpuBuffer`s: `Add`, `Sub`, `Mul`, and `Div` binary ops, and the `ReLU`, `Sqrt`, `Neg`, `Recip`, `Exp2`, `Log2`, `Sin`, and `Cos` unary ops. Each test skips when no GPU is available.
+#[cfg(test)]
+mod direct_kernel_tests {
+    use super::{GpuBuffer, GpuKernels};
+    use crate::gpu;
+    use crate::ops::{BinaryOp, UnaryOp};
+
+    // Helper to run comprehensive binary op tests
+    fn run_binary_op_test(op: BinaryOp, expected: &[f32]) {
+        if !gpu::is_gpu_available() {
+            println!("Skipping GPU test (no device)");
+            return;
+        }
+
+        let a = GpuBuffer::from_slice(&[10.0, 20.0, 30.0, 40.0]).unwrap();
+        let b = GpuBuffer::from_slice(&[2.0, 4.0, 5.0, 8.0]).unwrap();
+
+        let c = GpuKernels::binary_op(&a, &b, op)
+            .unwrap_or_else(|| panic!("Failed to run binary op {op:?}"));
+
+        let result = c.to_vec();
+        for (i, (r, e)) in result.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (r - e).abs() < 1e-5,
+                "Op {op:?} failed at index {i}: got {r}, expected {e}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_gpu_binary_ops_comprehensive() {
+        // Sub: 10-2, 20-4, 30-5, 40-8
+        run_binary_op_test(BinaryOp::Sub, &[8.0, 16.0, 25.0, 32.0]);
+        // Mul: 10*2, 20*4, 30*5, 40*8
+        run_binary_op_test(BinaryOp::Mul, &[20.0, 80.0, 150.0, 320.0]);
+        // Div: 10/2, 20/4, 30/5, 40/8
+        run_binary_op_test(BinaryOp::Div, &[5.0, 5.0, 6.0, 5.0]);
+    }
+
+    #[test]
+    fn test_gpu_unary_ops_comprehensive() {
+        if !gpu::is_gpu_available() {
+            return;
+        }
+
+        let input = [-1.0, 0.0, 1.0, 4.0];
+        let buf = GpuBuffer::from_slice(&input).unwrap();
+
+        // Test ReLU
+        let res = GpuKernels::unary_op(&buf, UnaryOp::ReLU).unwrap().to_vec();
+        assert_eq!(res, vec![0.0, 0.0, 1.0, 4.0]);
+
+        // Test Sqrt (using positive inputs)
+        let buf_pos = GpuBuffer::from_slice(&[4.0, 9.0, 16.0]).unwrap();
+        let res_sqrt = GpuKernels::unary_op(&buf_pos, UnaryOp::Sqrt)
+            .unwrap()
+            .to_vec();
+        assert_eq!(res_sqrt, vec![2.0, 3.0, 4.0]);
+
+        // Test Neg
+        let res_neg = GpuKernels::unary_op(&buf, UnaryOp::Neg).unwrap().to_vec();
+        assert_eq!(res_neg, vec![1.0, -0.0, -1.0, -4.0]);
+
+        // Test Recip (using positive inputs to avoid division by zero)
+        let buf_recip = GpuBuffer::from_slice(&[1.0, 2.0, 4.0, 8.0]).unwrap();
+        let res_recip = GpuKernels::unary_op(&buf_recip, UnaryOp::Recip)
+            .unwrap()
+            .to_vec();
+        let recip_inputs = [1.0, 2.0, 4.0, 8.0];
+        assert_eq!(res_recip.len(), recip_inputs.len());
+        for (i, (&val, &input)) in res_recip.iter().zip(&recip_inputs).enumerate() {
+            let expected = 1.0 / input;
+            assert!(
+                (val - expected).abs() < 1e-5,
+                "Recip failed at index {i}: got {val}, expected {expected}"
+            );
+        }
+
+        // Test Exp2
+        let res_exp2 = GpuKernels::unary_op(&buf, UnaryOp::Exp2).unwrap().to_vec();
+        let exp_vals = [-1.0, 0.0, 1.0, 4.0];
+        assert_eq!(res_exp2.len(), exp_vals.len());
+        for (i, (&val, &exponent)) in res_exp2.iter().zip(&exp_vals).enumerate() {
+            let expected = 2_f32.powf(exponent);
+            assert!(
+                (val - expected).abs() < 1e-4,
+                "Exp2 failed at index {i}: got {val}, expected {expected}"
+            );
+        }
+
+        // Test Log2 (using positive inputs)
+        let buf_log2 = GpuBuffer::from_slice(&[1.0, 2.0, 4.0, 8.0]).unwrap();
+        let res_log2 = GpuKernels::unary_op(&buf_log2, UnaryOp::Log2)
+            .unwrap()
+            .to_vec();
+        let expected_vals = [0.0, 1.0, 2.0, 3.0];
+        assert_eq!(res_log2.len(), expected_vals.len());
+        for (i, (&val, &expected)) in res_log2.iter().zip(&expected_vals).enumerate() {
+            assert!(
+                (val - expected).abs() < 1e-5,
+                "Log2 failed at index {i}: got {val}, expected {expected}"
+            );
+        }
+
+        // Test Sin
+        let res_sin = GpuKernels::unary_op(&buf, UnaryOp::Sin).unwrap().to_vec();
+        let expected_vals = [-1.0_f32.sin(), 0.0_f32.sin(), 1.0_f32.sin(), 4.0_f32.sin()];
+        assert_eq!(res_sin.len(), expected_vals.len());
+        for (i, (&val, &expected)) in res_sin.iter().zip(&expected_vals).enumerate() {
+            assert!(
+                (val - expected).abs() < 1e-5,
+                "Sin failed at index {i}: got {val}, expected {expected}"
+            );
+        }
+
+        // Test Cos
+        let res_cos = GpuKernels::unary_op(&buf, UnaryOp::Cos).unwrap().to_vec();
+        let expected_vals = [0.540_302_3, 1.0, 0.540_302_3, -0.653_643_6]; // cos([-1, 0, 1, 4])
+        assert_eq!(res_cos.len(), expected_vals.len());
+        for (i, (&val, &expected)) in res_cos.iter().zip(&expected_vals).enumerate() {
+            assert!(
+                (val - expected).abs() < 1e-5,
+                "Cos failed at index {i}: got {val}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_gpu_add() {
+        if !gpu::is_gpu_available() {
+            return;
+        }
+
+        let a = GpuBuffer::from_slice(&[1.0, 2.0, 3.0, 4.0]).unwrap();
+        let b = GpuBuffer::from_slice(&[5.0, 6.0, 7.0, 8.0]).unwrap();
+
+        let c = GpuKernels::binary_op(&a, &b, BinaryOp::Add).unwrap();
+
+        assert_eq!(c.to_vec(), vec![6.0, 8.0, 10.0, 12.0]);
+    }
+}
+
+#[cfg(test)]
+mod muon_tests {
+    use super::{GpuBuffer, GpuKernels};
+    use crate::gpu;
+    use crate::index::fetch;
+    use crate::nn::Muon;
+
+    const COEFFS: [f32; 3] = [3.4445, -4.7750, 2.0315];
+    const EPS: f32 = 1e-7;
+
+    /// A seeded random `rows × cols` matrix as a flat row-major vector.
+    fn random_matrix(rows: usize, cols: usize) -> Vec<f32> {
+        crate::tensor::randn(&[rows, cols]).borrow().data.to_vec()
+    }
+
+    /// The device Newton-Schulz of `g`, read back to the host.
+    fn on_gpu(g: &[f32], rows: usize, cols: usize, steps: usize) -> Vec<f32> {
+        let buf = GpuBuffer::from_slice(g).expect("GPU buffer");
+        GpuKernels::muon_newton_schulz(&buf, rows, cols, steps, COEFFS, EPS)
+            .expect("GPU Newton-Schulz")
+            .to_vec()
+    }
+
+    #[test]
+    fn newton_schulz_matches_the_cpu_for_wide_tall_square_and_untiled_shapes() {
+        if !gpu::is_gpu_available() {
+            return;
+        }
+        crate::tensor::manual_seed(0x6A11);
+        // Measured worst difference on an Apple M2: about 1e-6 (summation order and fused
+        // multiply-add differ), so 1e-5 leaves 10x of margin without hiding a real error.
+        // 300x2 and 2x300 have more than 256 elements in a 2-row Gram matrix, so the
+        // norm's strided loop runs more than once per thread; 20x37 and 37x20 are not
+        // multiples of the 16x16 matmul tile.
+        for (rows, cols) in [(20, 37), (37, 20), (64, 96), (16, 16), (2, 300), (300, 2)] {
+            let g = random_matrix(rows, cols);
+            let mut cpu = g.clone();
+            Muon::newton_schulz(&mut cpu, rows, cols, 5);
+            let gpu = on_gpu(&g, rows, cols, 5);
+            assert_eq!(gpu.len(), cpu.len(), "{rows}x{cols}: length");
+            let worst = cpu
+                .iter()
+                .zip(&gpu)
+                .map(|(c, g)| (c - g).abs())
+                .fold(0.0f32, f32::max);
+            assert!(
+                worst < 1e-5,
+                "{rows}x{cols}: GPU differs from CPU by {worst}"
+            );
+        }
+    }
+
+    #[test]
+    fn newton_schulz_does_not_modify_its_input() {
+        if !gpu::is_gpu_available() {
+            return;
+        }
+        crate::tensor::manual_seed(0x1D07);
+        let g = random_matrix(5, 9);
+        let buf = GpuBuffer::from_slice(&g).expect("GPU buffer");
+        let _ = GpuKernels::muon_newton_schulz(&buf, 5, 9, 5, COEFFS, EPS).expect("GPU");
+        assert_eq!(buf.to_vec(), g);
+    }
+
+    /// #373: the GPU Frobenius norm scales by the largest magnitude as the CPU's does, so
+    /// a 1e20-scaled matrix orthogonalizes like the unscaled one, and an infinite or NaN
+    /// entry gives the same NaN pattern on both backends.
+    #[test]
+    fn newton_schulz_norm_matches_the_cpu_at_extreme_scales() {
+        if !gpu::is_gpu_available() {
+            return;
+        }
+        crate::tensor::manual_seed(0x373);
+        let base = random_matrix(4, 6);
+        let scaled: Vec<f32> = base.iter().map(|v| v * 1e20).collect();
+        let mut with_inf = base.clone();
+        *crate::index::slot(&mut with_inf, 3) = f32::INFINITY;
+        let mut with_nan = base.clone();
+        *crate::index::slot(&mut with_nan, 7) = f32::NAN;
+        for (name, g) in [("1e20", &scaled), ("inf", &with_inf), ("nan", &with_nan)] {
+            let mut cpu = g.clone();
+            Muon::newton_schulz(&mut cpu, 4, 6, 5);
+            let gpu = on_gpu(g, 4, 6, 5);
+            assert_eq!(gpu.len(), cpu.len(), "{name}: length");
+            for (i, (c, d)) in cpu.iter().zip(&gpu).enumerate() {
+                assert!(
+                    (c.is_nan() && d.is_nan()) || (c - d).abs() < 1e-5,
+                    "{name}[{i}]: CPU {c}, GPU {d}"
+                );
+            }
+        }
+        // The 1e20 case is not degenerate: it moves like the unscaled matrix.
+        let unit = on_gpu(&base, 4, 6, 5);
+        let big = on_gpu(&scaled, 4, 6, 5);
+        assert!(unit.iter().any(|v| v.abs() > 0.1), "{unit:?}");
+        for (i, (u, b)) in unit.iter().zip(&big).enumerate() {
+            assert!((u - b).abs() < 1e-5, "[{i}]: unit {u}, 1e20 {b}");
+        }
+    }
+
+    #[test]
+    fn newton_schulz_leaves_a_zero_matrix_at_zero() {
+        if !gpu::is_gpu_available() {
+            return;
+        }
+        let out = on_gpu(&[0.0; 12], 3, 4, 5);
+        for i in 0..12 {
+            assert_eq!(fetch(&out, i), 0.0, "entry {i} must stay 0, with no NaN");
+        }
+    }
+
+    #[test]
+    fn momentum_updates_the_velocity_in_place_and_returns_the_update() {
+        if !gpu::is_gpu_available() {
+            return;
+        }
+        let v0 = [1.0f32, -2.0, 0.5, 4.0];
+        let g = [0.25f32, 1.0, -3.0, 0.0];
+        let mu = 0.9f32;
+        for nesterov in [false, true] {
+            let velocity = GpuBuffer::from_slice(&v0).expect("GPU buffer");
+            let grad = GpuBuffer::from_slice(&g).expect("GPU buffer");
+            let update = GpuKernels::muon_momentum(&velocity, &grad, mu, nesterov)
+                .expect("GPU momentum")
+                .to_vec();
+            let (v_out, want_v): (Vec<f32>, Vec<f32>) = (
+                velocity.to_vec(),
+                v0.iter().zip(&g).map(|(v, g)| mu * v + g).collect(),
+            );
+            let want_update: Vec<f32> = if nesterov {
+                want_v.iter().zip(&g).map(|(v, g)| mu * v + g).collect()
+            } else {
+                want_v.clone()
+            };
+            for i in 0..4 {
+                assert!(
+                    (fetch(&v_out, i) - fetch(&want_v, i)).abs() < 1e-6,
+                    "v[{i}]"
+                );
+                assert!(
+                    (fetch(&update, i) - fetch(&want_update, i)).abs() < 1e-6,
+                    "update[{i}] nesterov={nesterov}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod shared_struct_tests {
+    use super::super::shader_template::SHARED_STRUCTS;
+    use super::{ConvParams, WindowParams};
+
+    /// `(field, byte offset)` of each field of the WGSL struct `name` in [`SHARED_STRUCTS`],
+    /// and the struct's size (rounded up to its alignment). Only `u32` and `vec2<u32>`
+    /// fields occur.
+    fn wgsl_layout(name: &str) -> (Vec<(String, usize)>, usize) {
+        let body = SHARED_STRUCTS
+            .split(&format!("struct {name} {{"))
+            .nth(1)
+            .unwrap_or_else(|| panic!("no WGSL struct {name}"))
+            .split('}')
+            .next()
+            .expect("a struct body");
+        let (mut offset, mut max_align) = (0_usize, 1);
+        let mut fields = Vec::new();
+        for line in body.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            let (field, ty) = line
+                .trim_end_matches(',')
+                .split_once(':')
+                .unwrap_or_else(|| panic!("{name}: unparsed field `{line}`"));
+            let (size, align) = match ty.trim() {
+                "u32" => (4, 4),
+                "vec2<u32>" => (8, 8),
+                other => panic!("{name}: field type {other} not handled"),
+            };
+            max_align = max_align.max(align);
+            offset = offset.next_multiple_of(align);
+            fields.push((field.trim().to_owned(), offset));
+            offset += size;
+        }
+        (fields, offset.next_multiple_of(max_align))
+    }
+
+    /// `(field, byte offset)` of each listed field of a Rust struct.
+    macro_rules! rust_layout {
+        ($t:ty; $($f:ident),* $(,)?) => {
+            vec![$((stringify!($f).to_owned(), std::mem::offset_of!($t, $f))),*]
+        };
+    }
+
+    /// Each shared uniform struct has the same fields at the same offsets, and the same
+    /// size, in WGSL and in Rust, so the bytes `bytemuck` uploads are the bytes the shader
+    /// reads (#131).
+    #[test]
+    fn shared_structs_match_their_rust_twins() {
+        let conv = rust_layout!(ConvParams;
+            batch_size, in_channels, out_channels, height, width, kernel_h, kernel_w,
+            stride_h, stride_w, pad_h, pad_w, h_out, w_out, _padding);
+        assert_eq!(
+            wgsl_layout("ConvParams"),
+            (conv, std::mem::size_of::<ConvParams>())
+        );
+        let window = rust_layout!(WindowParams;
+            batch_size, channels, height, width, kernel_h, kernel_w, stride_h, stride_w,
+            h_out, w_out, _padding);
+        assert_eq!(
+            wgsl_layout("WindowParams"),
+            (window, std::mem::size_of::<WindowParams>())
+        );
+    }
+}
+
+#[cfg(test)]
+mod unused_state_tests {
+    use super::with_unused_state;
+    use crate::dtype::DType;
+    use crate::gpu::is_gpu_available;
+
+    /// The `(first, second)` buffer addresses of `dtype`'s placeholder pair.
+    fn addrs(dtype: DType) -> (usize, usize) {
+        with_unused_state(dtype, |a, b| {
+            assert!(!std::ptr::eq(a, b), "two buffers, not one bound twice");
+            assert_eq!((a.len(), b.len()), (1, 1));
+            (
+                std::ptr::from_ref(a) as usize,
+                std::ptr::from_ref(b) as usize,
+            )
+        })
+        .expect("a GPU is available")
+    }
+
+    /// #207: the placeholders are allocated once per element type, then reused, so a
+    /// stateless optimizer step allocates nothing. The pair is two distinct buffers.
+    #[test]
+    fn unused_state_placeholders_are_cached_per_dtype() {
+        if !is_gpu_available() {
+            return;
+        }
+        let f32_first = addrs(DType::F32);
+        let f16 = addrs(DType::F16);
+        assert_ne!(f32_first, f16, "one pair per element type");
+        // The pairs live in a static, so an equal address is the same buffer, not a freed
+        // allocation reused.
+        assert_eq!(addrs(DType::F32), f32_first);
+        assert_eq!(addrs(DType::F16), f16);
+    }
+
+    /// #433: a thread that uses the placeholders and exits drops nothing (the pairs are
+    /// process-wide), and every thread sees the same pair.
+    #[test]
+    fn unused_state_placeholders_are_shared_across_threads() {
+        if !is_gpu_available() {
+            return;
+        }
+        let here = addrs(DType::BF16);
+        let there = std::thread::spawn(|| addrs(DType::BF16))
+            .join()
+            .expect("the spawned thread finishes");
+        assert_eq!(here, there);
+        assert_eq!(addrs(DType::BF16), here);
+    }
+}

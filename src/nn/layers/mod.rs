@@ -1,20 +1,37 @@
-pub mod batchnorm;
-pub mod conv;
-pub mod conv_transpose;
-pub mod dropout;
-pub mod embedding;
-pub mod flatten;
-pub mod gelu;
-pub mod layernorm;
-pub mod linear;
-pub mod lstm;
-pub mod maxpool;
-pub mod pixelshuffle;
-pub mod relu;
-pub mod sequential;
-pub mod sequential_builder;
-pub mod sigmoid;
-pub mod tanh;
+/// `BatchNorm1d` and `BatchNorm2d`.
+pub(crate) mod batchnorm;
+/// `Conv2d` and its algorithm selection.
+pub(crate) mod conv;
+/// `ConvTranspose2d`.
+pub(crate) mod conv_transpose;
+/// `Dropout`.
+pub(crate) mod dropout;
+/// `Embedding`.
+pub(crate) mod embedding;
+/// `Flatten`.
+pub(crate) mod flatten;
+/// `GELU` activation.
+pub(crate) mod gelu;
+/// `LayerNorm`.
+pub(crate) mod layernorm;
+/// `Linear`.
+pub(crate) mod linear;
+/// `LSTMCell`.
+pub(crate) mod lstm;
+/// `MaxPool2d`.
+pub(crate) mod maxpool;
+/// `PixelShuffle`.
+pub(crate) mod pixelshuffle;
+/// `ReLU` activation.
+pub(crate) mod relu;
+/// `Sequential` container.
+pub(crate) mod sequential;
+/// `SequentialBuilder`.
+pub(crate) mod sequential_builder;
+/// `Sigmoid` activation.
+pub(crate) mod sigmoid;
+/// `Tanh` activation.
+pub(crate) mod tanh;
 
 pub use batchnorm::{BatchNorm1d, BatchNorm2d};
 pub use conv::{Conv2d, ConvAlgo};

@@ -1,0 +1,61 @@
+name: Coverage
+on:
+  # A signal, not a gate: it is not a required check, and no threshold fails it. It posts
+  # line/region coverage on the CPU lane to the job summary, so a PR that drops coverage on the
+  # autograd core shows it. Gate on a number only once a baseline exists (#154).
+  # PRs that can't change coverage (docs, workflows, examples) skip it (#258); the push to
+  # improvements always runs, so the baseline stays current.
+  pull_request:
+    paths:
+      - src/**
+      - tests/**
+      - Cargo.toml
+      - Cargo.lock
+      - justfile
+      - .github/workflows/coverage.yml
+      - .github/actions/setup-rust/**
+  push:
+    branches: [improvements]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          # rust-src: tests/compile_fail's pinned stderr quotes libcore source.
+          components: llvm-tools-preview, rust-src
+          tools: cargo-llvm-cov,just
+
+      - name: Coverage (no default features)
+        run: just coverage-cpu | tee coverage.txt
+
+      - name: Post to the job summary
+        run: |
+          {
+            echo "## Coverage (CPU lane, no default features)"
+            echo
+            echo '```'
+            # Header, the autograd core (autograd.rs, ops/), and the total.
+            grep -E '^(Filename|autograd\.rs|ops/|TOTAL)' coverage.txt
+            echo '```'
+            echo
+            echo "<details><summary>Every file</summary>"
+            echo
+            echo '```'
+            cat coverage.txt
+            echo '```'
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,9 +1,11 @@
+//! `Adam` and `SGD` against hand-computed updates: Adam bias correction, moment accumulation over several steps, and weight decay; SGD without momentum and with weight decay; and convergence of both on a convex problem.
+use volta::RawTensor;
 use volta::nn::{Adam, SGD};
-use volta::{RawTensor, Storage, TensorOps};
+use volta::storage::Storage;
 
 /// Helper: read the first (scalar) value from a tensor.
 fn scalar(t: &volta::Tensor) -> f32 {
-    t.borrow().data.first().copied().unwrap_or(f32::NAN)
+    t.item()
 }
 
 // ---------------------------------------------------------------------------
@@ -22,7 +24,7 @@ fn test_adam_bias_correction() {
     let init_param: f32 = 1.0;
 
     let t = RawTensor::new(vec![init_param], &[1], true);
-    t.borrow_mut().grad = Some(Storage::cpu(vec![grad_val]));
+    t.set_grad(Storage::cpu(vec![grad_val]));
 
     let mut opt = Adam::new(vec![t.clone()], lr, (beta1, beta2), eps, 0.0);
     opt.step();
@@ -58,7 +60,7 @@ fn test_adam_mv_accumulation_multi_step() {
     let init_param: f32 = 2.0;
 
     let t = RawTensor::new(vec![init_param], &[1], true);
-    t.borrow_mut().grad = Some(Storage::cpu(vec![grad_val]));
+    t.set_grad(Storage::cpu(vec![grad_val]));
 
     let mut opt = Adam::new(vec![t.clone()], lr, (beta1, beta2), eps, 0.0);
 
@@ -70,7 +72,7 @@ fn test_adam_mv_accumulation_multi_step() {
     for step in 1..=3_i32 {
         // Re-inject gradient before each step (step does not zero grad,
         // but we want a known, fresh gradient each time).
-        t.borrow_mut().grad = Some(Storage::cpu(vec![grad_val]));
+        t.set_grad(Storage::cpu(vec![grad_val]));
         opt.step();
 
         // EMA updates
@@ -101,14 +103,14 @@ fn test_adam_weight_decay() {
 
     // With weight decay
     let t_wd = RawTensor::new(vec![init_param], &[1], true);
-    t_wd.borrow_mut().grad = Some(Storage::cpu(vec![0.0]));
+    t_wd.set_grad(Storage::cpu(vec![0.0]));
     let mut opt_wd = Adam::new(vec![t_wd.clone()], lr, (beta1, beta2), eps, 0.01);
     opt_wd.step();
     let val_wd = scalar(&t_wd);
 
     // Without weight decay
     let t_no = RawTensor::new(vec![init_param], &[1], true);
-    t_no.borrow_mut().grad = Some(Storage::cpu(vec![0.0]));
+    t_no.set_grad(Storage::cpu(vec![0.0]));
     let mut opt_no = Adam::new(vec![t_no.clone()], lr, (beta1, beta2), eps, 0.0);
     opt_no.step();
     let val_no = scalar(&t_no);
@@ -150,7 +152,7 @@ fn test_adam_convergence_convex() {
         let target = RawTensor::new(vec![3.0], &[1], false);
         let diff = x.sub(&target);
         let loss = diff.elem_mul(&diff).sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
         opt.step();
     }
 
@@ -173,7 +175,7 @@ fn test_sgd_no_momentum_simple() {
     let grad_val: f32 = 2.0;
 
     let t = RawTensor::new(vec![init_param], &[1], true);
-    t.borrow_mut().grad = Some(Storage::cpu(vec![grad_val]));
+    t.set_grad(Storage::cpu(vec![grad_val]));
 
     let mut opt = SGD::new(vec![t.clone()], lr, 0.0, 0.0);
     opt.step();
@@ -206,7 +208,7 @@ fn test_sgd_weight_decay() {
     let grad_val: f32 = 1.0;
 
     let t = RawTensor::new(vec![init_param], &[1], true);
-    t.borrow_mut().grad = Some(Storage::cpu(vec![grad_val]));
+    t.set_grad(Storage::cpu(vec![grad_val]));
 
     let mut opt = SGD::new(vec![t.clone()], lr, 0.0, wd);
     opt.step();
@@ -233,7 +235,7 @@ fn test_sgd_convergence_convex() {
         let target = RawTensor::new(vec![3.0], &[1], false);
         let diff = x.sub(&target);
         let loss = diff.elem_mul(&diff).sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
         opt.step();
     }
 

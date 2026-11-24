@@ -2,24 +2,10 @@
 // Inverse of im2col: transforms 2D matrix (B*H_out*W_out, C*K_h*K_w) back to 4D tensor (B, C, H, W)
 // Each input position accumulates gradients from all output positions where it contributes
 
-@group(0) @binding(0) var<storage, read> col: array<f32>;
-@group(0) @binding(1) var<storage, read_write> output: array<f32>;
+@group(0) @binding(0) var<storage, read> col: array<ELEM>;
+@group(0) @binding(1) var<storage, read_write> output: array<ELEM>;
 
-struct Col2imParams {
-    batch_size: u32,
-    channels: u32,
-    height: u32,
-    width: u32,
-    kernel_h: u32,
-    kernel_w: u32,
-    stride_h: u32,
-    stride_w: u32,
-    h_out: u32,
-    w_out: u32,
-    _padding: vec2<u32>,
-}
-
-@group(0) @binding(2) var<uniform> params: Col2imParams;
+@group(0) @binding(2) var<uniform> params: WindowParams;
 
 // Convert 4D coordinates to linear index (NCHW format)
 fn coords_to_idx_4d(n: u32, c: u32, h: u32, w: u32) -> u32 {
@@ -30,7 +16,12 @@ fn coords_to_idx_4d(n: u32, c: u32, h: u32, w: u32) -> u32 {
 
 // Main col2im transformation
 @compute @workgroup_size(16, 16, 1)
-fn col2im_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn col2im_main(
+    @builtin(workgroup_id) wg_id: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+    @builtin(local_invocation_id) local_id: vec3<u32>,
+) {
+    let global_id = tile_global_id(wg_id, num_wg, local_id, (params.channels + 15u) / 16u);
     // Each thread handles one input position (b, c, h, w)
     let ch = global_id.x;
     let flat_spatial = global_id.y;
@@ -55,35 +46,42 @@ fn col2im_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var acc: f32 = 0.0;
     let cols = params.channels * params.kernel_h * params.kernel_w;
 
-    // Iterate over all output positions
-    for (var oh: u32 = 0u; oh < params.h_out; oh = oh + 1u) {
-        for (var ow: u32 = 0u; ow < params.w_out; ow = ow + 1u) {
-            // Calculate starting position in input (top-left of receptive field)
-            let h_start = oh * params.stride_h;
-            let w_start = ow * params.stride_w;
+    // Only the output positions whose window covers (h, w) contribute (#309): along each
+    // axis, `o * stride <= h < o * stride + kernel`, so `o` runs from
+    // `ceil((h + 1 - kernel) / stride)` (0 if `h < kernel`) to `h / stride`, capped at the
+    // last output position. The order is the same as a scan over every position, so the
+    // sum is bit-identical; it just skips the positions that never matched.
+    // The guards keep `h + 1 - kernel` from wrapping below zero.
+    var oh_lo: u32 = 0u;
+    if (h + 1u > params.kernel_h) {
+        oh_lo = (h + 1u - params.kernel_h + params.stride_h - 1u) / params.stride_h;
+    }
+    var ow_lo: u32 = 0u;
+    if (w + 1u > params.kernel_w) {
+        ow_lo = (w + 1u - params.kernel_w + params.stride_w - 1u) / params.stride_w;
+    }
+    let oh_end = min(h / params.stride_h + 1u, params.h_out);
+    let ow_end = min(w / params.stride_w + 1u, params.w_out);
 
-            // Check if this input position is in the receptive field
-            if (h >= h_start && h < h_start + params.kernel_h &&
-                w >= w_start && w < w_start + params.kernel_w) {
+    for (var oh: u32 = oh_lo; oh < oh_end; oh = oh + 1u) {
+        for (var ow: u32 = ow_lo; ow < ow_end; ow = ow + 1u) {
+            // Position in the kernel: in range by the loop bounds.
+            let kh = h - oh * params.stride_h;
+            let kw = w - ow * params.stride_w;
 
-                // Calculate position in kernel
-                let kh = h - h_start;
-                let kw = w - w_start;
+            // Calculate row index in col matrix
+            let row_idx = (batch * params.h_out + oh) * params.w_out + ow;
 
-                // Calculate row index in col matrix
-                let row_idx = (batch * params.h_out + oh) * params.w_out + ow;
+            // Calculate column index in col matrix
+            let col_idx = ch * (params.kernel_h * params.kernel_w) + kh * params.kernel_w + kw;
 
-                // Calculate column index in col matrix
-                let col_idx = ch * (params.kernel_h * params.kernel_w) + kh * params.kernel_w + kw;
-
-                // Read from col matrix and accumulate
-                let col_data_idx = row_idx * cols + col_idx;
-                acc += col[col_data_idx];
-            }
+            // Read from col matrix and accumulate
+            let col_data_idx = row_idx * cols + col_idx;
+            acc += ld_col(col_data_idx);
         }
     }
 
     // Write accumulated gradient to output
     let output_idx = coords_to_idx_4d(batch, ch, h, w);
-    output[output_idx] = acc;
+    st_output(output_idx, acc);
 }

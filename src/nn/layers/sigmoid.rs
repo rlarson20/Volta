@@ -1,15 +1,12 @@
 use crate::io::StateDict;
-use crate::nn::Module;
+use crate::nn::{Layer, Module};
 use crate::tensor::Tensor;
-use crate::tensor::TensorOps;
 
+/// Logistic function `1 / (1 + exp(-x))`.
+#[derive(Debug, Clone, Copy)]
 pub struct Sigmoid;
 
 impl Module for Sigmoid {
-    fn forward(&self, x: &Tensor) -> Tensor {
-        x.sigmoid()
-    }
-
     fn parameters(&self) -> Vec<Tensor> {
         vec![] // No learnable params
     }
@@ -18,7 +15,11 @@ impl Module for Sigmoid {
         StateDict::new()
     }
 
-    fn load_state_dict(&mut self, _state: &StateDict) {
-        // Stateless
+    fn plan_load<'a>(&self, _plan: &mut crate::nn::LoadPlan<'a>) {}
+}
+
+impl Layer for Sigmoid {
+    fn forward(&self, x: &Tensor) -> Tensor {
+        x.sigmoid()
     }
 }

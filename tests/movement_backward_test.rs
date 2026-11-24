@@ -1,10 +1,10 @@
 //! Tests for GPU-accelerated movement operation backward passes
-#![allow(clippy::cast_precision_loss)]
 #![cfg(feature = "gpu")]
 
+use volta::RawTensor;
 use volta::device::Device;
 use volta::gpu::is_gpu_available;
-use volta::{RawTensor, TensorOps};
+use volta::{Axis, PadValue};
 
 fn approx_eq(a: f32, b: f32, epsilon: f32) -> bool {
     (a - b).abs() < epsilon
@@ -32,19 +32,28 @@ fn test_permute_backward_cpu_vs_gpu() {
     let cpu_t = RawTensor::new(data.clone(), &[2, 3], true);
 
     // Permute: swap axes [2,3] -> [3,2]
-    let cpu_permuted = cpu_t.permute(&[1, 0]);
+    let cpu_permuted = cpu_t.permute(&[Axis(1), Axis(0)]);
 
     // Create same tensor on GPU
-    let gpu_t = RawTensor::new(data, &[2, 3], true).to_device(device.clone());
-    let gpu_permuted = gpu_t.permute(&[1, 0]);
+    let gpu_t = RawTensor::new(data, &[2, 3], false).to_device(device);
+    gpu_t.set_requires_grad(true);
+    let gpu_permuted = gpu_t.permute(&[Axis(1), Axis(0)]);
 
     // Backward pass
-    cpu_permuted.backward();
-    gpu_permuted.backward();
+    cpu_permuted
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
+    gpu_permuted
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
 
     // Compare gradients
-    let cpu_grad = cpu_t.borrow().grad.as_ref().unwrap().to_vec();
-    let gpu_grad = gpu_t.borrow().grad.as_ref().unwrap().to_vec();
+    let cpu_grad = cpu_t.grad_storage().unwrap().to_vec();
+    let gpu_grad = gpu_t.grad_storage().unwrap().to_vec();
 
     assert!(
         tensors_approx_eq(&cpu_grad, &gpu_grad, 1e-5),
@@ -68,16 +77,25 @@ fn test_expand_backward_cpu_vs_gpu() {
     let cpu_expanded = cpu_t.expand(&[2, 3]);
 
     // Create same tensor on GPU
-    let gpu_t = RawTensor::new(data, &[1, 3], true).to_device(device.clone());
+    let gpu_t = RawTensor::new(data, &[1, 3], false).to_device(device);
+    gpu_t.set_requires_grad(true);
     let gpu_expanded = gpu_t.expand(&[2, 3]);
 
     // Backward pass
-    cpu_expanded.backward();
-    gpu_expanded.backward();
+    cpu_expanded
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
+    gpu_expanded
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
 
     // Compare gradients (should sum over broadcast dimension)
-    let cpu_grad = cpu_t.borrow().grad.as_ref().unwrap().to_vec();
-    let gpu_grad = gpu_t.borrow().grad.as_ref().unwrap().to_vec();
+    let cpu_grad = cpu_t.grad_storage().unwrap().to_vec();
+    let gpu_grad = gpu_t.grad_storage().unwrap().to_vec();
 
     assert!(
         tensors_approx_eq(&cpu_grad, &gpu_grad, 1e-5),
@@ -105,23 +123,60 @@ fn test_pad_backward_cpu_vs_gpu() {
 
     // Pad: add 1 zero on each side -> [4,4]
     let padding = vec![(1, 1), (1, 1)];
-    let cpu_padded = cpu_t.pad(&padding);
+    let cpu_padded = cpu_t.pad_with(&padding, PadValue::ZERO);
 
     // Create same tensor on GPU
-    let gpu_t = RawTensor::new(data, &[2, 2], true).to_device(device.clone());
-    let gpu_padded = gpu_t.pad(&padding);
+    let gpu_t = RawTensor::new(data, &[2, 2], false).to_device(device);
+    gpu_t.set_requires_grad(true);
+    let gpu_padded = gpu_t.pad_with(&padding, PadValue::ZERO);
 
     // Backward pass
-    cpu_padded.backward();
-    gpu_padded.backward();
+    cpu_padded
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
+    gpu_padded
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
 
     // Compare gradients (should extract center region)
-    let cpu_grad = cpu_t.borrow().grad.as_ref().unwrap().to_vec();
-    let gpu_grad = gpu_t.borrow().grad.as_ref().unwrap().to_vec();
+    let cpu_grad = cpu_t.grad_storage().unwrap().to_vec();
+    let gpu_grad = gpu_t.grad_storage().unwrap().to_vec();
 
     assert!(
         tensors_approx_eq(&cpu_grad, &gpu_grad, 1e-5),
         "Pad backward: CPU and GPU gradients should match.\nCPU: {cpu_grad:?}\nGPU: {gpu_grad:?}"
+    );
+}
+
+#[test]
+fn test_pad_with_neg_inf_forward_cpu_vs_gpu() {
+    if !is_gpu_available() {
+        return;
+    }
+
+    let device = Device::gpu().expect("GPU should be available");
+    let data = vec![-1.0, -2.0, -3.0, -4.0, -5.0, -6.0];
+    let padding = [(1, 0), (0, 2)];
+
+    let cpu_t = RawTensor::new(data.clone(), &[2, 3], false);
+    let gpu_t = RawTensor::new(data, &[2, 3], false).to_device(device);
+
+    let cpu_out = cpu_t.pad_with(&padding, PadValue::NEG_INF).data();
+    let gpu_out = gpu_t.pad_with(&padding, PadValue::NEG_INF).data();
+
+    assert_eq!(cpu_out.len(), 3 * 5);
+    assert_eq!(
+        cpu_out.iter().filter(|v| **v == f32::NEG_INFINITY).count(),
+        15 - 6,
+        "CPU border should be exactly the non-interior cells"
+    );
+    assert_eq!(
+        cpu_out, gpu_out,
+        "pad_with(NEG_INF): CPU and GPU outputs should be identical"
     );
 }
 
@@ -142,16 +197,25 @@ fn test_shrink_backward_cpu_vs_gpu() {
     let cpu_shrunk = cpu_t.shrink(&ranges);
 
     // Create same tensor on GPU
-    let gpu_t = RawTensor::new(data, &[4, 4], true).to_device(device.clone());
+    let gpu_t = RawTensor::new(data, &[4, 4], false).to_device(device);
+    gpu_t.set_requires_grad(true);
     let gpu_shrunk = gpu_t.shrink(&ranges);
 
     // Backward pass
-    cpu_shrunk.backward();
-    gpu_shrunk.backward();
+    cpu_shrunk
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
+    gpu_shrunk
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
 
     // Compare gradients (should place gradient in window, zero elsewhere)
-    let cpu_grad = cpu_t.borrow().grad.as_ref().unwrap().to_vec();
-    let gpu_grad = gpu_t.borrow().grad.as_ref().unwrap().to_vec();
+    let cpu_grad = cpu_t.grad_storage().unwrap().to_vec();
+    let gpu_grad = gpu_t.grad_storage().unwrap().to_vec();
 
     assert!(
         tensors_approx_eq(&cpu_grad, &gpu_grad, 1e-5),
@@ -176,16 +240,25 @@ fn test_stride_backward_cpu_vs_gpu() {
     let cpu_strided = cpu_t.stride_op(&strides);
 
     // Create same tensor on GPU
-    let gpu_t = RawTensor::new(data, &[4, 4], true).to_device(device.clone());
+    let gpu_t = RawTensor::new(data, &[4, 4], false).to_device(device);
+    gpu_t.set_requires_grad(true);
     let gpu_strided = gpu_t.stride_op(&strides);
 
     // Backward pass
-    cpu_strided.backward();
-    gpu_strided.backward();
+    cpu_strided
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
+    gpu_strided
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
 
     // Compare gradients (should upsample with zeros)
-    let cpu_grad = cpu_t.borrow().grad.as_ref().unwrap().to_vec();
-    let gpu_grad = gpu_t.borrow().grad.as_ref().unwrap().to_vec();
+    let cpu_grad = cpu_t.grad_storage().unwrap().to_vec();
+    let gpu_grad = gpu_t.grad_storage().unwrap().to_vec();
 
     assert!(
         tensors_approx_eq(&cpu_grad, &gpu_grad, 1e-5),
@@ -207,15 +280,20 @@ fn test_movement_backward_chain_cpu_vs_gpu() {
 
     // CPU path
     let cpu_t = RawTensor::new(data.clone(), &[2, 1, 3], true);
-    let cpu_out = cpu_t.permute(&[2, 1, 0]).expand(&[3, 2, 2]);
-    cpu_out.backward();
-    let cpu_grad = cpu_t.borrow().grad.as_ref().unwrap().to_vec();
+    let cpu_out = cpu_t
+        .permute(&[Axis(2), Axis(1), Axis(0)])
+        .expand(&[3, 2, 2]);
+    cpu_out.sum().into_loss().expect("scalar loss").backward();
+    let cpu_grad = cpu_t.grad_storage().unwrap().to_vec();
 
     // GPU path
-    let gpu_t = RawTensor::new(data, &[2, 1, 3], true).to_device(device.clone());
-    let gpu_out = gpu_t.permute(&[2, 1, 0]).expand(&[3, 2, 2]);
-    gpu_out.backward();
-    let gpu_grad = gpu_t.borrow().grad.as_ref().unwrap().to_vec();
+    let gpu_t = RawTensor::new(data, &[2, 1, 3], false).to_device(device);
+    gpu_t.set_requires_grad(true);
+    let gpu_out = gpu_t
+        .permute(&[Axis(2), Axis(1), Axis(0)])
+        .expand(&[3, 2, 2]);
+    gpu_out.sum().into_loss().expect("scalar loss").backward();
+    let gpu_grad = gpu_t.grad_storage().unwrap().to_vec();
 
     assert!(
         tensors_approx_eq(&cpu_grad, &gpu_grad, 1e-5),
@@ -235,13 +313,22 @@ fn test_expand_backward_multiple_dims() {
     let data = vec![1.0, 2.0, 3.0];
     let cpu_t = RawTensor::new(data.clone(), &[1, 1, 3], true);
     let cpu_expanded = cpu_t.expand(&[2, 2, 3]);
-    cpu_expanded.backward();
-    let cpu_grad = cpu_t.borrow().grad.as_ref().unwrap().to_vec();
+    cpu_expanded
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
+    let cpu_grad = cpu_t.grad_storage().unwrap().to_vec();
 
-    let gpu_t = RawTensor::new(data, &[1, 1, 3], true).to_device(device.clone());
+    let gpu_t = RawTensor::new(data, &[1, 1, 3], false).to_device(device);
+    gpu_t.set_requires_grad(true);
     let gpu_expanded = gpu_t.expand(&[2, 2, 3]);
-    gpu_expanded.backward();
-    let gpu_grad = gpu_t.borrow().grad.as_ref().unwrap().to_vec();
+    gpu_expanded
+        .sum()
+        .into_loss()
+        .expect("scalar loss")
+        .backward();
+    let gpu_grad = gpu_t.grad_storage().unwrap().to_vec();
 
     assert!(
         tensors_approx_eq(&cpu_grad, &gpu_grad, 1e-5),

@@ -1,8 +1,8 @@
 // Movement operations - permute, expand, pad, shrink, stride
 // These operations manipulate how data is indexed rather than computing new values
 
-@group(0) @binding(0) var<storage, read> input: array<f32>;
-@group(0) @binding(1) var<storage, read_write> result: array<f32>;
+@group(0) @binding(0) var<storage, read> input: array<ELEM>;
+@group(0) @binding(1) var<storage, read_write> result: array<ELEM>;
 
 // Parameters for movement operations (up to 4 dimensions)
 struct MovementParams {
@@ -66,7 +66,11 @@ fn compute_strides(shape: vec4<u32>, rank: u32) -> vec4<u32> {
 // Permute: reorder axes according to op_params as permutation [axis0, axis1, ...]
 // Example: transpose 2D: axes=[1,0] swaps dimensions
 @compute @workgroup_size(256)
-fn permute(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn permute(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     let out_size = output_size(params.new_shape, params.rank);
 
@@ -82,13 +86,17 @@ fn permute(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let old_strides = compute_strides(params.old_shape, params.rank);
         let old_idx = coords_to_idx(old_coords, old_strides, params.rank);
-        result[idx] = input[old_idx];
+        st_result(idx, ld_input(old_idx));
     }
 }
 
 // Expand: broadcast dimensions from size 1 to target size
 @compute @workgroup_size(256)
-fn expand(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn expand(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     let out_size = output_size(params.new_shape, params.rank);
 
@@ -107,13 +115,17 @@ fn expand(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
 
         let old_idx = coords_to_idx(old_coords, old_strides, params.rank);
-        result[idx] = input[old_idx];
+        st_result(idx, ld_input(old_idx));
     }
 }
 
-// Pad: add zeros around edges (supports up to 4D)
+// Pad: fill edges with the f32 whose bits are in _padding[1] (supports up to 4D)
 @compute @workgroup_size(256)
-fn pad(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn pad(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     let out_size = output_size(params.new_shape, params.rank);
 
@@ -154,16 +166,20 @@ fn pad(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (in_bounds) {
             let old_strides = compute_strides(params.old_shape, params.rank);
             let old_idx = coords_to_idx(old_coords, old_strides, params.rank);
-            result[idx] = input[old_idx];
+            st_result(idx, ld_input(old_idx));
         } else {
-            result[idx] = 0.0;
+            st_result(idx, bitcast<f32>(params._padding[1]));
         }
     }
 }
 
 // Shrink: extract subregion
 @compute @workgroup_size(256)
-fn shrink(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn shrink(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     let out_size = output_size(params.new_shape, params.rank);
 
@@ -178,13 +194,17 @@ fn shrink(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let old_strides = compute_strides(params.old_shape, params.rank);
         let old_idx = coords_to_idx(old_coords, old_strides, params.rank);
-        result[idx] = input[old_idx];
+        st_result(idx, ld_input(old_idx));
     }
 }
 
 // Stride: subsample with stride
 @compute @workgroup_size(256)
-fn stride(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn stride(
+    @builtin(global_invocation_id) global_id_2d: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+) {
+    let global_id = flat_global_id(global_id_2d, num_wg);
     let idx = global_id.x;
     let out_size = output_size(params.new_shape, params.rank);
 
@@ -199,6 +219,6 @@ fn stride(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let old_strides = compute_strides(params.old_shape, params.rank);
         let old_idx = coords_to_idx(old_coords, old_strides, params.rank);
-        result[idx] = input[old_idx];
+        st_result(idx, ld_input(old_idx));
     }
 }

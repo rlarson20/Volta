@@ -1,15 +1,12 @@
 use crate::io::StateDict;
-use crate::nn::Module;
+use crate::nn::{Layer, Module};
 use crate::tensor::Tensor;
-use crate::tensor::TensorOps;
 
+/// Rectified linear unit: `max(0, x)`.
+#[derive(Debug, Clone, Copy)]
 pub struct ReLU;
 
 impl Module for ReLU {
-    fn forward(&self, x: &Tensor) -> Tensor {
-        x.relu()
-    }
-
     fn parameters(&self) -> Vec<Tensor> {
         vec![] // No learnable params
     }
@@ -17,7 +14,11 @@ impl Module for ReLU {
         StateDict::new()
     }
 
-    fn load_state_dict(&mut self, _state: &StateDict) {
-        // Stateless
+    fn plan_load<'a>(&self, _plan: &mut crate::nn::LoadPlan<'a>) {}
+}
+
+impl Layer for ReLU {
+    fn forward(&self, x: &Tensor) -> Tensor {
+        x.relu()
     }
 }

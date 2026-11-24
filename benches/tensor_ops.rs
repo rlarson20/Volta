@@ -6,9 +6,10 @@
 //! - Matrix multiplication
 //! - Reduction operations (sum, mean, max)
 //! - Movement operations (reshape, transpose, etc.)
-#![allow(clippy::cast_precision_loss)]
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use volta::{RawTensor, Tensor, TensorOps};
+use criterion::{BenchmarkId, Criterion, criterion_main};
+use std::hint::black_box;
+use volta::{Axis, PadValue};
+use volta::{RawTensor, Tensor};
 
 /// Generate a random tensor of the given size
 fn random_tensor(size: usize) -> Tensor {
@@ -25,6 +26,7 @@ fn random_tensor_2d(rows: usize, cols: usize) -> Tensor {
 
 // ===== BINARY OPERATIONS =====
 
+/// `add`, `sub`, elementwise `mul`, and `div` over 64 to 4096 elements, plus a broadcasting add.
 fn bench_binary_ops(c: &mut Criterion) {
     let mut group = c.benchmark_group("binary_ops");
 
@@ -67,6 +69,7 @@ fn bench_binary_ops(c: &mut Criterion) {
 
 // ===== UNARY OPERATIONS =====
 
+/// `exp`, `log`, `relu`, `sigmoid`, `tanh`, and `sqrt` over 1024 and 4096 elements.
 fn bench_unary_ops(c: &mut Criterion) {
     let mut group = c.benchmark_group("unary_ops");
 
@@ -108,6 +111,7 @@ fn bench_unary_ops(c: &mut Criterion) {
 
 // ===== MATRIX MULTIPLICATION =====
 
+/// Square matmul for `n` in 64..=1024, plus 128x256 and 256x128 rectangular cases.
 fn bench_matmul(c: &mut Criterion) {
     let mut group = c.benchmark_group("matmul");
 
@@ -139,6 +143,7 @@ fn bench_matmul(c: &mut Criterion) {
 
 // ===== REDUCTION OPERATIONS =====
 
+/// `sum`, `mean`, and `max_reduce` over 1024 to 16384 elements, plus a 2-D `sum`.
 fn bench_reduce_ops(c: &mut Criterion) {
     let mut group = c.benchmark_group("reduce_ops");
 
@@ -171,6 +176,7 @@ fn bench_reduce_ops(c: &mut Criterion) {
 
 // ===== MOVEMENT OPERATIONS =====
 
+/// `reshape`, 2-D `transpose`, `expand`, `permute`, and `pad_with` (zero padding).
 fn bench_movement_ops(c: &mut Criterion) {
     let mut group = c.benchmark_group("movement_ops");
 
@@ -196,13 +202,13 @@ fn bench_movement_ops(c: &mut Criterion) {
     group.bench_function("permute", |b| {
         let data: Vec<f32> = (0..10000).map(|i| i as f32 * 0.01).collect();
         let a = RawTensor::new(data, &[10, 10, 10, 10], false);
-        b.iter(|| black_box(&a).permute(&[2, 3, 1, 0]));
+        b.iter(|| black_box(&a).permute(&[Axis(2), Axis(3), Axis(1), Axis(0)]));
     });
 
     // Pad
     group.bench_function("pad", |b| {
         let a = random_tensor_2d(50, 50);
-        b.iter(|| black_box(&a).pad(&[(0, 0), (5, 5)]));
+        b.iter(|| black_box(&a).pad_with(&[(0, 0), (5, 5)], PadValue::ZERO));
     });
 
     group.finish();
@@ -210,6 +216,7 @@ fn bench_movement_ops(c: &mut Criterion) {
 
 // ===== TERNARY OPERATIONS =====
 
+/// `mulacc` (fused multiply-accumulate) over 512 and 2048 elements.
 fn bench_ternary_ops(c: &mut Criterion) {
     let mut group = c.benchmark_group("ternary_ops");
 
@@ -230,14 +237,28 @@ fn bench_ternary_ops(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    bench_binary_ops,
-    bench_unary_ops,
-    bench_matmul,
-    bench_reduce_ops,
-    bench_movement_ops,
-    bench_ternary_ops
-);
+// Runs the core tensor-op benchmarks: binary, unary, matmul, reduce, movement, and ternary ops.
+// `criterion_group!` (criterion 0.5) generates an undocumented `pub fn benches`. A lint
+// attribute on the macro call is ignored, so the call lives in a module that carries the
+// `allow`, which keeps the lint active for everything else in this file.
+#[allow(
+    missing_docs,
+    clippy::missing_docs_in_private_items,
+    reason = "`criterion_group!` (criterion 0.5) generates an undocumented `pub fn benches`"
+)]
+mod group {
+    use criterion::criterion_group;
+
+    criterion_group!(
+        benches,
+        super::bench_binary_ops,
+        super::bench_unary_ops,
+        super::bench_matmul,
+        super::bench_reduce_ops,
+        super::bench_movement_ops,
+        super::bench_ternary_ops,
+    );
+}
+use group::benches;
 
 criterion_main!(benches);

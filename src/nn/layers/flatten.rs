@@ -1,15 +1,17 @@
 use crate::io::StateDict;
-use crate::nn::Module;
-use crate::tensor::{Tensor, TensorOps};
+use crate::nn::{Layer, Module};
+use crate::tensor::Tensor;
 
 /// Flattens the input tensor into a 2D tensor (`batch_size`, `remaining_features`).
 ///
 /// Assumes the first dimension is the batch dimension and flattens all subsequent dimensions.
 /// Input shape: (B, D1, D2, ...)
 /// Output shape: (B, D1 * D2 * ...)
+#[derive(Debug, Clone, Copy)]
 pub struct Flatten;
 
 impl Flatten {
+    /// Creates the layer.
     #[must_use]
     pub const fn new() -> Self {
         Self
@@ -23,19 +25,6 @@ impl Default for Flatten {
 }
 
 impl Module for Flatten {
-    fn forward(&self, x: &Tensor) -> Tensor {
-        let shape = x.borrow().shape.clone();
-        if shape.len() < 2 {
-            // Already flat or scalar
-            return x.clone();
-        }
-
-        let batch_size = shape.first().copied().unwrap_or(1);
-        let flattened_size: usize = shape.get(1..).map_or(1, |s| s.iter().product());
-
-        x.reshape(&[batch_size, flattened_size])
-    }
-
     fn parameters(&self) -> Vec<Tensor> {
         vec![]
     }
@@ -44,8 +33,21 @@ impl Module for Flatten {
         StateDict::new()
     }
 
-    fn load_state_dict(&mut self, _state: &StateDict) {
-        // Stateless
+    fn plan_load<'a>(&self, _plan: &mut crate::nn::LoadPlan<'a>) {}
+}
+
+impl Layer for Flatten {
+    fn forward(&self, x: &Tensor) -> Tensor {
+        let shape = x.borrow().shape.clone();
+        if shape.rank() < 2 {
+            // Already flat or scalar
+            return x.clone();
+        }
+
+        let batch_size = shape.dim_at(0);
+        let flattened_size = shape.numel_from(1);
+
+        x.reshape(&[batch_size, flattened_size])
     }
 }
 

@@ -1,7 +1,6 @@
 use crate::io::StateDict;
-use crate::nn::Module;
-use crate::tensor::TensorOps;
-use crate::tensor::{RawTensor, Tensor};
+use crate::nn::{Layer, Module};
+use crate::tensor::Tensor;
 
 /// Gaussian Error Linear Unit (GELU) activation function.
 ///
@@ -23,15 +22,15 @@ use crate::tensor::{RawTensor, Tensor};
 ///
 /// # Example
 /// ```
-/// # use volta::GELU;
-/// # use volta::Module;
-/// # use volta::TensorOps;
+/// # use volta::nn::GELU;
+/// # use volta::nn::Layer;
 /// # use volta::RawTensor;
 /// let gelu = GELU::new();
 /// let x = RawTensor::new(vec![1.0, -1.0, 0.0], &[3], false);
 /// let y = gelu.forward(&x);
 /// // y ≈ [0.8413, -0.1588, 0.0]
 /// ```
+#[derive(Debug, Clone, Copy)]
 pub struct GELU;
 
 impl GELU {
@@ -49,15 +48,6 @@ impl Default for GELU {
 }
 
 impl Module for GELU {
-    fn forward(&self, x: &Tensor) -> Tensor {
-        // gelu(x) = 0.5 * x * (1 + erf(x / sqrt(2)))
-        let sqrt2 = RawTensor::new(vec![(2.0_f32).sqrt()], &[1], false);
-        let one = RawTensor::new(vec![1.0], &[1], false);
-        let half = RawTensor::new(vec![0.5], &[1], false);
-
-        x.div(&sqrt2).erf().add(&one).elem_mul(x).elem_mul(&half)
-    }
-
     fn parameters(&self) -> Vec<Tensor> {
         vec![] // No learnable parameters
     }
@@ -66,12 +56,21 @@ impl Module for GELU {
         StateDict::new()
     }
 
-    fn load_state_dict(&mut self, _state: &StateDict) {
-        // Stateless activation, nothing to load
-    }
+    fn plan_load<'a>(&self, _plan: &mut crate::nn::LoadPlan<'a>) {}
 
     fn train(&mut self, _mode: bool) {
         // Stateless, no training/eval behavior difference
+    }
+}
+
+impl Layer for GELU {
+    fn forward(&self, x: &Tensor) -> Tensor {
+        // gelu(x) = 0.5 * x * (1 + erf(x / sqrt(2)))
+        let sqrt2 = x.constant_like(vec![(2.0_f32).sqrt()], &[1]);
+        let one = x.constant_like(vec![1.0], &[1]);
+        let half = x.constant_like(vec![0.5], &[1]);
+
+        x.div(&sqrt2).erf().add(&one).elem_mul(x).elem_mul(&half)
     }
 }
 
@@ -82,16 +81,11 @@ mod tests {
     use approx::assert_relative_eq;
 
     #[test]
-    fn test_gelu_creation() {
-        let gelu = GELU::new();
-        // GELU is a zero-sized type, just verify it can be created
-        let _ = gelu.forward(&RawTensor::new(vec![0.0], &[1], false));
-    }
-
-    #[test]
     fn test_gelu_default() {
-        let gelu = GELU;
-        let _ = gelu.forward(&RawTensor::new(vec![0.0], &[1], false));
+        // GELU(0) = 0 * Phi(0) = 0, exactly, for the unit struct and for `new()`.
+        let x = RawTensor::new(vec![0.0], &[1], false);
+        assert_eq!(GELU.forward(&x).item(), 0.0);
+        assert_eq!(GELU::new().forward(&x).item(), 0.0);
     }
 
     #[test]
@@ -101,39 +95,23 @@ mod tests {
         // Test gelu(0) = 0
         let x = RawTensor::new(vec![0.0], &[1], false);
         let y = gelu.forward(&x);
-        assert_relative_eq!(
-            y.borrow().data.first().copied().unwrap(),
-            0.0,
-            epsilon = 1e-6
-        );
+        assert_relative_eq!(y.item(), 0.0, epsilon = 1e-6);
 
         // Test gelu(1) ≈ 0.8413
         let x = RawTensor::new(vec![1.0], &[1], false);
         let y = gelu.forward(&x);
-        assert_relative_eq!(
-            y.borrow().data.first().copied().unwrap(),
-            0.8413,
-            epsilon = 1e-4
-        );
+        assert_relative_eq!(y.item(), 0.8413, epsilon = 1e-4);
 
         // Test gelu(-1) ≈ -0.1588
         let x = RawTensor::new(vec![-1.0], &[1], false);
         let y = gelu.forward(&x);
-        assert_relative_eq!(
-            y.borrow().data.first().copied().unwrap(),
-            -0.1587,
-            epsilon = 1e-3
-        );
+        assert_relative_eq!(y.item(), -0.1587, epsilon = 1e-3);
 
         // Test gelu(0.56484) ≈ 0.4032
         // This is a test point where the tanh approximation would fail
         let x = RawTensor::new(vec![0.56484], &[1], false);
         let y = gelu.forward(&x);
-        assert_relative_eq!(
-            y.borrow().data.first().copied().unwrap(),
-            0.4032,
-            epsilon = 1e-4
-        );
+        assert_relative_eq!(y.item(), 0.4032, epsilon = 1e-4);
     }
 
     #[test]
@@ -168,7 +146,7 @@ mod tests {
 
         // GELU should preserve sign for negative inputs (unlike ReLU)
         // and be close to zero for small negative values
-        let data = y.borrow().data.clone();
+        let data = y.data();
         assert!(
             *data.first().unwrap() < -0.04,
             "gelu(-2.0) should be significantly negative"
@@ -200,7 +178,8 @@ mod tests {
         assert!(state.is_empty(), "GELU state dict should be empty");
 
         let mut gelu = GELU::new();
-        gelu.load_state_dict(&state); // Should not panic
+        gelu.load_state_dict(&state)
+            .expect("a parameterless layer accepts any state");
     }
 
     #[test]
@@ -222,11 +201,7 @@ mod tests {
         // Should not panic and behavior should be the same
         let x = RawTensor::new(vec![1.0], &[1], false);
         let y = gelu.forward(&x);
-        assert_relative_eq!(
-            y.borrow().data.first().copied().unwrap(),
-            0.8413,
-            epsilon = 1e-4
-        );
+        assert_relative_eq!(y.item(), 0.8413, epsilon = 1e-4);
     }
 
     #[test]
@@ -234,7 +209,7 @@ mod tests {
         let gelu = GELU::new();
         let x = RawTensor::new(vec![1.0], &[1], true);
         let y = gelu.forward(&x);
-        y.backward();
+        y.into_loss().expect("scalar loss").backward();
 
         // GELU gradient should exist and be non-zero
         let grad = x.grad().expect("Gradient should exist");

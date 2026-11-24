@@ -1,43 +1,41 @@
-// Character-Level Transformer Language Model
-//
-// Validates that Volta's transformer components compose correctly under backprop.
-// Uses a tiny 1-layer transformer with causal attention on toy text.
-// Loss should decrease visibly within 100 epochs.
-//
-// Architecture: Embedding -> PosEnc -> [MHA + LN -> FFN + LN] -> Linear head
-//
-// Usage: cargo run --example transformer_lm
+//! Character-Level Transformer Language Model
+//!
+//! Validates that Volta's transformer components compose correctly under backprop.
+//! Uses a tiny 1-layer transformer with causal attention on toy text.
+//! Loss should decrease visibly within the 150 epochs it trains for.
+//!
+//! Architecture: `Embedding` -> positional encoding -> [attention + `LayerNorm` -> feed-forward + `LayerNorm`] -> `Linear` head
+//!
+//! Usage: `cargo run --example char_transformer_model`
 //
 // TODO: handle these concerns
 //
-// MultiHeadAttention::forward internally does x.add(&output) — so calling norm1.forward(mha.forward(x)) is Pre-LN applied to the post-residual output, which is slightly non-standard (Post-LN).
-// That's fine for a smoke test but worth fixing later by refactoring MHA to not embed the residual.
-//
-// The positional encoding is added outside the graph (no requires_grad), which is correct for sinusoidal PE but means the model can't learn positional weights.
-// If you want learned PE later, PositionalEncoding::new(embed_dim, max_len, PositionalEncodingType::Learned) is wired up.
+// The positional encoding is sinusoidal (fixed). For learned positions, construct it with
+// PositionalEncodingType::Learned and add its parameters to the model's.
 //
 // If loss doesn't move at all, the most likely culprit is the FeedForward::forward reshape — it expects exactly 3D input [batch, seq_len, embed_dim].
 // A shape panic there would silently corrupt the graph on some code paths.
-#![allow(clippy::cast_precision_loss)]
 
 use std::collections::HashMap;
-use volta::{
-    Adam, Embedding, LayerNorm, RawTensor, TensorOps,
-    nn::{
-        Module,
-        transformer::{FeedForward, MultiHeadAttention},
-    },
-    tensor::cross_entropy_loss,
+use volta::RawTensor;
+use volta::nn::{
+    Adam, Embedding, FeedForward, Layer, LayerNorm, Module, MultiHeadAttention, PositionalEncoding,
+    PositionalEncodingType,
 };
+use volta::tensor::cross_entropy_loss;
 
 // ===== Vocabulary =====
 
+/// Character vocabulary, built from the sorted unique characters of the corpus.
 struct CharVocab {
+    /// Character to index.
     char_to_idx: HashMap<char, usize>,
+    /// Index to character: the sorted unique characters.
     idx_to_char: Vec<char>,
 }
 
 impl CharVocab {
+    /// Builds the vocabulary from the unique characters of `text`, in sorted order.
     fn from_text(text: &str) -> Self {
         let mut chars: Vec<char> = text.chars().collect();
         chars.sort_unstable();
@@ -49,10 +47,12 @@ impl CharVocab {
         }
     }
 
+    /// Number of distinct characters.
     fn size(&self) -> usize {
         self.idx_to_char.len()
     }
 
+    /// Maps `text` to indices, dropping characters that are not in the vocabulary.
     fn encode(&self, text: &str) -> Vec<usize> {
         text.chars()
             .filter_map(|c| self.char_to_idx.get(&c).copied())
@@ -61,17 +61,23 @@ impl CharVocab {
 }
 
 // ===== Minimal Transformer Block =====
-// Note: MultiHeadAttention::forward already adds the residual (x + attn_out).
-// We apply LayerNorm after, then FFN + manual residual + LayerNorm.
+// Post-LN, as in the original Transformer: x = LN(x + Attn(x)), then LN(x + FFN(x)).
+// `MultiHeadAttention` adds no residual of its own (like torch), so the layer adds both.
 
+/// One Post-LN transformer layer: causal self-attention and a feed-forward network, each with a residual and a `LayerNorm`.
 struct TransformerLayer {
+    /// Causal self-attention, without a residual of its own.
     attn: MultiHeadAttention,
+    /// Applied after attention (and its residual).
     norm1: LayerNorm,
+    /// Position-wise feed-forward network with a 4x hidden expansion.
     ffn: FeedForward,
+    /// Applied after the feed-forward residual.
     norm2: LayerNorm,
 }
 
 impl TransformerLayer {
+    /// Builds the layer for `embed_dim`-wide inputs with `num_heads` attention heads and no dropout.
     fn new(embed_dim: usize, num_heads: usize) -> Self {
         Self {
             attn: MultiHeadAttention::new(embed_dim, num_heads, 0.0),
@@ -81,14 +87,17 @@ impl TransformerLayer {
         }
     }
 
+    /// Maps `[batch, seq, embed_dim]` to the same shape.
     fn forward(&self, x: &volta::Tensor) -> volta::Tensor {
-        // Attention + residual (MHA does this internally) + LayerNorm
-        let x = self.norm1.forward(&self.attn.forward(x, true, None));
+        // Attention + residual + LayerNorm
+        let attn_out = self.attn.forward(x, true, None);
+        let x = self.norm1.forward(&x.add(&attn_out));
         // FFN + residual + LayerNorm
         let ffn_out = self.ffn.forward(&x);
         self.norm2.forward(&x.add(&ffn_out))
     }
 
+    /// Trainable parameters: attention, `norm1`, feed-forward, `norm2`.
     fn parameters(&self) -> Vec<volta::Tensor> {
         let mut p = self.attn.parameters();
         p.extend(self.norm1.parameters());
@@ -99,19 +108,34 @@ impl TransformerLayer {
 }
 
 // ===== Model =====
+/// Embedding, one `TransformerLayer`, and a linear head that predicts the next character.
 #[allow(dead_code)]
 struct TinyTransformerLM {
+    /// Token index to `embed_dim` vector.
     embedding: Embedding,
+    /// Fixed sinusoidal positional encoding for up to `max_len` positions.
+    pos_enc: PositionalEncoding,
+    /// The single transformer layer.
     layer: TransformerLayer,
+    /// Projects `embed_dim` to `vocab_size` logits.
     head: volta::nn::Linear,
+    /// Width of the embeddings and of the layer.
     embed_dim: usize,
+    /// Number of output classes. Stored but not read after construction, hence the `dead_code` allow on the struct.
     vocab_size: usize,
 }
 
 impl TinyTransformerLM {
-    fn new(vocab_size: usize, embed_dim: usize, num_heads: usize) -> Self {
+    /// Builds a model with the given vocabulary size, embedding width, head count, and
+    /// maximum sequence length.
+    fn new(vocab_size: usize, embed_dim: usize, num_heads: usize, max_len: usize) -> Self {
         Self {
             embedding: Embedding::new(vocab_size, embed_dim),
+            pos_enc: PositionalEncoding::new(
+                embed_dim,
+                max_len,
+                PositionalEncodingType::Sinusoidal,
+            ),
             layer: TransformerLayer::new(embed_dim, num_heads),
             head: volta::nn::Linear::new(embed_dim, vocab_size, true),
             embed_dim,
@@ -119,6 +143,7 @@ impl TinyTransformerLM {
         }
     }
 
+    /// Trainable parameters: embedding, layer, then head. The positional encoding adds none.
     fn parameters(&self) -> Vec<volta::Tensor> {
         let mut p = self.embedding.parameters();
         p.extend(self.layer.parameters());
@@ -126,19 +151,18 @@ impl TinyTransformerLM {
         p
     }
 
-    // Forward pass over a sequence of token indices.
-    // Returns logits of shape [seq_len, vocab_size].
+    /// Forward pass over a sequence of token indices.
+    /// Returns logits of shape `[seq_len, vocab_size]`.
     fn forward(&self, indices: &[usize]) -> volta::Tensor {
         let seq_len = indices.len();
 
         // Embed: [seq_len, embed_dim]
-        let emb = self.embedding.forward(indices);
+        let emb = self.embedding.forward(&index_tensor(indices));
 
-        // PosEnc: sinusoidal, added manually (not tracked, fine for inference quality)
-        let emb = self.add_positional_encoding(emb, seq_len);
-
-        // Reshape to [1, seq_len, embed_dim] for transformer layers
-        let x = emb.reshape(&[1, seq_len, self.embed_dim]);
+        // Reshape to [1, seq_len, embed_dim], then add the positional encoding
+        let x = self
+            .pos_enc
+            .forward(&emb.reshape(&[1, seq_len, self.embed_dim]));
 
         // Transformer layer
         let x = self.layer.forward(&x);
@@ -149,23 +173,18 @@ impl TinyTransformerLM {
         // Linear head: [seq_len, vocab_size]
         self.head.forward(&x)
     }
-
-    fn add_positional_encoding(&self, x: volta::Tensor, seq_len: usize) -> volta::Tensor {
-        let d = self.embed_dim;
-        let mut pe_data = vec![0.0f32; seq_len * d];
-        for pos in 0..seq_len {
-            for i in 0..(d / 2) {
-                let angle = pos as f32 / 10000_f32.powf(2.0 * i as f32 / d as f32);
-                *pe_data.get_mut(pos * d + 2 * i).unwrap() = angle.sin();
-                *pe_data.get_mut(pos * d + 2 * i + 1).unwrap() = angle.cos();
-            }
-        }
-        let pe = RawTensor::new(pe_data, &[seq_len, d], false);
-        x.add(&pe)
-    }
 }
 
 // ===== Training =====
+
+/// Token indices as the I64 tensor `Embedding` takes.
+fn index_tensor(indices: &[usize]) -> volta::Tensor {
+    let wide: Vec<i64> = indices
+        .iter()
+        .map(|&i| i64::try_from(i).expect("a token index fits i64"))
+        .collect();
+    volta::RawTensor::from_typed(wide, &[indices.len()])
+}
 
 fn main() {
     volta::manual_seed(42);
@@ -188,9 +207,9 @@ fn main() {
     let epochs = 150;
     let lr = 3e-3;
 
-    let model = TinyTransformerLM::new(vocab.size(), embed_dim, num_heads);
+    let model = TinyTransformerLM::new(vocab.size(), embed_dim, num_heads, seq_len);
     let params = model.parameters();
-    let total_params: usize = params.iter().map(|p| p.borrow().data.len()).sum();
+    let total_params: usize = params.iter().map(|p| p.data().len()).sum();
     println!("Parameters:  {total_params}");
     println!("Embed dim:   {embed_dim}, Heads: {num_heads}, SeqLen: {seq_len}\n");
 
@@ -198,6 +217,8 @@ fn main() {
 
     println!("Training...\n");
 
+    let mut first_loss = f32::NAN;
+    let mut final_loss = f32::NAN;
     for epoch in 1..=epochs {
         let num_batches = (data.len() - 1) / seq_len;
         let mut epoch_loss = 0.0;
@@ -224,13 +245,17 @@ fn main() {
             let loss = cross_entropy_loss(&logits, &target_tensor);
 
             optimizer.zero_grad();
-            loss.backward();
+            loss.clone().into_loss().expect("scalar loss").backward();
             optimizer.step();
 
-            epoch_loss += loss.borrow().data.first().copied().unwrap_or(f32::NAN);
+            epoch_loss += loss.item();
         }
 
         let avg_loss = epoch_loss / num_batches as f32;
+        final_loss = avg_loss;
+        if epoch == 1 {
+            first_loss = avg_loss;
+        }
         if epoch == 1 || epoch % 25 == 0 {
             println!("Epoch {epoch:3}/{epochs}: loss = {avg_loss:.4}");
         }
@@ -239,4 +264,10 @@ fn main() {
     println!("\n=== Done ===");
     println!("Loss should have decreased from ~3.8 toward ~2.0 or lower.");
     println!("If not, check that autograd flows through MHA and FFN.");
+    // The CI smoke run (`just examples-smoke`) relies on this: a NaN or a loss that never
+    // drops exits non-zero.
+    assert!(
+        final_loss.is_finite() && final_loss < first_loss,
+        "training did not reduce the loss: first {first_loss}, final {final_loss}"
+    );
 }

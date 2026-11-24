@@ -1,6 +1,8 @@
-use volta::{Linear, Module, ProgressBar, RawTensor, SGD, Sequential, TensorOps};
+//! Basic polynomial regression test
+use volta::RawTensor;
+use volta::nn::{Layer, Linear, Module, SGD, Sequential};
+use volta::utils::ProgressBar;
 
-#[allow(clippy::cast_precision_loss)]
 fn main() {
     println!("=== Polynomial Regression Example ===\n");
 
@@ -25,9 +27,9 @@ fn main() {
     // Input(1) -> Hidden(32) -> Output(1)
     let model = Sequential::new(vec![
         Box::new(Linear::new(1, 32, true)),
-        Box::new(volta::ReLU),
+        Box::new(volta::nn::ReLU),
         Box::new(Linear::new(32, 32, true)),
-        Box::new(volta::ReLU),
+        Box::new(volta::nn::ReLU),
         Box::new(Linear::new(32, 1, true)),
     ]);
 
@@ -40,20 +42,24 @@ fn main() {
     // Training loop
     let num_epochs = 1000;
     let mut progress = ProgressBar::new(num_epochs, "Training");
+    let mut first_loss = f32::NAN;
 
     for epoch in 0..num_epochs {
         optimizer.zero_grad();
 
         let pred = model.forward(&x);
         let loss = RawTensor::mse_loss(&pred, &y_true);
+        if epoch == 0 {
+            first_loss = loss.item();
+        }
 
-        loss.backward();
+        loss.clone().into_loss().expect("scalar loss").backward();
         optimizer.step();
 
         progress.update(epoch + 1);
 
         if epoch % 100 == 99 {
-            let loss_val = loss.borrow().data.first().copied().unwrap_or(f32::NAN);
+            let loss_val = loss.item();
             println!(" Loss = {loss_val:.6}");
         }
     }
@@ -62,27 +68,26 @@ fn main() {
     let final_pred = model.forward(&x);
     let final_loss = RawTensor::mse_loss(&final_pred, &y_true);
     println!("\n=== Training Complete ===");
-    println!(
-        "Final Loss: {:.6}",
-        final_loss
-            .borrow()
-            .data
-            .first()
-            .copied()
-            .unwrap_or(f32::NAN)
+    let final_loss = final_loss.item();
+    println!("Final Loss: {final_loss:.6}");
+    // The CI smoke run (`just examples-smoke`) relies on this: a NaN or a loss that never
+    // drops exits non-zero.
+    assert!(
+        final_loss.is_finite() && final_loss < first_loss,
+        "training did not reduce the loss: first {first_loss}, final {final_loss}"
     );
 
     // Show a few predictions
     println!("\nSample predictions:");
-    let pred_data = &final_pred.borrow().data;
+    let pred_data = final_pred.data();
     for i in (0..num_samples).step_by(20) {
         println!(
             "  x={:6.2}: pred={:6.3}, true={:6.3}, error={:6.3}",
-            x_data.get(i).copied().unwrap_or(f32::NAN),
-            pred_data.get(i).copied().unwrap_or(f32::NAN),
-            y_data.get(i).copied().unwrap_or(f32::NAN),
-            (pred_data.get(i).copied().unwrap_or(f32::NAN)
-                - y_data.get(i).copied().unwrap_or(f32::NAN))
+            x_data.get(i).copied().expect("index in range"),
+            pred_data.get(i).copied().expect("index in range"),
+            y_data.get(i).copied().expect("index in range"),
+            (pred_data.get(i).copied().expect("index in range")
+                - y_data.get(i).copied().expect("index in range"))
             .abs()
         );
     }

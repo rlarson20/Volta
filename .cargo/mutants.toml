@@ -1,0 +1,46 @@
+# cargo-mutants configuration (#389). `just mutants-core` (mutants.yml, weekly) runs the CPU
+# lane: `--no-default-features`, so there is no GPU device. A mutant excluded here is either
+# equivalent (no test can tell it from the original) or changes only a GPU branch, which the
+# CPU lane can never take. Every other survivor is a test gap: kill it with a test
+# (src/lib_tests/mutants_core_tests.rs), don't add it here.
+#
+# Each pattern is matched against the mutant's name without its line number, e.g.
+# "replace && with || in UnaryGradFn::backward". Add a reason with every entry.
+
+exclude_re = [
+    # --- Equivalent ---
+    # Only `Compare` is trivial at the `GradFn` level, and its output is Bool, so `edge()`'s
+    # `dtype().is_float()` check already refuses it a grad fn: `false` changes nothing.
+    "replace GradFn::is_trivial -> bool with false",
+    # Every `BinaryOp` is differentiable today (define_ops! has no non-differentiable binary
+    # row), so `BinaryOp::is_trivial` is always false. Revisit when one is added.
+    "replace BinaryGradFn::is_trivial -> bool with false",
+    # `broadcast_shape`'s message loop stops at the first incompatible axis, which is always
+    # inside both shapes (past the shorter one its dim reads as 1, which broadcasts), so the
+    # `i < len && !is_empty()` bounds guards are never false before it stops: `<=` and `||`
+    # change nothing. The panic text itself is pinned by mutants_core_tests.
+    "replace (< with <=|&& with \\|\\|) in RawTensor::broadcast_shape",
+    # `sum_axes` is only read with `contains` and `is_empty`: pushing a leading axis twice
+    # (`delete !`), or also listing a size-1 grad axis whose target is 1 (`>` to `>=`), sums
+    # nothing different, and an empty list returns `grad` unchanged, as summing size-1 axes
+    # would.
+    "replace > with >= in RawTensor::sum_over_broadcast_dims",
+    "delete ! in RawTensor::sum_over_broadcast_dims",
+
+    # --- GPU-only on the CPU lane ---
+    # All inputs are on the one CPU device, so the cross-device check never fires.
+    "replace check_one_device with \\(\\)",
+    "replace != with == in check_one_device",
+    # `transfer` (a `ToDevice` edge) only matters when input and output devices differ.
+    "replace match guard transfer with (true|false) in edge",
+    # The GPU fast paths open with `device.is_gpu() && ..`, false on the CPU lane, so the
+    # rest of the guard is never evaluated. The patterns can't name a line, so they also drop
+    # two mutants the CPU tests do catch: `ternary_op`'s `x.dtype() == DType::Bool` assert
+    # (`!=`), and the second `&&` of `UnaryGradFn::backward`'s guard.
+    "replace && with \\|\\| in UnaryGradFn::backward",
+    "replace (&& with \\|\\||== with !=) in RawTensor::compare",
+    "replace == with != in RawTensor::ternary_op",
+    # The GPU backward guard is `out_grad.device.is_gpu() && let Some(spec) = ..filter(|s|
+    # !s.is_batched())`; the `!` is never evaluated on the CPU lane.
+    "delete ! in MatMulGradFn::backward",
+]

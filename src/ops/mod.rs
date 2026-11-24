@@ -1,53 +1,128 @@
 // Operation enums and trait implementations
-pub mod binary;
-pub mod gpu_ops;
-pub mod matmul;
-pub mod movement;
-pub mod reduce;
-pub mod ternary;
-pub mod unary;
+/// Elementwise binary ops.
+pub(crate) mod binary;
+/// Elementwise comparisons (Bool results).
+pub(crate) mod compare;
+/// `gather` along one axis (`torch.gather`).
+pub(crate) mod gather;
+pub(crate) mod gpu_ops;
+/// Fused losses with their own gradient (binary cross entropy).
+pub(crate) mod loss;
+/// Matrix multiplication.
+pub(crate) mod matmul;
+/// Tie and NaN rules of the max family, one per PyTorch op.
+pub(crate) mod max_rule;
+/// Movement ops (reshape, permute, expand, pad, shrink, stride).
+pub(crate) mod movement;
+/// Reductions (sum, max, mean, and per-axis forms).
+pub(crate) mod reduce;
+/// Ternary ops (`mulacc`, `where_op`).
+pub(crate) mod ternary;
+/// Elementwise unary ops.
+pub(crate) mod unary;
 
 // Re-export operation types
-pub use binary::{BinaryGradFn, BinaryOp};
-pub use matmul::MatMulGradFn;
-pub use movement::{MovementGradFn, MovementOp};
-pub use reduce::{MaxReduceGradFn, MeanGradFn, ReduceOp, SumGradFn};
-pub use ternary::{MulAccGradFn, TernaryOp, WhereGradFn};
-pub use unary::{UnaryGradFn, UnaryOp};
-
-// ===== LOAD OPERATIONS =====
-// DONT KNOW WHERE LOADS GO
-//other methods to add:
-//to_device LoadOp?
+pub use binary::BinaryOp;
+pub use compare::CmpOp;
+pub use movement::MovementOp;
+pub use reduce::ReduceOp;
+pub use ternary::TernaryOp;
+pub use unary::UnaryOp;
 
 impl RawTensor {
-    /// Create empty (zero-filled) tensor
-    #[must_use]
-    pub fn empty(shape: &[usize]) -> Tensor {
-        let size = shape.iter().product();
-        Self::new(vec![0.0; size], shape, false)
-    }
-    /// Create tensor filled with constant value
-    #[must_use]
-    pub fn constant(value: f32, shape: &[usize]) -> Tensor {
-        let size = shape.iter().product();
-        Self::new(vec![value; size], shape, false)
-    }
-    /// Create tensor from existing Vec
-    #[must_use]
-    pub fn from_vec(data: Vec<f32>, shape: &[usize]) -> Tensor {
-        Self::new(data, shape, false)
+    /// Create tensor filled with constant value (fallible)
+    ///
+    /// # Errors
+    ///
+    /// Same as [`RawTensor::try_zeros`]
+    pub fn try_constant(value: f32, shape: &[usize]) -> crate::Result<Tensor> {
+        let size = Self::checked_numel(shape)?;
+        Self::try_new(vec![value; size], shape, false)
     }
 
-    /// Ensure tensor is contiguous in memory
+    /// Create tensor filled with constant value
     ///
-    /// Currently all tensors are contiguous. This would be needed
-    /// if we implement views/strides that share memory.
+    /// # Panics
+    ///
+    /// If `shape` is invalid. Use [`Self::try_constant`] to get an error instead.
+    #[must_use]
+    #[track_caller]
+    pub fn constant(value: f32, shape: &[usize]) -> Tensor {
+        Self::try_constant(value, shape).or_panic("constant")
+    }
+
+    /// Create tensor from existing Vec (fallible)
+    ///
+    /// # Errors
+    ///
+    /// Same as [`RawTensor::try_new`]
+    pub fn try_from_vec(data: Vec<f32>, shape: &[usize]) -> crate::Result<Tensor> {
+        Self::try_new(data, shape, false)
+    }
+
+    /// Create tensor from existing Vec
+    ///
+    /// # Panics
+    ///
+    /// If `shape` is invalid or `data.len()` != `shape.product()`. Use
+    /// [`Self::try_from_vec`] to get an error instead.
+    #[must_use]
+    #[track_caller]
+    pub fn from_vec(data: Vec<f32>, shape: &[usize]) -> Tensor {
+        Self::try_from_vec(data, shape).or_panic("from_vec")
+    }
+
+    /// A CPU leaf tensor (no grad) of any [`Element`](crate::storage::Element) type; its
+    /// dtype follows `T` (fallible).
+    ///
+    /// Separate from [`Self::from_vec`] on purpose: an unsuffixed float literal is `f64` in
+    /// Rust, so a generic `from_vec(vec![1.0])` would build an f64 tensor unasked.
+    ///
+    /// Every op, layer, and optimizer computes in f32, f64, f16 or bf16 on the CPU (the GPU
+    /// in f32, f16 or bf16); half types compute in f32 and round each output. Other dtypes can be
+    /// built, inspected, saved, and cast. An integer or bool tensor cannot require
+    /// gradients (`set_requires_grad(true)` panics).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`RawTensor::try_new`]
+    pub fn try_from_typed<T: crate::storage::Element>(
+        data: Vec<T>,
+        shape: &[usize],
+    ) -> crate::Result<Tensor> {
+        Self::try_new_typed(data, shape, false)
+    }
+
+    /// Panicking form of [`Self::try_from_typed`].
+    ///
+    /// # Panics
+    ///
+    /// If `shape` is invalid or `data.len()` != `shape.product()`.
+    #[must_use]
+    #[track_caller]
+    pub fn from_typed<T: crate::storage::Element>(data: Vec<T>, shape: &[usize]) -> Tensor {
+        Self::try_from_typed(data, shape).or_panic("from_typed")
+    }
+
+    /// Ensure tensor is contiguous in memory.
+    ///
+    /// Every tensor is contiguous today, so this is a differentiable identity: a
+    /// [`reshape`](Self::reshape) to the tensor's own shape. The result is a new graph node
+    /// that shares the input's buffer (copy-on-write), keeps its device and dtype, and
+    /// passes the gradient back unchanged.
+    ///
+    /// **When storage gains strided views, this must become its own op.** A same-shape
+    /// `reshape` would then stay a view, and `contiguous` would silently stop materializing.
+    /// Give it a `MovementOp` that copies the data densely, with an identity backward, and
+    /// send the choke points named in DECISIONS.md ("Matmul layout: contiguous-only")
+    /// through it. Don't reuse `reshape` there.
+    #[must_use]
     pub fn contiguous(self_t: &Tensor) -> Tensor {
-        let s = self_t.borrow();
-        Self::new(s.data.to_vec(), &s.shape, s.requires_grad)
+        let shape = self_t.borrow().shape.clone();
+        Self::reshape(self_t, shape.truncate_rank())
     }
 }
 
 // Import core types for operation implementations
+use crate::error::OrPanic;
 use crate::{RawTensor, Tensor};

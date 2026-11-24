@@ -1,7 +1,6 @@
-use volta::TensorOps;
-use volta::nn::Module;
-use volta::{Adam, Conv2d, Flatten, Linear, MaxPool2d, ReLU, Sequential};
-
+//! The second README example: one `Adam` training step of a small `Conv2d` + `MaxPool2d` + `Linear` classifier on random data, built with `Sequential`.
+use volta::nn::{Adam, Conv2d, Flatten, Linear, MaxPool2d, ReLU, Sequential};
+use volta::nn::{Layer, Module};
 fn main() {
     // 1. Define Model
     let model = Sequential::new(vec![
@@ -24,11 +23,12 @@ fn main() {
     optim.zero_grad();
     let output = model.forward(&input);
     let loss = volta::mse_loss(&output, &target);
-    loss.backward();
+    loss.clone().into_loss().expect("scalar loss").backward();
     optim.step();
 
-    println!(
-        "Loss: {:?}",
-        loss.borrow().data.first().copied().unwrap_or(f32::NAN)
-    );
+    let loss = loss.item();
+    println!("Loss: {loss:?}");
+    // One step on random targets has no "before" to beat; the CI smoke run
+    // (`just examples-smoke`) checks only that the loss is finite.
+    assert!(loss.is_finite(), "loss is not finite: {loss}");
 }

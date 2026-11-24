@@ -6,12 +6,35 @@
 use wgpu::PipelineCompilationOptions;
 
 use super::pool::{BufferPool, BufferPoolConfig};
+use super::shader_template::Elem;
 use super::staging_pool::StagingBufferPool;
+use crate::dtype::DType;
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 /// Manages the GPU device, queue, and compiled compute pipelines
+/// Forces f16 buffers through the packed (emulated) shaders even where the device has
+/// native f16, so tests can check that path on hardware that never needs it. Both paths
+/// use the same byte layout, so flipping it never invalidates a buffer.
+static F16_EMULATION: AtomicBool = AtomicBool::new(false);
+
+/// Route f16 buffers through the packed shaders (`true`) or native f16 where available.
+#[cfg(test)]
+pub(crate) fn set_f16_emulation(on: bool) {
+    F16_EMULATION.store(on, Ordering::Relaxed);
+}
+
+/// Compiled cast pipelines by (input, output element type, entry point).
+type CastPipelines = HashMap<(Elem, Elem, &'static str), Arc<wgpu::ComputePipeline>>;
+
+/// The largest storage binding Volta requests: 2^32 four-byte elements, the most a `u32`
+/// element index can address (#306).
+const MAX_ADDRESSABLE_BINDING_BYTES: u64 = (1 << 32) * 4;
+
 /// Default threshold for pending submissions before forcing a sync.
 /// This prevents GPU command queue exhaustion during rapid-fire operations.
 const DEFAULT_SYNC_THRESHOLD: u32 = 16;
@@ -19,9 +42,6 @@ const DEFAULT_SYNC_THRESHOLD: u32 = 16;
 /// Hard timeout for GPU sync operations (M2 Mac optimized)
 /// Set to 5s to accommodate unified memory architecture and thermal throttling
 const HARD_SYNC_TIMEOUT_SECS: u64 = 5;
-
-/// Maximum consecutive timeouts before aborting (3-strike rule)
-const MAX_CONSECUTIVE_TIMEOUTS: u32 = 3;
 
 /// Get the hard sync timeout from environment or default
 ///
@@ -36,26 +56,7 @@ fn get_sync_timeout_secs() -> u64 {
         .unwrap_or(HARD_SYNC_TIMEOUT_SECS)
 }
 
-/// GPU synchronization errors
-#[derive(Debug)]
-pub enum GpuSyncError {
-    /// Sync timed out (potentially recoverable)
-    Timeout(String),
-    /// GPU appears lost after consecutive timeouts
-    GpuLost(String),
-}
-
-impl std::fmt::Display for GpuSyncError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Self::Timeout(msg) => write!(f, "GPU sync timeout: {msg}"),
-            Self::GpuLost(msg) => write!(f, "GPU lost: {msg}"),
-        }
-    }
-}
-
-impl std::error::Error for GpuSyncError {}
-
+/// Handle to the GPU: device, queue, compiled pipelines, buffer pools, and submission counters.
 pub struct GpuContext {
     /// The GPU device - represents the actual hardware
     device: wgpu::Device,
@@ -65,6 +66,12 @@ pub struct GpuContext {
     adapter_info: wgpu::AdapterInfo,
     /// Pre-compiled compute pipelines for common operations
     pipelines: ComputePipelines,
+    /// Whether the device has `SHADER_F16` (native f16 storage).
+    f16_native: bool,
+    /// Pipelines for native f16, packed f16 and packed bf16, built on first use.
+    half_pipelines: [OnceLock<ComputePipelines>; 3],
+    /// Cast pipelines by (input, output element type, entry point), built on first use.
+    cast_pipelines: Mutex<CastPipelines>,
     /// Buffer pool for reusing GPU memory allocations
     buffer_pool: Arc<BufferPool>,
     /// Staging buffer pool for GPU→CPU transfers
@@ -73,8 +80,19 @@ pub struct GpuContext {
     pending_submissions: AtomicU32,
     /// Threshold before forcing a sync to prevent command queue exhaustion
     sync_threshold: u32,
-    /// Consecutive timeout counter for 3-strike abort rule
-    consecutive_timeouts: AtomicU32,
+}
+
+/// The backward pipelines of one differentiable binary op, looked up from its
+/// `define_ops!` row.
+pub(crate) struct BinaryBackwardPipelines<'p> {
+    /// Same-shape gradient wrt the first input.
+    pub a: &'p wgpu::ComputePipeline,
+    /// Same-shape gradient wrt the second input.
+    pub b: &'p wgpu::ComputePipeline,
+    /// Broadcast backward, scatter pass.
+    pub pass1: &'p wgpu::ComputePipeline,
+    /// Broadcast backward, reduce pass.
+    pub pass2: &'p wgpu::ComputePipeline,
 }
 
 /// Collection of pre-compiled compute pipelines
@@ -83,123 +101,243 @@ pub struct GpuContext {
 /// and reuse the pipelines for all operations.
 pub struct ComputePipelines {
     // Element-wise operations
+    /// Elementwise `a + b`.
     pub add: wgpu::ComputePipeline,
+    /// Elementwise `a - b`.
     pub sub: wgpu::ComputePipeline,
+    /// Elementwise `a * b`.
     pub mul: wgpu::ComputePipeline,
+    /// Elementwise `a / b`.
     pub div: wgpu::ComputePipeline,
+    /// Elementwise `max(a, b)`.
     pub max: wgpu::ComputePipeline,
+    /// Elementwise `a mod b`.
     pub mod_op: wgpu::ComputePipeline,
-    pub cmplt: wgpu::ComputePipeline,
+    /// Bool `a < b` (`compare.wgsl`).
+    pub cmp_lt: wgpu::ComputePipeline,
+    /// Bool `a <= b`.
+    pub cmp_le: wgpu::ComputePipeline,
+    /// Bool `a > b`.
+    pub cmp_gt: wgpu::ComputePipeline,
+    /// Bool `a >= b`.
+    pub cmp_ge: wgpu::ComputePipeline,
+    /// Bool `a == b`.
+    pub cmp_eq: wgpu::ComputePipeline,
+    /// Bool `a != b`.
+    pub cmp_ne: wgpu::ComputePipeline,
+    /// `where(cond, x, y)` with a Bool condition (`where_select.wgsl`).
+    pub where_select: wgpu::ComputePipeline,
+    /// `GradScaler`'s fused unscale and inf/NaN check (`amp_unscale.wgsl`).
+    pub amp_unscale: wgpu::ComputePipeline,
 
     // Unary operations
+    /// Elementwise `-x`.
     pub neg: wgpu::ComputePipeline,
+    /// Elementwise `exp(x)`.
     pub exp: wgpu::ComputePipeline,
+    /// Elementwise `ln(x)`.
     pub log: wgpu::ComputePipeline,
+    /// Elementwise `max(x, 0)`.
     pub relu: wgpu::ComputePipeline,
+    /// Elementwise `sigmoid(x)`.
     pub sigmoid: wgpu::ComputePipeline,
+    /// Elementwise `tanh(x)`.
     pub tanh: wgpu::ComputePipeline,
+    /// Elementwise `sqrt(x)`.
     pub sqrt: wgpu::ComputePipeline,
+    /// Elementwise `1 / x`.
     pub recip: wgpu::ComputePipeline,
+    /// Elementwise `2^x`.
     pub exp2: wgpu::ComputePipeline,
+    /// Elementwise `log2(x)`.
     pub log2: wgpu::ComputePipeline,
+    /// Elementwise `sin(x)`.
     pub sin: wgpu::ComputePipeline,
+    /// Elementwise `cos(x)`.
     pub cos: wgpu::ComputePipeline,
+    /// Elementwise `erf(x)`.
+    pub erf: wgpu::ComputePipeline,
 
     // Unary backward operations
+    /// Backward of `neg`: the input gradient.
     pub neg_backward: wgpu::ComputePipeline,
+    /// Backward of `exp`: the input gradient.
     pub exp_backward: wgpu::ComputePipeline,
+    /// Backward of `log`: the input gradient.
     pub log_backward: wgpu::ComputePipeline,
+    /// Backward of `relu`: the input gradient.
     pub relu_backward: wgpu::ComputePipeline,
+    /// Backward of `sigmoid`: the input gradient.
     pub sigmoid_backward: wgpu::ComputePipeline,
+    /// Backward of `tanh`: the input gradient.
     pub tanh_backward: wgpu::ComputePipeline,
+    /// Backward of `sqrt`: the input gradient.
     pub sqrt_backward: wgpu::ComputePipeline,
+    /// Backward of `recip`: the input gradient.
     pub recip_backward: wgpu::ComputePipeline,
+    /// Backward of `exp2`: the input gradient.
     pub exp2_backward: wgpu::ComputePipeline,
+    /// Backward of `log2`: the input gradient.
     pub log2_backward: wgpu::ComputePipeline,
+    /// Backward of `sin`: the input gradient.
     pub sin_backward: wgpu::ComputePipeline,
+    /// Backward of `cos`: the input gradient.
     pub cos_backward: wgpu::ComputePipeline,
+    /// Backward of `erf`: the input gradient.
+    pub erf_backward: wgpu::ComputePipeline,
 
-    // Binary backward operations (same-shape only, legacy)
+    // Binary backward operations (same-shape inputs)
+    /// Same-shape backward of `add` for the first operand.
     pub add_backward_a: wgpu::ComputePipeline,
+    /// Same-shape backward of `add` for the second operand.
     pub add_backward_b: wgpu::ComputePipeline,
+    /// Same-shape backward of `sub` for the first operand.
     pub sub_backward_a: wgpu::ComputePipeline,
+    /// Same-shape backward of `sub` for the second operand.
     pub sub_backward_b: wgpu::ComputePipeline,
+    /// Same-shape backward of `mul` for the first operand.
     pub mul_backward_a: wgpu::ComputePipeline,
+    /// Same-shape backward of `mul` for the second operand.
     pub mul_backward_b: wgpu::ComputePipeline,
+    /// Same-shape backward of `div` for the first operand.
     pub div_backward_a: wgpu::ComputePipeline,
+    /// Same-shape backward of `div` for the second operand.
     pub div_backward_b: wgpu::ComputePipeline,
+    /// Same-shape backward of `max` for the first operand.
     pub max_backward_a: wgpu::ComputePipeline,
+    /// Same-shape backward of `max` for the second operand.
     pub max_backward_b: wgpu::ComputePipeline,
-
-    // Binary backward operations with broadcasting support
-    pub add_broadcast: wgpu::ComputePipeline,
-    pub sub_broadcast: wgpu::ComputePipeline,
-    pub mul_broadcast: wgpu::ComputePipeline,
-    pub div_broadcast: wgpu::ComputePipeline,
-    pub max_broadcast: wgpu::ComputePipeline,
+    /// Same-shape backward of `mod` for the first operand.
+    pub mod_backward_a: wgpu::ComputePipeline,
+    /// Same-shape backward of `mod` for the second operand.
+    pub mod_backward_b: wgpu::ComputePipeline,
 
     // Binary backward operations with RACE-FREE broadcasting (two-pass)
+    /// Broadcast backward of `add`, scatter pass: records each output element's contribution in a temporary buffer.
     pub add_broadcast_pass1: wgpu::ComputePipeline,
+    /// Broadcast backward of `add`, reduce pass: accumulates the temporary buffer into the operand gradients without write races.
     pub add_broadcast_pass2: wgpu::ComputePipeline,
+    /// Broadcast backward of `sub`, scatter pass: records each output element's contribution in a temporary buffer.
     pub sub_broadcast_pass1: wgpu::ComputePipeline,
+    /// Broadcast backward of `sub`, reduce pass: accumulates the temporary buffer into the operand gradients without write races.
     pub sub_broadcast_pass2: wgpu::ComputePipeline,
+    /// Broadcast backward of `mul`, scatter pass: records each output element's contribution in a temporary buffer.
     pub mul_broadcast_pass1: wgpu::ComputePipeline,
+    /// Broadcast backward of `mul`, reduce pass: accumulates the temporary buffer into the operand gradients without write races.
     pub mul_broadcast_pass2: wgpu::ComputePipeline,
+    /// Broadcast backward of `div`, scatter pass: records each output element's contribution in a temporary buffer.
     pub div_broadcast_pass1: wgpu::ComputePipeline,
+    /// Broadcast backward of `div`, reduce pass: accumulates the temporary buffer into the operand gradients without write races.
     pub div_broadcast_pass2: wgpu::ComputePipeline,
+    /// Broadcast backward of `max`, scatter pass: records each output element's contribution in a temporary buffer.
     pub max_broadcast_pass1: wgpu::ComputePipeline,
+    /// Broadcast backward of `max`, reduce pass: accumulates the temporary buffer into the operand gradients without write races.
     pub max_broadcast_pass2: wgpu::ComputePipeline,
+    /// Broadcast backward of `mod`, scatter pass: records each output element's contribution in a temporary buffer.
+    pub mod_broadcast_pass1: wgpu::ComputePipeline,
+    /// Broadcast backward of `mod`, reduce pass: accumulates the temporary buffer into the operand gradients without write races.
+    pub mod_broadcast_pass2: wgpu::ComputePipeline,
 
     // Reductions
-    pub sum_reduce: wgpu::ComputePipeline,
-    pub max_reduce: wgpu::ComputePipeline,
-    pub mean_reduce: wgpu::ComputePipeline,
+    /// First pass of a sum or mean: input to one partial sum per 1024 elements.
+    pub sum_first: wgpu::ComputePipeline,
+    /// Later pass of a sum or mean: partial sums to fewer partial sums.
+    pub sum_next: wgpu::ComputePipeline,
+    /// First pass of a sum of squares (finished by `sum_next`).
+    pub sumsq_first: wgpu::ComputePipeline,
+    /// First pass of a maximum: input to one (value, count of elements equal to it) pair per 1024 elements.
+    pub max_first: wgpu::ComputePipeline,
+    /// Later pass of a maximum: (value, count) pairs to fewer pairs.
+    pub max_next: wgpu::ComputePipeline,
+    /// First pass of the largest magnitude, `max_first` on `abs(x)` (finished by `max_next`).
+    pub absmax_first: wgpu::ComputePipeline,
 
     // Movement operations
+    /// Forward `permute` movement op.
     pub permute: wgpu::ComputePipeline,
+    /// Forward `expand` movement op.
     pub expand: wgpu::ComputePipeline,
+    /// Forward `pad` movement op.
     pub pad: wgpu::ComputePipeline,
+    /// Forward `shrink` movement op.
     pub shrink: wgpu::ComputePipeline,
+    /// Forward `stride` movement op.
     pub stride: wgpu::ComputePipeline,
 
     // Movement backward operations
+    /// Backward of the `permute` movement op.
     pub permute_backward: wgpu::ComputePipeline,
+    /// Backward of the `expand` movement op, one thread per source element.
     pub expand_backward: wgpu::ComputePipeline,
+    /// Backward of the `expand` movement op, one workgroup per source element (many
+    /// broadcast terms per source).
+    pub expand_backward_wide: wgpu::ComputePipeline,
+    /// Backward of the `pad` movement op.
     pub pad_backward: wgpu::ComputePipeline,
+    /// Backward of the `shrink` movement op.
     pub shrink_backward: wgpu::ComputePipeline,
+    /// Backward of the `stride` movement op.
     pub stride_backward: wgpu::ComputePipeline,
 
     // Matrix multiplication (this is the big one for ML!)
+    /// Batched matrix product.
     pub matmul: wgpu::ComputePipeline,
 
     // Matrix multiplication backward
+    /// Matmul gradient for the left operand.
     pub matmul_backward_a: wgpu::ComputePipeline,
+    /// Matmul gradient for the right operand.
     pub matmul_backward_b: wgpu::ComputePipeline,
 
     // Reduction backward
+    /// Backward of the full sum reduction.
     pub sum_backward: wgpu::ComputePipeline,
+    /// Backward of the full mean reduction.
     pub mean_backward: wgpu::ComputePipeline,
+    /// Backward of the full max reduction: the gradient goes to the maximum element.
     pub max_backward: wgpu::ComputePipeline,
 
     // Optimizer step
+    /// Parameter update shared by SGD, SGD with momentum, and Adam.
     pub optimizer_step: wgpu::ComputePipeline,
 
+    // Muon: momentum, Frobenius norm, and the elementwise pieces of Newton-Schulz
+    /// Muon momentum buffer update (optionally Nesterov).
+    pub muon_momentum: wgpu::ComputePipeline,
+    /// Divides a buffer by its largest magnitude (or 1 if that is 0 or inf), before the
+    /// sum of squares.
+    pub muon_scale: wgpu::ComputePipeline,
+    /// The Frobenius norm from the largest magnitude and the scaled sum of squares.
+    pub muon_norm: wgpu::ComputePipeline,
+    /// Multiplies a buffer by `1 / (norm + epsilon)`, the norm from `muon_norm`.
+    pub muon_normalize: wgpu::ComputePipeline,
+    /// Computes `alpha * x + beta * y`.
+    pub muon_axpby: wgpu::ComputePipeline,
+
     // Image-to-column transformation for convolution
+    /// Unfolds input windows into columns.
     pub im2col: wgpu::ComputePipeline,
+    /// Folds columns back into an image, summing overlaps.
     pub col2im: wgpu::ComputePipeline,
 
     // Direct convolution (memory efficient)
+    /// Direct sliding-window convolution.
     pub direct_conv: wgpu::ComputePipeline,
 
     // Implicit GEMM convolution (balanced performance/memory)
+    /// Implicit-GEMM convolution.
     pub igemm: wgpu::ComputePipeline,
 
     // Convolution backward operations
+    /// Input gradient of direct convolution.
     pub conv_backward_input: wgpu::ComputePipeline,
+    /// Weight gradient of direct convolution.
     pub conv_backward_weight: wgpu::ComputePipeline,
 
     // iGEMM backward operations
+    /// Input gradient of implicit-GEMM convolution.
     pub igemm_backward_input: wgpu::ComputePipeline,
+    /// Weight gradient of implicit-GEMM convolution.
     pub igemm_backward_weight: wgpu::ComputePipeline,
 }
 
@@ -211,19 +349,20 @@ impl GpuContext {
     /// 2. Creates a device and queue
     /// 3. Compiles all our compute shaders
     /// # Errors
-    /// Whatever errors come from async (TODO: inspect this deeper)
+    /// A message naming the step that failed: no suitable adapter, or the device request was refused.
     pub fn new() -> Result<Self, String> {
         // wgpu is async, but we want a sync API for simplicity
         // pollster::block_on runs async code synchronously
         pollster::block_on(Self::new_async())
     }
 
+    /// Selects an adapter, opens a device, and compiles every pipeline; the error says which step failed.
     async fn new_async() -> Result<Self, String> {
         // Step 1: Create a wgpu instance
         // This is the entry point to wgpu
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(), // Try all available backends (Vulkan, Metal, DX12, etc.)
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()  // headless compute
         });
 
         // Step 2: Request an adapter (represents a physical GPU)
@@ -232,6 +371,9 @@ impl GpuContext {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: None, // We don't need a surface for compute
                 force_fallback_adapter: false,
+                // Bucketing would coarsen the adapter's limits; the device requests the real
+                // buffer limits below (the other limits stay at wgpu's defaults).
+                apply_limit_buckets: false,
             })
             .await
             .map_err(|e| format!("No suitable GPU adapter found: {e}"))?;
@@ -240,10 +382,32 @@ impl GpuContext {
 
         // Step 3: Request a device (logical connection to the GPU)
 
+        // Native f16 storage where the adapter has it; f16 falls back to packed words
+        // otherwise, and bf16 is always packed (`shader_template`).
+        let f16_native = adapter.features().contains(wgpu::Features::SHADER_F16);
+        // The two buffer-size limits are the adapter's, not wgpu's defaults (a 128 MiB
+        // binding and a 256 MiB buffer), so a tensor as large as the GPU can bind works
+        // (#306), clamped to what Volta can use. Shaders index elements with a `u32`, so a
+        // binding past 2^32 four-byte elements could not be addressed; and every Volta
+        // buffer is bound as a storage buffer, so a buffer larger than the binding limit
+        // would be useless. The other limits stay at the defaults.
+        let adapter_limits = adapter.limits();
+        let max_binding = adapter_limits
+            .max_storage_buffer_binding_size
+            .min(MAX_ADDRESSABLE_BINDING_BYTES);
+        let required_limits = wgpu::Limits {
+            max_storage_buffer_binding_size: max_binding,
+            max_buffer_size: adapter_limits.max_buffer_size.min(max_binding),
+            ..wgpu::Limits::default()
+        };
         let device_descriptor = wgpu::DeviceDescriptor {
             label: Some("Volta GPU Device"),
-            required_features: wgpu::Features::empty(),
-            required_limits: wgpu::Limits::default(),
+            required_features: if f16_native {
+                wgpu::Features::SHADER_F16
+            } else {
+                wgpu::Features::empty()
+            },
+            required_limits,
             memory_hints: wgpu::MemoryHints::Performance,
             ..Default::default()
         };
@@ -253,7 +417,7 @@ impl GpuContext {
             .await
             .map_err(|e| format!("Failed to create device: {e}"))?;
         // Step 4: Compile all our compute shaders
-        let pipelines = Self::create_pipelines(&device);
+        let pipelines = Self::create_pipelines(&device, Elem::F32);
 
         // Step 5: Create the buffer pool for memory reuse
         let buffer_pool = Arc::new(BufferPool::new(BufferPoolConfig::default()));
@@ -266,12 +430,22 @@ impl GpuContext {
             queue,
             adapter_info,
             pipelines,
+            f16_native,
+            half_pipelines: [OnceLock::new(), OnceLock::new(), OnceLock::new()],
+            cast_pipelines: Mutex::new(HashMap::new()),
             buffer_pool,
             staging_pool,
             pending_submissions: AtomicU32::new(0),
             sync_threshold: DEFAULT_SYNC_THRESHOLD,
-            consecutive_timeouts: AtomicU32::new(0),
         })
+    }
+
+    /// The largest tensor, in bytes, a kernel can bind: the device's
+    /// `max_storage_buffer_binding_size`, which Volta requests at the adapter's value
+    /// (#306). `to_device` refuses a larger upload with a `VoltaError`.
+    #[must_use]
+    pub fn max_binding_bytes(&self) -> u64 {
+        self.device.limits().max_storage_buffer_binding_size
     }
 
     /// Get the GPU device name for display
@@ -294,6 +468,86 @@ impl GpuContext {
         &self.pipelines
     }
 
+    /// The shader element type for GPU buffers of `dtype`: native f16 where the device
+    /// has `SHADER_F16` (unless [`set_f16_emulation`] forces the packed path), packed
+    /// otherwise; bf16 is always packed.
+    ///
+    /// # Panics
+    /// If `dtype` is not F32, F16 or BF16 (Bool and the rest have no float pipelines).
+    pub(crate) fn elem_for(&self, dtype: DType) -> Elem {
+        match dtype {
+            DType::F32 => Elem::F32,
+            DType::F16 if self.f16_native && !F16_EMULATION.load(Ordering::Relaxed) => Elem::F16,
+            DType::F16 => Elem::F16Packed,
+            DType::BF16 => Elem::Bf16Packed,
+            other @ (DType::F64 | DType::I32 | DType::I64 | DType::U8 | DType::Bool) => {
+                panic!("GPU kernels compute on f32, f16 and bf16 buffers, not {other}")
+            }
+        }
+    }
+
+    /// The pipelines for buffers of `dtype` (see [`Self::elem_for`]); half sets are
+    /// compiled on first use.
+    ///
+    /// # Panics
+    /// As [`Self::elem_for`].
+    pub(crate) fn pipelines_for(&self, dtype: DType) -> &ComputePipelines {
+        let elem = self.elem_for(dtype);
+        let slot = match elem {
+            Elem::F32 => return &self.pipelines,
+            Elem::F16 => 0,
+            Elem::F16Packed => 1,
+            Elem::Bf16Packed => 2,
+        };
+        self.half_pipelines
+            .get(slot)
+            .expect("three half pipeline slots")
+            .get_or_init(|| {
+                log::info!("[GPU] compiling {elem:?} pipelines");
+                Self::create_pipelines(&self.device, elem)
+            })
+    }
+
+    /// The `cast.wgsl` pipeline `entry` from `input` to `output` element types, compiled
+    /// on first use.
+    pub(crate) fn cast_pipeline(
+        &self,
+        input: Elem,
+        output: Elem,
+        entry: &'static str,
+    ) -> Arc<wgpu::ComputePipeline> {
+        let mut cache = self
+            .cast_pipelines
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Arc::clone(cache.entry((input, output, entry)).or_insert_with(|| {
+            let module = self
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("Cast Shader"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        super::shader_template::expand(
+                            include_str!("shaders/cast.wgsl"),
+                            input,
+                            output,
+                        )
+                        .into(),
+                    ),
+                });
+            Arc::new(
+                self.device
+                    .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: Some("Cast Pipeline"),
+                        layout: None,
+                        module: &module,
+                        entry_point: Some(entry),
+                        compilation_options: PipelineCompilationOptions::default(),
+                        cache: None,
+                    }),
+            )
+        }))
+    }
+
     /// Get a reference to the buffer pool
     pub fn buffer_pool(&self) -> &BufferPool {
         &self.buffer_pool
@@ -309,25 +563,11 @@ impl GpuContext {
         &self.staging_pool
     }
 
-    /// Get an Arc reference to the staging buffer pool
-    pub fn staging_pool_arc(&self) -> Arc<StagingBufferPool> {
-        Arc::clone(&self.staging_pool)
-    }
-
     /// Increment the pending submission counter.
     /// Call this after each `queue.submit()`.
     pub fn increment_pending(&self) {
-        #[cfg(debug_assertions)]
-        {
-            let new_count = self.pending_submissions.fetch_add(1, Ordering::Relaxed) + 1;
-            if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
-                eprintln!("[GPU] Pending count: {} -> {}", new_count - 1, new_count);
-            }
-        }
-        #[cfg(not(debug_assertions))]
-        {
-            self.pending_submissions.fetch_add(1, Ordering::Relaxed);
-        }
+        let new_count = self.pending_submissions.fetch_add(1, Ordering::Relaxed) + 1;
+        log::trace!("[GPU] pending count: {} -> {new_count}", new_count - 1);
     }
 
     /// Force GPU synchronization - wait for all pending commands to complete.
@@ -335,6 +575,9 @@ impl GpuContext {
     /// This polls the device until all submitted work is finished, then resets
     /// the pending counter. Use this when you need a clean sync point, such as
     /// between benchmark iterations or before reading results.
+    ///
+    /// Submits an empty command buffer first so that queued `write_buffer` uploads are flushed
+    /// (and their staging memory can be freed) rather than left waiting for the next kernel.
     ///
     /// Returns true if sync completed successfully, false if it timed out.
     /// A timeout doesn't necessarily mean the device is lost - the GPU may
@@ -347,14 +590,17 @@ impl GpuContext {
             return true;
         }
 
-        #[cfg(debug_assertions)]
-        if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
-            eprintln!("[GPU] Syncing {pending} pending submissions...");
-        }
+        log::debug!("[GPU] syncing {pending} pending submissions...");
 
-        // Poll the device until all work completes
+        // `write_buffer` data sits in wgpu's staging area until the next submit, so an upload
+        // alone is never in flight. An empty submit flushes it and gives `poll` something to wait on.
+        let flush = self.queue.submit(std::iter::empty::<wgpu::CommandBuffer>());
+
+        // Poll until that submission, and so everything before it, completes. Waiting on
+        // our own index rather than `None` keeps another thread's in-flight submit out of
+        // it (#437).
         let result = self.device.poll(wgpu::PollType::Wait {
-            submission_index: None,
+            submission_index: Some(flush),
             timeout: Some(Duration::from_secs(get_sync_timeout_secs())),
         });
 
@@ -364,42 +610,16 @@ impl GpuContext {
 
         match result {
             Ok(_) => {
-                #[cfg(debug_assertions)]
-                if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
-                    eprintln!("[GPU] Sync complete. Pending reset to 0.");
-                }
+                log::debug!("[GPU] sync complete, pending reset to 0");
                 true
             }
             Err(e) => {
-                eprintln!("[GPU] Sync timeout warning: {e:?}");
-                eprintln!("[GPU] This may indicate GPU overload. Consider:");
-                eprintln!("[GPU]   - Reducing batch size");
-                eprintln!("[GPU]   - Adding more frequent sync points");
-                eprintln!("[GPU]   - Using smaller tensors");
+                log::warn!(
+                    "[GPU] sync timeout: {e:?}. This may indicate GPU overload; consider reducing batch size, adding more frequent sync points, or using smaller tensors."
+                );
                 false
             }
         }
-    }
-
-    /// Force sync with retry on timeout
-    ///
-    /// Attempts to sync up to `max_retries` times, returning true only
-    /// if sync eventually succeeds.
-    pub fn sync_with_retry(&self, max_retries: u32) -> bool {
-        for attempt in 0..max_retries {
-            if self.sync() {
-                return true;
-            }
-            eprintln!(
-                "[GPU] Sync retry {}/{} - GPU may be overwhelmed",
-                attempt + 1,
-                max_retries
-            );
-            // Small delay between retries
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        eprintln!("[GPU] All sync retries failed - GPU may be lost");
-        false
     }
 
     /// Conditionally sync if pending submissions exceed the threshold.
@@ -410,13 +630,10 @@ impl GpuContext {
     pub fn maybe_sync(&self) {
         let pending = self.pending_submissions.load(Ordering::Relaxed);
         if pending >= self.sync_threshold {
-            #[cfg(debug_assertions)]
-            if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
-                eprintln!(
-                    "[GPU] Auto-sync triggered: {} >= {}",
-                    pending, self.sync_threshold
-                );
-            }
+            log::trace!(
+                "[GPU] auto-sync triggered: {pending} >= {}",
+                self.sync_threshold
+            );
             self.sync();
         }
     }
@@ -434,189 +651,165 @@ impl GpuContext {
         self.sync_threshold
     }
 
-    /// Force sync with hard timeout and consecutive failure tracking
-    ///
-    /// This method implements a 3-strike rule for GPU timeouts:
-    /// - Returns Ok(()) on successful sync (resets timeout counter)
-    /// - Returns Err(Timeout) on timeout (increments counter)
-    /// - Returns Err(GpuLost) if 3+ consecutive timeouts occur
-    ///
-    /// Use this instead of `sync()` in critical paths where you need
-    /// error handling for GPU failures.
-    /// # Errors
-    /// Whatever errors come from async
-    pub fn sync_checked(&self) -> Result<(), GpuSyncError> {
-        let timeout_count = self.consecutive_timeouts.load(Ordering::Relaxed);
-
-        // 3-strike rule: abort after consecutive failures
-        if timeout_count >= MAX_CONSECUTIVE_TIMEOUTS {
-            return Err(GpuSyncError::GpuLost(format!(
-                "{timeout_count} consecutive timeouts - GPU unresponsive"
-            )));
-        }
-
-        let pending = self.pending_submissions.load(Ordering::Relaxed);
-        if pending == 0 {
-            return Ok(());
-        }
-
-        #[cfg(debug_assertions)]
-        if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
-            eprintln!("[GPU] sync_checked: {pending} pending submissions...");
-        }
-
-        // Use 2-second hard timeout
-        let result = self.device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(Duration::from_secs(get_sync_timeout_secs())),
-        });
-
-        self.pending_submissions.store(0, Ordering::Relaxed);
-
-        match result {
-            Ok(_) => {
-                // Success - reset timeout counter
-                self.consecutive_timeouts.store(0, Ordering::Relaxed);
-
-                #[cfg(debug_assertions)]
-                if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
-                    eprintln!("[GPU] sync_checked: Success, timeout counter reset");
-                }
-
-                Ok(())
-            }
-            Err(e) => {
-                // Timeout - increment counter
-                let new_count = self.consecutive_timeouts.fetch_add(1, Ordering::Relaxed) + 1;
-
-                eprintln!("[GPU] Sync timeout #{new_count}: {e:?}");
-
-                if new_count >= MAX_CONSECUTIVE_TIMEOUTS {
-                    Err(GpuSyncError::GpuLost(format!(
-                        "{new_count} consecutive timeouts - aborting"
-                    )))
-                } else {
-                    Err(GpuSyncError::Timeout(format!(
-                        "Timeout #{new_count} of {MAX_CONSECUTIVE_TIMEOUTS}"
-                    )))
-                }
-            }
-        }
-    }
-
-    /// Get consecutive timeout count (diagnostic)
-    ///
-    /// Returns the number of consecutive sync timeouts. This counter
-    /// resets to 0 on successful sync or manual reset.
-    pub fn consecutive_timeouts(&self) -> u32 {
-        self.consecutive_timeouts.load(Ordering::Relaxed)
-    }
-
-    /// Reset the consecutive timeout counter (manual recovery)
-    ///
-    /// Use this to manually clear the timeout counter after diagnosing
-    /// and resolving GPU issues.
-    pub fn reset_timeout_counter(&self) {
-        self.consecutive_timeouts.store(0, Ordering::Relaxed);
-
-        #[cfg(debug_assertions)]
-        if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
-            eprintln!("[GPU] Timeout counter manually reset");
-        }
-    }
-
     /// Create all compute pipelines by compiling shaders
-    #[allow(clippy::too_many_lines)]
-    fn create_pipelines(device: &wgpu::Device) -> ComputePipelines {
+    fn create_pipelines(device: &wgpu::Device, elem: Elem) -> ComputePipelines {
+        use super::shader_template::expand;
         // Load and compile shader modules
         let elementwise_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Elementwise Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/elementwise.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/elementwise.wgsl"), elem, Elem::F32).into(),
+            ),
         });
 
         let unary_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Unary Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/unary.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/unary.wgsl"), elem, Elem::F32).into(),
+            ),
         });
 
         let reduce_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Reduce Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/reduce.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/reduce.wgsl"), elem, Elem::F32).into(),
+            ),
         });
 
         let matmul_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("MatMul Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/matmul.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/matmul.wgsl"), elem, Elem::F32).into(),
+            ),
         });
 
         let movement_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Movement Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/movement.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/movement.wgsl"), elem, Elem::F32).into(),
+            ),
         });
 
         let movement_backward_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Movement Backward Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/movement_backward.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(
+                    include_str!("shaders/movement_backward.wgsl"),
+                    elem,
+                    Elem::F32,
+                )
+                .into(),
+            ),
         });
 
         let unary_backward_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Unary Backward Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/unary_backward.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/unary_backward.wgsl"), elem, Elem::F32).into(),
+            ),
         });
 
         let binary_backward_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Binary Backward Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/binary_backward.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(
+                    include_str!("shaders/binary_backward.wgsl"),
+                    elem,
+                    Elem::F32,
+                )
+                .into(),
+            ),
         });
 
         let binary_backward_safe_shader =
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("Binary Backward Safe Shader"),
                 source: wgpu::ShaderSource::Wgsl(
-                    include_str!("shaders/binary_backward_safe.wgsl").into(),
+                    expand(
+                        include_str!("shaders/binary_backward_safe.wgsl"),
+                        elem,
+                        elem,
+                    )
+                    .into(),
                 ),
             });
 
         let matmul_backward_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("MatMul Backward Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/matmul_backward.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(
+                    include_str!("shaders/matmul_backward.wgsl"),
+                    elem,
+                    Elem::F32,
+                )
+                .into(),
+            ),
         });
 
         let reduce_backward_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Reduce Backward Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/reduce_backward.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(
+                    include_str!("shaders/reduce_backward.wgsl"),
+                    elem,
+                    Elem::F32,
+                )
+                .into(),
+            ),
         });
 
         let optimizer_step_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Optimizer Step Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/optimizer_step.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/optimizer_step.wgsl"), elem, Elem::F32).into(),
+            ),
+        });
+
+        let muon_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Muon Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/muon.wgsl"), elem, Elem::F32).into(),
+            ),
         });
 
         let im2col_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Im2col Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/im2col.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/im2col.wgsl"), elem, elem).into(),
+            ),
         });
 
         let col2im_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Col2im Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/col2im.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/col2im.wgsl"), elem, elem).into(),
+            ),
         });
 
         let direct_conv_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Direct Conv Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/direct_conv.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/direct_conv.wgsl"), elem, Elem::F32).into(),
+            ),
         });
 
         let igemm_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("iGEMM Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/igemm.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/igemm.wgsl"), elem, Elem::F32).into(),
+            ),
         });
 
         let igemm_backward_input_shader =
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("iGEMM Backward Input Shader"),
                 source: wgpu::ShaderSource::Wgsl(
-                    include_str!("shaders/igemm_backward_input.wgsl").into(),
+                    expand(
+                        include_str!("shaders/igemm_backward_input.wgsl"),
+                        elem,
+                        elem,
+                    )
+                    .into(),
                 ),
             });
 
@@ -624,7 +817,12 @@ impl GpuContext {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("iGEMM Backward Weight Shader"),
                 source: wgpu::ShaderSource::Wgsl(
-                    include_str!("shaders/igemm_backward_weight.wgsl").into(),
+                    expand(
+                        include_str!("shaders/igemm_backward_weight.wgsl"),
+                        elem,
+                        elem,
+                    )
+                    .into(),
                 ),
             });
 
@@ -632,7 +830,12 @@ impl GpuContext {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("Conv Backward Input Shader"),
                 source: wgpu::ShaderSource::Wgsl(
-                    include_str!("shaders/conv_backward_input.wgsl").into(),
+                    expand(
+                        include_str!("shaders/conv_backward_input.wgsl"),
+                        elem,
+                        Elem::F32,
+                    )
+                    .into(),
                 ),
             });
 
@@ -640,7 +843,12 @@ impl GpuContext {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("Conv Backward Weight Shader"),
                 source: wgpu::ShaderSource::Wgsl(
-                    include_str!("shaders/conv_backward_weight.wgsl").into(),
+                    expand(
+                        include_str!("shaders/conv_backward_weight.wgsl"),
+                        elem,
+                        elem,
+                    )
+                    .into(),
                 ),
             });
 
@@ -656,7 +864,35 @@ impl GpuContext {
             })
         };
 
+        let compare_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Compare Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/compare.wgsl"), elem, Elem::F32).into(),
+            ),
+        });
+        let where_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Where Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/where_select.wgsl"), elem, Elem::F32).into(),
+            ),
+        });
+
+        let amp_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("AMP Unscale Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/amp_unscale.wgsl"), elem, Elem::F32).into(),
+            ),
+        });
+
         ComputePipelines {
+            amp_unscale: create_pipeline(&amp_shader, "amp_unscale", "AMP Unscale Pipeline"),
+            cmp_lt: create_pipeline(&compare_shader, "lt", "Compare Lt Pipeline"),
+            cmp_le: create_pipeline(&compare_shader, "le", "Compare Le Pipeline"),
+            cmp_gt: create_pipeline(&compare_shader, "gt", "Compare Gt Pipeline"),
+            cmp_ge: create_pipeline(&compare_shader, "ge", "Compare Ge Pipeline"),
+            cmp_eq: create_pipeline(&compare_shader, "eq", "Compare Eq Pipeline"),
+            cmp_ne: create_pipeline(&compare_shader, "ne", "Compare Ne Pipeline"),
+            where_select: create_pipeline(&where_shader, "where_select", "Where Pipeline"),
             // Element-wise binary ops
             add: create_pipeline(&elementwise_shader, "add", "Add Pipeline"),
             sub: create_pipeline(&elementwise_shader, "sub", "Sub Pipeline"),
@@ -664,7 +900,6 @@ impl GpuContext {
             div: create_pipeline(&elementwise_shader, "div", "Div Pipeline"),
             max: create_pipeline(&elementwise_shader, "max_elem", "Max Pipeline"),
             mod_op: create_pipeline(&elementwise_shader, "mod_op", "Mod Pipeline"),
-            cmplt: create_pipeline(&elementwise_shader, "cmplt", "Cmplt Pipeline"),
 
             // Unary ops
             neg: create_pipeline(&unary_shader, "neg", "Neg Pipeline"),
@@ -678,6 +913,7 @@ impl GpuContext {
             exp2: create_pipeline(&unary_shader, "exp2_op", "Exp2 Pipeline"),
             log2: create_pipeline(&unary_shader, "log2_op", "Log2 Pipeline"),
             sin: create_pipeline(&unary_shader, "sin_op", "Sin Pipeline"),
+            erf: create_pipeline(&unary_shader, "erf_op", "Erf Pipeline"),
             cos: create_pipeline(&unary_shader, "cos_op", "Cos Pipeline"),
 
             // Unary backward ops
@@ -741,6 +977,11 @@ impl GpuContext {
                 "cos_backward",
                 "Cos Backward Pipeline",
             ),
+            erf_backward: create_pipeline(
+                &unary_backward_shader,
+                "erf_backward",
+                "Erf Backward Pipeline",
+            ),
 
             // Binary backward ops
             add_backward_a: create_pipeline(
@@ -793,32 +1034,15 @@ impl GpuContext {
                 "max_backward_b",
                 "Max Backward B Pipeline",
             ),
-
-            // Binary backward with broadcasting support
-            add_broadcast: create_pipeline(
+            mod_backward_a: create_pipeline(
                 &binary_backward_shader,
-                "add_broadcast",
-                "Add Broadcast Pipeline",
+                "mod_backward_a",
+                "Mod Backward A Pipeline",
             ),
-            sub_broadcast: create_pipeline(
+            mod_backward_b: create_pipeline(
                 &binary_backward_shader,
-                "sub_broadcast",
-                "Sub Broadcast Pipeline",
-            ),
-            mul_broadcast: create_pipeline(
-                &binary_backward_shader,
-                "mul_broadcast",
-                "Mul Broadcast Pipeline",
-            ),
-            div_broadcast: create_pipeline(
-                &binary_backward_shader,
-                "div_broadcast",
-                "Div Broadcast Pipeline",
-            ),
-            max_broadcast: create_pipeline(
-                &binary_backward_shader,
-                "max_broadcast",
-                "Max Broadcast Pipeline",
+                "mod_backward_b",
+                "Mod Backward B Pipeline",
             ),
 
             // Binary backward with RACE-FREE broadcasting (two-pass)
@@ -872,11 +1096,28 @@ impl GpuContext {
                 "max_broadcast_pass2",
                 "Max Broadcast Pass2 Pipeline",
             ),
+            mod_broadcast_pass1: create_pipeline(
+                &binary_backward_safe_shader,
+                "mod_broadcast_pass1",
+                "Mod Broadcast Pass1 Pipeline",
+            ),
+            mod_broadcast_pass2: create_pipeline(
+                &binary_backward_safe_shader,
+                "mod_broadcast_pass2",
+                "Mod Broadcast Pass2 Pipeline",
+            ),
 
             // Reductions
-            sum_reduce: create_pipeline(&reduce_shader, "sum_reduce", "Sum Reduce Pipeline"),
-            max_reduce: create_pipeline(&reduce_shader, "max_reduce", "Max Reduce Pipeline"),
-            mean_reduce: create_pipeline(&reduce_shader, "mean_reduce", "Mean Reduce Pipeline"),
+            sum_first: create_pipeline(&reduce_shader, "sum_first", "Sum First Pipeline"),
+            sum_next: create_pipeline(&reduce_shader, "sum_next", "Sum Next Pipeline"),
+            sumsq_first: create_pipeline(
+                &reduce_shader,
+                "sumsq_first",
+                "Sum Squares First Pipeline",
+            ),
+            max_first: create_pipeline(&reduce_shader, "max_first", "Max First Pipeline"),
+            max_next: create_pipeline(&reduce_shader, "max_next", "Max Next Pipeline"),
+            absmax_first: create_pipeline(&reduce_shader, "absmax_first", "AbsMax First Pipeline"),
 
             // Movement operations
             permute: create_pipeline(&movement_shader, "permute", "Permute Pipeline"),
@@ -895,6 +1136,11 @@ impl GpuContext {
                 &movement_backward_shader,
                 "expand_backward",
                 "Expand Backward Pipeline",
+            ),
+            expand_backward_wide: create_pipeline(
+                &movement_backward_shader,
+                "expand_backward_wide",
+                "Expand Backward Wide Pipeline",
             ),
             pad_backward: create_pipeline(
                 &movement_backward_shader,
@@ -934,7 +1180,11 @@ impl GpuContext {
                 "main",
                 "Mean Backward Pipeline",
             ),
-            max_backward: create_pipeline(&reduce_backward_shader, "main", "Max Backward Pipeline"),
+            max_backward: create_pipeline(
+                &reduce_backward_shader,
+                "max_backward",
+                "Max Backward Pipeline",
+            ),
 
             // Optimizer step
             optimizer_step: create_pipeline(
@@ -942,6 +1192,13 @@ impl GpuContext {
                 "main",
                 "Optimizer Step Pipeline",
             ),
+
+            // Muon
+            muon_momentum: create_pipeline(&muon_shader, "momentum", "Muon Momentum Pipeline"),
+            muon_scale: create_pipeline(&muon_shader, "scale", "Muon Scale Pipeline"),
+            muon_norm: create_pipeline(&muon_shader, "norm", "Muon Norm Pipeline"),
+            muon_normalize: create_pipeline(&muon_shader, "normalize", "Muon Normalize Pipeline"),
+            muon_axpby: create_pipeline(&muon_shader, "axpby", "Muon Axpby Pipeline"),
 
             // Image-to-column transformation
             im2col: create_pipeline(&im2col_shader, "im2col_main", "Im2col Pipeline"),

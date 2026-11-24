@@ -4,22 +4,28 @@
 //! where each timestep consists of 28 features (one row of pixels).
 //! An LSTM processes the sequence row-by-row, and the final hidden
 //! state is used for classification.
-#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-use std::path::Path;
-use volta::{
-    Adam, BatchNorm1d, DataLoader, LSTMCell, Linear, Module, ProgressBar, RawTensor, TensorOps,
-    load_mnist_images, load_mnist_labels, to_one_hot,
-};
+//!
+//! Trains on the 60,000-image `train` split and reports accuracy on the held-out 10,000-image `t10k` split.
+//!
+//! Needs the MNIST files under `data/mnist`; if they are missing it prints how to download them and exits, rather than train on made-up data.
+#[path = "common/mnist.rs"]
+mod mnist;
+use volta::nn::{Adam, BatchNorm1d, LSTMCell, Layer, Linear, Module, RecurrentLayer};
+use volta::utils::ProgressBar;
+use volta::{DataLoader, RawTensor};
+
+/// Per-sample input shape: `[seq_len, features]`, each pixel row is a timestep.
+const SAMPLE_SHAPE: &[usize] = &[28, 28];
 
 /// Extract a single timestep from a batched sequence tensor.
 ///
 /// Input shape: [batch, `seq_len`, features]
 /// Output shape: [batch, features]
 fn extract_timestep(batch: &volta::Tensor, t: usize) -> volta::Tensor {
-    let borrowed = batch.borrow();
-    let batch_size = *borrowed.shape.first().unwrap_or(&1);
-    let seq_len = *borrowed.shape.get(1).unwrap_or(&1);
-    let features = *borrowed.shape.get(2).unwrap_or(&1);
+    let shape = batch.shape();
+    let &[batch_size, seq_len, features] = shape.truncate_rank() else {
+        panic!("extract_timestep expects [batch, seq_len, features], got {shape:?}");
+    };
 
     assert!(
         t < seq_len,
@@ -27,70 +33,43 @@ fn extract_timestep(batch: &volta::Tensor, t: usize) -> volta::Tensor {
     );
 
     let mut data = Vec::with_capacity(batch_size * features);
+    let batch_data = batch.data();
 
     for b in 0..batch_size {
         let start = b * seq_len * features + t * features;
         let end = start + features;
-        if let Some(slice) = borrowed.data.get(start..end) {
-            data.extend_from_slice(slice);
-        }
+        data.extend_from_slice(
+            batch_data
+                .get(start..end)
+                .expect("timestep slice lies within the batch"),
+        );
     }
 
     RawTensor::new(data, &[batch_size, features], false)
 }
 
-#[allow(clippy::too_many_lines)]
 fn main() {
     println!("=== MNIST RNN (LSTM) Training ===\n");
 
-    // Try to load MNIST data
     let mnist_dir = "data/mnist";
-    let train_images_path = format!("{mnist_dir}/train-images-idx3-ubyte");
-    let train_labels_path = format!("{mnist_dir}/train-labels-idx1-ubyte");
-
-    let (image_data, label_data, num_samples) = if Path::new(&train_images_path).exists()
-        && Path::new(&train_labels_path).exists()
-    {
-        println!("Loading MNIST data from {mnist_dir}...");
-
-        let images = load_mnist_images(&train_images_path).expect("Failed to load MNIST images");
-        let labels = load_mnist_labels(&train_labels_path).expect("Failed to load MNIST labels");
-
-        let num_samples = labels.len();
-        let label_data = to_one_hot(&labels, 10);
-
-        println!("Loaded {num_samples} training samples");
-        (images, label_data, num_samples)
-    } else {
-        println!("MNIST data not found. Using synthetic data for demonstration.");
-        println!("\nTo download MNIST data:");
-        println!("  mkdir -p data/mnist");
-        println!("  cd data/mnist");
-        println!("  curl -O http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz");
-        println!("  curl -O http://yann.lecun.com/exdb/mnist/train-labels-idx1-ubyte.gz");
-        println!("  gunzip *.gz");
-        println!();
-
-        // Generate synthetic data
-        let num_samples = 1024;
-        let image_data: Vec<f32> = (0..num_samples * 28 * 28)
-            .map(|i| (i % 255) as f32 / 255.0)
-            .collect();
-        let labels: Vec<u8> = (0..num_samples).map(|i| (i % 10) as u8).collect();
-        let label_data = to_one_hot(&labels, 10);
-
-        println!("Generated {num_samples} synthetic samples");
-        (image_data, label_data, num_samples)
-    };
+    println!("Loading MNIST data from {mnist_dir}...");
+    let train = mnist::load_split(mnist_dir, "train");
+    // Held-out set: accuracy is measured on these 10,000 images, never trained on.
+    let test = mnist::load_split(mnist_dir, "t10k");
+    let num_samples = train.len;
+    println!(
+        "Loaded {num_samples} training and {} test samples",
+        test.len
+    );
 
     // Create DataLoader
     // Shape: [28, 28] - treating image as 28 timesteps of 28 features
     let batch_size = 64;
     let mut dataloader = DataLoader::new(
-        image_data,
-        label_data,
-        &[28, 28], // [seq_len, features] - each row is a timestep
-        &[10],     // 10-class one-hot labels
+        train.images,
+        train.labels,
+        SAMPLE_SHAPE,
+        &[10], // 10-class one-hot labels
         batch_size,
         true, // shuffle
     );
@@ -118,12 +97,13 @@ fn main() {
     println!("  Linear({hidden_size} → {num_classes})");
     println!(
         "\nTraining with {} batches per epoch...\n",
-        num_samples / batch_size
+        num_samples.div_ceil(batch_size)
     );
 
     // Training
     let num_epochs = 10;
-    let total_batches = num_samples / batch_size;
+    // The loader yields the last, partial batch too.
+    let total_batches = num_samples.div_ceil(batch_size);
     let seq_len = 28;
 
     for epoch in 0..num_epochs {
@@ -143,22 +123,17 @@ fn main() {
 
             // Process sequence through LSTM
             // batch_x shape: [batch, 28, 28]
-            let mut h_state: Option<(volta::Tensor, volta::Tensor)> = None;
+            let batch = batch_x.shape().dim(volta::Axis(0)).expect("batch dim");
+            let mut state = lstm.initial_state(batch);
 
             for t in 0..seq_len {
                 // Extract timestep t: [batch, 28]
                 let x_t = extract_timestep(&batch_x, t);
-
-                let (h_new, c_new) = match &h_state {
-                    Some((h, c)) => lstm.forward_step(&x_t, Some((h, c))),
-                    None => lstm.forward_step(&x_t, None),
-                };
-
-                h_state = Some((h_new, c_new));
+                let _ = lstm.step(&x_t, &mut state);
             }
 
             // Use final hidden state for classification
-            let (h_final, _) = h_state.unwrap();
+            let (h_final, _) = state;
 
             // BatchNorm + Classification
             let h_norm = bn.forward(&h_final);
@@ -166,10 +141,10 @@ fn main() {
 
             // Loss and backprop
             let loss = RawTensor::cross_entropy_loss(&logits, &batch_y);
-            loss.backward();
+            loss.clone().into_loss().expect("scalar loss").backward();
             optimizer.step();
 
-            epoch_loss += loss.borrow().data.first().copied().unwrap_or(f32::NAN);
+            epoch_loss += loss.item();
             num_batches += 1;
             progress.update(num_batches);
         }
@@ -181,34 +156,40 @@ fn main() {
     // Test accuracy
     println!("\n=== Testing ===");
     bn.train(false);
-    dataloader.reset();
 
+    // A separate, unshuffled loader over the t10k split.
+    let mut test_loader = DataLoader::new(
+        test.images,
+        test.labels,
+        SAMPLE_SHAPE,
+        &[10],
+        batch_size,
+        false,
+    );
     let mut total_correct = 0;
     let mut total_samples = 0;
-    let mut progress = ProgressBar::new(total_batches, "Testing");
+    let mut progress = ProgressBar::new(test.len.div_ceil(batch_size), "Testing");
 
-    for (test_x, test_y) in &mut dataloader {
+    for (test_x, test_y) in &mut test_loader {
         // Process sequence through LSTM
-        let mut h_state: Option<(volta::Tensor, volta::Tensor)> = None;
+        let batch = test_x.shape().dim(volta::Axis(0)).expect("batch dim");
+        let mut state = lstm.initial_state(batch);
 
         for t in 0..seq_len {
             let x_t = extract_timestep(&test_x, t);
-
-            let (h_new, c_new) = match &h_state {
-                Some((h, c)) => lstm.forward_step(&x_t, Some((h, c))),
-                None => lstm.forward_step(&x_t, None),
-            };
-
-            h_state = Some((h_new, c_new));
+            let _ = lstm.step(&x_t, &mut state);
         }
 
-        let (h_final, _) = h_state.unwrap();
+        let (h_final, _) = state;
         let h_norm = bn.forward(&h_final);
         let logits = classifier.forward(&h_norm);
 
-        let pred_data = &logits.borrow().data;
-        let target_data = &test_y.borrow().data;
-        let batch_size = *test_y.borrow().shape.first().unwrap_or(&1);
+        let pred_data = logits.data();
+        let target_data = test_y.data();
+        let batch_size = test_y
+            .shape()
+            .dim(volta::Axis(0))
+            .expect("test labels have a batch dim");
 
         for i in 0..batch_size {
             let pred_class = (0..10)
@@ -216,14 +197,20 @@ fn main() {
                     pred_data
                         .get(i * 10 + a)
                         .copied()
-                        .unwrap_or(f32::NAN)
-                        .partial_cmp(&pred_data.get(i * 10 + b).copied().unwrap_or(f32::NAN))
+                        .expect("index in range")
+                        .partial_cmp(&pred_data.get(i * 10 + b).copied().expect("index in range"))
                         .unwrap()
                 })
                 .unwrap();
 
             let true_class = (0..10)
-                .position(|j| target_data.get(i * 10 + j).copied().unwrap_or(f32::NAN) > 0.5)
+                .position(|j| {
+                    target_data
+                        .get(i * 10 + j)
+                        .copied()
+                        .expect("index in range")
+                        > 0.5
+                })
                 .unwrap();
 
             if pred_class == true_class {
@@ -236,5 +223,6 @@ fn main() {
     println!();
 
     let accuracy = total_correct as f32 / total_samples as f32 * 100.0;
-    println!("Training Set Accuracy: {total_correct}/{total_samples} ({accuracy:.2}%)");
+    assert_eq!(total_samples, test.len, "every test sample is scored once");
+    println!("Test Accuracy (t10k): {total_correct}/{total_samples} ({accuracy:.2}%)");
 }

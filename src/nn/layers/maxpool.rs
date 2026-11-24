@@ -1,94 +1,141 @@
-use crate::autograd::GradFn;
+use crate::autograd::{GradFn, edge};
+use crate::device::Device;
+use crate::error::OrPanic;
+use crate::index::{fetch, slot};
 use crate::io::StateDict;
-use crate::nn::Module;
-use crate::tensor::{RawTensor, Tensor, TensorOps};
+use crate::nn::hyper;
+use crate::nn::{Layer, Module};
+use crate::ops::max_rule::pool_scan_replaces;
+use crate::real::{Real, compute_dtype, dispatch_real};
+use crate::shape::Shape;
+use crate::spec::{PadValue, Window2dSpec};
+use crate::storage::Storage;
+use crate::tensor::{RawTensor, Tensor};
 
 /// 2D max pooling layer
 ///
 /// Accepts tensors shaped (batch, channels, height, width) and downsamples each
-/// spatial window to its maximum value, similar to `PyTorch`'s `nn.MaxPool2d`.
+/// spatial window to its maximum value, similar to PyTorch's `nn.MaxPool2d`. As in torch, a
+/// NaN in a window makes the output NaN (the last NaN gets the gradient), a tie goes to
+/// the first element in scan order, and all of the gradient goes to that one element.
+#[derive(Debug, Clone, Copy)]
 pub struct MaxPool2d {
+    /// `(height, width)` of the pooling window.
     kernel: (usize, usize),
+    /// `(vertical, horizontal)` step between windows.
     stride: (usize, usize),
+    /// `(vertical, horizontal)` implicit padding.
     padding: (usize, usize),
 }
 
+/// Gradient function for [`MaxPool2d`]: sends each output gradient to the input element that won its window.
 #[derive(Clone)]
-struct MaxPool2dGradFn {
+pub(crate) struct MaxPool2dGradFn {
+    /// For each output element, the linear index into the input of its window's maximum.
     max_indices: Vec<usize>,
 }
 
 impl MaxPool2d {
+    /// The layer's name in errors.
+    const OP: &'static str = "MaxPool2d";
+
     /// Square-kernel constructor for convenience
+    ///
+    /// # Panics
+    /// If `kernel` or `stride` is zero (see [`Self::try_new`]).
     #[must_use]
-    pub const fn new(kernel: usize, stride: usize, padding: usize) -> Self {
-        Self {
-            kernel: (kernel, kernel),
-            stride: (stride, stride),
-            padding: (padding, padding),
-        }
+    #[track_caller]
+    pub fn new(kernel: usize, stride: usize, padding: usize) -> Self {
+        Self::try_new(kernel, stride, padding).or_panic(Self::OP)
+    }
+
+    /// [`Self::new`], checking the hyperparameters first.
+    ///
+    /// # Errors
+    /// As [`Self::try_with_params`].
+    pub fn try_new(kernel: usize, stride: usize, padding: usize) -> crate::Result<Self> {
+        Self::try_with_params((kernel, kernel), (stride, stride), (padding, padding))
     }
 
     /// Arbitrary kernel/stride/padding constructor
+    ///
+    /// # Panics
+    /// If a `kernel` or `stride` component is zero (see [`Self::try_with_params`]).
     #[must_use]
-    pub const fn with_params(
+    #[track_caller]
+    pub fn with_params(
         kernel: (usize, usize),
         stride: (usize, usize),
         padding: (usize, usize),
     ) -> Self {
-        Self {
+        Self::try_with_params(kernel, stride, padding).or_panic(Self::OP)
+    }
+
+    /// [`Self::with_params`], checking the hyperparameters first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` naming the argument if a component of `kernel` or
+    /// `stride` is zero. These used to be accepted here and to panic in `forward` (#133).
+    pub fn try_with_params(
+        kernel: (usize, usize),
+        stride: (usize, usize),
+        padding: (usize, usize),
+    ) -> crate::Result<Self> {
+        for v in [kernel.0, kernel.1] {
+            hyper::at_least_one(Self::OP, "kernel", v)?;
+        }
+        for v in [stride.0, stride.1] {
+            hyper::at_least_one(Self::OP, "stride", v)?;
+        }
+        Ok(Self {
             kernel,
             stride,
             padding,
-        }
+        })
     }
 
+    /// Computes the pooled output and attaches the backward edge.
     fn pool_forward(&self, x: &Tensor) -> Tensor {
-        let (batch, channels, _height, _width) = {
-            let x_borrow = x.borrow();
-            assert_eq!(
-                x_borrow.shape.len(),
-                4,
-                "MaxPool2d expects input shape (B, C, H, W)"
-            );
-            (
-                x_borrow.shape.first().copied().unwrap_or(1),
-                x_borrow.shape.get(1).copied().unwrap_or(1),
-                x_borrow.shape.get(2).copied().unwrap_or(1),
-                x_borrow.shape.get(3).copied().unwrap_or(1),
-            )
-        };
+        let dtype = compute_dtype(|| "MaxPool2d".to_string(), &[x.dtype()]);
+        let spec =
+            Window2dSpec::new(&x.shape(), self.kernel, self.stride, self.padding).or_panic("");
+        let Window2dSpec {
+            batch,
+            channels,
+            kernel_h,
+            kernel_w,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            out_h: h_out,
+            out_w: w_out,
+            ..
+        } = spec;
+        // Padding may cover at most half the kernel (PyTorch's rule), so every window holds
+        // a real element. Conv shares `Window2dSpec` and allows more.
+        assert!(
+            pad_h <= kernel_h / 2 && pad_w <= kernel_w / 2,
+            "MaxPool2d padding must be at most half the kernel: padding {:?} with kernel {:?}",
+            (pad_h, pad_w),
+            (kernel_h, kernel_w),
+        );
+        let (padded_h, padded_w) = (spec.padded_h(), spec.padded_w());
 
-        let (pad_h, pad_w) = self.padding;
         let x_padded = if pad_h > 0 || pad_w > 0 {
-            x.pad(&[(0, 0), (0, 0), (pad_h, pad_h), (pad_w, pad_w)])
+            x.pad_with(
+                &[(0, 0), (0, 0), (pad_h, pad_h), (pad_w, pad_w)],
+                PadValue::NEG_INF,
+            )
         } else {
             x.clone()
         };
 
-        let (data, shape, requires_grad) = {
-            let xp = x_padded.borrow();
-            (xp.data.clone(), xp.shape.clone(), xp.requires_grad)
-        };
+        let data = x_padded.borrow().data.clone();
+        let (out_storage, max_indices) = dispatch_real!(dtype, T => {
+        let data = data.host::<T>();
 
-        let (padded_h, padded_w) = (
-            shape.get(2).copied().unwrap_or(1),
-            shape.get(3).copied().unwrap_or(1),
-        );
-        let (kernel_h, kernel_w) = self.kernel;
-        let (stride_h, stride_w) = self.stride;
-
-        assert!(kernel_h > 0 && kernel_w > 0, "Kernel size must be positive");
-        assert!(stride_h > 0 && stride_w > 0, "Stride must be positive");
-        assert!(
-            padded_h >= kernel_h && padded_w >= kernel_w,
-            "Kernel larger than input"
-        );
-
-        let h_out = (padded_h - kernel_h) / stride_h + 1;
-        let w_out = (padded_w - kernel_w) / stride_w + 1;
-
-        let mut out_data = vec![0.0; batch * channels * h_out * w_out];
+        let mut out_data = vec![T::ZERO; batch * channels * h_out * w_out];
         let mut max_indices = vec![0usize; out_data.len()];
 
         for b in 0..batch {
@@ -99,52 +146,54 @@ impl MaxPool2d {
                         let h_start = oh * stride_h;
                         let w_start = ow * stride_w;
 
-                        let mut max_val = f32::NEG_INFINITY;
-                        let mut max_idx = 0usize;
+                        // Like torch, the window starts at -inf and its first real (not
+                        // padding) element, so an all -inf window sends its gradient there
+                        // and never to another channel (S3).
+                        let mut max_val = T::NEG_INFINITY;
+                        let mut max_idx = None;
 
                         for kh in 0..kernel_h {
                             for kw in 0..kernel_w {
                                 let h_in = h_start + kh;
                                 let w_in = w_start + kw;
+                                if h_in < pad_h
+                                    || h_in >= pad_h + spec.in_h
+                                    || w_in < pad_w
+                                    || w_in >= pad_w + spec.in_w
+                                {
+                                    continue; // padding is -inf and never wins
+                                }
                                 let in_idx =
                                     (((b * channels + c) * padded_h) + h_in) * padded_w + w_in;
-                                if let Some(&val) = data.get(in_idx)
-                                    && val > max_val
-                                {
+                                let val = fetch(&data, in_idx);
+                                if max_idx.is_none() || pool_scan_replaces(val, max_val) {
                                     max_val = val;
-                                    max_idx = in_idx;
+                                    max_idx = Some(in_idx);
                                 }
                             }
                         }
 
-                        if let Some(slot) = out_data.get_mut(out_idx) {
-                            *slot = max_val;
-                        }
-                        if let Some(slot) = max_indices.get_mut(out_idx) {
-                            *slot = max_idx;
-                        }
+                        *slot(&mut out_data, out_idx) = max_val;
+                        *slot(&mut max_indices, out_idx) = max_idx
+                            .expect("MaxPool2d: every window holds a real element (padding <= kernel / 2)");
                     }
                 }
             }
         }
+        (Storage::from_compute(dtype, out_data), max_indices)
+        });
 
-        let out_shape = vec![batch, channels, h_out, w_out];
-        let out = RawTensor::new(out_data, &out_shape, requires_grad);
-
-        if requires_grad {
-            out.borrow_mut().parents = vec![x_padded];
-            out.borrow_mut().grad_fn = Some(Box::new(MaxPool2dGradFn { max_indices }));
-        }
-
-        out
+        edge(
+            [x_padded],
+            out_storage,
+            Shape::derived(spec.output_dims()),
+            Device::CPU,
+            GradFn::MaxPool2d(MaxPool2dGradFn { max_indices }),
+        )
     }
 }
 
 impl Module for MaxPool2d {
-    fn forward(&self, x: &Tensor) -> Tensor {
-        self.pool_forward(x)
-    }
-
     fn parameters(&self) -> Vec<Tensor> {
         vec![]
     }
@@ -152,36 +201,45 @@ impl Module for MaxPool2d {
         StateDict::new()
     }
 
-    fn load_state_dict(&mut self, _state: &StateDict) {
-        // Stateless
+    fn plan_load<'a>(&self, _plan: &mut crate::nn::LoadPlan<'a>) {}
+}
+
+impl Layer for MaxPool2d {
+    fn forward(&self, x: &Tensor) -> Tensor {
+        self.pool_forward(x)
     }
 }
 
-impl GradFn for MaxPool2dGradFn {
-    fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
-        let input_shape = parents.first().unwrap().borrow().shape.clone();
-        let mut grad_input = vec![0.0; input_shape.iter().product()];
-
-        for (idx, &max_linear_idx) in self.max_indices.iter().enumerate() {
-            let grad_val = out_grad.data.get(idx).copied().unwrap_or(0.0);
-            if let Some(slot) = grad_input.get_mut(max_linear_idx) {
-                *slot += grad_val;
+impl MaxPool2dGradFn {
+    /// Scatters `out_grad` to the recorded maxima; all other input elements get zero.
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        parents: &[Tensor],
+    ) -> Vec<Option<Storage>> {
+        let input_shape = parents
+            .first()
+            .expect("MaxPool2d backward: one parent")
+            .borrow()
+            .shape
+            .clone();
+        dispatch_real!(out_grad.data.dtype(), T => {
+            let mut grad_input = vec![T::ZERO; input_shape.iter().product()];
+            let g_host = out_grad.data.host::<T>();
+            for (idx, &max_linear_idx) in self.max_indices.iter().enumerate() {
+                let grad_val = fetch(&g_host, idx);
+                *slot(&mut grad_input, max_linear_idx) += grad_val;
             }
-        }
-
-        vec![Some(RawTensor::new(grad_input, &input_shape, false))]
-    }
-
-    fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(self.clone())
+            vec![Some(Storage::from_compute(out_grad.data.dtype(), grad_input))]
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::MaxPool2d;
-    use crate::nn::Module;
-    use crate::tensor::{RawTensor, TensorOps};
+    use crate::nn::Layer;
+    use crate::tensor::RawTensor;
 
     // ==================== Basic Existing Tests ====================
 
@@ -210,17 +268,6 @@ mod tests {
         let x = RawTensor::randn(&[1, 1, 3, 3]);
         let y = pool.forward(&x);
         assert_eq!(y.borrow().shape, vec![1, 1, 2, 2]);
-    }
-
-    #[test]
-    fn test_maxpool2d_backward_flow() {
-        let pool = MaxPool2d::new(2, 2, 0);
-        let x = RawTensor::randn(&[1, 1, 4, 4]);
-        x.borrow_mut().requires_grad = true;
-        let y = pool.forward(&x);
-        let loss = y.sum();
-        loss.backward();
-        assert!(x.grad().is_some());
     }
 
     #[test]
@@ -313,20 +360,20 @@ mod tests {
 
     #[test]
     fn test_maxpool2d_padding_2() {
-        let pool = MaxPool2d::new(3, 2, 2);
+        let pool = MaxPool2d::new(4, 2, 2);
         let x = RawTensor::randn(&[1, 1, 6, 6]);
         let y = pool.forward(&x);
-        // Padded: 6 + 4 = 10, (10 - 3) / 2 + 1 = 4
+        // Padded: 6 + 4 = 10, (10 - 4) / 2 + 1 = 4
         assert_eq!(y.borrow().shape, vec![1, 1, 4, 4]);
     }
 
     #[test]
     fn test_maxpool2d_padding_3() {
-        let pool = MaxPool2d::new(5, 2, 3);
+        let pool = MaxPool2d::new(7, 2, 3);
         let x = RawTensor::randn(&[1, 1, 8, 8]);
         let y = pool.forward(&x);
-        // Padded: 8 + 6 = 14, (14 - 5) / 2 + 1 = 5
-        assert_eq!(y.borrow().shape, vec![1, 1, 5, 5]);
+        // Padded: 8 + 6 = 14, (14 - 7) / 2 + 1 = 4
+        assert_eq!(y.borrow().shape, vec![1, 1, 4, 4]);
     }
 
     #[test]
@@ -486,10 +533,10 @@ mod tests {
         let x = RawTensor::new(data, &[1, 1, 4, 4], true);
         let y = pool.forward(&x);
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         let grad = x.grad().unwrap();
-        let grad_data = grad.clone();
+        let grad_data = grad;
 
         // Only max positions should receive gradient (value 1.0 from sum)
         // Window 1 max: [1,1] position, index 5 (value 8.0)
@@ -551,10 +598,10 @@ mod tests {
 
         let y = pool.forward(&x);
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         let grad = x.grad().unwrap();
-        let grad_data = grad.clone();
+        let grad_data = grad;
 
         // Position 4 (center) should be max in all 4 windows
         // So it should accumulate gradient of 4.0
@@ -584,10 +631,10 @@ mod tests {
         assert_eq!(y.borrow().shape, vec![1, 1, 3, 3]);
 
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         let grad = x.grad().unwrap();
-        let grad_data = grad.clone();
+        let grad_data = grad;
 
         // With overlapping windows, gradients should accumulate
         // Sum of input gradients should equal number of outputs (9)
@@ -609,13 +656,13 @@ mod tests {
 
         // 1x1 kernel with stride 1 on 1x1 input: output is 1x1 with same value
         assert_eq!(y.borrow().shape, vec![1, 1, 1, 1]);
-        assert_eq!(y.borrow().data.first().copied().unwrap(), 5.0);
+        assert_eq!(y.item(), 5.0);
 
         // Gradient should flow correctly
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
         let grad = x.grad().unwrap();
-        assert_eq!(grad.clone().first().copied().unwrap(), 1.0);
+        assert_eq!(grad.first().copied().unwrap(), 1.0);
     }
 
     #[test]
@@ -627,13 +674,13 @@ mod tests {
 
         // 4x4 kernel with stride 1 on 4x4 input: output is 1x1 (global max pool)
         assert_eq!(y.borrow().shape, vec![1, 1, 1, 1]);
-        assert_eq!(y.borrow().data.first().copied().unwrap(), 15.0); // Max is 15.0
+        assert_eq!(y.item(), 15.0); // Max is 15.0
 
         // Gradient should flow to the max position only
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
         let grad = x.grad().unwrap();
-        let grad_data = grad.clone();
+        let grad_data = grad;
 
         // Only the last position (value 15.0) should have gradient
         assert_eq!(
@@ -649,26 +696,6 @@ mod tests {
     }
 
     #[test]
-    fn test_maxpool2d_large_padding() {
-        // Test with padding larger than typical
-        let pool = MaxPool2d::new(2, 1, 3);
-        let x = RawTensor::randn(&[1, 1, 4, 4]);
-        x.borrow_mut().requires_grad = true;
-        let y = pool.forward(&x);
-
-        // Padded: 4 + 6 = 10, (10 - 2) / 1 + 1 = 9
-        assert_eq!(y.borrow().shape, vec![1, 1, 9, 9]);
-
-        // Gradient should still flow correctly with padding
-        let loss = y.sum();
-        loss.backward();
-        assert!(
-            x.grad().is_some(),
-            "Gradient should exist with large padding"
-        );
-    }
-
-    #[test]
     fn test_maxpool2d_batch_gradient_isolation() {
         // Test that gradients for different batches don't interfere
         let pool = MaxPool2d::new(2, 2, 0);
@@ -677,10 +704,10 @@ mod tests {
 
         let y = pool.forward(&x);
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         let grad = x.grad().unwrap();
-        let grad_data = grad.clone();
+        let grad_data = grad;
 
         // Each batch should have its own gradients
         // Each batch has 16 elements (1 channel * 4 * 4)
@@ -701,10 +728,10 @@ mod tests {
 
         let y = pool.forward(&x);
         let loss = y.sum();
-        loss.backward();
+        loss.into_loss().expect("scalar loss").backward();
 
         let grad = x.grad().unwrap();
-        let grad_data = grad.clone();
+        let grad_data = grad;
 
         // Each channel should have its own gradients
         // Each channel has 16 elements (4x4)
@@ -718,5 +745,87 @@ mod tests {
                 .sum();
             assert!(channel_sum > 0.0, "Channel {c} should have gradients");
         }
+    }
+
+    // ==================== Window geometry errors ====================
+
+    /// Runs `pool.forward(x)` and returns the panic message, failing if it does not panic.
+    fn forward_panic_message(pool: &MaxPool2d, x: &crate::tensor::Tensor) -> String {
+        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pool.forward(x)))
+            .expect_err("forward should have panicked");
+        payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+            .expect("panic payload should be a string")
+    }
+
+    #[test]
+    fn test_maxpool2d_padding_never_beats_negative_input_h1_repro() {
+        // H1: padding with 0.0 made every padded window win with 0.0.
+        let pool = MaxPool2d::new(2, 2, 1);
+        let x = RawTensor::new(vec![-5.0; 16], &[1, 1, 4, 4], false);
+        let y = pool.forward(&x);
+        assert_eq!(y.borrow().shape, vec![1, 1, 3, 3]);
+        let out = y.data();
+        assert!(
+            out.iter().all(|&v| v == -5.0),
+            "padding must not win a window of all -5.0, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn test_maxpool2d_padding_routes_one_unit_per_output_to_real_input() {
+        // Shifted negative so that a 0.0 pad would win every border window.
+        let pool = MaxPool2d::new(3, 2, 1);
+        let x = RawTensor::randn(&[1, 2, 6, 6]);
+        let shifted: Vec<f32> = x.data().iter().map(|v| v - 10.0).collect();
+        let x = RawTensor::new(shifted, &[1, 2, 6, 6], true);
+        let y = pool.forward(&x);
+        assert!(y.data().iter().all(|&v| v < 0.0), "output leaked the pad");
+        y.sum().into_loss().expect("scalar loss").backward();
+        let grad = x.grad().expect("input should receive a gradient");
+        let total: f32 = grad.iter().sum();
+        assert_eq!(total, y.data().len() as f32, "one unit per output window");
+    }
+
+    #[test]
+    fn test_maxpool2d_padding_over_half_kernel_panics() {
+        let pool = MaxPool2d::new(2, 1, 2);
+        let x = RawTensor::randn(&[1, 1, 4, 4]);
+        let msg = forward_panic_message(&pool, &x);
+        assert!(msg.contains("at most half"), "{msg}");
+    }
+
+    #[test]
+    fn test_maxpool2d_zero_stride_is_refused_at_construction() {
+        let err = MaxPool2d::try_new(2, 0, 0).expect_err("stride 0 is refused");
+        let d = err.detail().expect("InvalidParameter");
+        assert_eq!((d.op, d.arg), ("MaxPool2d", Some("stride")));
+        assert_eq!(d.message, "stride must be at least 1, got 0");
+    }
+
+    #[test]
+    fn test_maxpool2d_zero_kernel_is_refused_at_construction() {
+        let err = MaxPool2d::try_with_params((2, 0), (1, 1), (0, 0))
+            .expect_err("a zero kernel width is refused");
+        let d = err.detail().expect("InvalidParameter");
+        assert_eq!((d.op, d.arg), ("MaxPool2d", Some("kernel")));
+    }
+
+    #[test]
+    fn test_maxpool2d_kernel_larger_than_padded_input_panics_with_spec_message() {
+        let pool = MaxPool2d::new(5, 1, 0);
+        let x = RawTensor::randn(&[1, 1, 3, 3]);
+        let msg = forward_panic_message(&pool, &x);
+        assert!(msg.contains("larger than padded input"), "{msg}");
+    }
+
+    #[test]
+    fn test_maxpool2d_non_4d_input_panics_with_spec_message() {
+        let pool = MaxPool2d::new(2, 2, 0);
+        let x = RawTensor::randn(&[8, 8]);
+        let msg = forward_panic_message(&pool, &x);
+        assert!(msg.contains("input must be 4D"), "{msg}");
     }
 }

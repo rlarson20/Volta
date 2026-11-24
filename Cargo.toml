@@ -1,43 +1,54 @@
 [package]
 name = "volta"
-description = "A PyTorch-like Machine Learning framework."
-version = "0.3.0"
+description = "A PyTorch-style tensor and autograd library in pure Rust, written to show how an autograd engine works rather than to be fast."
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.89.0"
-build = "build.rs"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/rlarson20/Volta"
+documentation = "https://docs.rs/volta"
 keywords = ["ml", "machine-learning", "autodiff", "tensor"]
-categories = ["science"]
+categories = ["science", "science::ml"]
+# Ship the library, its unit tests (`src/lib_tests/`) and the examples. Leave out the
+# integration tests and benches: `tests/fixtures/` alone is about 1.9 MB of PyTorch
+# reference data no downstream user can use (#462), and both run from the repository,
+# not the published crate. Agent, audit and tooling files (CLAUDE.md, .claude/, docs/,
+# dev-docs/, notes/, scripts/, CI config) stay out too.
+include = [
+    "/src/**",
+    "/build.rs",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+    "/examples/**",
+]
 
 [dependencies]
-bincode = { version = "2.0.1", features = ["derive"] }
-approx = "0.5.1"
-rand = "0.9.2"
-rand_distr = "0.5.1"
+rand = "0.10.3"
+rand_distr = "0.6.0"
 matrixmultiply = "0.3.10"
+log = "0.4.29"
+safetensors = "0.8.0"
+thiserror = "2.0.18"
+libm = "0.2.16"
 
 # Dtype support
 half = { version = "2.7.1", features = ["bytemuck"] }
-bytemuck = { version = "1.24.0", features = ["derive"] }
+bytemuck = { version = "1.24.0", features = ["derive", "extern_crate_alloc"] }
 
 # GPU support
-wgpu = { version = "27.0.1", optional = true }
-pollster = { version = "0.4.0", optional = true }
-safetensors = "0.7.0"
-thiserror = "2.0.18"
-statrs = "0.18.0"
+wgpu = { version = "30.0.1", optional = true }
+pollster = { version = "1.0.1", optional = true }
 
-[[example]]
-name = "gpu"
-path = "examples/gpu.rs"
+# wasm32-unknown-unknown has no OS entropy source, so `getrandom` (behind `rand::rng()`,
+# the unseeded RNG) refuses to compile there unless a backend is chosen. `wasm_js` reads
+# `crypto.getRandomValues`, so it assumes a JavaScript host (a browser or Node), as the
+# WASM bindings do. Native targets are unaffected (#64).
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.4", features = ["wasm_js"] }
 
-[[example]]
-name = "showcase"
-path = "examples/showcase.rs"
-
-
+# Examples
 [[example]]
 name = "readme1"
 path = "examples/readme-1.rs"
@@ -46,61 +57,24 @@ path = "examples/readme-1.rs"
 name = "readme2"
 path = "examples/readme-2.rs"
 
-[[example]]
-name = "load_external_mnist"
-path = "examples/load_external_mnist.rs"
-
-[[example]]
-name = "mnist_cnn"
-path = "examples/mnist_cnn.rs"
-
-[[example]]
-name = "mnist_rnn"
-path = "examples/mnist_rnn.rs"
-
-[[example]]
-name = "regression"
-path = "examples/regression.rs"
-
-[[example]]
-name = "char_language_model"
-path = "examples/char_language_model.rs"
-
-[[example]]
-name = "char_transformer_model"
-path = "examples/char_transformer_model.rs"
-
-[[example]]
-name = "dcgan"
-path = "examples/dcgan.rs"
-
-[[example]]
-name = "gpu_training"
-path = "examples/gpu_training.rs"
-
-[[example]]
-name = "super_resolution"
-path = "examples/super_resolution.rs"
-
-[[example]]
-name = "time_sequence"
-path = "examples/time_sequence.rs"
-
-[[example]]
-name = "vae"
-path = "examples/vae.rs"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-blas-src = { version = "0.14", features = ["accelerate"], optional = true }
-
 [dev-dependencies]
-criterion = "0.5"
+approx = "0.5.1"
+criterion = "0.8"
+trybuild = "1"
+serde_json = "1.0.100"
+rustversion = "1.0.6"
+# Validates every shader expansion without a device (src/gpu/shader_template.rs). Same
+# version as wgpu's own naga, so the lockfile keeps one copy.
+naga = { version = "30", features = ["wgsl-in"] }
 
 [features]
-default = ["gpu", "accelerate"]
-accelerate = ["blas-src"]
+# CPU-only by default; each backend is opt-in and additive (#378, DECISIONS.md,
+# "Default features are CPU-only").
+default = []
+accelerate = []
 gpu = ["wgpu", "pollster"]
 
+# Benchmarks
 [[bench]]
 name = "tensor_ops"
 harness = false
@@ -112,10 +86,16 @@ harness = false
 [[bench]]
 name = "gpu_comparison"
 harness = false
+required-features = ["gpu"]
 
 [[bench]]
 name = "conv_algorithms"
 harness = false
+
+[lints.rust]
+missing_docs = "deny"
+# Every public type can be `dbg!`ed and held in a `#[derive(Debug)]` struct (#116).
+missing_debug_implementations = "deny"
 
 # =============================================================================
 # Clippy Lints Configuration
@@ -126,8 +106,7 @@ harness = false
 # Organization:
 # 1. Defensive/Safety Lints (deny) - Critical for correctness
 # 2. Code Quality Lints (deny) - Important for maintainability
-# 3. Pedantic Lints (selective) - Quality improvements where practical
-# 4. Allowed Lints - Explicitly documented exceptions
+# 3. Allowed Lints - Explicitly documented exceptions
 # =============================================================================
 
 [lints.clippy]
@@ -138,7 +117,14 @@ harness = false
 # These lints prevent common sources of runtime errors and undefined behavior
 
 # Memory safety and bounds checking
-indexing_slicing = "deny" # Use .get() instead of [] to prevent panics
+indexing_slicing = "deny" # Use crate::index::{fetch, slot, span}; tests are exempt via clippy.toml
+
+# Casts that can silently wrap or truncate index math and kernel parameters. Use
+# crate::index::{signed, unsigned} (and `pack_u32` in src/gpu/kernels.rs), which panic instead
+# (ADDENDUM §8).
+cast_possible_truncation = "deny" # usize -> u32 kernel parameters, float -> int
+cast_possible_wrap = "deny"       # usize -> isize/i64 in padding and window math
+cast_sign_loss = "deny"           # signed -> usize after a bounds check
 
 # Type safety and conversions
 fallible_impl_from = "deny" # Fallible conversions should use TryFrom, not From
@@ -149,7 +135,7 @@ unneeded_field_pattern = "deny"  # Don't ignore struct fields unnecessarily
 
 # API design
 fn_params_excessive_bools = "deny" # 4+ bool params usually indicate need for an enum
-must_use_candidate = "deny"        # Mark types that should not be ignored
+must_use_candidate = "deny"        # Mark functions whose result should not be ignored
 
 # -----------------------------------------------------------------------------
 # 2. CODE QUALITY LINTS (deny)
@@ -165,10 +151,11 @@ explicit_iter_loop = "deny"            # Use iter() explicitly in for loops
 semicolon_if_nothing_returned = "deny" # Consistent semicolon usage
 
 # Type and trait improvements
-default_trait_access = "deny" # Use Default::default() instead of Type::default()
+default_trait_access = "deny" # Use Type::default() instead of Default::default()
 implicit_clone = "deny"       # Make clones explicit for clarity
 assigning_clones = "deny"     # Use clone_from when assigning clones
 cast_lossless = "deny"        # Use From/Into for lossless casts
+redundant_closure_for_method_calls = "deny" # Pass `Tensor::exp`, not `|t| t.exp()`
 
 # Pattern matching
 single_match_else = "deny"                  # Use if-let for single match arms
@@ -191,7 +178,7 @@ struct_field_names = "deny"    # Avoid redundant prefixes in struct field names
 pub_underscore_fields = "deny" # Public fields shouldn't start with underscore
 
 # Conditionals and control flow
-bool_to_int_with_if = "deny" # Use as conversion instead of if bool { 1 } else { 0 }
+bool_to_int_with_if = "deny" # Use From/Into instead of if bool { 1 } else { 0 }
 if_not_else = "deny"         # Put the positive case in if, not else
 manual_let_else = "deny"     # Use let-else syntax when appropriate
 manual_assert = "deny"       # Use assert! macro instead of manual if panic!
@@ -202,14 +189,23 @@ return_self_not_must_use = "deny" # Builder pattern methods should be #[must_use
 double_must_use = "deny"          # Avoid duplicate #[must_use] attributes
 
 # Documentation
-doc_markdown = "deny"            # Properly format doc comments
-missing_panics_doc = "deny"      # Document when functions can panic
-missing_errors_doc = "deny"      # Document error conditions
-missing_fields_in_debug = "deny" # Include all fields in Debug implementations
+doc_markdown = "deny"                  # Properly format doc comments
+missing_panics_doc = "deny"            # Document when functions can panic
+missing_errors_doc = "deny"            # Document error conditions
+missing_docs_in_private_items = "deny"
+missing_fields_in_debug = "deny"       # Include all fields in Debug implementations
+
+# Leftover debugging and unsafe hygiene
+dbg_macro = "deny"                  # No dbg! left in committed code
+todo = "deny"                       # Track work in GitHub issues, not todo!()
+unimplemented = "deny"              # Same: no unimplemented!() stubs
+undocumented_unsafe_blocks = "deny" # Every unsafe block states its SAFETY invariant
 
 # Misc improvements
 unreadable_literal = "deny" # Use underscores in large numeric literals (1_000_000)
 use_self = "deny"           # Use Self instead of repeating type name
+unused_self = "deny"        # A method that never reads `self` is an associated fn
+needless_pass_by_value = "deny" # Take `&T` unless the function consumes the argument
 
 # -----------------------------------------------------------------------------
 # 3. ALLOWED LINTS (with rationale)
@@ -218,3 +214,9 @@ use_self = "deny"           # Use Self instead of repeating type name
 
 # Pedantic lints that are too noisy or don't apply
 similar_names = "allow" # Common in math/ML code (x, y, z, w, h, etc.)
+
+# `usize`/`i32 as f32` for counts, means, and positions. A count above 2^24 rounds in the low
+# bits (relative error about 6e-8), which cannot change a result beyond f32's own rounding.
+# Wrapping 100+ sites would add noise, not safety. Revisit if an `as f32` ever feeds an
+# integer-exact comparison.
+cast_precision_loss = "allow"

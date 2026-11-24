@@ -1,251 +1,100 @@
-# CLAUDE.md
+# CLAUDE.md — Volta
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Educational PyTorch-style autograd engine in pure Rust. Correctness and defensibility over speed: every claim the code, docs, or tests make must hold up under review.
 
-## Key Instructions
+Area-specific rules live in `.claude/rules/` and load automatically when you read or edit matching files. This file holds only what applies everywhere.
 
-Whenever you're corrected on something, or you learn something about the codebase, either add it to the relevant spot in this file, or add it under the Learned Instructions if it's too general for any other spot in this file.
+In a cloud session (Linux, `CLAUDE_CODE_REMOTE` set, no `rtk`, no GPU), read `dev-docs/CLOUD.md` first.
 
-## Learned Instructions
+## Current state
 
-### Recent Refactoring Work (2025-2026)
+Update this section when a phase lands or the merge gate changes. Keep it short; what landed is in the commit log and `DECISIONS.md`.
 
-**TensorOps Duplication Removal (COMPLETED):**
-- Eliminated 107 lines of boilerplate from tensor operations
-- TensorOps implementations now call helper functions directly (`binary_op()`, `unary_op()`, `reduce_op()`, `ternary_op()`)
-- When adding new operations, follow the pattern in `src/ops/` - implement the operation logic in the appropriate file, then add a thin wrapper in TensorOps trait
+- **Releases:** the [milestones](https://github.com/rlarson20/Volta/milestones) are the plan: v0.4.0 (what must land before `improvements` merges into `main`), v0.5.0 (Phase 4), v1.0.0 (breaking changes and readiness), Backlog. Breaking goes to v1.0.0 (v0.5.0 if Phase 4), must-precede-`main` to v0.4.0, anything else to Backlog. The State of Volta issue (#456) carries the latest digest.
+- **Roadmap:** `docs/plans/ADDENDUM.md` § Sequencing defines the phases. Phases 0–3 and 5 (dtypes and mixed precision, PRs #19–#28) are done. Phase 4 (arena graph, sealed `Backend` trait, proptest DAG checks) is optional and comes last.
+- **Open work lives in [GitHub issues](https://github.com/rlarson20/Volta/issues), nowhere else.** Each defect ID (`S<n>`, `A<n>`) has one issue naming its `#[ignore = "S<n>: ..."]` repro and its audit section. Pick work with `is:open label:P0 -label:blocked` (then P1, ...). The audits in `docs/audits/` are dated, append-only evidence, not status: correct them by appending, and tell the user (`.claude/rules/audits.md`). PyTorch fixtures are regenerated with `just torch-fixtures` (needs `uv`).
+- **Merge gate:** `improvements` merges into `main` when every [`merge-gate`](https://github.com/rlarson20/Volta/issues?q=is%3Aopen+label%3Amerge-gate) issue is closed (fixed, or closed as not planned with a reason). `just ci` passes and the library documents every item. Rulesets in `.github/rulesets/` (applied with `just rulesets`) enforce the PR and required CI checks on both branches (`DECISIONS.md`, "Rulesets enforce the merge gate"). PRs into `improvements` gate on Linux, including `macos-cross`. Real macOS (Metal, Accelerate) runs after each merge and on the PR into `main`; a post-merge failure opens a `merge-gate` issue (`DECISIONS.md`, "macOS checks move off the PR gate").
 
-**Conv2d Algorithm Improvements (COMPLETED):**
-- Direct convolution implemented with full gradient support (memory-efficient)
-- iGEMM (Implicit GEMM) implemented with tiled computation (balanced memory/performance)
-- im2col+GEMM remains available but is memory-intensive
-- Auto-selection chooses algorithm based on input size, kernel size, batch size, and device
-- All three algorithms support both forward and backward passes on GPU with zero CPU fallback
+## Invariants
 
-**See `notes/REFACTOR_SUGGESTIONS.md` for ongoing and planned refactoring work, and `dev-docs/IMPROVEMENT_PLAN.md` (2026-07) for the current prioritized bug/improvement roadmap.**
+Never violate these. If a task seems to require it, stop and ask.
 
-**Feature flags gotcha:** `Cargo.toml` sets `default = ["gpu", "accelerate"]`, so plain `cargo build`/`cargo test`/`cargo clippy` compile WITH the GPU backend (contrary to the README's opt-in framing, and CI's "no features" step labels). Use `--no-default-features` for a CPU-only build.
+1. `autograd::edge()` is the only code that attaches `parents`/`grad_fn`. Never build an op or layer output by copying data into `RawTensor::new` (that is how B2/B3 shipped).
+2. A `borrow_mut()` outside `src/autograd.rs` and `src/ops/` means `Tensor` is missing a method. Add the method instead.
+3. Only `accumulate_grad` and `set_grad` write `grad`, and only `zero_grad` (`RawTensor::zero_grad`, which `Tensor`, `Module` and the optimizers call) clears it.
+4. Library code never prints: use `log::` (lint-enforced).
+5. Numeric code fails loudly (ADDENDUM §8). Library code reads and writes through `crate::index::{fetch, slot, span}`, which panic on an out-of-bounds index in every profile; `#[cfg(test)]` code in `src/` uses `fetch` too, `tests/` and `#[test]` fns index with `v[i]` (`clippy.toml` allows `indexing_slicing` in tests), or zip expected against actual after asserting equal lengths. `examples/` and `benches/` (public API only, not covered by `clippy.toml`) read a scalar with `Tensor::item()` and anything else with `.expect(..)`. Every target reads a scalar with `Tensor::item()`. Never use `.get(i).unwrap_or(0.0)`, and never write an `if let Some` that silently skips a read or write. A zero that means padding gets an explicit coordinate check. Silent zeros are how wrong gradients pass tests. `just check-fallbacks` (in `just ci` and pre-commit) enforces it; opt out per line with `// index-ok: <reason>`.
+6. Never write a test that asserts a known bug's behavior. Use `#[ignore = "<defect ID>: <why>"]` instead, where the ID is one an open issue's title starts with (`S4`, as in "S2/S3/S4: ...") or the issue number itself (`#60`). `just check-ignores` (in `just ci`, CI, and, without the issue lookup, pre-commit) enforces both.
+7. Don't overclaim. A layer or feature is "working" only when a test exercises its gradients with non-degenerate inputs.
+8. Errors follow where the data comes from (DECISIONS.md, "Panic inside the program, `Result` where data comes from outside"; `dev-docs/DEVELOPMENT.md`). An argument a user can supply (shape, axis, range, label, bytes, state dict) is validated, before any allocation, and returned as a `VoltaError`; the panicking form wraps the `try_` one. A contract violation between tensors the program built panics, with `# Panics`.
 
-## Project Overview
+## Commands
 
-Volta is a PyTorch-like deep learning framework written in pure Rust. It's an educational project designed to demystify automatic differentiation engines and neural network computation graphs.
+- Default features are empty (CPU-only; DECISIONS.md, "Default features are CPU-only"). A plain `cargo build` skips the GPU backend; add `--features gpu,accelerate` (the justfile's `{{full}}`) to compile it.
+- Fast loop: `cargo test --lib <name-filter>`.
+- Before opening a PR, run `cargo clippy --features gpu,accelerate --all-targets -- -D warnings` (and plain `cargo clippy --all-targets -- -D warnings` if the change compiles differently without `gpu`) and the tests the change touches (GPU ones with `VOLTA_REQUIRE_GPU=1` where an adapter exists). Then push: GitHub Actions runs every `just ci` recipe on the PR and is the gate, so don't also run the full `just ci` locally (DECISIONS.md, "GitHub Actions is the PR gate"). Fix a red CI run on the PR. `just ci` is still the one-command local copy of CI (fmt, `clippy --all-targets -D warnings`, test and `RUSTDOCFLAGS=-D warnings cargo doc`, each with `gpu` + `accelerate` and with `--no-default-features`, then examples (built, and the quick ones run by `just examples-smoke`), each CPU bench run once by `just bench-smoke`, the cargo-hack feature powerset when installed, and `just wasm-check` when the wasm32 target is installed). `ci.yml` calls the same justfile recipes. `pre-commit run` is the faster subset (fmt, fallbacks, ignore IDs, both clippy runs, `cargo test`); it runs on commit where it's installed. Both should pass on a clean `HEAD`; if a hook fails, fix the cause rather than skipping it.
+- Committing past the hooks: `SKIP=clippy,cargo-test git commit ...` (ask the user first; never `--no-verify`). The `fmt` hook runs `cargo fmt --all` and fails whenever it rewrites a file, so make the tree `cargo fmt --check`-clean first. Stage everything you want and leave nothing unstaged: pre-commit stashes unstaged changes, and that conflicts with its own fixes (also with `git commit -- <paths>`).
+- `cargo test <filter>` matches test *names*. There are no category modules called `core`, `neural`, or similar.
 
-**Key Characteristics:**
-- **Educational focus**: Prioritizes correctness and clarity over performance
-- **PyTorch-like API**: Familiar patterns for ML practitioners
-- **Pure Rust**: No Python dependencies, suitable for Rust-native ML
-- **Verified gradients**: All operations validated with numerical gradient checking
-- **GPU acceleration**: Experimental WGPU-based support for core operations
-- **Extensible**: Clean architecture for adding new operations and layers
+## Shell gotchas
 
-## Development Commands
+The shell is zsh on macOS, and a Claude Code hook rewrites commands through `rtk`.
 
-### Quick Start
+- `grep` becomes `rtk grep`, which rejects `-n`, `-E`, and `--include`. Use `rtk proxy grep ...` for a standalone search. In a pipeline, `rtk proxy grep` can silently print nothing, so use `command grep` there.
+- Quote globs (`--include='*.rs'`); zsh errors on unmatched ones. A bare `===` is also an error in zsh (`=` expansion), so don't use it as a separator in `echo`.
+- BSD `sed`: `sed -i '2i text'` fails. Use the Edit tool or a short `python3` script.
+- Don't chain a `VAR=...` assignment and its use across `&&` where an earlier command can fail; the next command runs with `VAR` unset (this happened with a scratchpad path). Set it inside the same command.
+- `rtk` filters `cargo` output and can drop compiler error bodies (you get only `could not compile`). Use `rtk proxy cargo ...` to see the real error.
+- A `cargo test ... | grep` pipeline can come out empty (the hook rewrites the `cargo` side). To capture `--list` output or anything you will diff, redirect: `rtk proxy cargo test --lib -- --list > file`, then grep the file. Don't hide stderr with `2>/dev/null` while checking that the build worked.
+- **A command that may run longer than 3 minutes goes in the background from the start** (`run_in_background`, output redirected to a file in the scratchpad), then do other work while it runs. This covers examples that train on MNIST (`mnist_cnn` is far over 3 minutes on the CPU), `just test-gpu`, benches, and full `just ci`. Run each such command as its own task rather than in one `for` loop, so one slow run doesn't hold up or hide the rest. Output redirected through `rtk` is buffered, so a quiet log does not mean a hang: check CPU time with `ps` and use a short run (fewer epochs or batches) to judge speed before a full one.
+- Format single files with `rustfmt --edition 2024 <file>`. `cargo fmt` rewrites unrelated, already-dirty files.
+- For a mechanical signature change that touches many call sites, change the signature and wrap the spans from `cargo check --message-format=json` (E0308 spans) with a script instead of hand-editing each site.
 
-```bash
-# Build and test
-cargo check
-cargo build
-cargo test -- --nocapture
-
-# Quick verification (runs check, build, and test)
-just check
+## Where knowledge lives
 
-# Run examples
-cargo run --example readme1                    # Simple MLP training
-cargo run --example readme2                    # LeNet-style CNN
-cargo run --example showcase                   # Feature showcase
-cargo run --example load_external_mnist        # PyTorch → Volta loading
-```
+Read these when the need comes up; don't preload them.
 
-### Testing
+| Need | Read |
+| --- | --- |
+| Why something is designed the way it is | `DECISIONS.md` |
+| What's open; what's next | [GitHub issues](https://github.com/rlarson20/Volta/issues) (labels `P0`–`P3`, `merge-gate`, `blocked`, `needs-mac`) |
+| Evidence and repro for a defect ID | `docs/audits/` |
+| Feature ideas | Issues labeled `kind:feature` (don't start these unprompted) |
+| Step-by-step: adding an op or layer | `dev-docs/DEVELOPMENT.md` |
+| Conv algorithms and selection | `dev-docs/CONV2D_IMPLEMENTATION.md` |
+| What's valid in a cloud session; Linux/no-GPU differences | `dev-docs/CLOUD.md` |
+| Local PR workflow: `just pr`, `just sync`, `just prs`, and why | `dev-docs/WORKFLOW.md` |
+| What's left that needs RJ's Mac, admin rights or decision (temporary) | `dev-docs/FINISHING.md` |
 
-```bash
-# Run all tests with output
-cargo test -- --nocapture
+## Filing what you learn
 
-# Run specific test modules (organized by category in src/lib.rs)
-cargo test core                # Core tensor operations
-cargo test grad_check          # Numerical gradient validation
-cargo test broadcasting        # Broadcasting rules
-cargo test neural              # Neural network layers
-cargo test optimizer           # Optimizer convergence tests
-cargo test axis_reduce_tests   # Dimension reduction operations
-cargo test shape_tests         # Shape manipulation tests
+When you're corrected or discover something non-obvious, file it in exactly one place:
 
-# Run a specific test
-cargo test test_name -- --nocapture
-```
+- **A defect, task, or idea** goes in a GitHub issue (one per defect ID, with labels `kind:`, `area:`, `P0`–`P3`, `size:`), never in a file. Before filing, run `just issues "<two or three key terms>"` (an op name, a file, the symptom; it searches closed issues too). If something matches, comment on it or add a `Related: #N` line instead of filing a second one.
+- **A correction to an audit** is appended under that file's `## Corrections` with an inline pointer, never made by editing the original text, and you tell the user (`.claude/rules/audits.md`).
+- **A rule for one area** goes in the matching `.claude/rules/*.md`.
+- **A repo-wide rule** goes under Invariants above. Keep that list at 10 or fewer and merge items rather than append.
+- **Why a decision was made, or what was tried and rejected** goes in a `DECISIONS.md` entry.
+- **What was done** goes in the commit message, not here. Never add "COMPLETED" or changelog sections to this file or to the rules.
 
-### GPU Support
+## Scope
 
-```bash
-# Build with GPU support
-cargo build --features gpu
-cargo test --features gpu -- --nocapture
-cargo run --example gpu --features gpu
+Stay inside the current phase. Backlog features, refactors from later phases, and "while I'm here" cleanups get proposed as a new issue, not implemented.
 
-# Build with BLAS acceleration (macOS only)
-cargo build --features accelerate
-cargo test --features accelerate -- --nocapture
-```
+## Review and status
 
-## Testing Overview
+Output can outrun what RJ can read. These rules keep approval and review the same thing.
 
-**Test Organization:**
-- **core**: Basic tensor operations, chain rule, shape manipulation
-- **grad_check**: Numerical gradient validation for all operations
-- **broadcasting**: NumPy-style broadcasting rules
-- **neural**: Neural network layer tests (Linear, Conv2d, MaxPool2d, etc.)
-- **optimizer**: Optimizer convergence tests (Adam, SGD)
-- **axis_reduce_tests**: Dimension reduction operations (sum_dim, max_dim, softmax)
-- **shape_tests**: Shape manipulation operations (reshape, permute, transpose)
+- **Every PR declares a review tier** in the template. *Mechanical* (tests, docs, lints, CI, a fix inside an existing contract) merges on green CI. *Design* (a public signature or type, a new trait, a reversed `DECISIONS.md` entry, a numerics or dtype change) waits until RJ has read the diff. When unsure, it is design. A stack of PRs holds at most four, and any design PR in it is read before the stack merges.
+- **Ask before designing.** Before adding a public type or trait, or reversing a `DECISIONS.md` entry, put the question to RJ (a decision card, or a comment on the issue) and wait. A reversal updates the superseded table at the top of `DECISIONS.md` in the same PR.
+- **Status lives in issues and milestones only.** No status files: a runbook (`dev-docs/FINISHING.md`) loses each step once it's done, and project-file plans move into the issue they serve. After a batch of merges, run `just status` and post its output as a comment on the State of Volta issue (#456).
+- **One outside audit per release,** by a different model, at the release boundary. RJ triages it before anything is filed, and severities are re-checked against the code first.
 
-**Test Coverage:**
-- Core operations, gradient correctness, broadcasting
-- Neural networks (Linear, Sequential, Conv2d, ConvTranspose2d, MaxPool2d)
-- Optimizers (Adam, SGD)
-- Edge cases (numerical edge cases, empty tensors, scalar tensors)
+## Working an issue
 
-**Workflow:**
-- Always run `cargo test` before committing changes
-- Use `check_gradients_simple()` for basic gradient validation
-- Use full `check_gradients()` for comprehensive validation
-
-## Pre-commit Hooks
-
-The project uses pre-commit hooks configured in `.pre-commit-config.yaml`:
-
-- **fmt**: Runs `cargo fmt` to format code
-- **cargo-check**: Validates code compiles
-- **clippy**: Lints with exceptions for `needless_range_loop` and `too_many_arguments`
-- **cargo test**: Runs full test suite
-- **General hooks**: trailing-whitespace, end-of-file-fixer, check-yaml, check-toml, check-added-large-files, check-merge-conflict
-
-To install hooks: `pre-commit install`
-Run hooks before committing (almost always right): `pre-commit run`
-
-## Defensive Programming with Clippy
-
-Volta uses a defensive linting approach. The following Clippy lints are configured in `Cargo.toml`:
-
-```toml
-[lints.clippy]
-indexing_slicing = "deny"          # Prevents direct indexing into slices
-fallible_impl_from = "deny"        # Warns about panic-prone From impls
-wildcard_enum_match_arm = "deny"   # Disallows wildcard _ patterns
-unneeded_field_pattern = "deny"    # Identifies ignored struct fields
-fn_params_excessive_bools = "deny" # Warns about too many bool params
-must_use_candidate = "deny"        # Suggests #[must_use] attributes
-```
-
-**Key principles:**
-- **No direct indexing**: Use `.get()`, iterators, or safe wrappers instead of `[]` indexing
-- **No panicking From impls**: Use `TryFrom` for fallible conversions
-- **Exhaustive matching**: Always handle all enum variants explicitly
-- **Explicit field patterns**: Don't ignore struct fields with `..` without reason
-- **Result-oriented**: Return `Result` types instead of panicking on errors
-
-## Code Quality
-
-Run `cargo clippy --all-targets` (not just `cargo clippy --all`) to catch linting errors in tests and examples. Fix all clippy warnings before committing.
-
-## Serialization (State Dicts)
-
-The framework supports multiple serialization formats for model weights:
-
-**Supported Formats:**
-- **bincode**: Binary format for Volta-native model saving/loading
-- **SafeTensors**: Industry-standard format for interoperability with PyTorch, HuggingFace, etc.
-
-**Key Types:**
-- `StateDict`: `BTreeMap<String, TensorData>` - Human-readable parameter names to tensor data
-- `TensorData`: Serializable struct containing `data: Vec<f32>` and `shape: Vec<usize>`
-- `StateDictDiff`: Debugging tool for comparing expected vs loaded state dicts
-
-**Key Functions:**
-- `save_state_dict()`: Save model weights to bincode format
-- `load_state_dict()`: Load model weights from bincode format
-- `load_safetensors()`: Load from SafeTensors format
-- `save_safetensors()`: Save to SafeTensors format
-- `load_safetensors_with_mapping()`: Load with automatic key/weight transformations
-
-**Named Layer Support:**
-
-Sequential now supports optional layer names for more robust model serialization. See `examples/load_external_mnist.rs` for a complete end-to-end example.
-
-**External Model Loading:**
-
-Load weights from PyTorch, HuggingFace, and other frameworks using weight mapping with `StateDictMapper`.
-
-## Known Issues and Limitations
-
-**Current Limitations:**
-- **Single-threaded only**: Uses Rc<RefCell> instead of Arc<Mutex>
-- **No distributed training**
-- **No learning rate schedulers**
-- **No full RNN layer** (LSTMCell exists; transformer components — `MultiHeadAttention`, `TransformerBlock`, `PositionalEncoding` — ARE implemented in `src/nn/transformer/`)
-- **Incomplete GPU support**: Some operations still CPU-only (check `src/gpu/mod.rs` for current status)
-
-**Known Anti-Patterns (from notes/REFACTOR_SUGGESTIONS.md):**
-1. **Excessive Clone Operations**: 424+ clone operations across 45 files due to Rc<RefCell> design
-2. **Gradient Function Boilerplate**: Each operation requires ~30 lines of repetitive GradFn code
-3. **Recursive Movement Ops**: Deep nesting in movement operations (pad, shrink, stride)
-
-## Code Conventions
-
-When working with this codebase:
-
-1. **All operations must have verified gradients**: Add numerical gradient check tests in `src/lib.rs`
-2. **Use TensorOps trait**: User-facing API for all tensor operations
-3. **Module trait for layers**: Implement `forward()`, `parameters()`, `state_dict()`, `load_state_dict()`
-4. **GradFn for backprop**: Each operation implements the GradFn trait for reverse-mode autodiff
-5. **Shape semantics**: Follow PyTorch conventions (NCHW for conv layers)
-6. **Error handling**: Return `VoltaError` results instead of panicking where possible
-7. **Defensive indexing**: Use `.get()`, iterators, or safe wrappers; avoid direct `[]` indexing
-
-## Performance Characteristics
-
-- **Not optimized for speed (yet)**: Educational focus prioritizes correctness and clarity
-- **BLAS acceleration available**: macOS can use Accelerate framework for matmul (`--features accelerate`)
-- **Naive implementations**: Most operations use simple loops rather than SIMD or optimized kernels
-- **Single-threaded**: Uses Rc instead of Arc, no parallelism
-
-## Dependencies
-
-### Core Dependencies
-
-- `rand`, `rand_distr`: Random number generation
-- `approx`: Numerical approximations for gradient checking
-- `bincode`: Binary serialization for model weights
-- `matrixmultiply`: GEMM operations
-- `half`, `bytemuck`: Dtype support (f16, bf16)
-- `safetensors`: SafeTensors format support for model loading
-- `thiserror`: Error handling
-
-### Optional Dependencies
-
-- `blas-src` (macOS only): BLAS interface for Accelerate framework
-- `wgpu`: GPU compute via WebGPU
-- `pollster`: Async executor for GPU operations
-
-### Development Dependencies
-
-- `criterion`: Benchmarking framework
-
-## Development Notes
-
-- **scrapboard.md**: Contains development notes, TODOs, and clippy linting progress
-- **notes/REFACTOR_SUGGESTIONS.md**: Detailed analysis of completed and planned refactoring work
-- **responses/**: Directory containing LLM-assisted development recommendations
-- **sys-prompts/**: System prompts for external LLM assistance (maintainer use only)
-
-## Reference Documentation
-
-For detailed information on specific topics, see:
-
-- **Architecture**: `dev-docs/ARCHITECTURE.md` - Core design philosophy, tensor design, storage system, autograd engine, operation organization, neural network layers, GPU support
-- **Benchmarking**: `dev-docs/BENCHMARKING.md` - Performance testing, convolution algorithm benchmarks, benchmarking guidelines
-- **Development**: `dev-docs/DEVELOPMENT.md` - Adding new operations, adding new neural network layers, testing workflow conventions, gradient checks
-- **Conv2D Implementation**: `dev-docs/CONV2D_IMPLEMENTATION.md` - Algorithm overview (Direct, im2col, iGEMM), algorithm selection, iGEMM architecture, recent improvements
-- **Refactoring**: `notes/REFACTOR_SUGGESTIONS.md` - Ongoing and planned refactoring work
+- A PR that fixes an issue says `Fixes #N` in its body; merging closes the issue. One PR may close several, each with its own `Fixes`.
+- PR bodies follow `.github/PULL_REQUEST_TEMPLATE.md` (`gh pr create --body` skips it): a short opener the user approved, `Fixes`, the checklist, then the agent's full write-up inside `<details><summary>Model (effort)</summary>`.
+- Finished without a PR (an investigation, a refuted defect): comment the result on the issue and close it (`completed` or `not planned`, with the reason).
+- Found something new mid-task: open an issue for it and keep it out of the current PR.
+- Skip `needs-mac` issues in a cloud session; they need the M2's Metal backend to verify.
+- When a fix removes an `#[ignore = "S<n>: ..."]`, the PR closes the issue that names `S<n>`.

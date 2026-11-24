@@ -1,6 +1,8 @@
-use volta::{LSTMCell, Module, ProgressBar, RawTensor, SGD, TensorOps};
+//! Time-sequence prediction: an `LSTMCell` (1 input, 32 hidden units) followed by a `Linear` output layer, trained with `SGD` with momentum on sine-wave sequences, then tested on a held-out prediction.
+use volta::RawTensor;
+use volta::nn::{LSTMCell, Module, RecurrentLayer, SGD};
+use volta::utils::ProgressBar;
 
-#[allow(clippy::cast_precision_loss)]
 fn main() {
     println!("=== Time Sequence Prediction with LSTM ===\n");
 
@@ -27,7 +29,7 @@ fn main() {
 
     // Build model: LSTM with 1 input, 32 hidden units, 1 output
     let lstm = LSTMCell::new(1, 32, true);
-    let output_layer = volta::Linear::new(32, 1, true);
+    let output_layer = volta::nn::Linear::new(32, 1, true);
 
     let mut lstm_params = lstm.parameters();
     lstm_params.extend(output_layer.parameters());
@@ -43,53 +45,67 @@ fn main() {
     let num_epochs = 50;
     let mut progress = ProgressBar::new(num_epochs, "Training");
 
+    // One optimizer step per sequence, on the mean of its per-timestep losses. Summing
+    // the gradients of all 10,000 timestep losses into one step per epoch (what this
+    // example used to do) makes the step about 10,000 times too large, and training
+    // diverges to inf and then NaN within a few epochs (#88).
+    let mut first_loss = None;
+    let mut last_loss = f32::NAN;
     for epoch in 0..num_epochs {
-        optimizer.zero_grad();
         let mut total_loss = 0.0;
 
-        // Process each sequence
         for seq_idx in 0..num_sequences {
-            let mut h_state = None;
+            optimizer.zero_grad();
+            let mut state = lstm.initial_state(1);
+            let mut seq_loss: Option<volta::Tensor> = None;
 
             // Process each timestep in the sequence
             for t in 0..sequence_length {
                 let idx = seq_idx * sequence_length + t;
-                let input_val = all_inputs.get(idx).copied().unwrap_or(f32::NAN);
-                let target_val = all_targets.get(idx).copied().unwrap_or(f32::NAN);
+                let input_val = all_inputs.get(idx).copied().expect("index in range");
+                let target_val = all_targets.get(idx).copied().expect("index in range");
 
                 // Create input tensor [1, 1] (batch=1, features=1)
                 let input = RawTensor::new(vec![input_val], &[1, 1], false);
 
-                // LSTM forward
-                let (h_new, c_new) = if let Some((ref h, ref c)) = h_state {
-                    lstm.forward_step(&input, Some((h, c)))
-                } else {
-                    lstm.forward_step(&input, None)
-                };
-
-                // Output layer
+                // LSTM forward, then the output layer
+                let h_new = lstm.step(&input, &mut state);
                 let pred = output_layer.forward(&h_new);
 
-                // Loss
                 let target = RawTensor::new(vec![target_val], &[1, 1], false);
                 let loss = RawTensor::mse_loss(&pred, &target);
-
-                total_loss += loss.borrow().data.first().copied().unwrap_or(f32::NAN);
-                loss.backward();
-
-                // Update hidden state for next timestep
-                h_state = Some((h_new, c_new));
+                seq_loss = Some(match seq_loss {
+                    Some(acc) => acc.add(&loss),
+                    None => loss,
+                });
             }
+
+            // Backpropagate through the whole sequence once, on the mean step loss.
+            let mean = RawTensor::new(vec![1.0 / sequence_length as f32], &[1], false);
+            let seq_loss = seq_loss.expect("sequence_length > 0").elem_mul(&mean);
+            total_loss += seq_loss.item();
+            seq_loss.into_loss().expect("scalar loss").backward();
+            optimizer.step();
         }
 
-        optimizer.step();
         progress.update(epoch + 1);
 
+        let avg_loss = total_loss / num_sequences as f32;
+        assert!(
+            avg_loss.is_finite(),
+            "epoch {epoch}: loss diverged to {avg_loss}"
+        );
+        first_loss.get_or_insert(avg_loss);
+        last_loss = avg_loss;
         if epoch % 10 == 9 {
-            let avg_loss = total_loss / (num_sequences * sequence_length) as f32;
             println!(" Loss = {avg_loss:.6}");
         }
     }
+    let first_loss = first_loss.expect("num_epochs > 0");
+    assert!(
+        last_loss < first_loss,
+        "final loss {last_loss} is not below the first epoch's {first_loss}"
+    );
 
     println!("\n=== Training Complete ===");
 
@@ -98,7 +114,7 @@ fn main() {
     let test_start = 5.0;
     let test_length = 20;
 
-    let mut h_state = None;
+    let mut state = lstm.initial_state(1);
     for t in 0..test_length {
         let x = test_start + (t as f32) * 0.1;
         let true_current = x.sin();
@@ -106,14 +122,10 @@ fn main() {
 
         let input = RawTensor::new(vec![true_current], &[1, 1], false);
 
-        let (h_new, c_new) = if let Some((ref h, ref c)) = h_state {
-            lstm.forward_step(&input, Some((h, c)))
-        } else {
-            lstm.forward_step(&input, None)
-        };
+        let h_new = lstm.step(&input, &mut state);
 
         let pred = output_layer.forward(&h_new);
-        let pred_val = pred.borrow().data.first().copied().unwrap_or(f32::NAN);
+        let pred_val = pred.item();
 
         if t % 5 == 0 {
             println!(
@@ -125,7 +137,5 @@ fn main() {
                 (pred_val - true_next).abs()
             );
         }
-
-        h_state = Some((h_new, c_new));
     }
 }

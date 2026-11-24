@@ -19,7 +19,7 @@ use wgpu::Buffer;
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```text
 /// let pool = StagingBufferPool::default();
 ///
 /// // Try to acquire from pool
@@ -31,6 +31,11 @@ use wgpu::Buffer;
 /// // Return to pool (or drop if full)
 /// pool.release(buffer, size_bytes);
 /// ```
+///
+/// A poisoned lock is recovered rather than propagated: each critical section only
+/// pushes, pops, or adjusts a count, with nothing in between that can panic, so the
+/// pool is consistent after a panic elsewhere; and one panicking thread (a failing
+/// test) must not break every later GPU call.
 pub struct StagingBufferPool {
     /// Pools organized by exact byte size
     pools: Mutex<HashMap<u64, Vec<Buffer>>>,
@@ -61,22 +66,24 @@ impl StagingBufferPool {
     ///
     /// # Arguments
     /// * `size_bytes` - Exact size in bytes of the staging buffer needed
-    /// # Panics
-    /// Unwrapping pool mutex
     pub fn acquire(&self, size_bytes: u64) -> Option<Buffer> {
-        let mut count = self.current_count.lock().unwrap();
-        if let Some(pool) = self.pools.lock().unwrap().get_mut(&size_bytes)
+        let mut count = self
+            .current_count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(pool) = self
+            .pools
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_mut(&size_bytes)
             && let Some(buffer) = pool.pop()
         {
             *count = count.saturating_sub(1);
 
-            #[cfg(debug_assertions)]
-            if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
-                eprintln!(
-                    "[StagingPool] Acquired {}B buffer from pool ({} remain)",
-                    size_bytes, *count
-                );
-            }
+            log::trace!(
+                "[StagingPool] acquired {size_bytes}B buffer from pool ({} remain)",
+                *count
+            );
             drop(count);
             return Some(buffer);
         }
@@ -92,38 +99,34 @@ impl StagingBufferPool {
     /// # Arguments
     /// * `buffer` - The staging buffer to return to the pool
     /// * `size_bytes` - Size of the buffer in bytes (must match buffer's actual size)
-    /// # Panics
-    /// Unwrapping pool mutex
     pub fn release(&self, buffer: Buffer, size_bytes: u64) -> bool {
-        let mut count = self.current_count.lock().unwrap();
+        let mut count = self
+            .current_count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         if *count >= self.max_total {
-            #[cfg(debug_assertions)]
-            if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
-                eprintln!(
-                    "[StagingPool] Pool full ({}/{}), dropping {}B buffer",
-                    *count, self.max_total, size_bytes
-                );
-            }
+            log::trace!(
+                "[StagingPool] pool full ({}/{}), dropping {size_bytes}B buffer",
+                *count,
+                self.max_total
+            );
 
             return false; // Pool full, buffer will be dropped
         }
 
         self.pools
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .entry(size_bytes)
             .or_default()
             .push(buffer);
         *count += 1;
 
-        #[cfg(debug_assertions)]
-        if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
-            eprintln!(
-                "[StagingPool] Returned {}B buffer to pool ({} total)",
-                size_bytes, *count
-            );
-        }
+        log::trace!(
+            "[StagingPool] returned {size_bytes}B buffer to pool ({} total)",
+            *count
+        );
         drop(count);
         true
     }
@@ -132,26 +135,30 @@ impl StagingBufferPool {
     ///
     /// This drops all pooled buffers, freeing their GPU memory.
     /// Useful for cleanup or resetting state during testing.
-    /// # Panics
-    /// Unwrapping pool mutex
     pub fn clear(&self) {
-        self.pools.lock().unwrap().clear();
-        *self.current_count.lock().unwrap() = 0;
+        self.pools
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        *self
+            .current_count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = 0;
 
-        #[cfg(debug_assertions)]
-        if std::env::var("VOLTA_GPU_DEBUG").is_ok() {
-            eprintln!("[StagingPool] Cleared all buffers");
-        }
+        log::trace!("[StagingPool] cleared all buffers");
     }
 
     /// Get current number of pooled buffers
-    /// # Panics
-    /// Unwrapping count mutex
+    #[cfg(test)]
     pub fn size(&self) -> usize {
-        *self.current_count.lock().unwrap()
+        *self
+            .current_count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Get maximum pool capacity
+    #[cfg(test)]
     pub const fn capacity(&self) -> usize {
         self.max_total
     }
@@ -159,12 +166,12 @@ impl StagingBufferPool {
     /// Get statistics about pool usage
     ///
     /// Returns a snapshot of the current pool state for diagnostics.
-    /// # Panics
-    /// unwrapping mutex for `total_pooled`
     pub fn stats(&self) -> StagingPoolStats {
         StagingPoolStats {
-            total_pooled: *self.current_count.lock().unwrap(),
-            max_capacity: self.max_total,
+            total_pooled: *self
+                .current_count
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
         }
     }
 }
@@ -174,8 +181,6 @@ impl StagingBufferPool {
 pub struct StagingPoolStats {
     /// Total number of buffers currently in the pool
     pub total_pooled: usize,
-    /// Maximum pool capacity
-    pub max_capacity: usize,
 }
 
 impl Default for StagingBufferPool {
@@ -204,7 +209,10 @@ mod tests {
     #[test]
     fn test_clear_resets_count() {
         let pool = StagingBufferPool::new(10);
-        *pool.current_count.lock().unwrap() = 5; // Simulate some buffers
+        *pool
+            .current_count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = 5; // Simulate some buffers
         pool.clear();
         assert_eq!(pool.size(), 0);
     }

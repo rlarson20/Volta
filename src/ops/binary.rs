@@ -1,77 +1,75 @@
-use crate::autograd::GradFn;
+use crate::autograd::{GradFn, edge};
 use crate::device::Device;
+use crate::index::{fetch, slot};
+use crate::macros::define_ops;
+use crate::ops::reduce::pairwise_sum_by;
+use crate::real::{Real, compute_dtype, dispatch_real, promote_operands};
+use crate::shape::{Shape, Strides};
 use crate::storage::Storage;
 use crate::{RawTensor, Result, Tensor, VoltaError};
-use std::cell::RefCell;
-use std::rc::Rc;
 
-/// Binary operations: two inputs, one output
-///
-/// Broadcasting is automatically handled for compatible shapes.
-/// Non-differentiable operations (Mod, Cmplt) return tensors with `requires_grad=false`.
-#[derive(Clone, Copy)]
-pub enum BinaryOp {
-    Add,   // x + y
-    Sub,   // x - y
-    Mul,   // x * y (element-wise)
-    Div,   // x / y (element-wise)
-    Max,   // max(x, y) (element-wise)
-    Mod,   // x % y (non-differentiable)
-    Cmplt, // x < y ? 1 : 0 (non-differentiable)
-}
-
-impl RawTensor {
-    #[cfg(feature = "gpu")]
-    fn try_gpu_binary_result(
-        self_t: &Tensor,
-        other: &Tensor,
-        op: BinaryOp,
-    ) -> Option<(Vec<usize>, Storage, Device)> {
-        // Only these ops have GPU kernels at the moment.
-        if !matches!(
-            op,
-            BinaryOp::Add
-                | BinaryOp::Sub
-                | BinaryOp::Mul
-                | BinaryOp::Div
-                | BinaryOp::Max
-                | BinaryOp::Mod
-                | BinaryOp::Cmplt
-        ) {
-            return None;
+// One row per op. A differentiable row gives the forward, the per-element backward
+// `(∂L/∂a, ∂L/∂b)` (before the reduction over broadcast dims, which `BinaryGradFn`
+// does once for every op), and the GPU pipelines. A `non_differentiable` row has no
+// backward, so its `edge()` grad fn is trivial and never attached. See `define_ops!`.
+define_ops! {
+    /// Binary operations: two inputs, one output
+    ///
+    /// Broadcasting is automatically handled for compatible shapes.
+    /// `Mod` is floored, as `torch.remainder`.
+    /// Comparisons are [`CmpOp`](crate::ops::CmpOp), which return Bool.
+    binary BinaryOp {
+        differentiable {
+            /// x + y
+            Add => |a, b| a + b,
+                |g, _a, _b| (g, g),
+                gpu(add, add_backward_a, add_backward_b, add_broadcast_pass1, add_broadcast_pass2);
+            /// x - y
+            Sub => |a, b| a - b,
+                |g, _a, _b| (g, -g),
+                gpu(sub, sub_backward_a, sub_backward_b, sub_broadcast_pass1, sub_broadcast_pass2);
+            /// x * y (element-wise)
+            Mul => |a, b| a * b,
+                |g, a, b| (g * b, g * a),
+                gpu(mul, mul_backward_a, mul_backward_b, mul_broadcast_pass1, mul_broadcast_pass2);
+            /// x / y (element-wise): ∂/∂x = 1/y, ∂/∂y = -x/y². The y-gradient is
+            /// `-g * x * (1/y) * (1/y)`: squaring y first overflows to inf (gradient 0) for
+            /// |y| above ~1.8e19 and underflows to 0 (gradient inf) below ~1e-19 in f32,
+            /// where the true value is finite (#92). The GPU kernels compute the same
+            /// quotient with `over_square` (`frexp`/`ldexp`) instead, because Metal's fast
+            /// math may reassociate the CPU's form.
+            Div => |a, b| a / b,
+                |g, a, b| {
+                    let b_inv = 1.0 / b;
+                    (g / b, -g * a * b_inv * b_inv)
+                },
+                gpu(div, div_backward_a, div_backward_b, div_broadcast_pass1, div_broadcast_pass2);
+            /// max(x, y) (element-wise), as `torch.maximum`: NaN if either input is NaN. The
+            /// gradient goes to the larger input, a tie splits it in half, and a NaN input
+            /// gives both sides all of it (S4, `ops::max_rule`).
+            Max => |a, b| crate::ops::max_rule::maximum(a, b),
+                |g, a, b| crate::ops::max_rule::maximum_backward(g, a, b),
+                gpu(max, max_backward_a, max_backward_b, max_broadcast_pass1, max_broadcast_pass2);
+            /// x mod y, floored like `torch.remainder` (the result takes y's sign):
+            /// ∂/∂x = 1, ∂/∂y = -floor(x/y)
+            ///
+            /// The CPU computes the exact remainder (Rust's `%`, then the floored step).
+            /// The GPU kernel does not (#302): it computes `x - trunc(x/y) * y` with a
+            /// rounding at each step, then forces the result into the floored range (zero
+            /// or y's sign, magnitude below `|y|`). For `|x/y| < 2^23` it is within
+            /// `(|x| + |y|) * 2^-22` of the exact remainder, counted modulo `y` (a remainder
+            /// just above 0 can come back just below `|y|`); past `2^23` it is not the
+            /// remainder. An infinite `y` with a finite `x` gives the CPU's result exactly,
+            /// and a zero `y`, an infinite `x` or a NaN gives NaN on both. An exact GPU
+            /// kernel is #355.
+            Mod => |a, b| {
+                    let r = a % b;
+                    if r != 0.0 && ((r < 0.0) != (b < 0.0)) { r + b } else { r }
+                },
+                |g, a, b| (g, -g * (a / b).floor()),
+                gpu(mod_op, mod_backward_a, mod_backward_b, mod_broadcast_pass1, mod_broadcast_pass2);
         }
-
-        let (shape_a, device_a, storage_a) = {
-            let a = self_t.borrow();
-            (a.shape.clone(), a.device.clone(), a.data.clone())
-        };
-        let (shape_b, device_b, storage_b) = {
-            let b = other.borrow();
-            (b.shape.clone(), b.device.clone(), b.data.clone())
-        };
-
-        // Both tensors must be on the same GPU device.
-        if !device_a.is_gpu() || !device_b.is_gpu() || device_a != device_b {
-            return None;
-        }
-
-        // Broadcasting on GPU is not yet implemented; fall back to CPU when
-        // shapes differ.
-        if shape_a != shape_b {
-            return None;
-        }
-
-        let storage = match op {
-            BinaryOp::Add => Self::gpu_add(&storage_a, &storage_b)?,
-            BinaryOp::Sub => Self::gpu_sub(&storage_a, &storage_b)?,
-            BinaryOp::Mul => Self::gpu_mul(&storage_a, &storage_b)?,
-            BinaryOp::Div => Self::gpu_div(&storage_a, &storage_b)?,
-            BinaryOp::Max => Self::gpu_max(&storage_a, &storage_b)?,
-            BinaryOp::Mod => Self::gpu_mod(&storage_a, &storage_b)?,
-            BinaryOp::Cmplt => Self::gpu_cmplt(&storage_a, &storage_b)?,
-        };
-
-        Some((shape_a, storage, device_a))
+        non_differentiable {}
     }
 }
 
@@ -79,315 +77,91 @@ impl RawTensor {
 ///
 /// Handles broadcasting during backward pass - gradients must be summed
 /// over dimensions that were broadcast in the forward pass.
-pub struct BinaryGradFn {
+#[derive(Clone)]
+pub(crate) struct BinaryGradFn {
+    /// The forward op, which selects the derivative.
     op: BinaryOp,
 }
 
-impl GradFn for BinaryGradFn {
-    #[allow(clippy::too_many_lines)]
-    fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
-        // SAFETY: Binary operations always create exactly 2 parents during forward pass
-        debug_assert!(parents.len() >= 2, "Binary grad requires 2 parents");
-        let x_ref = parents.first().cloned().unwrap();
-        let y_ref = parents.get(1).cloned().unwrap();
-        let x_val = x_ref.borrow();
-        let y_val = y_ref.borrow();
+impl BinaryGradFn {
+    /// The op's name in device errors and fallback events, e.g. `"Binary(Add)"`.
+    pub(crate) fn op_name(&self) -> String {
+        format!("Binary({:?})", self.op)
+    }
 
-        // Check GPU path - use legacy path for same-shape, broadcast path for different shapes
-        #[cfg(feature = "gpu")]
-        {
-            if out_grad.device.is_gpu() && x_val.device.is_gpu() && y_val.device.is_gpu() {
-                // For same-shape case, use legacy path (more tested)
-                if out_grad.shape == x_val.shape && out_grad.shape == y_val.shape {
-                    if let Some((kernel_a, kernel_b)) = binary_backward_kernel_names(self.op) {
-                        let gx = if x_val.requires_grad {
-                            RawTensor::gpu_binary_backward_a(
-                                &out_grad.data,
-                                &x_val.data,
-                                &y_val.data,
-                                kernel_a,
-                            )
-                            .map(|storage| {
-                                RawTensor::new_with_storage(
-                                    storage,
-                                    &x_val.shape,
-                                    x_val.device.clone(),
-                                    false,
-                                )
-                            })
-                        } else {
-                            None
-                        };
+    /// Whether backward reads the operands' values. `Add` and `Sub` have constant
+    /// derivatives, so changing an operand in place can't change their gradients. Every
+    /// op is spelled out so a new one has to decide.
+    pub(crate) const fn saves_input(&self) -> bool {
+        match self.op {
+            BinaryOp::Add | BinaryOp::Sub => false,
+            BinaryOp::Mul | BinaryOp::Div | BinaryOp::Max | BinaryOp::Mod => true,
+        }
+    }
 
-                        let gy = if y_val.requires_grad {
-                            RawTensor::gpu_binary_backward_b(
-                                &out_grad.data,
-                                &x_val.data,
-                                &y_val.data,
-                                kernel_b,
-                            )
-                            .map(|storage| {
-                                RawTensor::new_with_storage(
-                                    storage,
-                                    &y_val.shape,
-                                    y_val.device.clone(),
-                                    false,
-                                )
-                            })
-                        } else {
-                            None
-                        };
+    /// Gradients for both operands, reduced back to each operand's pre-broadcast shape.
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        parents: &[Tensor],
+    ) -> Vec<Option<Storage>> {
+        let [x_ref, y_ref] = parents else {
+            panic!("binary ops require 2 parents, got {}", parents.len());
+        };
+        let x = x_ref.borrow();
+        let y = y_ref.borrow();
 
-                        // If GPU path succeeded, return early
-                        if (x_val.requires_grad && gx.is_some())
-                            || (y_val.requires_grad && gy.is_some())
-                        {
-                            return vec![gx, gy];
-                        }
-                    }
-                } else if let Some(broadcast_kernel) =
-                    binary_backward_broadcast_kernel_name(self.op)
-                {
-                    // For different shapes (broadcasting), try RACE-FREE broadcast path
-                    if let Some((grad_a_storage, grad_b_storage)) =
-                        RawTensor::gpu_binary_backward_broadcast_safe(
-                            &out_grad.data,
-                            &x_val.data,
-                            &y_val.data,
-                            broadcast_kernel,
-                            &out_grad.shape,
-                            &x_val.shape,
-                            &y_val.shape,
-                        )
-                    {
-                        let gx = if x_val.requires_grad {
-                            Some(RawTensor::new_with_storage(
-                                grad_a_storage,
-                                &x_val.shape,
-                                x_val.device.clone(),
-                                false,
-                            ))
-                        } else {
-                            None
-                        };
-
-                        let gy = if y_val.requires_grad {
-                            Some(RawTensor::new_with_storage(
-                                grad_b_storage,
-                                &y_val.shape,
-                                y_val.device.clone(),
-                                false,
-                            ))
-                        } else {
-                            None
-                        };
-
-                        return vec![gx, gy];
-                    }
-                    // If all GPU paths failed, fall through to CPU path
-                }
-            }
+        if let Some(grads) = RawTensor::gpu_binary_backward(self.op, out_grad, &x, &y) {
+            return grads;
         }
 
-        // CPU fallback
-        let (grad_x, grad_y) = match self.op {
-            BinaryOp::Add => {
-                // ∂(x+y)/∂x = 1, ∂(x+y)/∂y = 1
-                // But must sum over broadcast dimensions
-                let gx = if x_val.requires_grad {
-                    let summed = RawTensor::sum_over_broadcast_dims(
-                        &out_grad.data,
-                        &out_grad.shape,
-                        &x_val.shape,
-                    );
-                    Some(RawTensor::new(summed, &x_val.shape, false))
-                } else {
-                    None
-                };
-                let gy = if y_val.requires_grad {
-                    let summed = RawTensor::sum_over_broadcast_dims(
-                        &out_grad.data,
-                        &out_grad.shape,
-                        &y_val.shape,
-                    );
-                    Some(RawTensor::new(summed, &y_val.shape, false))
-                } else {
-                    None
-                };
-                (gx, gy)
-            }
-            BinaryOp::Sub => {
-                // ∂(x-y)/∂x = 1, ∂(x-y)/∂y = -1
-                let gx = if x_val.requires_grad {
-                    let summed = RawTensor::sum_over_broadcast_dims(
-                        &out_grad.data,
-                        &out_grad.shape,
-                        &x_val.shape,
-                    );
-                    Some(RawTensor::new(summed, &x_val.shape, false))
-                } else {
-                    None
-                };
-                let gy = if y_val.requires_grad {
-                    let neg_grad: Vec<f32> = out_grad.data.iter().map(|&g| -g).collect();
-                    let summed = RawTensor::sum_over_broadcast_dims(
-                        &neg_grad,
-                        &out_grad.shape,
-                        &y_val.shape,
-                    );
-                    Some(RawTensor::new(summed, &y_val.shape, false))
-                } else {
-                    None
-                };
-                (gx, gy)
-            }
-            BinaryOp::Mul => {
-                // ∂(x*y)/∂x = y, ∂(x*y)/∂y = x
-                let gx = if x_val.requires_grad {
-                    // Broadcast y to out_grad shape for multiplication
-                    let y_bc = RawTensor::broadcast_to(&y_val.data, &y_val.shape, &out_grad.shape);
-                    let grad: Vec<f32> = out_grad
-                        .data
-                        .iter()
-                        .zip(&y_bc)
-                        .map(|(&g, &y)| g * y)
-                        .collect();
-                    let summed =
-                        RawTensor::sum_over_broadcast_dims(&grad, &out_grad.shape, &x_val.shape);
-                    Some(RawTensor::new(summed, &x_val.shape, false))
-                } else {
-                    None
-                };
-                let gy = if y_val.requires_grad {
-                    let x_bc = RawTensor::broadcast_to(&x_val.data, &x_val.shape, &out_grad.shape);
-                    let grad: Vec<f32> = out_grad
-                        .data
-                        .iter()
-                        .zip(&x_bc)
-                        .map(|(&g, &x)| g * x)
-                        .collect();
-                    let summed =
-                        RawTensor::sum_over_broadcast_dims(&grad, &out_grad.shape, &y_val.shape);
-                    Some(RawTensor::new(summed, &y_val.shape, false))
-                } else {
-                    None
-                };
-                (gx, gy)
-            }
-            BinaryOp::Div => {
-                // ∂(x/y)/∂x = 1/y, ∂(x/y)/∂y = -x/y²
-                let gx = if x_val.requires_grad {
-                    let y_bc = RawTensor::broadcast_to(&y_val.data, &y_val.shape, &out_grad.shape);
-                    let grad: Vec<f32> = out_grad
-                        .data
-                        .iter()
-                        .zip(&y_bc)
-                        .map(|(&g, &y)| g / y)
-                        .collect();
-                    let summed =
-                        RawTensor::sum_over_broadcast_dims(&grad, &out_grad.shape, &x_val.shape);
-                    Some(RawTensor::new(summed, &x_val.shape, false))
-                } else {
-                    None
-                };
-                let gy = if y_val.requires_grad {
-                    let x_bc = RawTensor::broadcast_to(&x_val.data, &x_val.shape, &out_grad.shape);
-                    let y_bc = RawTensor::broadcast_to(&y_val.data, &y_val.shape, &out_grad.shape);
-                    #[expect(clippy::suspicious_operation_groupings, reason = "∂(x/y)/∂y = -x/y²")]
-                    let grad: Vec<f32> = out_grad
-                        .data
-                        .iter()
-                        .zip(&x_bc)
-                        .zip(&y_bc)
-                        .map(|((&g, &x), &y)| -g * x / (y * y))
-                        .collect();
-                    let summed =
-                        RawTensor::sum_over_broadcast_dims(&grad, &out_grad.shape, &y_val.shape);
-                    Some(RawTensor::new(summed, &y_val.shape, false))
-                } else {
-                    None
-                };
-                (gx, gy)
-            }
-            BinaryOp::Max => {
-                // Gradient flows to whichever input was larger
-                let gx = if x_val.requires_grad {
-                    let x_bc = RawTensor::broadcast_to(&x_val.data, &x_val.shape, &out_grad.shape);
-                    let y_bc = RawTensor::broadcast_to(&y_val.data, &y_val.shape, &out_grad.shape);
-                    let grad: Vec<f32> = out_grad
-                        .data
-                        .iter()
-                        .zip(&x_bc)
-                        .zip(&y_bc)
-                        .map(|((&g, &x), &y)| if x >= y { g } else { 0.0 })
-                        .collect();
-                    let summed =
-                        RawTensor::sum_over_broadcast_dims(&grad, &out_grad.shape, &x_val.shape);
-                    Some(RawTensor::new(summed, &x_val.shape, false))
-                } else {
-                    None
-                };
-                let gy = if y_val.requires_grad {
-                    let x_bc = RawTensor::broadcast_to(&x_val.data, &x_val.shape, &out_grad.shape);
-                    let y_bc = RawTensor::broadcast_to(&y_val.data, &y_val.shape, &out_grad.shape);
-                    let grad: Vec<f32> = out_grad
-                        .data
-                        .iter()
-                        .zip(&x_bc)
-                        .zip(&y_bc)
-                        .map(|((&g, &x), &y)| if y > x { g } else { 0.0 })
-                        .collect();
-                    let summed =
-                        RawTensor::sum_over_broadcast_dims(&grad, &out_grad.shape, &y_val.shape);
-                    Some(RawTensor::new(summed, &y_val.shape, false))
-                } else {
-                    None
-                };
-                (gx, gy)
-            }
-            BinaryOp::Mod | BinaryOp::Cmplt => {
-                // Non-differentiable
-                (None, None)
-            }
-        };
+        // CPU path: the table gives the per-element (∂a, ∂b) at the broadcast shape;
+        // each is then summed back down to its operand's shape.
+        let op = self.op;
+        dispatch_real!(x.data.dtype(), T => {
+            let x_bc = RawTensor::broadcast_to(
+                &x.data.host::<T>(),
+                x.shape.truncate_rank(),
+                out_grad.shape.truncate_rank(),
+            );
+            let y_bc = RawTensor::broadcast_to(
+                &y.data.host::<T>(),
+                y.shape.truncate_rank(),
+                out_grad.shape.truncate_rank(),
+            );
+            let (grad_x, grad_y): (Vec<T>, Vec<T>) = out_grad
+                .data
+                .host::<T>()
+                .iter()
+                .zip(&x_bc)
+                .zip(&y_bc)
+                .map(|((&g, &a), &b)| T::binary_backward(op, g, a, b))
+                .unzip();
 
-        vec![grad_x, grad_y]
+            let reduce_to = |full: &[T], operand: &RawTensor| {
+                let summed = RawTensor::sum_over_broadcast_dims(
+                    full,
+                    out_grad.shape.truncate_rank(),
+                    operand.shape.truncate_rank(),
+                );
+                Storage::from_compute(x.data.dtype(), summed)
+            };
+            vec![
+                x.requires_grad.then(|| reduce_to(&grad_x, &x)),
+                y.requires_grad.then(|| reduce_to(&grad_y, &y)),
+            ]
+        })
     }
 
-    fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(Self { op: self.op })
-    }
-}
-
-// Map a `BinaryOp` to the corresponding GPU backward kernel names, if supported.
-// Returns (kernel_for_grad_a, kernel_for_grad_b)
-#[cfg(feature = "gpu")]
-const fn binary_backward_kernel_names(op: BinaryOp) -> Option<(&'static str, &'static str)> {
-    match op {
-        BinaryOp::Add => Some(("add_backward_a", "add_backward_b")),
-        BinaryOp::Sub => Some(("sub_backward_a", "sub_backward_b")),
-        BinaryOp::Mul => Some(("mul_backward_a", "mul_backward_b")),
-        BinaryOp::Div => Some(("div_backward_a", "div_backward_b")),
-        BinaryOp::Max => Some(("max_backward_a", "max_backward_b")),
-        BinaryOp::Mod | BinaryOp::Cmplt => None, // Non-differentiable
-    }
-}
-
-/// Get the broadcast kernel name for a binary operation
-const fn binary_backward_broadcast_kernel_name(op: BinaryOp) -> Option<&'static str> {
-    match op {
-        BinaryOp::Add => Some("add"),
-        BinaryOp::Sub => Some("sub"),
-        BinaryOp::Mul => Some("mul"),
-        BinaryOp::Div => Some("div"),
-        BinaryOp::Max => Some("max"),
-        BinaryOp::Mod | BinaryOp::Cmplt => None, // Non-differentiable
+    /// Whether the op has no derivative, so `edge()` attaches no grad fn (none today).
+    pub(crate) fn is_trivial(&self) -> bool {
+        self.op.is_trivial()
     }
 }
 
 // ===== BINARY OPERATIONS =====
 impl RawTensor {
-    /// Compute broadcast shape following `NumPy` broadcasting rules
+    /// Compute broadcast shape following NumPy broadcasting rules
     ///
     /// Rules:
     /// 1. Align shapes from the right (trailing dimensions)
@@ -397,10 +171,24 @@ impl RawTensor {
     /// Examples:
     /// - (3, 1) + (1, 4) -> (3, 4)
     /// - (5, 3, 1) + (1, 4) -> (5, 3, 4)
+    ///
     /// # Panics
-    /// broadcast failures
+    /// If the shapes cannot be broadcast (a dimension differs and neither is 1), or either
+    /// is not a valid [`Shape`] (a zero dimension, or more than `MAX_NUMEL` elements).
     #[must_use]
+    #[track_caller]
     pub fn broadcast_shape(shape_a: &[usize], shape_b: &[usize]) -> Vec<usize> {
+        Self::broadcast_shape_for("broadcast_shape", shape_a, shape_b)
+    }
+
+    /// [`Self::broadcast_shape`], with the panic naming `op`, the public op the shapes
+    /// came from (`"add"`), as `add: Cannot broadcast shapes .. at dimension ..` (#142).
+    #[track_caller]
+    pub(crate) fn broadcast_shape_for(
+        op: &str,
+        shape_a: &[usize],
+        shape_b: &[usize],
+    ) -> Vec<usize> {
         match Self::try_broadcast_shape(shape_a, shape_b) {
             Ok(shape) => shape,
             Err(VoltaError::BroadcastError(a, b)) => {
@@ -408,25 +196,25 @@ impl RawTensor {
                 let max_len = a.len().max(b.len());
                 for i in 0..max_len {
                     let a_dim = if i < a.len() && !a.is_empty() {
-                        a.get(a.len() - 1 - i).copied().unwrap_or(1)
+                        fetch(&a, a.len() - 1 - i)
                     } else {
                         1
                     };
                     let b_dim = if i < b.len() && !b.is_empty() {
-                        b.get(b.len() - 1 - i).copied().unwrap_or(1)
+                        fetch(&b, b.len() - 1 - i)
                     } else {
                         1
                     };
                     if a_dim != b_dim && a_dim != 1 && b_dim != 1 {
                         let dim = max_len - 1 - i;
                         panic!(
-                            "Cannot broadcast shapes {shape_a:?} and {shape_b:?} at dimension {dim}"
+                            "{op}: Cannot broadcast shapes {shape_a:?} and {shape_b:?} at dimension {dim}"
                         );
                     }
                 }
-                panic!("Cannot broadcast shapes {shape_a:?} and {shape_b:?}");
+                panic!("{op}: Cannot broadcast shapes {shape_a:?} and {shape_b:?}");
             }
-            Err(e) => panic!("Broadcast error: {e}"),
+            Err(e) => panic!("{op}: {e}"),
         }
     }
 
@@ -434,93 +222,64 @@ impl RawTensor {
     ///
     /// # Errors
     ///
-    /// Returns `VoltaError::BroadcastError` if shapes cannot be broadcast together
+    /// Returns `VoltaError::BroadcastError` if shapes cannot be broadcast together, or
+    /// `VoltaError::InvalidParameter` if an operand or the result is not a valid
+    /// [`Shape`] (zero dimension, or more than `MAX_NUMEL` elements)
     pub fn try_broadcast_shape(shape_a: &[usize], shape_b: &[usize]) -> Result<Vec<usize>> {
-        let max_len = shape_a.len().max(shape_b.len());
-        let mut result = vec![1; max_len];
-
-        // Align from right (trailing dimensions)
-        for i in 0..max_len {
-            let a_dim = if i < shape_a.len() && !shape_a.is_empty() {
-                let idx = shape_a.len() - 1 - i;
-                shape_a.get(idx).copied().unwrap_or(1)
-            } else {
-                1
-            };
-            let b_dim = if i < shape_b.len() && !shape_b.is_empty() {
-                let idx = shape_b.len() - 1 - i;
-                shape_b.get(idx).copied().unwrap_or(1)
-            } else {
-                1
-            };
-
-            let result_idx = max_len - 1 - i;
-            if let Some(slot) = result.get_mut(result_idx) {
-                if a_dim == b_dim {
-                    *slot = a_dim;
-                } else if a_dim == 1 {
-                    *slot = b_dim;
-                } else if b_dim == 1 {
-                    *slot = a_dim;
-                } else {
-                    return Err(VoltaError::BroadcastError(
-                        shape_a.to_vec(),
-                        shape_b.to_vec(),
-                    ));
-                }
-            }
-        }
-        Ok(result)
+        let a = Shape::from_dims(shape_a)?;
+        let b = Shape::from_dims(shape_b)?;
+        Ok(a.broadcast(&b)?.truncate_rank().to_vec())
     }
 
     /// Broadcast data from one shape to another
     ///
     /// This repeats values along dimensions where `from_shape` is 1
     /// and `to_shape` is larger.
-    pub(crate) fn broadcast_to(data: &[f32], from_shape: &[usize], to_shape: &[usize]) -> Vec<f32> {
-        const MAX_ALLOC: usize = 100_000_000;
-
+    pub(crate) fn broadcast_to<T: Copy>(
+        data: &[T],
+        from_shape: &[usize],
+        to_shape: &[usize],
+    ) -> Vec<T> {
         if from_shape == to_shape {
             return data.to_vec();
         }
 
-        let to_size: usize = to_shape.iter().product();
-        assert!(
-            to_size <= MAX_ALLOC,
-            "Broadcast would create tensor with {to_size} elements (max: {MAX_ALLOC}). Check shapes {from_shape:?} -> {to_shape:?}"
-        );
-        let mut result = vec![0.0; to_size];
+        let to_size = Shape::from_dims(to_shape)
+            .unwrap_or_else(|e| {
+                panic!("Broadcast: invalid target shape {to_shape:?} from {from_shape:?}: {e}")
+            })
+            .numel();
+        // Every element is written below; the first input value is only a placeholder.
+        let mut result = vec![fetch(data, 0); to_size];
 
         // Pad from_shape with leading 1s to match rank
         let mut padded_from = vec![1; to_shape.len()];
         let offset = to_shape.len() - from_shape.len();
-        if let Some(dest) = padded_from.get_mut(offset..) {
-            dest.copy_from_slice(from_shape);
-        }
-        let from_strides_padded = Self::compute_strides(&padded_from);
-        let to_strides = Self::compute_strides(to_shape);
+        padded_from
+            .get_mut(offset..)
+            .expect("offset = rank difference, so it is within the padded rank")
+            .copy_from_slice(from_shape);
+        let from_strides_padded = Strides::from_shape(&padded_from);
+        let from_strides_padded = from_strides_padded.truncate_rank();
+        let to_strides = Strides::from_shape(to_shape);
+        let to_strides = to_strides.truncate_rank();
 
         // For each output position, compute corresponding input position
-        #[allow(clippy::needless_range_loop)]
         for i in 0..to_size {
             let mut from_idx = 0;
             let mut remainder = i;
             //calc coords based on to_shape and map
             for dim in 0..to_shape.len() {
-                let stride = to_strides.get(dim).copied().unwrap_or(1);
+                let stride = fetch(to_strides, dim);
                 let coord = remainder / stride;
                 remainder %= stride;
                 //if dim broadcast (size was 1) use coord 0 for from_idx
-                if padded_from.get(dim).copied().unwrap_or(1) != 1 {
-                    let from_stride = from_strides_padded.get(dim).copied().unwrap_or(1);
+                if fetch(&padded_from, dim) != 1 {
+                    let from_stride = fetch(from_strides_padded, dim);
                     from_idx += coord * from_stride;
                 }
             }
-            if let Some(&src_val) = data.get(from_idx)
-                && let Some(slot) = result.get_mut(i)
-            {
-                *slot = src_val;
-            }
+            *slot(&mut result, i) = fetch(data, from_idx);
         }
         result
     }
@@ -530,11 +289,11 @@ impl RawTensor {
     /// During backward pass, if a dimension was broadcast from size 1 to size N,
     /// we need to sum the gradients over that dimension to get the gradient
     /// for the original size-1 dimension.
-    pub(crate) fn sum_over_broadcast_dims(
-        grad: &[f32],
+    pub(crate) fn sum_over_broadcast_dims<T: Real>(
+        grad: &[T],
         grad_shape: &[usize],
         target_shape: &[usize],
-    ) -> Vec<f32> {
+    ) -> Vec<T> {
         if grad_shape == target_shape {
             return grad.to_vec();
         }
@@ -542,9 +301,10 @@ impl RawTensor {
         // Pad target_shape with leading 1s to match ranks
         let mut padded_target = vec![1; grad_shape.len()];
         let offset = grad_shape.len() - target_shape.len();
-        if let Some(dest) = padded_target.get_mut(offset..) {
-            dest.copy_from_slice(target_shape);
-        }
+        padded_target
+            .get_mut(offset..)
+            .expect("offset = rank difference, so it is within the padded rank")
+            .copy_from_slice(target_shape);
 
         // Find dimensions that need summing (where target was 1, grad is >1)
         let mut sum_axes = Vec::new();
@@ -564,35 +324,41 @@ impl RawTensor {
         if sum_axes.is_empty() {
             return grad.to_vec();
         }
-        let mut result = vec![0.0; target_shape.iter().product()];
-        let target_strides = Self::compute_strides(target_shape);
-        let grad_strides = Self::compute_strides(grad_shape);
-
-        // For each gradient element, sum into appropriate result position
-        for (i, &grad_val) in grad.iter().enumerate() {
-            let mut target_idx = 0;
-            let mut remainder = i;
-
-            // convert lin index i in grad_shape to coords and map to target
-            for dim in 0..grad_shape.len() {
-                let grad_stride = grad_strides.get(dim).copied().unwrap_or(1);
-                let coord = remainder / grad_stride;
-                remainder %= grad_stride;
-
-                // Map to target coordinate (skip if was broadcast)
-                if dim >= offset && padded_target.get(dim).copied().unwrap_or(1) != 1 {
-                    let target_dim_idx = dim - offset;
-                    let target_stride = target_strides.get(target_dim_idx).copied().unwrap_or(1);
-                    target_idx += coord * target_stride;
-                }
-            }
-            if target_idx < result.len()
-                && let Some(slot) = result.get_mut(target_idx)
-            {
-                *slot += grad_val;
+        let grad_strides = Strides::from_shape(grad_shape);
+        let grad_strides = grad_strides.truncate_rank();
+        // Kept axes (in order) index the result; summed axes are added up per result
+        // element. Each axis is `(extent, stride in grad)`.
+        let mut kept = Vec::new();
+        let mut summed = Vec::new();
+        for (dim, &g) in grad_shape.iter().enumerate() {
+            let axis = (g, fetch(grad_strides, dim));
+            if sum_axes.contains(&dim) {
+                summed.push(axis);
+            } else {
+                kept.push((fetch(&padded_target, dim), axis.1));
             }
         }
-        result
+        let n_summed: usize = summed.iter().map(|&(g, _)| g).product();
+        let target_numel: usize = target_shape.iter().product();
+
+        // The offset in `grad` of row-major index `i` over `axes`.
+        let offset_of = |axes: &[(usize, usize)], mut i: usize| -> usize {
+            let mut offset = 0;
+            for &(extent, stride) in axes.iter().rev() {
+                offset += (i % extent) * stride;
+                i /= extent;
+            }
+            offset
+        };
+
+        // Each result element is a pairwise sum over its broadcast axes (S6 class, #212): a
+        // running f32 total rounds away small terms once it is large next to them.
+        (0..target_numel)
+            .map(|t| {
+                let base = offset_of(&kept, t);
+                pairwise_sum_by(n_summed, |j| fetch(grad, base + offset_of(&summed, j)))
+            })
+            .collect()
     }
 
     /// Apply a binary operation with broadcasting
@@ -602,90 +368,260 @@ impl RawTensor {
     /// 2. Broadcast both inputs to that shape
     /// 3. Apply operation element-wise
     /// 4. Set up gradient tracking
+    ///
     /// # Panics
-    /// broadcast failure
+    /// If the shapes cannot be broadcast, the operands are on different devices, or the
+    /// promoted dtype is not a float (integer and bool tensors have no arithmetic kernel).
+    /// Under [`DTypePolicy::Strict`](crate::DTypePolicy::Strict), also if the dtypes differ.
+    #[must_use]
+    #[track_caller]
     pub fn binary_op(self_t: &Tensor, other: &Tensor, op: BinaryOp) -> Tensor {
-        let (data_a, shape_a, req_a) = {
-            let s = self_t.borrow();
-            (s.data.clone(), s.shape.clone(), s.requires_grad)
+        // Mixed operands are cast to one dtype first (`DTypePolicy`); `Div` is true
+        // division, so integers divide in f32 as in PyTorch.
+        let (promoted, operands) = promote_operands(
+            || format!("Binary({op:?})"),
+            &[self_t, other],
+            op == BinaryOp::Div,
+        );
+        let [self_t, other] = operands.as_slice() else {
+            unreachable!("two operands in, two out")
         };
-        let (data_b, shape_b, req_b) = {
-            let o = other.borrow();
-            (o.data.clone(), o.shape.clone(), o.requires_grad)
-        };
-
-        // Mod and Cmplt are non-differentiable
-        let requires_grad = match op {
-            BinaryOp::Mod | BinaryOp::Cmplt => false,
-            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Max => {
-                req_a || req_b
-            }
-        };
-
-        // If both operands are already on the same GPU and we have a matching
-        // kernel, try to perform the operation there and fall back to CPU
-        // otherwise.
-        #[cfg(feature = "gpu")]
-        {
-            if Self::common_gpu_device(&[self_t, other]).is_some()
-                && let Some((shape, storage, device)) =
-                    Self::try_gpu_binary_result(self_t, other, op)
-            {
-                let out = Rc::new(RefCell::new(Self {
-                    data: storage,
-                    shape,
-                    grad: None,
-                    requires_grad,
-                    grad_fn: None,
-                    parents: vec![self_t.clone(), other.clone()],
-                    device,
-                }));
-                if requires_grad {
-                    out.borrow_mut().grad_fn = Some(Box::new(BinaryGradFn { op }));
-                }
-                return out;
-            }
+        let dtype = compute_dtype(|| format!("Binary({op:?})"), &[promoted]);
+        // If both operands are on the same GPU with equal shapes, run the kernel there;
+        // otherwise take the CPU path. A kernel that covers the case and fails panics.
+        if let Some((shape, storage, device)) = Self::gpu_binary_forward(self_t, other, op) {
+            return edge(
+                [self_t.clone(), other.clone()],
+                storage,
+                shape,
+                device,
+                GradFn::Binary(BinaryGradFn { op }),
+            );
         }
 
+        let (data_a, shape_a) = {
+            let s = self_t.borrow();
+            (s.data.clone(), s.shape.clone())
+        };
+        let (data_b, shape_b) = {
+            let o = other.borrow();
+            (o.data.clone(), o.shape.clone())
+        };
+
         // CPU path: compute broadcast shape and perform the operation on host data.
-        let out_shape = Self::broadcast_shape(&shape_a, &shape_b);
+        let op_name = format!("{op:?}").to_lowercase();
+        let out_shape =
+            Self::broadcast_shape_for(&op_name, shape_a.truncate_rank(), shape_b.truncate_rank());
 
         // Broadcast inputs to output shape
         // Check for reasonable sizes to prevent memory issues
         let out_size: usize = out_shape.iter().product();
         assert!(out_size > 0, "Invalid broadcast result size");
 
-        let bc_data_a = Self::broadcast_to(&data_a, &shape_a, &out_shape);
-        let bc_data_b = Self::broadcast_to(&data_b, &shape_b, &out_shape);
+        let result = dispatch_real!(dtype, T => {
+            let bc_data_a =
+                Self::broadcast_to(&data_a.host::<T>(), shape_a.truncate_rank(), &out_shape);
+            let bc_data_b =
+                Self::broadcast_to(&data_b.host::<T>(), shape_b.truncate_rank(), &out_shape);
+            Storage::from_compute(dtype,
+                bc_data_a
+                    .iter()
+                    .zip(&bc_data_b)
+                    .map(|(&a, &b)| T::binary(op, a, b))
+                    .collect::<Vec<T>>(),
+            )
+        });
 
-        let result_data: Vec<f32> = bc_data_a
-            .iter()
-            .zip(&bc_data_b)
-            .map(|(a, b)| match op {
-                BinaryOp::Add => a + b,
-                BinaryOp::Sub => a - b,
-                BinaryOp::Mul => a * b,
-                BinaryOp::Div => a / b,
-                BinaryOp::Max => a.max(*b),
-                BinaryOp::Mod => a % b,
-                BinaryOp::Cmplt => {
-                    if a < b {
-                        1.0
-                    } else {
-                        0.0
-                    }
-                }
-            })
-            .collect();
-
-        let out = Self::new(result_data, &out_shape, requires_grad);
-
-        if out.borrow().requires_grad {
-            out.borrow_mut().parents = vec![self_t.clone(), other.clone()];
-            out.borrow_mut().grad_fn = Some(Box::new(BinaryGradFn { op }));
-        }
-        out
+        edge(
+            [self_t.clone(), other.clone()],
+            result,
+            Shape::derived(out_shape),
+            Device::CPU,
+            GradFn::Binary(BinaryGradFn { op }),
+        )
     }
 
     // Convenience methods for binary operations
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #212: a broadcast operand's gradient sums over the broadcast axis pairwise. With a
+    /// sequential f32 sum, 100,000 terms of 3e-8 after a 1.0 round away and `b.grad` stays 1.
+    #[test]
+    fn broadcast_backward_sums_pairwise() {
+        let n = 100_001;
+        let mut w = vec![3.0e-8f32; n * 2];
+        *crate::index::slot(&mut w, 0) = 1.0;
+        *crate::index::slot(&mut w, 1) = 1.0;
+        let a = RawTensor::new(vec![0.0; n * 2], &[n, 2], false);
+        let b = RawTensor::new(vec![0.0; 2], &[2], true);
+        let w = RawTensor::new(w, &[n, 2], false);
+        a.add(&b)
+            .elem_mul(&w)
+            .sum()
+            .into_loss()
+            .expect("scalar")
+            .backward();
+        let g = b.grad().expect("b has a gradient");
+        assert_eq!(g.len(), 2);
+        for v in g {
+            assert!((v - 1.003).abs() < 1e-5, "b.grad = {v}, expected 1.003");
+        }
+    }
+
+    /// Broadcast backward over a middle axis and a leading (rank-padding) axis together,
+    /// against the explicit sum.
+    #[test]
+    fn sum_over_broadcast_dims_middle_and_leading_axes() {
+        // Target [3, 1] pads to [1, 3, 1]: sums axes 0 and 2. Target [1, 4] pads to
+        // [1, 1, 4]: sums axes 0 and 1.
+        let grad: Vec<f32> = (0..24).map(|v| v as f32).collect();
+        let got = RawTensor::sum_over_broadcast_dims(&grad, &[2, 3, 4], &[3, 1]);
+        let want: Vec<f32> = (0..3)
+            .map(|j| {
+                (0..2)
+                    .flat_map(|i| (0..4).map(move |k| (i * 12 + j * 4 + k) as f32))
+                    .sum()
+            })
+            .collect();
+        assert_eq!(got, want);
+        let got = RawTensor::sum_over_broadcast_dims(&grad, &[2, 3, 4], &[1, 4]);
+        let want: Vec<f32> = (0..4)
+            .map(|k| {
+                (0..2)
+                    .flat_map(|i| (0..3).map(move |j| (i * 12 + j * 4 + k) as f32))
+                    .sum()
+            })
+            .collect();
+        assert_eq!(got, want);
+    }
+    use crate::tensor::{check_gradients, manual_seed, randn};
+
+    /// Differentiable ops only: the gradcheck below needs a backward to check.
+    fn differentiable() -> impl Iterator<Item = BinaryOp> {
+        BinaryOp::ALL.iter().copied().filter(|op| !op.is_trivial())
+    }
+
+    /// Random operands in each op's domain, away from Div's pole, from Max ties, and from
+    /// Mod's jumps (the finite-difference step must not straddle `a == b` or `a/b` integral).
+    fn operands(op: BinaryOp, shape_a: &[usize], shape_b: &[usize]) -> (Tensor, Tensor) {
+        for seed in 0..64_u64 {
+            manual_seed(0xB1A5 + seed);
+            let a = randn(shape_a);
+            let b = randn(shape_b);
+            let av: Vec<f32> = a.data().clone();
+            let bv: Vec<f32> = match op {
+                BinaryOp::Div => b.data().iter().map(|v| 0.5 + v.abs()).collect(),
+                // |b| in [2, 3] with a random sign: negative divisors, and b away from 0.
+                BinaryOp::Mod => b
+                    .data()
+                    .iter()
+                    .map(|v| if *v < 0.0 { v - 2.0 } else { v + 2.0 }.clamp(-3.0, 3.0))
+                    .collect(),
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Max => b.data().clone(),
+            };
+            let (a, b) = (
+                RawTensor::new(av, shape_a, true),
+                RawTensor::new(bv, shape_b, true),
+            );
+            if op != BinaryOp::Max && op != BinaryOp::Mod {
+                return (a, b);
+            }
+            let out_shape = RawTensor::broadcast_shape(shape_a, shape_b);
+            let a_bc = RawTensor::broadcast_to(&a.data(), shape_a, &out_shape);
+            let b_bc = RawTensor::broadcast_to(&b.data(), shape_b, &out_shape);
+            let clear = |x: &f32, y: &f32| match op {
+                // Mod jumps where a/b is an integer; the finite-difference step moves a/b
+                // by at most ~0.0075, so stay 0.02 clear of one.
+                BinaryOp::Mod => ((x / y) - (x / y).round()).abs() > 0.02,
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Max => {
+                    (x - y).abs() > 0.05
+                }
+            };
+            if a_bc.iter().zip(&b_bc).all(|(x, y)| clear(x, y)) {
+                return (a, b);
+            }
+        }
+        panic!("no tie-free {op:?} operands for {shape_a:?} x {shape_b:?}");
+    }
+
+    #[test]
+    fn binary_gradcheck_every_op_equal_broadcast_and_unequal_rank() {
+        let cases: &[(&[usize], &[usize])] = &[
+            (&[2, 3], &[2, 3]),
+            (&[2, 3], &[3]),
+            (&[2, 1], &[1, 3]),
+            (&[4, 2, 3], &[2, 1]),
+        ];
+        for op in differentiable() {
+            for &(shape_a, shape_b) in cases {
+                let (a, b) = operands(op, shape_a, shape_b);
+                let out_shape = RawTensor::broadcast_shape(shape_a, shape_b);
+                // Weighted sum, so every output element contributes a different gradient.
+                manual_seed(0x17);
+                let w = randn(&out_shape);
+
+                let (err_a, _, ok_a) = check_gradients(
+                    &a,
+                    |t| RawTensor::binary_op(t, &b, op).elem_mul(&w).sum(),
+                    1e-2,
+                    1e-2,
+                );
+                assert!(
+                    ok_a,
+                    "{op:?} {shape_a:?}x{shape_b:?}: d/da max_error={err_a:.3e}"
+                );
+
+                let (err_b, _, ok_b) = check_gradients(
+                    &b,
+                    |t| RawTensor::binary_op(&a, t, op).elem_mul(&w).sum(),
+                    1e-2,
+                    1e-2,
+                );
+                assert!(
+                    ok_b,
+                    "{op:?} {shape_a:?}x{shape_b:?}: d/db max_error={err_b:.3e}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_binary_op_is_trivial() {
+        for &op in BinaryOp::ALL {
+            assert!(!op.is_trivial(), "{op:?}");
+        }
+    }
+
+    #[test]
+    fn mod_is_floored_with_torch_gradients() {
+        // torch.remainder: the result takes the divisor's sign.
+        let (a, b) = ([-1.0, 5.5, -7.0, 7.0], [3.0, 2.0, 2.0, -3.0]);
+        let expected = [2.0, 1.5, 1.0, -2.0];
+        let floors = [-1.0, 2.0, -4.0, -3.0];
+        for ((&x, &y), (&want, &fl)) in a.iter().zip(&b).zip(expected.iter().zip(&floors)) {
+            assert_eq!(BinaryOp::Mod.forward(x, y), want, "{x} mod {y}");
+            assert_eq!(BinaryOp::Mod.backward(1.0, x, y), (1.0, -fl), "{x} mod {y}");
+        }
+    }
+
+    #[test]
+    fn all_lists_each_variant_once() {
+        assert_eq!(BinaryOp::ALL.len(), 6);
+        for (i, a) in BinaryOp::ALL.iter().enumerate() {
+            for b in BinaryOp::ALL.iter().skip(i + 1) {
+                assert_ne!(a, b);
+            }
+        }
+    }
+
+    #[test]
+    fn max_tie_splits_gradient_between_operands() {
+        // Pins the documented tie rule (torch.maximum halves it), so a table edit can't
+        // change it silently.
+        assert_eq!(BinaryOp::Max.backward(1.0, 3.0, 3.0), (0.5, 0.5));
+    }
 }

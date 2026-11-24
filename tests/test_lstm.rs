@@ -1,6 +1,7 @@
+//! `LSTMCell`: output shapes, zero-state initialization, gate math against known weights, state propagation across steps, forget-gate dominance, gradient flow, the no-bias variant, and `RecurrentLayer::step`.
 use volta::io::{StateDict, TensorData};
-use volta::nn::{LSTMCell, Module};
-use volta::tensor::{RawTensor, TensorOps};
+use volta::nn::{LSTMCell, Module, RecurrentLayer};
+use volta::tensor::RawTensor;
 
 // LSTMCell::new(4, 3, true), input [2,4], no initial state -> h,c shapes = [2,3]
 #[test]
@@ -8,36 +9,40 @@ fn test_lstm_output_shapes() {
     let lstm = LSTMCell::new(4, 3, true);
     let x = RawTensor::new(vec![1.0; 8], &[2, 4], false);
 
-    let (h, c) = lstm.forward_step(&x, None);
+    let mut state = lstm.initial_state(2);
+    let h = lstm.step(&x, &mut state);
+    let c = state.1.clone();
 
     assert_eq!(
-        h.borrow().shape,
+        h.shape(),
         vec![2, 3],
         "h shape should be [batch=2, hidden=3]"
     );
     assert_eq!(
-        c.borrow().shape,
+        c.shape(),
         vec![2, 3],
         "c shape should be [batch=2, hidden=3]"
     );
 }
 
-// forward_step(x, None) should produce the same result as
-// forward_step(x, Some(zeros, zeros))
+// step from `initial_state` should produce the same result as
+// step from an explicit (zeros, zeros) state
 #[test]
 fn test_lstm_zero_state_init() {
     let lstm = LSTMCell::new(3, 2, true);
     let x = RawTensor::new(vec![0.5, -0.3, 0.7, 1.0, 0.2, -0.5], &[2, 3], false);
 
-    let (h_none, c_none) = lstm.forward_step(&x, None);
-    let h0 = RawTensor::zeros(&[2, 2]);
-    let c0 = RawTensor::zeros(&[2, 2]);
-    let (h_zero, c_zero) = lstm.forward_step(&x, Some((&h0, &c0)));
+    let mut state_none = lstm.initial_state(2);
+    let h_none = lstm.step(&x, &mut state_none);
+    let c_none = state_none.1.clone();
+    let mut state_zero = (RawTensor::zeros(&[2, 2]), RawTensor::zeros(&[2, 2]));
+    let h_zero = lstm.step(&x, &mut state_zero);
+    let c_zero = state_zero.1.clone();
 
-    let h_none_data = h_none.borrow().data.to_vec();
-    let h_zero_data = h_zero.borrow().data.to_vec();
-    let c_none_data = c_none.borrow().data.to_vec();
-    let c_zero_data = c_zero.borrow().data.to_vec();
+    let h_none_data = h_none.data();
+    let h_zero_data = h_zero.data();
+    let c_none_data = c_none.data();
+    let c_zero_data = c_zero.data();
 
     for (idx, (a, b)) in h_none_data.iter().zip(h_zero_data.iter()).enumerate() {
         assert!(
@@ -70,40 +75,30 @@ fn test_lstm_gate_math_known_weights() {
     // weight_ih: [4*1, 1] = [4, 1], all ones
     state.insert(
         "weight_ih".to_string(),
-        TensorData {
-            data: vec![1.0; 4],
-            shape: vec![4, 1],
-        },
+        TensorData::from_f32(vec![1.0; 4], vec![4, 1]),
     );
     // weight_hh: [4*1, 1] = [4, 1], all ones
     state.insert(
         "weight_hh".to_string(),
-        TensorData {
-            data: vec![1.0; 4],
-            shape: vec![4, 1],
-        },
+        TensorData::from_f32(vec![1.0; 4], vec![4, 1]),
     );
     // bias_ih: [4], all zeros
     state.insert(
         "bias_ih".to_string(),
-        TensorData {
-            data: vec![0.0; 4],
-            shape: vec![4],
-        },
+        TensorData::from_f32(vec![0.0; 4], vec![4]),
     );
     // bias_hh: [4], all zeros
     state.insert(
         "bias_hh".to_string(),
-        TensorData {
-            data: vec![0.0; 4],
-            shape: vec![4],
-        },
+        TensorData::from_f32(vec![0.0; 4], vec![4]),
     );
 
-    lstm.load_state_dict(&state);
+    lstm.load_state_dict(&state).expect("state loads");
 
     let x = RawTensor::new(vec![2.0], &[1, 1], false);
-    let (h, c) = lstm.forward_step(&x, None);
+    let mut state = lstm.initial_state(1);
+    let h = lstm.step(&x, &mut state);
+    let c = state.1.clone();
 
     // Manual computation: gates all = 2.0 (x=2, w=1, h=0, bias=0)
     let sig2 = 1.0_f64 / (1.0 + (-2.0_f64).exp()); // sigmoid(2)
@@ -115,8 +110,8 @@ fn test_lstm_gate_math_known_weights() {
     // h_next = o * tanh(c_next)
     let expected_h = sig2 * expected_c.tanh();
 
-    let h_val = h.borrow().data.to_vec();
-    let c_val = c.borrow().data.to_vec();
+    let h_val = h.data();
+    let c_val = c.data();
 
     let h0 = *h_val.first().expect("h should have at least one element");
     let c0 = *c_val.first().expect("c should have at least one element");
@@ -140,24 +135,28 @@ fn test_lstm_state_propagation() {
     let x3 = RawTensor::new(vec![-0.5, 0.3, 0.1], &[1, 3], false);
 
     // Step 1: no initial state
-    let (h1, c1) = lstm.forward_step(&x1, None);
-    assert_eq!(h1.borrow().shape, vec![1, 4]);
-    assert_eq!(c1.borrow().shape, vec![1, 4]);
+    let mut state = lstm.initial_state(1);
+    let h1 = lstm.step(&x1, &mut state);
+    let c1 = state.1.clone();
+    assert_eq!(h1.shape(), vec![1, 4]);
+    assert_eq!(c1.shape(), vec![1, 4]);
 
     // Step 2: feed forward state
-    let (h2, c2) = lstm.forward_step(&x2, Some((&h1, &c1)));
-    assert_eq!(h2.borrow().shape, vec![1, 4]);
-    assert_eq!(c2.borrow().shape, vec![1, 4]);
+    let h2 = lstm.step(&x2, &mut state);
+    let c2 = state.1.clone();
+    assert_eq!(h2.shape(), vec![1, 4]);
+    assert_eq!(c2.shape(), vec![1, 4]);
 
     // Step 3: feed forward again
-    let (h3, c3) = lstm.forward_step(&x3, Some((&h2, &c2)));
-    assert_eq!(h3.borrow().shape, vec![1, 4]);
-    assert_eq!(c3.borrow().shape, vec![1, 4]);
+    let h3 = lstm.step(&x3, &mut state);
+    let c3 = state.1.clone();
+    assert_eq!(h3.shape(), vec![1, 4]);
+    assert_eq!(c3.shape(), vec![1, 4]);
 
     // Values should change across steps
-    let h1_data = h1.borrow().data.to_vec();
-    let h2_data = h2.borrow().data.to_vec();
-    let h3_data = h3.borrow().data.to_vec();
+    let h1_data = h1.data();
+    let h2_data = h2.data();
+    let h3_data = h3.data();
 
     // At least one element should differ between steps
     let h1_h2_differ = h1_data
@@ -176,7 +175,7 @@ fn test_lstm_state_propagation() {
         assert!(val.is_finite(), "h3 contains non-finite value: {val}");
         assert!(val.abs() <= 1.0 + 1e-6, "h3 value {val} outside tanh range");
     }
-    for val in &c3.borrow().data.to_vec() {
+    for val in &c3.data() {
         assert!(val.is_finite(), "c3 contains non-finite value: {val}");
     }
 }
@@ -207,43 +206,36 @@ fn test_lstm_forget_gate_dominance() {
     // Set weights to small values so bias dominates
     state.insert(
         "weight_ih".to_string(),
-        TensorData {
-            data: vec![0.0; 4 * hidden * input_size],
-            shape: vec![4 * hidden, input_size],
-        },
+        TensorData::from_f32(
+            vec![0.0; 4 * hidden * input_size],
+            vec![4 * hidden, input_size],
+        ),
     );
     state.insert(
         "weight_hh".to_string(),
-        TensorData {
-            data: vec![0.0; 4 * hidden * hidden],
-            shape: vec![4 * hidden, hidden],
-        },
+        TensorData::from_f32(vec![0.0; 4 * hidden * hidden], vec![4 * hidden, hidden]),
     );
     state.insert(
         "bias_ih".to_string(),
-        TensorData {
-            data: bias_data.clone(),
-            shape: vec![4 * hidden],
-        },
+        TensorData::from_f32(bias_data.clone(), vec![4 * hidden]),
     );
     state.insert(
         "bias_hh".to_string(),
-        TensorData {
-            data: vec![0.0; 4 * hidden],
-            shape: vec![4 * hidden],
-        },
+        TensorData::from_f32(vec![0.0; 4 * hidden], vec![4 * hidden]),
     );
 
-    lstm.load_state_dict(&state);
+    lstm.load_state_dict(&state).expect("state loads");
 
     let x = RawTensor::new(vec![1.0, -1.0], &[1, input_size], false);
     let c_init = RawTensor::new(vec![3.0, -2.0], &[1, hidden], false);
     let h_init = RawTensor::zeros(&[1, hidden]);
 
-    let (_h_next, c_next) = lstm.forward_step(&x, Some((&h_init, &c_init)));
+    let mut state = (h_init, c_init.clone());
+    let _ = lstm.step(&x, &mut state);
+    let c_next = state.1.clone();
 
-    let c_init_data = c_init.borrow().data.to_vec();
-    let c_next_data = c_next.borrow().data.to_vec();
+    let c_init_data = c_init.data();
+    let c_next_data = c_next.data();
 
     // c_next should be very close to c_init because forget~1 and input~0
     for (idx, (orig, next)) in c_init_data.iter().zip(c_next_data.iter()).enumerate() {
@@ -254,7 +246,7 @@ fn test_lstm_forget_gate_dominance() {
     }
 }
 
-// Test that gradients flow through forward_step.
+// Test that gradients flow through step.
 //
 // Known limitation: `slice_gate()` in lstm.rs copies raw floats into new
 // `RawTensor::new()` calls, which breaks the autograd graph. If this test
@@ -263,16 +255,17 @@ fn test_lstm_forget_gate_dominance() {
 fn test_lstm_gradient_flow() {
     let lstm = LSTMCell::new(2, 2, true);
     let x = RawTensor::new(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], false);
-    x.borrow_mut().requires_grad = true;
+    x.set_requires_grad(true);
 
-    let (h, _c) = lstm.forward_step(&x, None);
+    let mut state = lstm.initial_state(2);
+    let h = lstm.step(&x, &mut state);
     let loss = h.sum();
 
     // Known limitation: slice_gate breaks the autograd graph.
     // backward() may produce None gradients for the input.
-    loss.backward();
+    loss.into_loss().expect("scalar loss").backward();
 
-    let grad = x.borrow().grad.clone();
+    let grad = x.grad_storage();
     match grad {
         Some(ref g) => {
             let g_data = g.to_vec();
@@ -309,18 +302,8 @@ fn test_lstm_no_bias() {
     );
 
     // Verify shapes of the two weight tensors
-    let w_ih_shape = params
-        .first()
-        .expect("should have weight_ih")
-        .borrow()
-        .shape
-        .clone();
-    let w_hh_shape = params
-        .get(1)
-        .expect("should have weight_hh")
-        .borrow()
-        .shape
-        .clone();
+    let w_ih_shape = params.first().expect("should have weight_ih").shape();
+    let w_hh_shape = params.get(1).expect("should have weight_hh").shape();
     assert_eq!(
         w_ih_shape,
         vec![8, 2],
@@ -334,36 +317,38 @@ fn test_lstm_no_bias() {
 
     // Forward should produce valid output
     let x = RawTensor::new(vec![1.0, -1.0, 0.5, 0.5], &[2, 2], false);
-    let (h, c) = lstm.forward_step(&x, None);
+    let mut state = lstm.initial_state(2);
+    let h = lstm.step(&x, &mut state);
+    let c = state.1.clone();
 
-    assert_eq!(h.borrow().shape, vec![2, 2]);
-    assert_eq!(c.borrow().shape, vec![2, 2]);
+    assert_eq!(h.shape(), vec![2, 2]);
+    assert_eq!(c.shape(), vec![2, 2]);
 
     // Values should be finite
-    for val in &h.borrow().data.to_vec() {
+    for val in &h.data() {
         assert!(val.is_finite(), "h contains non-finite value: {val}");
     }
-    for val in &c.borrow().data.to_vec() {
+    for val in &c.data() {
         assert!(val.is_finite(), "c contains non-finite value: {val}");
     }
 }
 
-// lstm.forward(&x) (Module trait) returns hidden state with correct shape.
+// step returns the hidden state with correct shape.
 #[test]
-fn test_lstm_module_forward() {
+fn test_lstm_step_output() {
     let lstm = LSTMCell::new(5, 3, true);
     let x = RawTensor::new(vec![0.1; 10], &[2, 5], false);
 
-    let h = lstm.forward(&x);
+    let h = lstm.step(&x, &mut lstm.initial_state(2));
 
     assert_eq!(
-        h.borrow().shape,
+        h.shape(),
         vec![2, 3],
-        "Module::forward should return h with shape [batch, hidden]"
+        "step should return h with shape [batch, hidden]"
     );
 
     // Values should be finite and bounded by tanh
-    for val in &h.borrow().data.to_vec() {
+    for val in &h.data() {
         assert!(val.is_finite(), "h contains non-finite value: {val}");
         assert!(
             val.abs() <= 1.0 + 1e-6,

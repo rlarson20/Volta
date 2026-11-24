@@ -1,14 +1,23 @@
+.claude/*.local.*
 /target
 
 *.txt
 
 .bacon-locations
-responses/context.md
 
 *.bin
 # Data files
 data/*
 node_modules/
+#model artifacts
+/model.safetensors
+models/
+#hiding this for now
+minigrad-react/
 
 #mutants output
 mutants.out/
+
+# Nix / direnv
+.direnv/
+result

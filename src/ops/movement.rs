@@ -1,5 +1,14 @@
-use crate::autograd::GradFn;
-use crate::error::Result;
+use crate::autograd::{GradFn, edge};
+use crate::device::Device;
+use crate::device_policy::kernel_failed;
+use crate::error::OrPanic;
+use crate::error::{Result, VoltaError};
+use crate::index::{fetch, slot};
+use crate::ops::reduce::pairwise_sum_by;
+use crate::real::{Bits, Real, dispatch_bits, dispatch_real};
+use crate::shape::{Axis, Shape, Strides};
+use crate::spec::PadValue;
+use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
 
 // ===== INDEX MAPPING TRAITS =====
@@ -34,6 +43,7 @@ trait ForwardIndexMapper {
 
 /// Mapper for pad operations: adds padding offset to index
 struct PadMapper {
+    /// Per-axis `(before, after)` zero padding.
     padding: Vec<(usize, usize)>,
 }
 
@@ -48,13 +58,14 @@ impl ForwardIndexMapper for PadMapper {
 
     fn map_forward_indices(&self, dim: usize, iter_idx: usize) -> (usize, usize) {
         // Forward: output_idx = input_idx + pad_left
-        let pad_left = self.padding.get(dim).map_or(0, |p| p.0);
+        let pad_left = fetch(&self.padding, dim).0;
         (iter_idx, iter_idx + pad_left)
     }
 }
 
 /// Mapper for shrink operations: offsets by range start
 struct ShrinkMapper {
+    /// Per-axis `(start, end)` range kept, `end` exclusive.
     ranges: Vec<(usize, usize)>,
 }
 
@@ -69,13 +80,14 @@ impl ForwardIndexMapper for ShrinkMapper {
 
     fn map_forward_indices(&self, dim: usize, iter_idx: usize) -> (usize, usize) {
         // Forward: input_idx (original) = output_idx (shrunk) + range_start
-        let range_start = self.ranges.get(dim).map_or(0, |r| r.0);
+        let range_start = fetch(&self.ranges, dim).0;
         (iter_idx + range_start, iter_idx)
     }
 }
 
 /// Mapper for stride operations: multiplies by stride
 struct StrideMapper {
+    /// Per-axis step between kept elements.
     strides: Vec<usize>,
 }
 
@@ -90,7 +102,7 @@ impl ForwardIndexMapper for StrideMapper {
 
     fn map_forward_indices(&self, dim: usize, iter_idx: usize) -> (usize, usize) {
         // Forward: input_idx (original) = output_idx (strided) * stride
-        let stride = self.strides.get(dim).copied().unwrap_or(1);
+        let stride = fetch(&self.strides, dim);
         (iter_idx * stride, iter_idx)
     }
 }
@@ -112,23 +124,16 @@ trait BackwardIndexMapper {
     /// # Arguments
     /// * `dim` - Current dimension being processed
     /// * `iter_idx` - Index in the iteration shape for this dimension
-    /// * `input_dim_size` - Size of the input tensor in this dimension
-    /// * `output_dim_size` - Size of the output tensor in this dimension
     ///
     /// # Returns
-    /// * `Some((input_idx, output_idx))` - Valid indices for both tensors
-    /// * `None` - If the mapping is invalid and should be skipped
-    fn map_backward_indices(
-        &self,
-        dim: usize,
-        iter_idx: usize,
-        input_dim_size: usize,
-        output_dim_size: usize,
-    ) -> Option<(usize, usize)>;
+    /// * (`input_idx`, `output_idx`) - The corresponding indices in the input and output tensors.
+    ///   Every iteration index maps inside both tensors; `apply_movement_backward` asserts it.
+    fn map_backward_indices(&self, dim: usize, iter_idx: usize) -> (usize, usize);
 }
 
 /// Backward mapper for pad operations
 struct PadBackwardMapper {
+    /// Per-axis `(before, after)` padding applied in forward.
     padding: Vec<(usize, usize)>,
 }
 
@@ -141,22 +146,17 @@ impl BackwardIndexMapper for PadBackwardMapper {
         input_shape // Iterate over input (unpadded) shape
     }
 
-    fn map_backward_indices(
-        &self,
-        dim: usize,
-        iter_idx: usize,
-        _input_dim_size: usize,
-        _output_dim_size: usize,
-    ) -> Option<(usize, usize)> {
+    fn map_backward_indices(&self, dim: usize, iter_idx: usize) -> (usize, usize) {
         // Backward: we iterate over input shape and map to padded output shape
         // input_idx = iter_idx, output_idx = iter_idx + pad_left
-        let pad_left = self.padding.get(dim).map_or(0, |p| p.0);
-        Some((iter_idx, iter_idx + pad_left))
+        let pad_left = fetch(&self.padding, dim).0;
+        (iter_idx, iter_idx + pad_left)
     }
 }
 
 /// Backward mapper for shrink operations
 struct ShrinkBackwardMapper {
+    /// Per-axis `(start, end)` range kept in forward.
     ranges: Vec<(usize, usize)>,
 }
 
@@ -169,22 +169,17 @@ impl BackwardIndexMapper for ShrinkBackwardMapper {
         output_shape // Iterate over output (shrunk) shape
     }
 
-    fn map_backward_indices(
-        &self,
-        dim: usize,
-        iter_idx: usize,
-        _input_dim_size: usize,
-        _output_dim_size: usize,
-    ) -> Option<(usize, usize)> {
+    fn map_backward_indices(&self, dim: usize, iter_idx: usize) -> (usize, usize) {
         // Backward: we iterate over output shape and map to larger input shape
         // output_idx = iter_idx, input_idx = iter_idx + range_start
-        let range_start = self.ranges.get(dim).map_or(0, |r| r.0);
-        Some((iter_idx + range_start, iter_idx))
+        let range_start = fetch(&self.ranges, dim).0;
+        (iter_idx + range_start, iter_idx)
     }
 }
 
 /// Backward mapper for stride operations
 struct StrideBackwardMapper {
+    /// Per-axis stride applied in forward.
     strides: Vec<usize>,
 }
 
@@ -197,22 +192,12 @@ impl BackwardIndexMapper for StrideBackwardMapper {
         output_shape // Iterate over output (strided) shape
     }
 
-    fn map_backward_indices(
-        &self,
-        dim: usize,
-        iter_idx: usize,
-        input_dim_size: usize,
-        _output_dim_size: usize,
-    ) -> Option<(usize, usize)> {
+    fn map_backward_indices(&self, dim: usize, iter_idx: usize) -> (usize, usize) {
         // Backward: we iterate over output shape and map to larger input shape
-        // output_idx = iter_idx, input_idx = iter_idx * stride
-        let stride = self.strides.get(dim).copied().unwrap_or(1);
-        let input_idx = iter_idx * stride;
-        if input_idx < input_dim_size {
-            Some((input_idx, iter_idx))
-        } else {
-            None // Out of bounds
-        }
+        // output_idx = iter_idx, input_idx = iter_idx * stride. With
+        // `out = ceil(in / stride)`, every `iter_idx * stride` is below `in`.
+        let stride = fetch(&self.strides, dim);
+        (iter_idx * stride, iter_idx)
     }
 }
 
@@ -221,13 +206,18 @@ impl BackwardIndexMapper for StrideBackwardMapper {
 /// Holds all the shared parameters for recursive movement operations,
 /// reducing the number of function parameters from 10 to 4.
 struct MovementContext<'a> {
+    /// Shape of the source tensor.
     input_shape: &'a [usize],
+    /// Shape of the result.
     output_shape: &'a [usize],
+    /// Row-major strides of the source tensor.
     input_strides: &'a [usize],
+    /// Row-major strides of the result.
     output_strides: &'a [usize],
 }
 
 impl<'a> MovementContext<'a> {
+    /// Bundles the four shape and stride slices.
     fn new(
         input_shape: &'a [usize],
         output_shape: &'a [usize],
@@ -241,6 +231,64 @@ impl<'a> MovementContext<'a> {
             output_strides,
         }
     }
+}
+
+/// Whether the GPU movement kernels cover a tensor of this rank. They pack shapes into
+/// `[u32; 4]`, so a higher rank has no GPU kernel: a gap for the device policy, not a
+/// kernel to run on silently truncated shapes (H5).
+const fn gpu_movement_supported(rank: usize) -> bool {
+    rank <= 4
+}
+
+/// Whether the GPU `pad` kernels cover this padding: rank <= 4, and dims 2 and 3 are packed
+/// as two 16-bit halves of one `u32` each, so their pad widths must fit in 16 bits.
+fn gpu_pad_supported(padding: &[(usize, usize)]) -> bool {
+    let fits = |w: usize| u16::try_from(w).is_ok();
+    gpu_movement_supported(padding.len())
+        && padding
+            .iter()
+            .skip(2)
+            .all(|&(left, right)| fits(left) && fits(right))
+}
+
+/// Pad's fill `value` stored as `dtype`, as `B` bits. A float dtype rounds it (f16/bf16);
+/// an integer or bool dtype needs a finite value, which converts like `to_dtype`.
+///
+/// # Panics
+/// If `dtype` is not a float and `value` is not finite (max pooling's `-inf` border on an
+/// integer tensor).
+fn fill_bits<B: Bits>(dtype: crate::DType, value: f32) -> B {
+    assert!(
+        dtype.is_float() || value.is_finite(),
+        "Pad: a {value} fill cannot be stored in a {dtype} tensor"
+    );
+    *Storage::cpu(vec![value])
+        .cast(dtype)
+        .bits::<B>()
+        .first()
+        .expect("one element")
+}
+
+/// Checks that a mapper's per-axis indices lie inside both tensors.
+///
+/// The `slot`/`fetch` at the base case only check the flat offset, and an index past one
+/// axis can still land inside the buffer (in the next row), so the per-axis check is
+/// needed to fail loudly instead of writing the wrong element.
+///
+/// # Panics
+/// If `input_idx >= input_dim_size` or `output_idx >= output_dim_size`: a mapper bug.
+fn assert_in_dim(
+    dim: usize,
+    input_idx: usize,
+    input_dim_size: usize,
+    output_idx: usize,
+    output_dim_size: usize,
+) {
+    assert!(
+        input_idx < input_dim_size && output_idx < output_dim_size,
+        "movement: axis {dim} maps to input index {input_idx} (size {input_dim_size}) \
+         and output index {output_idx} (size {output_dim_size})"
+    );
 }
 
 /// Unified recursive index transformation for backward movement operations
@@ -259,10 +307,10 @@ impl<'a> MovementContext<'a> {
 /// * `output_offset` - Current linear offset in output buffer
 /// * `input_strides` - Memory strides for input tensor
 /// * `output_strides` - Memory strides for output tensor
-fn apply_movement_backward<M: BackwardIndexMapper>(
+fn apply_movement_backward<T: Copy, M: BackwardIndexMapper>(
     ctx: &MovementContext<'_>,
-    result: &mut [f32],
-    grad: &[f32],
+    result: &mut [T],
+    grad: &[T],
     dim: usize,
     mapper: &M,
     input_offset: usize,
@@ -270,39 +318,33 @@ fn apply_movement_backward<M: BackwardIndexMapper>(
 ) {
     // Base case: reached the innermost dimension
     if dim == ctx.input_shape.len() {
-        if let Some(&val) = grad.get(output_offset)
-            && let Some(slot) = result.get_mut(input_offset)
-        {
-            *slot = val;
-        }
+        *slot(result, input_offset) = fetch(grad, output_offset);
         return;
     }
 
     // Get the iteration shape for this backward operation
     let iter_shape = mapper.iteration_shape(ctx.input_shape, ctx.output_shape);
-    let dim_size = iter_shape.get(dim).copied().unwrap_or(1);
-    let input_dim_size = ctx.input_shape.get(dim).copied().unwrap_or(1);
-    let output_dim_size = ctx.output_shape.get(dim).copied().unwrap_or(1);
+    let dim_size = fetch(iter_shape, dim);
+    let input_dim_size = fetch(ctx.input_shape, dim);
+    let output_dim_size = fetch(ctx.output_shape, dim);
 
     // Iterate according to the mapper's iteration shape
     for iter_idx in 0..dim_size {
         // Map iteration index to input and output indices
-        if let Some((input_idx, output_idx)) =
-            mapper.map_backward_indices(dim, iter_idx, input_dim_size, output_dim_size)
-        {
-            let input_stride = ctx.input_strides.get(dim).copied().unwrap_or(1);
-            let output_stride = ctx.output_strides.get(dim).copied().unwrap_or(1);
+        let (input_idx, output_idx) = mapper.map_backward_indices(dim, iter_idx);
+        assert_in_dim(dim, input_idx, input_dim_size, output_idx, output_dim_size);
+        let input_stride = fetch(ctx.input_strides, dim);
+        let output_stride = fetch(ctx.output_strides, dim);
 
-            apply_movement_backward(
-                ctx,
-                result,
-                grad,
-                dim + 1,
-                mapper,
-                input_offset + input_idx * input_stride,
-                output_offset + output_idx * output_stride,
-            );
-        }
+        apply_movement_backward(
+            ctx,
+            result,
+            grad,
+            dim + 1,
+            mapper,
+            input_offset + input_idx * input_stride,
+            output_offset + output_idx * output_stride,
+        );
     }
 }
 
@@ -322,10 +364,10 @@ fn apply_movement_backward<M: BackwardIndexMapper>(
 /// * `output_offset` - Current linear offset in output buffer
 /// * `input_strides` - Memory strides for input tensor
 /// * `output_strides` - Memory strides for output tensor
-fn apply_movement_forward<M: ForwardIndexMapper>(
+fn apply_movement_forward<T: Copy, M: ForwardIndexMapper>(
     ctx: &MovementContext<'_>,
-    result: &mut [f32],
-    data: &[f32],
+    result: &mut [T],
+    data: &[T],
     dim: usize,
     mapper: &M,
     input_offset: usize,
@@ -333,40 +375,34 @@ fn apply_movement_forward<M: ForwardIndexMapper>(
 ) {
     // Base case: reached the innermost dimension
     if dim == ctx.input_shape.len() {
-        if let Some(&src) = data.get(input_offset)
-            && let Some(slot) = result.get_mut(output_offset)
-        {
-            *slot = src;
-        }
+        *slot(result, output_offset) = fetch(data, input_offset);
         return;
     }
 
     // Get the iteration shape for this operation
     let iter_shape = mapper.iteration_shape(ctx.input_shape, ctx.output_shape);
-    let dim_size = iter_shape.get(dim).copied().unwrap_or(1);
-    let input_dim_size = ctx.input_shape.get(dim).copied().unwrap_or(1);
-    let output_dim_size = ctx.output_shape.get(dim).copied().unwrap_or(1);
+    let dim_size = fetch(iter_shape, dim);
+    let input_dim_size = fetch(ctx.input_shape, dim);
+    let output_dim_size = fetch(ctx.output_shape, dim);
 
     // Iterate through the dimension
     for iter_idx in 0..dim_size {
         // Map iteration index to input and output indices
         let (input_idx, output_idx) = mapper.map_forward_indices(dim, iter_idx);
 
-        // Check bounds
-        if input_idx < input_dim_size && output_idx < output_dim_size {
-            let input_stride = ctx.input_strides.get(dim).copied().unwrap_or(1);
-            let output_stride = ctx.output_strides.get(dim).copied().unwrap_or(1);
+        assert_in_dim(dim, input_idx, input_dim_size, output_idx, output_dim_size);
+        let input_stride = fetch(ctx.input_strides, dim);
+        let output_stride = fetch(ctx.output_strides, dim);
 
-            apply_movement_forward(
-                ctx,
-                result,
-                data,
-                dim + 1,
-                mapper,
-                input_offset + input_idx * input_stride,
-                output_offset + output_idx * output_stride,
-            );
-        }
+        apply_movement_forward(
+            ctx,
+            result,
+            data,
+            dim + 1,
+            mapper,
+            input_offset + input_idx * input_stride,
+            output_offset + output_idx * output_stride,
+        );
     }
 }
 
@@ -376,14 +412,39 @@ fn apply_movement_forward<M: ForwardIndexMapper>(
 ///
 /// These operations don't modify data values, only how they're indexed.
 /// Gradients must "undo" these operations during backpropagation.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum MovementOp {
-    Reshape { new_shape: Vec<usize> }, // Change shape, preserve order
-    Permute { axes: Vec<usize> },      // Transpose/reorder axes
-    Expand { new_shape: Vec<usize> },  // Broadcast to larger shape
-    Pad { padding: Vec<(usize, usize)> }, // Add zeros around edges
-    Shrink { ranges: Vec<(usize, usize)> }, // Extract subregion
-    Stride { strides: Vec<usize> },    // Subsample with stride
+    /// Change the shape, keeping element order.
+    Reshape {
+        /// Target shape.
+        new_shape: Vec<usize>,
+    },
+    /// Reorder the axes.
+    Permute {
+        /// `axes[i]` is the input axis that becomes output axis `i`.
+        axes: Vec<usize>,
+    },
+    /// Broadcast to a larger shape.
+    Expand {
+        /// Target shape.
+        new_shape: Vec<usize>,
+    },
+    /// Add zeros around the edges.
+    Pad {
+        /// Per-axis `(before, after)` counts.
+        padding: Vec<(usize, usize)>,
+    },
+    /// Extract a sub-region.
+    Shrink {
+        /// Per-axis `(start, end)` range, `end` exclusive.
+        ranges: Vec<(usize, usize)>,
+    },
+    /// Subsample with a step.
+    Stride {
+        /// Per-axis step between kept elements.
+        strides: Vec<usize>,
+    },
 }
 
 /// Unified gradient function for all movement operations
@@ -391,277 +452,345 @@ pub enum MovementOp {
 /// Movement ops don't change data values, only how they're indexed.
 /// During backward, we need to "undo" the movement to restore the original shape.
 #[derive(Clone)]
-pub struct MovementGradFn {
+pub(crate) struct MovementGradFn {
+    /// The movement applied in forward.
     op: MovementOp,
-    original_shape: Vec<usize>,
+    /// Shape of the input, which the gradient must be restored to.
+    original_shape: Shape,
 }
 
-impl GradFn for MovementGradFn {
-    #[allow(clippy::too_many_lines)]
-    fn backward(&self, out_grad: &RawTensor, _parents: &[Tensor]) -> Vec<Option<Tensor>> {
+impl MovementGradFn {
+    /// The op's name in device errors and fallback events, e.g. `"Movement(Permute)"`.
+    pub(crate) fn op_name(&self) -> String {
+        let op = match self.op {
+            MovementOp::Reshape { .. } => "Reshape",
+            MovementOp::Permute { .. } => "Permute",
+            MovementOp::Expand { .. } => "Expand",
+            MovementOp::Pad { .. } => "Pad",
+            MovementOp::Shrink { .. } => "Shrink",
+            MovementOp::Stride { .. } => "Stride",
+        };
+        format!("Movement({op})")
+    }
+
+    /// Undoes the movement on `out_grad`, returning a gradient in the input's shape.
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        _parents: &[Tensor],
+    ) -> Vec<Option<Storage>> {
+        dispatch_real!(out_grad.data.dtype(), T => self.backward_typed::<T>(out_grad))
+    }
+
+    /// [`Self::backward`] in the gradient's dtype `T`.
+    fn backward_typed<T: Real>(&self, out_grad: &RawTensor) -> Vec<Option<Storage>> {
         let grad_tensor = match &self.op {
             MovementOp::Reshape { .. } => {
-                // Reshape back to original shape
-                RawTensor::new(out_grad.data.to_vec(), &self.original_shape, false)
+                // Reshape back to original shape: same data, same device, new shape.
+                return vec![Some(out_grad.data.clone())];
             }
             MovementOp::Permute { axes } => {
                 // Invert the permutation to restore original order
                 let mut inverse_axes = vec![0; axes.len()];
                 for (i, &ax) in axes.iter().enumerate() {
-                    if let Some(slot) = inverse_axes.get_mut(ax) {
-                        *slot = i;
-                    }
+                    *slot(&mut inverse_axes, ax) = i;
                 }
 
-                // Try GPU path
-                #[cfg(feature = "gpu")]
-                {
-                    if out_grad.device.is_gpu()
-                        && let Some(grad_storage) = RawTensor::gpu_permute_backward(
-                            &out_grad.data,
-                            &self.original_shape,
-                            &out_grad.shape,
-                            &inverse_axes,
-                        )
-                    {
-                        return vec![Some(RawTensor::new_with_storage(
-                            grad_storage,
-                            &self.original_shape,
-                            out_grad.device.clone(),
-                            false,
-                        ))];
-                    }
+                // GPU path when the kernel covers this rank; a `None` from it is a failure.
+                if out_grad.device.is_gpu() && gpu_movement_supported(self.original_shape.rank()) {
+                    let grad_storage = RawTensor::gpu_permute_backward(
+                        &out_grad.data,
+                        self.original_shape.truncate_rank(),
+                        out_grad.shape.truncate_rank(),
+                        &inverse_axes,
+                    )
+                    .unwrap_or_else(|| kernel_failed("Movement(Permute)"));
+                    return vec![Some(grad_storage)];
                 }
 
-                // CPU fallback
-                let grad_t = RawTensor::new(out_grad.data.to_vec(), &out_grad.shape, false);
-                let result = RawTensor::permute_impl(&grad_t, &inverse_axes);
-                return vec![Some(result)];
+                // CPU path. `out_grad` may be GPU storage (a rank the kernel doesn't
+                // cover), so copy it to the host rather than relabel it.
+                let grad_t = RawTensor::new_with_storage(
+                    Storage::from_compute(
+                        out_grad.data.dtype(),
+                        out_grad.data.host::<T>().to_vec(),
+                    ),
+                    out_grad.shape.clone(),
+                    Device::CPU,
+                    false,
+                );
+                let (storage, ..) = RawTensor::permute_impl(&grad_t, &inverse_axes);
+                return vec![Some(storage)];
             }
             MovementOp::Expand { new_shape } => {
-                // Try GPU path
-                #[cfg(feature = "gpu")]
-                {
-                    if out_grad.device.is_gpu()
-                        && let Some(grad_storage) = RawTensor::gpu_expand_backward(
-                            &out_grad.data,
-                            &self.original_shape,
-                            new_shape,
-                        )
-                    {
-                        return vec![Some(RawTensor::new_with_storage(
-                            grad_storage,
-                            &self.original_shape,
-                            out_grad.device.clone(),
-                            false,
-                        ))];
-                    }
+                // GPU path when the kernel covers this rank; a `None` from it is a failure.
+                if out_grad.device.is_gpu() && gpu_movement_supported(self.original_shape.rank()) {
+                    let grad_storage = RawTensor::gpu_expand_backward(
+                        &out_grad.data,
+                        self.original_shape.truncate_rank(),
+                        new_shape,
+                    )
+                    .unwrap_or_else(|| kernel_failed("Movement(Expand)"));
+                    return vec![Some(grad_storage)];
                 }
 
-                // CPU fallback: Sum gradient over dimensions that were expanded (broadcast)
-                let mut grad_data = vec![0.0; self.original_shape.iter().product()];
-                let old_strides = RawTensor::compute_strides(&self.original_shape);
-                let _new_strides = RawTensor::compute_strides(new_shape);
+                // CPU path: each source element's gradient is the sum of the incoming
+                // gradient over the broadcast axes (the ones that grew from 1). It is
+                // summed pairwise per source element (#303): a sequential f32 chain stalls
+                // as the sum grows (S6), and every conv bias gradient is one such sum over
+                // batch x H x W.
+                let old_dims = self.original_shape.truncate_rank();
+                let new_strides = Strides::from_shape(new_shape);
+                let new_strides = new_strides.truncate_rank();
+                // (extent, stride in `out_grad`) of each broadcast axis, outermost first.
+                let broadcast: Vec<(usize, usize)> = (0..new_shape.len())
+                    .filter(|&j| fetch(old_dims, j) == 1 && fetch(new_shape, j) > 1)
+                    .map(|j| (fetch(new_shape, j), fetch(new_strides, j)))
+                    .collect();
+                let terms: usize = broadcast.iter().map(|&(n, _)| n).product();
+                // The offset in `out_grad` of the `k`-th term of a source's sum.
+                let offset = |k: usize| {
+                    let mut off = 0;
+                    let mut rem = k;
+                    for &(n, stride) in broadcast.iter().rev() {
+                        off += (rem % n) * stride;
+                        rem /= n;
+                    }
+                    off
+                };
 
-                for i in 0..out_grad.data.len() {
-                    let mut old_idx = 0;
-                    let mut rem = i;
-                    for j in (0..new_shape.len()).rev() {
-                        let dim_size = new_shape.get(j).copied().unwrap_or(1);
-                        let coord = rem % dim_size;
-                        rem /= dim_size;
-                        // If this dimension was size 1, don't advance the index
-                        if self.original_shape.get(j).copied().unwrap_or(1) != 1 {
-                            old_idx += coord * old_strides.get(j).copied().unwrap_or(1);
+                let g_host = out_grad.data.host::<T>();
+                let old_numel: usize = old_dims.iter().product();
+                let grad_data: Vec<T> = (0..old_numel)
+                    .map(|src| {
+                        // The source's first term: its own coordinates in `new_shape`
+                        // (a broadcast axis's coordinate is 0).
+                        let mut base = 0;
+                        let mut rem = src;
+                        for j in (0..old_dims.len()).rev() {
+                            let dim = fetch(old_dims, j);
+                            base += (rem % dim) * fetch(new_strides, j);
+                            rem /= dim;
                         }
-                    }
-                    if let Some(og_val) = out_grad.data.get(i)
-                        && let Some(slot) = grad_data.get_mut(old_idx)
-                    {
-                        *slot += *og_val;
-                    }
-                }
-                RawTensor::new(grad_data, &self.original_shape, false)
+                        pairwise_sum_by(terms, |k| fetch(&g_host, base + offset(k)))
+                    })
+                    .collect();
+                Storage::from_compute(out_grad.data.dtype(), grad_data)
             }
             MovementOp::Pad { padding } => {
-                // Try GPU path
-                #[cfg(feature = "gpu")]
-                {
-                    if out_grad.device.is_gpu()
-                        && let Some(grad_storage) = RawTensor::gpu_pad_backward(
-                            &out_grad.data,
-                            &self.original_shape,
-                            &out_grad.shape,
-                            padding,
-                        )
-                    {
-                        return vec![Some(RawTensor::new_with_storage(
-                            grad_storage,
-                            &self.original_shape,
-                            out_grad.device.clone(),
-                            false,
-                        ))];
-                    }
+                // GPU path when the kernel covers this rank; a `None` from it is a failure.
+                if out_grad.device.is_gpu() && gpu_pad_supported(padding) {
+                    let grad_storage = RawTensor::gpu_pad_backward(
+                        &out_grad.data,
+                        self.original_shape.truncate_rank(),
+                        out_grad.shape.truncate_rank(),
+                        padding,
+                    )
+                    .unwrap_or_else(|| kernel_failed("Movement(Pad)"));
+                    return vec![Some(grad_storage)];
                 }
 
-                // CPU fallback: Remove padding from gradient (extract center region)
-                let mut result = vec![0.0; self.original_shape.iter().product()];
-                let old_strides = RawTensor::compute_strides(&self.original_shape);
-                let new_strides = RawTensor::compute_strides(&out_grad.shape);
+                // CPU path: Remove padding from gradient (extract center region)
+                let mut result = vec![T::ZERO; self.original_shape.iter().product()];
+                let old_strides = self.original_shape.strides();
+                let old_strides = old_strides.truncate_rank();
+                let new_strides = out_grad.shape.strides();
+                let new_strides = new_strides.truncate_rank();
                 let mapper = PadBackwardMapper {
                     padding: padding.clone(),
                 };
                 let ctx = MovementContext::new(
-                    &self.original_shape,
-                    &out_grad.shape,
-                    &old_strides,
-                    &new_strides,
+                    self.original_shape.truncate_rank(),
+                    out_grad.shape.truncate_rank(),
+                    old_strides,
+                    new_strides,
                 );
 
-                apply_movement_backward(&ctx, &mut result, &out_grad.data, 0, &mapper, 0, 0);
-                RawTensor::new(result, &self.original_shape, false)
+                apply_movement_backward(
+                    &ctx,
+                    &mut result,
+                    &out_grad.data.host::<T>(),
+                    0,
+                    &mapper,
+                    0,
+                    0,
+                );
+                Storage::from_compute(out_grad.data.dtype(), result)
             }
             MovementOp::Shrink { ranges } => {
-                // Try GPU path
-                #[cfg(feature = "gpu")]
-                {
-                    if out_grad.device.is_gpu()
-                        && let Some(grad_storage) = RawTensor::gpu_shrink_backward(
-                            &out_grad.data,
-                            &self.original_shape,
-                            &out_grad.shape,
-                            ranges,
-                        )
-                    {
-                        return vec![Some(RawTensor::new_with_storage(
-                            grad_storage,
-                            &self.original_shape,
-                            out_grad.device.clone(),
-                            false,
-                        ))];
-                    }
+                // GPU path when the kernel covers this rank; a `None` from it is a failure.
+                if out_grad.device.is_gpu() && gpu_movement_supported(self.original_shape.rank()) {
+                    let grad_storage = RawTensor::gpu_shrink_backward(
+                        &out_grad.data,
+                        self.original_shape.truncate_rank(),
+                        out_grad.shape.truncate_rank(),
+                        ranges,
+                    )
+                    .unwrap_or_else(|| kernel_failed("Movement(Shrink)"));
+                    return vec![Some(grad_storage)];
                 }
 
-                // CPU fallback: Pad gradient back to original size (inverse of shrink)
-                let mut result = vec![0.0; self.original_shape.iter().product()];
-                let old_strides = RawTensor::compute_strides(&self.original_shape);
-                let new_strides = RawTensor::compute_strides(&out_grad.shape);
+                // CPU path: Pad gradient back to original size (inverse of shrink)
+                let mut result = vec![T::ZERO; self.original_shape.iter().product()];
+                let old_strides = self.original_shape.strides();
+                let old_strides = old_strides.truncate_rank();
+                let new_strides = out_grad.shape.strides();
+                let new_strides = new_strides.truncate_rank();
                 let mapper = ShrinkBackwardMapper {
                     ranges: ranges.clone(),
                 };
                 let ctx = MovementContext::new(
-                    &self.original_shape,
-                    &out_grad.shape,
-                    &old_strides,
-                    &new_strides,
+                    self.original_shape.truncate_rank(),
+                    out_grad.shape.truncate_rank(),
+                    old_strides,
+                    new_strides,
                 );
 
-                apply_movement_backward(&ctx, &mut result, &out_grad.data, 0, &mapper, 0, 0);
-                RawTensor::new(result, &self.original_shape, false)
+                apply_movement_backward(
+                    &ctx,
+                    &mut result,
+                    &out_grad.data.host::<T>(),
+                    0,
+                    &mapper,
+                    0,
+                    0,
+                );
+                Storage::from_compute(out_grad.data.dtype(), result)
             }
             MovementOp::Stride { strides } => {
-                // Try GPU path
-                #[cfg(feature = "gpu")]
-                {
-                    if out_grad.device.is_gpu()
-                        && let Some(grad_storage) = RawTensor::gpu_stride_backward(
-                            &out_grad.data,
-                            &self.original_shape,
-                            &out_grad.shape,
-                            strides,
-                        )
-                    {
-                        return vec![Some(RawTensor::new_with_storage(
-                            grad_storage,
-                            &self.original_shape,
-                            out_grad.device.clone(),
-                            false,
-                        ))];
-                    }
+                // GPU path when the kernel covers this rank; a `None` from it is a failure.
+                if out_grad.device.is_gpu() && gpu_movement_supported(self.original_shape.rank()) {
+                    let grad_storage = RawTensor::gpu_stride_backward(
+                        &out_grad.data,
+                        self.original_shape.truncate_rank(),
+                        out_grad.shape.truncate_rank(),
+                        strides,
+                    )
+                    .unwrap_or_else(|| kernel_failed("Movement(Stride)"));
+                    return vec![Some(grad_storage)];
                 }
 
-                // CPU fallback: Upsample gradient (inverse of stride/downsampling)
-                let mut result = vec![0.0; self.original_shape.iter().product()];
-                let old_strides_mem = RawTensor::compute_strides(&self.original_shape);
-                let new_strides_mem = RawTensor::compute_strides(&out_grad.shape);
+                // CPU path: Upsample gradient (inverse of stride/downsampling)
+                let mut result = vec![T::ZERO; self.original_shape.iter().product()];
+                let old_strides_mem = self.original_shape.strides();
+                let old_strides_mem = old_strides_mem.truncate_rank();
+                let new_strides_mem = out_grad.shape.strides();
+                let new_strides_mem = new_strides_mem.truncate_rank();
                 let mapper = StrideBackwardMapper {
                     strides: strides.clone(),
                 };
                 let ctx = MovementContext::new(
-                    &self.original_shape,
-                    &out_grad.shape,
-                    &old_strides_mem,
-                    &new_strides_mem,
+                    self.original_shape.truncate_rank(),
+                    out_grad.shape.truncate_rank(),
+                    old_strides_mem,
+                    new_strides_mem,
                 );
 
-                apply_movement_backward(&ctx, &mut result, &out_grad.data, 0, &mapper, 0, 0);
-                RawTensor::new(result, &self.original_shape, false)
+                apply_movement_backward(
+                    &ctx,
+                    &mut result,
+                    &out_grad.data.host::<T>(),
+                    0,
+                    &mapper,
+                    0,
+                    0,
+                );
+                Storage::from_compute(out_grad.data.dtype(), result)
             }
         };
 
         vec![Some(grad_tensor)]
     }
-
-    fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(Self {
-            op: self.op.clone(),
-            original_shape: self.original_shape.clone(),
-        })
-    }
 }
 
 // ===== MOVEMENT OPERATIONS =====
 impl RawTensor {
+    /// The one place a movement op's autograd edge is built.
+    ///
+    /// Every movement op computes its output storage (on the GPU or the CPU), then ends in
+    /// exactly one call here, so the `GradFn` it records can't differ between the two paths.
+    fn movement_edge(
+        self_t: &Tensor,
+        storage: Storage,
+        shape: Shape,
+        device: Device,
+        op: MovementOp,
+        original_shape: Shape,
+    ) -> Tensor {
+        edge(
+            [self_t.clone()],
+            storage,
+            shape,
+            device,
+            GradFn::Movement(MovementGradFn { op, original_shape }),
+        )
+    }
+
     /// Reshape tensor to new shape (same number of elements)
+    ///
     /// # Panics
-    /// Size mismatch
+    ///
+    /// If `new_shape` is invalid or has a different element count. Use
+    /// [`Self::try_reshape`] to get an error instead.
+    #[must_use]
+    #[track_caller]
     pub fn reshape(self_t: &Tensor, new_shape: &[usize]) -> Tensor {
-        let (data, old_shape, req_grad, device) = {
+        Self::try_reshape(self_t, new_shape).or_panic("reshape")
+    }
+
+    /// Reshape tensor to new shape (fallible)
+    ///
+    /// # Errors
+    ///
+    /// `VoltaError::InvalidParameter` if `new_shape` has a zero dimension, overflows, or
+    /// exceeds `MAX_NUMEL` (see [`Shape::from_dims`]), or has a different element count.
+    pub fn try_reshape(self_t: &Tensor, new_shape: &[usize]) -> Result<Tensor> {
+        // Validate before `product()` or any allocation: `new_shape` may be user data.
+        let target = Shape::from_dims(new_shape)?;
+        let (data, old_shape, device) = {
             let s = self_t.borrow();
-            (
-                s.data.clone(),
-                s.shape.clone(),
-                s.requires_grad,
-                s.device.clone(),
-            )
+            (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
-        let old_size: usize = old_shape.iter().product();
-        let new_size: usize = new_shape.iter().product();
-        assert_eq!(old_size, new_size, "Cannot reshape: size mismatch");
-
-        // Reshape is a view operation - data stays in place, only shape changes
-        // Use new_with_storage to preserve the device
-        let out = Self::new_with_storage(data, new_shape, device, req_grad);
-
-        if req_grad {
-            out.borrow_mut().parents = vec![self_t.clone()];
-            out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
-                op: MovementOp::Reshape {
-                    new_shape: new_shape.to_vec(),
-                },
-                original_shape: old_shape,
-            }));
+        if old_shape.numel() != target.numel() {
+            return Err(VoltaError::invalid(
+                "reshape",
+                Some("shape"),
+                format!(
+                    "cannot reshape {:?} ({} elements) to {new_shape:?} ({} elements)",
+                    old_shape.truncate_rank(),
+                    old_shape.numel(),
+                    target.numel()
+                ),
+            ));
         }
-        out
+
+        // `data` shares the input's buffer (copy-on-write storage); only the shape changes.
+        Ok(Self::movement_edge(
+            self_t,
+            data,
+            target,
+            device,
+            MovementOp::Reshape {
+                new_shape: new_shape.to_vec(),
+            },
+            old_shape,
+        ))
     }
 
     /// Internal permute implementation (no gradient tracking)
     ///
     /// Reorders axes according to the permutation specified by `axes`.
     /// For example, axes=[1,0] transposes a 2D matrix.
-    fn permute_impl(self_t: &Tensor, axes: &[usize]) -> Tensor {
+    fn permute_impl(self_t: &Tensor, axes: &[usize]) -> (Storage, Vec<usize>, Device) {
         // Helper: convert linear index to coordinates
         fn index_to_coords(idx: usize, shape: &[usize]) -> Vec<usize> {
             let mut coords = vec![0; shape.len()];
             let mut remaining = idx;
             for i in (0..shape.len()).rev() {
-                if let Some(&dim_size) = shape.get(i) {
-                    if let Some(slot) = coords.get_mut(i) {
-                        *slot = remaining % dim_size;
-                    }
-                    remaining /= dim_size;
-                }
+                let dim_size = fetch(shape, i);
+                *slot(&mut coords, i) = remaining % dim_size;
+                remaining /= dim_size;
             }
             coords
         }
@@ -675,258 +804,286 @@ impl RawTensor {
             let s = self_t.borrow();
             (s.data.clone(), s.shape.clone(), s.device.clone())
         };
-        assert_eq!(axes.len(), shape.len(), "Axes length must match rank");
+        assert_eq!(axes.len(), shape.rank(), "Axes length must match rank");
 
-        let new_shape: Vec<usize> = axes.iter().filter_map(|&i| shape.get(i).copied()).collect();
+        let new_shape: Vec<usize> = axes.iter().map(|&i| shape.dim_at(i)).collect();
 
-        // Try GPU path first if available
-        #[cfg(feature = "gpu")]
-        if device.is_gpu()
-            && let Some(storage) = Self::gpu_permute(&data, &shape, &new_shape, axes)
-        {
-            return Self::new_with_storage(storage, &new_shape, device, false);
+        // GPU path when the kernel covers this rank; a `None` from it is a failure.
+        if device.is_gpu() && gpu_movement_supported(shape.rank()) {
+            let storage = Self::gpu_permute(&data, shape.truncate_rank(), &new_shape, axes)
+                .unwrap_or_else(|| kernel_failed("Movement(Permute)"));
+            return (storage, new_shape, device);
         }
 
-        // CPU fallback
-        let old_strides = Self::compute_strides(&shape);
-        let mut new_data = vec![0.0; data.len()];
+        // CPU path (`movement_edge` applies the device policy to a GPU input)
+        let old_strides = shape.strides();
+        let old_strides = old_strides.truncate_rank();
+        dispatch_bits!(data.dtype(), B => {
+        let mut new_data = vec![B::default(); data.len()];
 
-        let cpu_data = data.to_vec();
+                let cpu_data = data.bits::<B>().to_vec();
 
-        for (new_idx, val) in new_data.iter_mut().enumerate() {
-            let new_coords = index_to_coords(new_idx, &new_shape);
-            // Map new coordinates back to old coordinates
-            let mut old_coords = vec![0; axes.len()];
-            for (i, &ax) in axes.iter().enumerate() {
-                if let Some(slot) = old_coords.get_mut(ax)
-                    && let Some(&coord) = new_coords.get(i)
-                {
-                    *slot = coord;
+                for (new_idx, val) in new_data.iter_mut().enumerate() {
+                    let new_coords = index_to_coords(new_idx, &new_shape);
+                    // Map new coordinates back to old coordinates
+                    let mut old_coords = vec![0; axes.len()];
+                    for (i, &ax) in axes.iter().enumerate() {
+                        *slot(&mut old_coords, ax) = fetch(&new_coords, i);
+                    }
+                    let old_idx = coords_to_index(&old_coords, old_strides);
+                    *val = fetch(&cpu_data, old_idx);
                 }
-            }
-            let old_idx = coords_to_index(&old_coords, &old_strides);
-            if let Some(&data_val) = cpu_data.get(old_idx) {
-                *val = data_val;
-            }
-        }
-        Self::new(new_data, &new_shape, false)
+                (Storage::from_bits(data.dtype(), &new_data), new_shape, Device::CPU)
+        })
     }
 
     /// Permute (reorder) tensor axes
     ///
     /// # Arguments
     /// * `axes` - New ordering of axes (must be a valid permutation of 0..rank)
+    ///
     /// # Panics
-    /// invalid permutation axes
-    pub fn permute(self_t: &Tensor, axes: &[usize]) -> Tensor {
-        let req_grad = self_t.borrow().requires_grad;
+    /// If `axes` is not a permutation of `0..rank`: a repeated or out-of-range axis, or a
+    /// length other than the tensor's rank.
+    #[must_use]
+    #[track_caller]
+    pub fn permute(self_t: &Tensor, axes: &[Axis]) -> Tensor {
         let old_shape = self_t.borrow().shape.clone();
+        let axes: Vec<usize> = axes.iter().map(|a| a.0).collect();
 
         // Verify axes is a valid permutation
-        let mut sorted_axes = axes.to_vec();
+        let mut sorted_axes = axes.clone();
         sorted_axes.sort_unstable();
-        for (i, &ax) in sorted_axes.iter().enumerate() {
-            assert_eq!(i, ax, "Invalid permutation axes");
-        }
+        let rank = old_shape.rank();
+        assert!(
+            sorted_axes.iter().copied().eq(0..rank),
+            "permute: axes {axes:?} are not a permutation of 0..{rank} (shape {:?})",
+            old_shape.truncate_rank()
+        );
 
-        let out = Self::permute_impl(self_t, axes);
-        out.borrow_mut().requires_grad = req_grad;
+        let (storage, new_shape, device) = Self::permute_impl(self_t, &axes);
 
-        if req_grad {
-            out.borrow_mut().parents = vec![self_t.clone()];
-            out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
-                op: MovementOp::Permute {
-                    axes: axes.to_vec(),
-                },
-                original_shape: old_shape,
-            }));
-        }
-        out
+        Self::movement_edge(
+            self_t,
+            storage,
+            Shape::derived(new_shape),
+            device,
+            MovementOp::Permute { axes },
+            old_shape,
+        )
     }
 
     /// Expand (broadcast) tensor to larger shape
     ///
     /// Dimensions can only be expanded from size 1 to size N.
     /// Rank must remain the same.
+    ///
     /// # Panics
-    /// expand rank must match
+    ///
+    /// If `new_shape` is invalid, has a different rank, or a dimension is neither `1`
+    /// nor equal to the target. Use [`Self::try_expand`] to get an error instead.
+    #[must_use]
+    #[track_caller]
     pub fn expand(self_t: &Tensor, new_shape: &[usize]) -> Tensor {
-        const MAX_ALLOC: usize = 100_000_000;
-
-        let (data, old_shape, req_grad, device) = {
-            let s = self_t.borrow();
-            (
-                s.data.clone(),
-                s.shape.clone(),
-                s.requires_grad,
-                s.device.clone(),
-            )
-        };
-
-        assert_eq!(old_shape.len(), new_shape.len(), "Expand: rank must match");
-
-        // Verify broadcasting rules: old dims must be 1 or equal to new
-        for (old_d, new_d) in old_shape.iter().zip(new_shape) {
-            assert!(
-                *old_d == 1 || old_d == new_d,
-                "Cannot expand dimension {old_d} to {new_d}"
-            );
-        }
-
-        let new_size: usize = new_shape.iter().product();
-        assert!(
-            new_size <= MAX_ALLOC,
-            "Expand would create tensor with {new_size} elements (max: {MAX_ALLOC}). Check shapes {old_shape:?} -> {new_shape:?}"
-        );
-
-        // Try GPU path first if available
-        #[cfg(feature = "gpu")]
-        if device.is_gpu()
-            && let Some(storage) = Self::gpu_expand(&data, &old_shape, new_shape)
-        {
-            let out = Self::new_with_storage(storage, new_shape, device, req_grad);
-            if req_grad {
-                out.borrow_mut().parents = vec![self_t.clone()];
-                out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
-                    op: MovementOp::Expand {
-                        new_shape: new_shape.to_vec(),
-                    },
-                    original_shape: old_shape,
-                }));
-            }
-            return out;
-        }
-
-        // CPU fallback
-        let mut result = vec![0.0; new_size];
-        let cpu_data = data.to_vec();
-
-        // Broadcast by repeating values
-        let old_strides = Self::compute_strides(&old_shape);
-        let _new_strides = Self::compute_strides(new_shape);
-
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..new_size {
-            let mut old_idx = 0;
-            let mut rem = i;
-            for j in (0..new_shape.len()).rev() {
-                let dim_size = new_shape.get(j).copied().unwrap_or(1);
-                let coord = rem % dim_size;
-                rem /= dim_size;
-                if old_shape.get(j).copied().unwrap_or(1) != 1 {
-                    let stride = old_strides.get(j).copied().unwrap_or(1);
-                    old_idx += coord * stride;
-                }
-            }
-            if let Some(&src_val) = cpu_data.get(old_idx)
-                && let Some(slot) = result.get_mut(i)
-            {
-                *slot = src_val;
-            }
-        }
-
-        let out = Self::new(result, new_shape, req_grad);
-
-        if req_grad {
-            out.borrow_mut().parents = vec![self_t.clone()];
-            out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
-                op: MovementOp::Expand {
-                    new_shape: new_shape.to_vec(),
-                },
-                original_shape: old_shape,
-            }));
-        }
-        out
+        Self::try_expand(self_t, new_shape).or_panic("Expand")
     }
 
-    /// Pad tensor with zeros
+    /// Expand (broadcast) tensor to larger shape (fallible)
+    ///
+    /// # Errors
+    ///
+    /// `VoltaError::InvalidParameter` if `new_shape` is invalid (see [`Shape::from_dims`])
+    /// or has a different rank, `VoltaError::BroadcastError` if a dimension is neither
+    /// `1` nor equal to the target.
+    pub fn try_expand(self_t: &Tensor, new_shape: &[usize]) -> Result<Tensor> {
+        let dtype = self_t.dtype();
+        let out_shape = Shape::from_dims(new_shape)?;
+        let (data, old_shape, device) = {
+            let s = self_t.borrow();
+            (s.data.clone(), s.shape.clone(), s.device.clone())
+        };
+
+        if old_shape.rank() != new_shape.len() {
+            return Err(VoltaError::invalid(
+                "expand",
+                Some("shape"),
+                format!(
+                    "rank must match, got {:?} -> {new_shape:?}",
+                    old_shape.truncate_rank()
+                ),
+            ));
+        }
+
+        // Verify broadcasting rules: old dims must be 1 or equal to new
+        for (old_d, &new_d) in old_shape.iter().zip(new_shape) {
+            if old_d != 1 && old_d != new_d {
+                return Err(VoltaError::BroadcastError(
+                    old_shape.truncate_rank().to_vec(),
+                    new_shape.to_vec(),
+                ));
+            }
+        }
+
+        let new_size = out_shape.numel();
+
+        // GPU path when the kernel covers this case; a `None` from it is a failure.
+        let gpu_storage =
+            (device.is_gpu() && gpu_movement_supported(old_shape.rank())).then(|| {
+                Self::gpu_expand(&data, old_shape.truncate_rank(), new_shape)
+                    .unwrap_or_else(|| kernel_failed("Movement(Expand)"))
+            });
+        let (storage, out_device) = if let Some(storage) = gpu_storage {
+            (storage, device)
+        } else {
+            dispatch_bits!(dtype, B => {
+            let mut result = vec![B::default(); new_size];
+                        let cpu_data = data.bits::<B>().to_vec();
+
+                        // Broadcast by repeating values
+                        let old_strides = old_shape.strides();
+                        let old_strides = old_strides.truncate_rank();
+
+                        for i in 0..new_size {
+                            let mut old_idx = 0;
+                            let mut rem = i;
+                            for j in (0..new_shape.len()).rev() {
+                                let dim_size = fetch(new_shape, j);
+                                let coord = rem % dim_size;
+                                rem /= dim_size;
+                                if old_shape.dim_at(j) != 1 {
+                                    let stride = fetch(old_strides, j);
+                                    old_idx += coord * stride;
+                                }
+                            }
+                            *slot(&mut result, i) = fetch(&cpu_data, old_idx);
+                        }
+                        (Storage::from_bits(dtype, &result), Device::CPU)
+            })
+        };
+
+        Ok(Self::movement_edge(
+            self_t,
+            storage,
+            out_shape,
+            out_device,
+            MovementOp::Expand {
+                new_shape: new_shape.to_vec(),
+            },
+            old_shape,
+        ))
+    }
+
+    /// Pad a tensor, filling the new border with `value`.
     ///
     /// # Arguments
     /// * `padding` - For each dimension, (`left_pad`, `right_pad`)
+    /// * `value` - Fill for the border. Convolution wants [`PadValue::ZERO`];
+    ///   max pooling wants [`PadValue::NEG_INF`] (H1).
     /// # Panics
-    /// padding must match rank
-    pub fn pad(self_t: &Tensor, padding: &[(usize, usize)]) -> Tensor {
-        const MAX_ALLOC: usize = 100_000_000;
-
-        let (data, old_shape, req_grad, device) = {
-            let s = self_t.borrow();
-            (
-                s.data.clone(),
-                s.shape.clone(),
-                s.requires_grad,
-                s.device.clone(),
-            )
-        };
-
-        assert_eq!(
-            padding.len(),
-            old_shape.len(),
-            "Padding length must match rank"
-        );
-
-        let new_shape: Vec<usize> = old_shape
-            .iter()
-            .zip(padding)
-            .map(|(d, (l, r))| d + l + r)
-            .collect();
-
-        let new_size: usize = new_shape.iter().product();
-        assert!(
-            new_size <= MAX_ALLOC,
-            "Expand would create tensor with {new_size} elements (max: {MAX_ALLOC}). Check shapes {old_shape:?} -> {new_shape:?}"
-        );
-
-        // Try GPU path first if available
-        #[cfg(feature = "gpu")]
-        if device.is_gpu()
-            && let Some(storage) = Self::gpu_pad(&data, &old_shape, &new_shape, padding)
-        {
-            let out = Self::new_with_storage(storage, &new_shape, device, req_grad);
-            if req_grad {
-                out.borrow_mut().parents = vec![self_t.clone()];
-                out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
-                    op: MovementOp::Pad {
-                        padding: padding.to_vec(),
-                    },
-                    original_shape: old_shape,
-                }));
-            }
-            return out;
-        }
-
-        // CPU fallback
-        let mut result = vec![0.0; new_size];
-        let cpu_data = data.to_vec();
-
-        // Copy old data into padded positions
-        let old_strides = Self::compute_strides(&old_shape);
-        let new_strides = Self::compute_strides(&new_shape);
-        let mapper = PadMapper {
-            padding: padding.to_vec(),
-        };
-        let ctx = MovementContext::new(&old_shape, &new_shape, &old_strides, &new_strides);
-
-        apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
-
-        let out = Self::new(result, &new_shape, req_grad);
-
-        if req_grad {
-            out.borrow_mut().parents = vec![self_t.clone()];
-            out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
-                op: MovementOp::Pad {
-                    padding: padding.to_vec(),
-                },
-                original_shape: old_shape,
-            }));
-        }
-        out
+    /// Panics if `padding` does not match the rank or the padded shape is
+    /// invalid. Use [`Self::try_pad_with`] to get an error instead.
+    #[must_use]
+    #[track_caller]
+    pub fn pad_with(self_t: &Tensor, padding: &[(usize, usize)], value: PadValue) -> Tensor {
+        Self::try_pad_with(self_t, padding, value).or_panic("Pad")
     }
 
-    /// Extract a sub-region of the tensor
+    /// Fallible version of [`Self::pad_with`].
     ///
-    /// # Arguments
-    /// * `ranges` - For each dimension, (start, end) indices
-    /// # Panics
+    /// # Errors
+    /// * `VoltaError::InvalidParameter` - `padding.len()` differs from the rank, or a padded
+    ///   dimension `d + left + right` overflows `usize`
+    /// * Any `Shape::from_dims` error for the padded shape (zero dim, over the element cap)
+    pub fn try_pad_with(
+        self_t: &Tensor,
+        padding: &[(usize, usize)],
+        value: PadValue,
+    ) -> Result<Tensor> {
+        use crate::error::VoltaError;
+        let dtype = self_t.dtype();
+
+        let (data, old_shape, device) = {
+            let s = self_t.borrow();
+            (s.data.clone(), s.shape.clone(), s.device.clone())
+        };
+
+        if padding.len() != old_shape.rank() {
+            return Err(VoltaError::invalid(
+                "pad",
+                Some("padding"),
+                format!(
+                    "padding length ({}) must match tensor rank ({})",
+                    padding.len(),
+                    old_shape.rank()
+                ),
+            ));
+        }
+
+        // Checked: a user-supplied width can overflow `usize` (#96).
+        let new_shape =
+            old_shape
+                .iter()
+                .zip(padding)
+                .enumerate()
+                .map(|(dim, (d, (l, r)))| {
+                    d.checked_add(*l)
+                    .and_then(|n| n.checked_add(*r))
+                    .ok_or_else(|| {
+                        VoltaError::invalid("pad", Some("padding"), format!(
+                            "padding ({l}, {r}) for dimension {dim} of size {d} overflows usize"
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<usize>>>()?;
+
+        let out_shape = Shape::from_dims(new_shape.clone())?;
+        let new_size = out_shape.numel();
+
+        // GPU path when the kernel covers this case; a `None` from it is a failure.
+        let gpu_storage = (device.is_gpu() && gpu_pad_supported(padding)).then(|| {
+            Self::gpu_pad(&data, old_shape.truncate_rank(), &new_shape, padding, value)
+                .unwrap_or_else(|| kernel_failed("Movement(Pad)"))
+        });
+        let (storage, out_device) = if let Some(storage) = gpu_storage {
+            (storage, device)
+        } else {
+            // CPU path. `PadMapper` only writes the interior, so the fill is the border.
+            dispatch_bits!(dtype, B => {
+            let mut result = vec![fill_bits::<B>(dtype, value.get()); new_size];
+                        let cpu_data = data.bits::<B>().to_vec();
+
+                        // Copy old data into padded positions
+                        let old_strides = old_shape.strides();
+                        let old_strides = old_strides.truncate_rank();
+                        let new_strides = Strides::from_shape(&new_shape);
+                        let new_strides = new_strides.truncate_rank();
+                        let mapper = PadMapper {
+                            padding: padding.to_vec(),
+                        };
+                        let ctx = MovementContext::new(
+                            old_shape.truncate_rank(),
+                            &new_shape,
+                            old_strides,
+                            new_strides,
+                        );
+
+                        apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
+                        (Storage::from_bits(dtype, &result), Device::CPU)
+            })
+        };
+
+        Ok(Self::movement_edge(
+            self_t,
+            storage,
+            out_shape,
+            out_device,
+            MovementOp::Pad {
+                padding: padding.to_vec(),
+            },
+            old_shape,
+        ))
+    }
+
     /// Validate shrink ranges for bounds checking
     ///
     /// Ensures that:
@@ -939,35 +1096,51 @@ impl RawTensor {
 
         // Validate rank match
         if ranges.len() != shape.len() {
-            return Err(VoltaError::InvalidParameter(format!(
-                "Shrink ranges length ({}) must match tensor rank ({})",
-                ranges.len(),
-                shape.len()
-            )));
+            return Err(VoltaError::invalid(
+                "shrink",
+                Some("ranges"),
+                format!(
+                    "ranges length ({}) must match tensor rank ({})",
+                    ranges.len(),
+                    shape.len()
+                ),
+            ));
         }
 
         // Validate each range
         for (dim, (&(start, end), &dim_size)) in ranges.iter().zip(shape.iter()).enumerate() {
             // Check range order
             if start > end {
-                return Err(VoltaError::InvalidParameter(format!(
-                    "Invalid shrink range for dimension {dim}: start ({start}) exceeds end ({end})"
-                )));
+                return Err(VoltaError::invalid(
+                    "shrink",
+                    Some("ranges"),
+                    format!(
+                        "invalid range for dimension {dim}: start ({start}) exceeds end ({end})"
+                    ),
+                ));
             }
 
             // Check end bound
             if end > dim_size {
-                return Err(VoltaError::DimensionOutOfBounds {
-                    dim,
-                    shape: shape.to_vec(),
-                });
+                return Err(VoltaError::invalid(
+                    "shrink",
+                    Some("ranges"),
+                    format!(
+                        "range ({start}, {end}) for dimension {dim} ends past its size {dim_size} \
+                         (shape {shape:?})"
+                    ),
+                ));
             }
 
             // Check for empty range
             if start == end {
-                return Err(VoltaError::InvalidParameter(format!(
-                    "Invalid shrink range for dimension {dim}: start equals end ({start}), creates zero-sized dimension"
-                )));
+                return Err(VoltaError::invalid(
+                    "shrink",
+                    Some("ranges"),
+                    format!(
+                        "invalid range for dimension {dim}: start equals end ({start}), creates zero-sized dimension"
+                    ),
+                ));
             }
         }
 
@@ -990,8 +1163,10 @@ impl RawTensor {
     /// - If any range has `start > end`
     /// - If any range has `end > dimension size`
     /// - If any range has `start == end` (zero-sized dimension)
+    #[must_use]
+    #[track_caller]
     pub fn shrink(self_t: &Tensor, ranges: &[(usize, usize)]) -> Tensor {
-        Self::try_shrink(self_t, ranges).expect("Invalid shrink ranges")
+        Self::try_shrink(self_t, ranges).or_panic("shrink")
     }
 
     /// Try to shrink tensor to specified ranges for each dimension
@@ -1013,88 +1188,106 @@ impl RawTensor {
     ///   - Any range has `start == end` (zero-sized dimension)
     /// * `VoltaError::DimensionOutOfBounds` - If any range has `end > dimension size`
     pub fn try_shrink(self_t: &Tensor, ranges: &[(usize, usize)]) -> Result<Tensor> {
-        let (data, old_shape, req_grad, device) = {
+        let dtype = self_t.dtype();
+        let (data, old_shape, device) = {
             let s = self_t.borrow();
-            (
-                s.data.clone(),
-                s.shape.clone(),
-                s.requires_grad,
-                s.device.clone(),
-            )
+            (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
         // Validate ranges before any computation
-        Self::validate_shrink_ranges(&old_shape, ranges)?;
+        Self::validate_shrink_ranges(old_shape.truncate_rank(), ranges)?;
 
         let new_shape: Vec<usize> = ranges.iter().map(|(start, end)| end - start).collect();
 
-        // Try GPU path first if available
-        #[cfg(feature = "gpu")]
-        if device.is_gpu()
-            && let Some(storage) = Self::gpu_shrink(&data, &old_shape, &new_shape, ranges)
-        {
-            let out = Self::new_with_storage(storage, &new_shape, device, req_grad);
-            if req_grad {
-                out.borrow_mut().parents = vec![self_t.clone()];
-                out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
-                    op: MovementOp::Shrink {
-                        ranges: ranges.to_vec(),
-                    },
-                    original_shape: old_shape,
-                }));
-            }
-            return Ok(out);
-        }
+        // GPU path when the kernel covers this case; a `None` from it is a failure.
+        let gpu_storage =
+            (device.is_gpu() && gpu_movement_supported(old_shape.rank())).then(|| {
+                Self::gpu_shrink(&data, old_shape.truncate_rank(), &new_shape, ranges)
+                    .unwrap_or_else(|| kernel_failed("Movement(Shrink)"))
+            });
+        let (storage, out_device) = if let Some(storage) = gpu_storage {
+            (storage, device)
+        } else {
+            dispatch_bits!(dtype, B => {
+            let new_size: usize = new_shape.iter().product();
+                        let mut result = vec![B::default(); new_size];
+                        let cpu_data = data.bits::<B>().to_vec();
 
-        // CPU fallback
-        let new_size: usize = new_shape.iter().product();
-        let mut result = vec![0.0; new_size];
-        let cpu_data = data.to_vec();
+                        let old_strides = old_shape.strides();
+                        let old_strides = old_strides.truncate_rank();
+                        let new_strides = Strides::from_shape(&new_shape);
+                        let new_strides = new_strides.truncate_rank();
+                        let mapper = ShrinkMapper {
+                            ranges: ranges.to_vec(),
+                        };
+                        let ctx = MovementContext::new(
+                            old_shape.truncate_rank(),
+                            &new_shape,
+                            old_strides,
+                            new_strides,
+                        );
 
-        let old_strides = Self::compute_strides(&old_shape);
-        let new_strides = Self::compute_strides(&new_shape);
-        let mapper = ShrinkMapper {
-            ranges: ranges.to_vec(),
+                        apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
+                        (Storage::from_bits(dtype, &result), Device::CPU)
+            })
         };
-        let ctx = MovementContext::new(&old_shape, &new_shape, &old_strides, &new_strides);
 
-        apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
-
-        let out = Self::new(result, &new_shape, req_grad);
-
-        if req_grad {
-            out.borrow_mut().parents = vec![self_t.clone()];
-            out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
-                op: MovementOp::Shrink {
-                    ranges: ranges.to_vec(),
-                },
-                original_shape: old_shape,
-            }));
-        }
-        Ok(out)
+        Ok(Self::movement_edge(
+            self_t,
+            storage,
+            Shape::derived(new_shape),
+            out_device,
+            MovementOp::Shrink {
+                ranges: ranges.to_vec(),
+            },
+            old_shape,
+        ))
     }
 
     /// Subsample tensor with specified strides
     ///
     /// Similar to slicing with step: array\[`::2`\] takes every other element
+    ///
     /// # Panics
-    /// Strides length must match rank
+    /// If `strides.len()` differs from the tensor's rank, or a stride is zero. Use
+    /// [`Self::try_stride_op`] to get an error instead.
+    #[must_use]
+    #[track_caller]
     pub fn stride_op(self_t: &Tensor, strides: &[usize]) -> Tensor {
-        let (data, old_shape, req_grad, device) = {
+        Self::try_stride_op(self_t, strides).or_panic("Stride")
+    }
+
+    /// Fallible version of [`Self::stride_op`].
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` if `strides.len()` differs from the rank or a stride is
+    /// zero (strides must be >= 1).
+    pub fn try_stride_op(self_t: &Tensor, strides: &[usize]) -> Result<Tensor> {
+        use crate::error::VoltaError;
+        let dtype = self_t.dtype();
+        let (data, old_shape, device) = {
             let s = self_t.borrow();
-            (
-                s.data.clone(),
-                s.shape.clone(),
-                s.requires_grad,
-                s.device.clone(),
-            )
+            (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
-        assert_eq!(
-            strides.len(),
-            old_shape.len(),
-            "Strides length must match rank"
-        );
+        if strides.len() != old_shape.rank() {
+            return Err(VoltaError::invalid(
+                "stride",
+                Some("strides"),
+                format!(
+                    "strides length ({}) must match tensor rank ({})",
+                    strides.len(),
+                    old_shape.rank()
+                ),
+            ));
+        }
+        if let Some(dim) = strides.iter().position(|&s| s == 0) {
+            return Err(VoltaError::invalid(
+                "stride",
+                Some("strides"),
+                format!("stride 0 for dimension {dim} (strides must be >= 1)"),
+            ));
+        }
 
         let new_shape: Vec<usize> = old_shape
             .iter()
@@ -1102,67 +1295,97 @@ impl RawTensor {
             .map(|(d, s)| d.div_ceil(*s))
             .collect();
 
-        // Try GPU path first if available
-        #[cfg(feature = "gpu")]
-        if device.is_gpu()
-            && let Some(storage) = Self::gpu_stride(&data, &old_shape, &new_shape, strides)
-        {
-            let out = Self::new_with_storage(storage, &new_shape, device, req_grad);
-            if req_grad {
-                out.borrow_mut().parents = vec![self_t.clone()];
-                out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
-                    op: MovementOp::Stride {
-                        strides: strides.to_vec(),
-                    },
-                    original_shape: old_shape,
-                }));
-            }
-            return out;
-        }
+        // GPU path when the kernel covers this case; a `None` from it is a failure.
+        let gpu_storage =
+            (device.is_gpu() && gpu_movement_supported(old_shape.rank())).then(|| {
+                Self::gpu_stride(&data, old_shape.truncate_rank(), &new_shape, strides)
+                    .unwrap_or_else(|| kernel_failed("Movement(Stride)"))
+            });
+        let (storage, out_device) = if let Some(storage) = gpu_storage {
+            (storage, device)
+        } else {
+            dispatch_bits!(dtype, B => {
+            let new_size: usize = new_shape.iter().product();
+                        let mut result = vec![B::default(); new_size];
+                        let cpu_data = data.bits::<B>().to_vec();
 
-        // CPU fallback
-        let new_size: usize = new_shape.iter().product();
-        let mut result = vec![0.0; new_size];
-        let cpu_data = data.to_vec();
+                        let old_strides_mem = old_shape.strides();
+                        let old_strides_mem = old_strides_mem.truncate_rank();
+                        let new_strides_mem = Strides::from_shape(&new_shape);
+                        let new_strides_mem = new_strides_mem.truncate_rank();
+                        let mapper = StrideMapper {
+                            strides: strides.to_vec(),
+                        };
+                        let ctx = MovementContext::new(
+                            old_shape.truncate_rank(),
+                            &new_shape,
+                            old_strides_mem,
+                            new_strides_mem,
+                        );
 
-        let old_strides_mem = Self::compute_strides(&old_shape);
-        let new_strides_mem = Self::compute_strides(&new_shape);
-        let mapper = StrideMapper {
-            strides: strides.to_vec(),
+                        apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
+                        (Storage::from_bits(dtype, &result), Device::CPU)
+            })
         };
-        let ctx = MovementContext::new(&old_shape, &new_shape, &old_strides_mem, &new_strides_mem);
 
-        apply_movement_forward(&ctx, &mut result, &cpu_data, 0, &mapper, 0, 0);
+        Ok(Self::movement_edge(
+            self_t,
+            storage,
+            Shape::derived(new_shape),
+            out_device,
+            MovementOp::Stride {
+                strides: strides.to_vec(),
+            },
+            old_shape,
+        ))
+    }
+}
 
-        let out = Self::new(result, &new_shape, req_grad);
+#[cfg(test)]
+mod tests {
+    use super::{assert_in_dim, gpu_movement_supported, gpu_pad_supported};
 
-        if req_grad {
-            out.borrow_mut().parents = vec![self_t.clone()];
-            out.borrow_mut().grad_fn = Some(Box::new(MovementGradFn {
-                op: MovementOp::Stride {
-                    strides: strides.to_vec(),
-                },
-                original_shape: old_shape,
-            }));
-        }
-        out
+    /// The GPU movement kernels take up to four dims (#389: every mutant of this survived).
+    #[test]
+    fn gpu_movement_covers_rank_four_and_below() {
+        assert!(gpu_movement_supported(1));
+        assert!(gpu_movement_supported(4));
+        assert!(!gpu_movement_supported(5));
     }
 
-    /// Compute memory strides for row-major layout
-    ///
-    /// For shape [3, 4, 5], strides are [20, 5, 1]
-    /// This tells us how many elements to skip to move one step in each dimension.
-    #[must_use]
-    pub fn compute_strides(shape: &[usize]) -> Vec<usize> {
-        let mut strides = vec![1; shape.len()];
-        for i in (0..shape.len().saturating_sub(1)).rev() {
-            if let Some(&stride_val) = strides.get(i + 1)
-                && let Some(&shape_val) = shape.get(i + 1)
-                && let Some(slot) = strides.get_mut(i)
-            {
-                *slot = stride_val * shape_val;
-            }
-        }
-        strides
+    /// Pad widths of dims 2 and 3 are packed as 16-bit halves, so each must fit in a `u16`;
+    /// dims 0 and 1 are not packed.
+    #[test]
+    fn gpu_pad_needs_rank_four_and_16_bit_widths_on_dims_two_and_three() {
+        let max = usize::from(u16::MAX);
+        assert!(gpu_pad_supported(&[(0, 0), (0, 0), (max, max), (max, max)]));
+        assert!(gpu_pad_supported(&[
+            (max + 1, max + 1),
+            (max + 1, 0),
+            (1, 1)
+        ]));
+        assert!(!gpu_pad_supported(&[(0, 0), (0, 0), (max + 1, 0), (0, 0)]));
+        assert!(!gpu_pad_supported(&[(0, 0), (0, 0), (0, max + 1), (0, 0)]));
+        assert!(!gpu_pad_supported(&[(0, 0), (0, 0), (0, 0), (max + 1, 0)]));
+        assert!(!gpu_pad_supported(&[(0, 0), (0, 0), (0, 0), (0, max + 1)]));
+        assert!(!gpu_pad_supported(&[(0, 0); 5]));
+    }
+
+    /// The guard names a mapper bug at its site, before `fetch` would fail further on.
+    #[test]
+    #[should_panic(expected = "movement: axis 1 maps to input index 3 (size 3)")]
+    fn assert_in_dim_rejects_an_input_index_past_the_axis() {
+        assert_in_dim(1, 3, 3, 0, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "and output index 2 (size 2)")]
+    fn assert_in_dim_rejects_an_output_index_past_the_axis() {
+        assert_in_dim(1, 0, 3, 2, 2);
+    }
+
+    #[test]
+    fn assert_in_dim_accepts_the_last_index() {
+        assert_in_dim(0, 2, 3, 1, 2);
     }
 }

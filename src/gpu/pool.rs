@@ -18,9 +18,9 @@ use std::sync::Mutex;
 #[derive(Debug, Clone)]
 pub struct BufferPoolConfig {
     /// Maximum number of buffers per size bucket
-    pub max_buffers_per_bucket: usize,
+    pub bucket_capacity: usize,
     /// Maximum total buffers across all buckets
-    pub max_total_buffers: usize,
+    pub total_capacity: usize,
     /// Maximum buffer size (in bytes) to pool (larger buffers are not pooled)
     pub max_pooled_size: usize,
 }
@@ -28,8 +28,8 @@ pub struct BufferPoolConfig {
 impl Default for BufferPoolConfig {
     fn default() -> Self {
         Self {
-            max_buffers_per_bucket: 8,         // Keep up to 8 buffers of each size
-            max_total_buffers: 64,             // Total pool capacity
+            bucket_capacity: 8,                // Keep up to 8 buffers of each size
+            total_capacity: 64,                // Total pool capacity
             max_pooled_size: 64 * 1024 * 1024, // Pool buffers up to 64MB
         }
     }
@@ -52,6 +52,11 @@ impl Default for BufferPoolConfig {
 ///
 /// All operations are protected by a Mutex, making the pool safe for concurrent
 /// access (though Volta is currently single-threaded, this future-proofs the design).
+///
+/// A poisoned lock is recovered rather than propagated: each critical section only
+/// pushes, pops, or adjusts a count, with nothing in between that can panic, so the
+/// pool is consistent after a panic elsewhere; and one panicking thread (a failing
+/// test) must not break every later GPU call.
 pub struct BufferPool {
     /// Free buffers organized by size bucket (key = log2(size))
     buckets: Mutex<HashMap<u32, VecDeque<wgpu::Buffer>>>,
@@ -70,12 +75,6 @@ impl BufferPool {
             config,
             total_count: Mutex::new(0),
         }
-    }
-
-    /// Create a buffer pool with default configuration
-    #[must_use]
-    pub fn with_defaults() -> Self {
-        Self::new(BufferPoolConfig::default())
     }
 
     /// Round size up to next power of 2 and return the bucket index (log2)
@@ -111,6 +110,18 @@ impl BufferPool {
         Self::bucket_to_size(bucket)
     }
 
+    /// The byte size to allocate for a request of `min_size` bytes: its power-of-two bucket
+    /// if the pool takes buffers that large, else `min_size` itself (such a buffer is
+    /// never pooled, so rounding it up would only waste up to half of it, #306).
+    #[must_use]
+    pub const fn allocation_size_for(&self, min_size: usize) -> usize {
+        if min_size > self.config.max_pooled_size {
+            min_size
+        } else {
+            Self::allocation_size(min_size)
+        }
+    }
+
     /// Try to acquire a buffer from the pool
     ///
     /// Returns `Some(buffer)` if a suitable buffer is available,
@@ -118,8 +129,6 @@ impl BufferPool {
     ///
     /// # Arguments
     /// * `min_size` - Minimum required size in bytes
-    /// # Panics
-    /// Unwrapping bucket mutex
     pub fn acquire(&self, min_size: usize) -> Option<wgpu::Buffer> {
         if min_size > self.config.max_pooled_size {
             return None; // Too large to pool
@@ -127,10 +136,17 @@ impl BufferPool {
 
         let bucket = Self::size_to_bucket(min_size);
 
-        if let Some(queue) = self.buckets.lock().unwrap().get_mut(&bucket)
+        if let Some(queue) = self
+            .buckets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_mut(&bucket)
             && let Some(buffer) = queue.pop_front()
         {
-            let mut count = self.total_count.lock().unwrap();
+            let mut count = self
+                .total_count
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             *count = count.saturating_sub(1);
             drop(count);
             return Some(buffer);
@@ -148,8 +164,6 @@ impl BufferPool {
     /// # Arguments
     /// * `buffer` - The GPU buffer to return
     /// * `size` - The buffer size in bytes
-    /// # Panics
-    /// Unwrapping bucket mutex
     #[expect(
         clippy::significant_drop_tightening,
         reason = "Attempts to fix by merging the constructon with its single usage leads to other errors, will come back to fix this."
@@ -160,18 +174,24 @@ impl BufferPool {
         }
 
         let bucket = Self::size_to_bucket(size);
-        let mut buckets = self.buckets.lock().unwrap();
-        let mut count = self.total_count.lock().unwrap();
+        let mut buckets = self
+            .buckets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut count = self
+            .total_count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         // Check total capacity
-        if *count >= self.config.max_total_buffers {
+        if *count >= self.config.total_capacity {
             return false; // Pool full
         }
 
         let queue = buckets.entry(bucket).or_default();
 
         // Check per-bucket capacity
-        if queue.len() >= self.config.max_buffers_per_bucket {
+        if queue.len() >= self.config.bucket_capacity {
             return false; // Bucket full
         }
 
@@ -184,43 +204,34 @@ impl BufferPool {
     ///
     /// This immediately frees all GPU memory held by the pool.
     /// Useful for reducing memory pressure or before shutdown.
-    /// # Panics
-    /// Unwrapping bucket mutex
     pub fn clear(&self) {
-        self.buckets.lock().unwrap().clear();
-        *self.total_count.lock().unwrap() = 0;
+        self.buckets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        *self
+            .total_count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = 0;
     }
 
     /// Get statistics about pool usage
-    /// # Panics
-    /// Unwrapping bucket mutex
-    #[allow(dead_code)]
-    pub fn stats(&self) -> BufferPoolStats {
-        let total = *self.total_count.lock().unwrap();
-
-        let bucket_stats: Vec<(usize, usize)> = self
-            .buckets
+    pub(crate) fn stats(&self) -> BufferPoolStats {
+        let total = *self
+            .total_count
             .lock()
-            .unwrap()
-            .iter()
-            .map(|(&bucket, queue)| (Self::bucket_to_size(bucket), queue.len()))
-            .collect();
-
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         BufferPoolStats {
             total_pooled: total,
-            buckets: bucket_stats,
         }
     }
 }
 
 /// Statistics about buffer pool usage
 #[derive(Debug)]
-#[allow(dead_code)]
-pub struct BufferPoolStats {
+pub(crate) struct BufferPoolStats {
     /// Total number of buffers currently in the pool
     pub total_pooled: usize,
-    /// Buffer counts per bucket (`bucket_size`, count)
-    pub buckets: Vec<(usize, usize)>,
 }
 
 #[cfg(test)]
@@ -269,8 +280,8 @@ mod tests {
     #[test]
     fn test_config_limits() {
         let config = BufferPoolConfig {
-            max_buffers_per_bucket: 2,
-            max_total_buffers: 4,
+            bucket_capacity: 2,
+            total_capacity: 4,
             max_pooled_size: 1024,
         };
         let pool = BufferPool::new(config);

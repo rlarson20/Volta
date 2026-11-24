@@ -1,17 +1,15 @@
-// Super Resolution using Efficient Sub-Pixel Convolution
-//
-// This example demonstrates the PixelShuffle layer for image upscaling,
-// implementing the ESPCN architecture from:
-// "Real-Time Single Image and Video Super-Resolution Using an Efficient
-// Sub-Pixel Convolutional Neural Network" (Shi et al., 2016)
-//
-// Since Volta doesn't have image I/O yet, we use synthetic data to demonstrate
-// the architecture and training process.
+//! Super Resolution using Efficient Sub-Pixel Convolution
+//!
+//! This example demonstrates the `PixelShuffle` layer for image upscaling,
+//! implementing the ESPCN architecture from:
+//! "Real-Time Single Image and Video Super-Resolution Using an Efficient
+//! Sub-Pixel Convolutional Neural Network" (Shi et al., 2016)
+//!
+//! Since Volta doesn't have image I/O yet, we use synthetic data to demonstrate
+//! the architecture and training process.
 
-use volta::{
-    Adam, Conv2d, Module, PixelShuffle, RawTensor, ReLU, Sequential, TensorOps, manual_seed,
-    mse_loss,
-};
+use volta::nn::{Adam, Conv2d, Layer, Module, PixelShuffle, ReLU, Sequential};
+use volta::{RawTensor, manual_seed, mse_loss};
 
 fn main() {
     manual_seed(42);
@@ -66,7 +64,7 @@ fn main() {
     println!();
 
     let params = model.parameters();
-    let total_params: usize = params.iter().map(|p| p.borrow().data.len()).sum();
+    let total_params: usize = params.iter().map(|p| p.data().len()).sum();
     println!("Total parameters: {total_params}\n");
 
     // Create optimizer (lr, betas, eps, weight_decay)
@@ -75,6 +73,8 @@ fn main() {
     println!("Training...\n");
 
     // Training loop
+    let mut first_loss = f32::NAN;
+    let mut final_loss = f32::NAN;
     for epoch in 1..=num_epochs {
         // Generate synthetic training data
         // Low-res: smooth gradients, High-res: sharper version with more detail
@@ -85,16 +85,15 @@ fn main() {
 
         // Compute MSE loss
         let loss_tensor = mse_loss(&output, &high_res);
-        let loss_value = loss_tensor
-            .borrow()
-            .data
-            .first()
-            .copied()
-            .unwrap_or(f32::NAN);
+        let loss_value = loss_tensor.item();
+        final_loss = loss_value;
+        if epoch == 1 {
+            first_loss = loss_value;
+        }
 
         // Backward pass
         optimizer.zero_grad();
-        loss_tensor.backward();
+        loss_tensor.into_loss().expect("scalar loss").backward();
         optimizer.step();
 
         // Print progress
@@ -104,17 +103,23 @@ fn main() {
     }
 
     println!("\n=== Training Complete ===\n");
+    // The CI smoke run (`just examples-smoke`) relies on this: a NaN or a loss that never
+    // drops exits non-zero.
+    assert!(
+        final_loss.is_finite() && final_loss < first_loss,
+        "training did not reduce the loss: first {first_loss}, final {final_loss}"
+    );
 
     // Demonstrate upscaling on a test pattern
     println!("Testing on a simple checkerboard pattern...");
     let test_input = create_test_pattern(1, low_res_size);
     let test_output = model.forward(&test_input);
 
-    println!("  Input shape:  {:?}", test_input.borrow().shape);
-    println!("  Output shape: {:?}", test_output.borrow().shape);
+    println!("  Input shape:  {:?}", test_input.shape());
+    println!("  Output shape: {:?}", test_output.shape());
 
     // Show a slice of the output to verify reasonable values
-    let out_data = &test_output.borrow().data;
+    let out_data = test_output.data();
     println!(
         "  Output range: [{:.3}, {:.3}]",
         out_data.iter().copied().fold(f32::INFINITY, f32::min),
@@ -128,7 +133,6 @@ fn main() {
 ///
 /// Creates smooth low-resolution images and corresponding high-resolution targets
 /// with added detail/frequency content to simulate the super-resolution task
-#[allow(clippy::cast_precision_loss)]
 fn generate_synthetic_data(
     batch_size: usize,
     low_res_size: usize,
@@ -139,7 +143,7 @@ fn generate_synthetic_data(
 
     // High-res: start with upsampled version of low-res (via simple repetition),
     // then add high-frequency detail
-    let lr_data = low_res.borrow().data.to_vec();
+    let lr_data = low_res.data();
     let mut hr_data = Vec::with_capacity(batch_size * high_res_size * high_res_size);
 
     let scale = high_res_size / low_res_size;
@@ -151,7 +155,7 @@ fn generate_synthetic_data(
                 let lr_y = y / scale;
                 let lr_x = x / scale;
                 let lr_idx = b * low_res_size * low_res_size + lr_y * low_res_size + lr_x;
-                let base_value = lr_data.get(lr_idx).copied().unwrap_or(0.0);
+                let base_value = lr_data.get(lr_idx).copied().expect("index in range");
 
                 // Add some high-frequency detail using a deterministic pattern
                 // This simulates texture/edges that should be learned

@@ -1,61 +1,40 @@
-#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-use std::path::Path;
-use volta::{
-    Conv2d, DataLoader, Dropout, Flatten, Linear, MaxPool2d, Module, ProgressBar, RawTensor, ReLU,
-    SGD, Sequential, TensorOps, load_mnist_images, load_mnist_labels, to_one_hot,
+//! MNIST CNN training: two `Conv2d` + `ReLU` layers, `MaxPool2d`, dropout, and two `Linear` layers, fed by a shuffling `DataLoader` and trained with `SGD`.
+//!
+//! Trains on the 60,000-image `train` split and reports accuracy on the held-out 10,000-image `t10k` split.
+//!
+//! Needs the MNIST files under `data/mnist`; if they are missing it prints how to download them and exits, rather than train on made-up data.
+#[path = "common/mnist.rs"]
+mod mnist;
+use volta::nn::{
+    Conv2d, Dropout, Flatten, Layer, Linear, MaxPool2d, Module, ReLU, SGD, Sequential,
 };
+use volta::utils::ProgressBar;
+use volta::{DataLoader, RawTensor};
 
-#[allow(clippy::too_many_lines)]
+/// Per-sample input shape: NCHW without the batch, 1 channel of 28x28 pixels.
+const SAMPLE_SHAPE: &[usize] = &[1, 28, 28];
+
 fn main() {
     println!("=== MNIST CNN Training ===\n");
 
-    // Try to load MNIST data
     let mnist_dir = "data/mnist";
-    let train_images_path = format!("{mnist_dir}/train-images-idx3-ubyte");
-    let train_labels_path = format!("{mnist_dir}/train-labels-idx1-ubyte");
-
-    let (image_data, label_data, num_samples) = if Path::new(&train_images_path).exists()
-        && Path::new(&train_labels_path).exists()
-    {
-        println!("Loading MNIST data from {mnist_dir}...");
-
-        let images = load_mnist_images(&train_images_path).expect("Failed to load MNIST images");
-        let labels = load_mnist_labels(&train_labels_path).expect("Failed to load MNIST labels");
-
-        let num_samples = labels.len();
-        let label_data = to_one_hot(&labels, 10);
-
-        println!("Loaded {num_samples} training samples");
-        (images, label_data, num_samples)
-    } else {
-        println!("MNIST data not found. Using synthetic data for demonstration.");
-        println!("\nTo download MNIST data:");
-        println!("  mkdir -p data/mnist");
-        println!("  cd data/mnist");
-        println!("  curl -O http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz");
-        println!("  curl -O http://yann.lecun.com/exdb/mnist/train-labels-idx1-ubyte.gz");
-        println!("  gunzip *.gz");
-        println!();
-
-        // Generate synthetic data
-        let num_samples = 1024;
-        let image_data: Vec<f32> = (0..num_samples * 28 * 28)
-            .map(|i| (i % 255) as f32 / 255.0)
-            .collect();
-        let labels: Vec<u8> = (0..num_samples).map(|i| (i % 10) as u8).collect();
-        let label_data = to_one_hot(&labels, 10);
-
-        println!("Generated {num_samples} synthetic samples");
-        (image_data, label_data, num_samples)
-    };
+    println!("Loading MNIST data from {mnist_dir}...");
+    let train = mnist::load_split(mnist_dir, "train");
+    // Held-out set: accuracy is measured on these 10,000 images, never trained on.
+    let test = mnist::load_split(mnist_dir, "t10k");
+    let num_samples = train.len;
+    println!(
+        "Loaded {num_samples} training and {} test samples",
+        test.len
+    );
 
     // Create DataLoader
     let batch_size = 64;
     let mut dataloader = DataLoader::new(
-        image_data,
-        label_data,
-        &[1, 28, 28], // NCHW format: 1 channel, 28x28 pixels
-        &[10],        // 10-class one-hot labels
+        train.images,
+        train.labels,
+        SAMPLE_SHAPE,
+        &[10], // 10-class one-hot labels
         batch_size,
         true, // shuffle
     );
@@ -88,13 +67,14 @@ fn main() {
     println!("  Linear(9216→128) → ReLU → Dropout(0.5) → Linear(128→10)");
     println!(
         "\nTraining with {} batches per epoch...\n",
-        num_samples / batch_size
+        num_samples.div_ceil(batch_size)
     );
 
     // Training
     model.train(true);
     let num_epochs = 10;
-    let total_batches = num_samples / batch_size;
+    // The loader yields the last, partial batch too.
+    let total_batches = num_samples.div_ceil(batch_size);
 
     for epoch in 0..num_epochs {
         dataloader.reset();
@@ -110,10 +90,10 @@ fn main() {
             optimizer.zero_grad();
             let output = model.forward(&batch_x);
             let loss = RawTensor::cross_entropy_loss(&output, &batch_y);
-            loss.backward();
+            loss.clone().into_loss().expect("scalar loss").backward();
             optimizer.step();
 
-            epoch_loss += loss.borrow().data.first().copied().unwrap_or(0.0);
+            epoch_loss += loss.item();
             num_batches += 1;
             progress.update(num_batches);
         }
@@ -125,29 +105,46 @@ fn main() {
     // Test accuracy
     println!("\n=== Testing ===");
     model.train(false);
-    dataloader.reset();
 
+    // A separate, unshuffled loader over the t10k split.
+    let mut test_loader = DataLoader::new(
+        test.images,
+        test.labels,
+        SAMPLE_SHAPE,
+        &[10],
+        batch_size,
+        false,
+    );
     let mut total_correct = 0;
     let mut total_samples = 0;
-    let mut progress = ProgressBar::new(total_batches, "Testing");
+    let mut progress = ProgressBar::new(test.len.div_ceil(batch_size), "Testing");
 
-    for (test_x, test_y) in &mut dataloader {
+    for (test_x, test_y) in &mut test_loader {
         let output = model.forward(&test_x);
-        let pred_data = &output.borrow().data;
-        let target_data = &test_y.borrow().data;
-        let batch_size = test_y.borrow().shape.first().copied().unwrap_or(1);
+        let pred_data = output.data();
+        let target_data = test_y.data();
+        let batch_size = test_y
+            .shape()
+            .dim(volta::Axis(0))
+            .expect("test labels have a batch dim");
 
         for i in 0..batch_size {
             let pred_class = (0..10)
                 .max_by(|&a, &b| {
-                    let val_a = pred_data.get(i * 10 + a).copied().unwrap_or(f32::NAN);
-                    let val_b = pred_data.get(i * 10 + b).copied().unwrap_or(f32::NAN);
+                    let val_a = pred_data.get(i * 10 + a).copied().expect("index in range");
+                    let val_b = pred_data.get(i * 10 + b).copied().expect("index in range");
                     val_a.partial_cmp(&val_b).unwrap()
                 })
                 .unwrap();
 
             let true_class = (0..10)
-                .position(|j| target_data.get(i * 10 + j).copied().unwrap_or(0.0) > 0.5)
+                .position(|j| {
+                    target_data
+                        .get(i * 10 + j)
+                        .copied()
+                        .expect("index in range")
+                        > 0.5
+                })
                 .unwrap();
 
             if pred_class == true_class {
@@ -160,5 +157,6 @@ fn main() {
     println!();
 
     let accuracy = total_correct as f32 / total_samples as f32 * 100.0;
-    println!("Training Set Accuracy: {total_correct}/{total_samples} ({accuracy:.2}%)");
+    assert_eq!(total_samples, test.len, "every test sample is scored once");
+    println!("Test Accuracy (t10k): {total_correct}/{total_samples} ({accuracy:.2}%)");
 }

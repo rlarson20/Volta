@@ -1,25 +1,26 @@
-// Character-Level Language Model using LSTM
-//
-// This example demonstrates:
-// - Embedding layer for character-to-vector mapping
-// - LSTM for sequential processing
-// - Character-level text generation
-//
-// The model predicts the next character in a sequence, learning patterns
-// from a small text corpus.
-#![allow(clippy::cast_precision_loss)]
+//! Character-Level Language Model using LSTM
+//!
+//! This example demonstrates:
+//! - Embedding layer for character-to-vector mapping
+//! - LSTM for sequential processing
+//! - Character-level text generation
+//!
+//! The model predicts the next character in a sequence, learning patterns
+//! from a small text corpus.
 use std::collections::HashMap;
-use volta::{
-    Adam, Dropout, Embedding, LSTMCell, Linear, Module, RawTensor, TensorOps, manual_seed,
-};
+use volta::nn::{Adam, Dropout, Embedding, LSTMCell, Layer, Linear, Module, RecurrentLayer};
+use volta::{Axis, RawTensor, manual_seed, rand};
 
 /// Vocabulary for character-level language modeling
 struct CharVocab {
+    /// Character to index, built from the sorted unique characters of the corpus.
     char_to_idx: HashMap<char, usize>,
+    /// Index to character: the sorted unique characters, so `idx_to_char[char_to_idx[c]] == c`.
     idx_to_char: Vec<char>,
 }
 
 impl CharVocab {
+    /// Builds the vocabulary from the unique characters of `text`, in sorted order.
     fn from_text(text: &str) -> Self {
         let mut chars: Vec<char> = text.chars().collect();
         chars.sort_unstable();
@@ -36,34 +37,46 @@ impl CharVocab {
         }
     }
 
+    /// Number of distinct characters.
     fn size(&self) -> usize {
         self.idx_to_char.len()
     }
 
+    /// Maps `text` to indices, dropping characters that are not in the vocabulary.
     fn encode(&self, text: &str) -> Vec<usize> {
         text.chars()
             .filter_map(|c| self.char_to_idx.get(&c).copied())
             .collect()
     }
 
+    /// Index of `c`. Panics if `c` is not in the vocabulary.
     fn encode_char(&self, c: char) -> usize {
         *self.char_to_idx.get(&c).unwrap()
     }
 
+    /// Character at `idx`. Panics if `idx` is not in the vocabulary.
     fn decode_char(&self, idx: usize) -> char {
-        *self.idx_to_char.get(idx).unwrap_or(&' ')
+        *self
+            .idx_to_char
+            .get(idx)
+            .expect("the model's output index is inside the vocabulary")
     }
 }
 
 /// Character-level RNN model
 struct CharRNN {
+    /// Token index to `emb_dim` vector.
     embedding: Embedding,
+    /// Recurrent core: `emb_dim` inputs, `hidden_size` hidden units.
     lstm: LSTMCell,
+    /// Applied to the LSTM output during training only (see `train_mode`).
     dropout: Dropout,
+    /// Projects the hidden state to `vocab_size` logits.
     decoder: Linear,
 }
 
 impl CharRNN {
+    /// Builds the embedding, `LSTMCell`, dropout (probability `dropout_p`), and decoder.
     fn new(vocab_size: usize, emb_dim: usize, hidden_size: usize, dropout_p: f32) -> Self {
         Self {
             embedding: Embedding::new(vocab_size, emb_dim),
@@ -73,6 +86,7 @@ impl CharRNN {
         }
     }
 
+    /// Trainable parameters: embedding, LSTM, then decoder. Dropout has none.
     fn parameters(&self) -> Vec<volta::Tensor> {
         let mut params = Vec::new();
         params.extend(self.embedding.parameters());
@@ -81,6 +95,7 @@ impl CharRNN {
         params
     }
 
+    /// Turns dropout on (`true`) or off (`false`).
     fn train_mode(&mut self, mode: bool) {
         self.dropout.train(mode);
     }
@@ -93,19 +108,17 @@ fn forward_and_compute_loss(
     targets: &[usize],
     vocab_size: usize,
 ) -> volta::Tensor {
-    let mut h_state: Option<(volta::Tensor, volta::Tensor)> = None;
+    let mut state = model.lstm.initial_state(1);
     let mut all_logits = Vec::new();
     let mut all_targets = Vec::new();
 
     for (&input_idx, &target_idx) in inputs.iter().zip(targets) {
         // Embedding lookup
-        let emb = model.embedding.forward(&[input_idx]);
+        let emb = model.embedding.forward(&index_tensor(&[input_idx]));
         let emb_drop = model.dropout.forward(&emb);
 
         // LSTM step
-        let (h_new, c_new) = model
-            .lstm
-            .forward_step(&emb_drop, h_state.as_ref().map(|(h, c)| (h, c)));
+        let h_new = model.lstm.step(&emb_drop, &mut state);
 
         // Decode
         let h_drop = model.dropout.forward(&h_new);
@@ -113,8 +126,6 @@ fn forward_and_compute_loss(
 
         all_logits.push(logits);
         all_targets.push(target_idx);
-
-        h_state = Some((h_new, c_new));
     }
 
     // Compute loss by accumulating cross-entropy for each timestep
@@ -122,7 +133,9 @@ fn forward_and_compute_loss(
     for (logits, &target_idx) in all_logits.iter().zip(&all_targets) {
         // Create one-hot target
         let mut target_one_hot = vec![0.0; vocab_size];
-        *target_one_hot.get_mut(target_idx).unwrap_or(&mut 0.0) = 1.0;
+        *target_one_hot
+            .get_mut(target_idx)
+            .expect("the target index is inside the vocabulary") = 1.0;
         let target_tensor = RawTensor::new(target_one_hot, &[1, vocab_size], false);
 
         // Cross entropy loss
@@ -141,7 +154,7 @@ fn forward_and_compute_loss(
     loss.div(&seq_len_tensor)
 }
 
-/// Generate text from the model
+/// Generate `length` characters after `seed`, each sampled from the softmax of the logits divided by `temperature`.
 fn generate(
     model: &mut CharRNN,
     vocab: &CharVocab,
@@ -152,50 +165,58 @@ fn generate(
     model.train_mode(false); // Disable dropout for generation
 
     let mut result = seed.to_string();
-    let mut h_state: Option<(volta::Tensor, volta::Tensor)> = None;
+    let mut state = model.lstm.initial_state(1);
 
     // Prime with seed text
     for c in seed.chars() {
-        if let Some(&idx) = vocab.char_to_idx.get(&c) {
-            let emb = model.embedding.forward(&[idx]);
-            let (h_new, c_new) = model
-                .lstm
-                .forward_step(&emb, h_state.as_ref().map(|(h, c)| (h, c)));
-            h_state = Some((h_new, c_new));
-        }
+        let emb = model
+            .embedding
+            .forward(&index_tensor(&[vocab.encode_char(c)]));
+        let _ = model.lstm.step(&emb, &mut state);
     }
 
     // Generate new characters
-    let mut current_idx = vocab.encode_char(seed.chars().last().unwrap_or('a'));
+    let mut current_idx = vocab.encode_char(
+        seed.chars()
+            .last()
+            .expect("generation needs a non-empty seed"),
+    );
 
     for _ in 0..length {
-        let emb = model.embedding.forward(&[current_idx]);
-        let (h_new, c_new) = model
-            .lstm
-            .forward_step(&emb, h_state.as_ref().map(|(h, c)| (h, c)));
+        let emb = model.embedding.forward(&index_tensor(&[current_idx]));
+        let h_new = model.lstm.step(&emb, &mut state);
         let logits = model.decoder.forward(&h_new);
 
-        // Apply temperature and sample
-        let logits_data = &logits.borrow().data;
-        let scaled: Vec<f32> = logits_data.iter().map(|&x| x / temperature).collect();
-
-        // Simple argmax for deterministic generation
-        let mut max_idx = 0;
-        let mut max_val = *scaled.first().unwrap_or(&f32::NAN);
-        for (i, &val) in scaled.iter().enumerate().skip(1) {
-            if val > max_val {
-                max_val = val;
-                max_idx = i;
+        // Sample from softmax(logits / temperature): a lower temperature sharpens the
+        // distribution toward the most likely character, a higher one flattens it.
+        let temperature = RawTensor::new(vec![temperature], &[1], false);
+        let probs = logits.div(&temperature).softmax(Axis(1)).data();
+        // Inverse-CDF draw. `rand` uses the generator `manual_seed` seeded, so the text
+        // is reproducible.
+        let u = rand(&[1]).item();
+        let mut cumulative = 0.0;
+        current_idx = probs.len() - 1; // u lands past the last bucket only by rounding
+        for (i, &p) in probs.iter().enumerate() {
+            cumulative += p;
+            if u < cumulative {
+                current_idx = i;
+                break;
             }
         }
-
-        current_idx = max_idx;
         result.push(vocab.decode_char(current_idx));
-        h_state = Some((h_new, c_new));
     }
 
     model.train_mode(true); // Re-enable dropout
     result
+}
+
+/// Token indices as the I64 tensor `Embedding` takes.
+fn index_tensor(indices: &[usize]) -> volta::Tensor {
+    let wide: Vec<i64> = indices
+        .iter()
+        .map(|&i| i64::try_from(i).expect("a token index fits i64"))
+        .collect();
+    volta::RawTensor::from_typed(wide, &[indices.len()])
 }
 
 fn main() {
@@ -218,7 +239,10 @@ fn main() {
     println!("Training data length: {} characters", data.len());
     println!(
         "Sample vocabulary: {:?}\n",
-        &vocab.idx_to_char.get(..10.min(vocab.size())).unwrap_or(&[])
+        vocab
+            .idx_to_char
+            .get(..10.min(vocab.size()))
+            .expect("the prefix is inside the vocabulary")
     );
 
     // Hyperparameters
@@ -242,7 +266,7 @@ fn main() {
     model.train_mode(true);
 
     let params = model.parameters();
-    let total_params: usize = params.iter().map(|p| p.borrow().data.len()).sum();
+    let total_params: usize = params.iter().map(|p| p.data().len()).sum();
     println!("Total parameters: {total_params}\n");
 
     // Create optimizer
@@ -251,6 +275,8 @@ fn main() {
     println!("Training...\n");
 
     // Training loop
+    let mut first_loss = f32::NAN;
+    let mut final_loss = f32::NAN;
     for epoch in 1..=epochs {
         let mut epoch_loss = 0.0;
         let num_batches = (data.len() - 1) / seq_len;
@@ -268,20 +294,26 @@ fn main() {
                 continue;
             }
 
-            let inputs = data.get(start..end).unwrap_or(&[]);
-            let targets = data.get(start + 1..end + 1).unwrap_or(&[]);
+            let inputs = data.get(start..end).expect("the batch is inside the data");
+            let targets = data
+                .get(start + 1..end + 1)
+                .expect("the shifted batch is inside the data");
 
             // Forward pass
             let loss = forward_and_compute_loss(&model, inputs, targets, vocab.size());
 
             optimizer.zero_grad();
-            loss.backward();
+            loss.clone().into_loss().expect("scalar loss").backward();
             optimizer.step();
 
-            epoch_loss += loss.borrow().data.first().copied().unwrap_or(f32::NAN);
+            epoch_loss += loss.item();
         }
 
         let avg_loss = epoch_loss / num_batches as f32;
+        final_loss = avg_loss;
+        if epoch == 1 {
+            first_loss = avg_loss;
+        }
 
         if epoch % 10 == 0 || epoch == 1 {
             println!("Epoch {epoch:3}/{epochs}: Loss = {avg_loss:.4}");
@@ -289,6 +321,12 @@ fn main() {
     }
 
     println!("\n=== Training Complete ===\n");
+    // The CI smoke run (`just examples-smoke`) relies on this: a NaN or a loss that never
+    // drops exits non-zero.
+    assert!(
+        final_loss.is_finite() && final_loss < first_loss,
+        "training did not reduce the loss: first {first_loss}, final {final_loss}"
+    );
 
     // Generate text samples
     println!("Generated text samples:\n");

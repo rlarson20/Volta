@@ -1,8 +1,10 @@
 //! Tests exercising all `VoltaError` variants through public APIs.
 
+use volta::Axis;
+use volta::RawTensor;
 use volta::dtype::DType;
 use volta::error::VoltaError;
-use volta::{RawTensor, Storage};
+use volta::storage::Storage;
 
 // ── ShapeDataMismatch ──────────────────────────────────────────────────
 
@@ -21,7 +23,7 @@ fn test_shape_data_mismatch() {
 fn test_dimension_out_of_bounds() {
     // 2D tensor (shape [2,3]), requesting sum along dim 5
     let x = RawTensor::try_new(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], false).unwrap();
-    let result = RawTensor::try_sum_dim(&x, 5, false);
+    let result = RawTensor::try_sum_dim(&x, Axis(5), false);
     assert!(result.is_err());
     let err = result.err().unwrap();
     assert!(matches!(
@@ -67,11 +69,41 @@ fn test_shrink_start_exceeds_end() {
 
 #[test]
 fn test_io_error() {
-    // load_state_dict returns std::io::Result, so we check for io::Error
-    let result = volta::io::load_state_dict("nonexistent_path_xyz123.bin");
-    assert!(result.is_err());
+    // A missing file is `Io`, not `Decode` (#394).
+    let result = volta::io::load_safetensors("nonexistent_path_xyz123.safetensors");
     let err = result.err().unwrap();
-    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    assert!(
+        matches!(&err, VoltaError::Io(e) if e.kind() == std::io::ErrorKind::NotFound),
+        "{err:?}"
+    );
+}
+
+// ── Decode ─────────────────────────────────────────────────────────────
+
+#[test]
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "every variant other than Decode is a failure"
+)]
+fn test_decode_error_names_the_file() {
+    let path =
+        std::env::temp_dir().join(format!("volta_{}_not_st.safetensors", std::process::id()));
+    std::fs::write(&path, b"not a safetensors file").unwrap();
+    let err = volta::io::load_safetensors(&path).err().unwrap();
+    std::fs::remove_file(&path).unwrap();
+    match &err {
+        VoltaError::Decode {
+            path: p,
+            key,
+            detail,
+        } => {
+            assert_eq!(p, &path);
+            assert_eq!(key, &None);
+            assert_eq!((detail.op, detail.arg), ("load_safetensors", Some("path")));
+        }
+        other => panic!("expected Decode, got {other:?}"),
+    }
+    assert!(err.to_string().starts_with("Decode error in "), "{err}");
 }
 
 // ── DTypeMismatch ──────────────────────────────────────────────────────
@@ -79,8 +111,8 @@ fn test_io_error() {
 #[test]
 fn test_dtype_mismatch() {
     // Create F16 storage (2 bytes per element, 4 bytes = 2 elements)
-    let storage = Storage::try_from_bytes(vec![0u8; 4], DType::F16).unwrap();
-    let result = storage.try_as_f32_slice();
+    let storage = Storage::try_from_bytes(&[0u8; 4], DType::F16).unwrap();
+    let result = storage.as_host_f32();
     assert!(result.is_err());
     assert!(matches!(
         result.unwrap_err(),
@@ -123,23 +155,19 @@ fn test_error_display() {
             "Cannot broadcast",
         ),
         (
-            VoltaError::DeviceError("test device error".into()),
-            "Device error",
-        ),
-        (
             VoltaError::Io(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "file missing",
             )),
             "IO error",
         ),
+        // Only Volta builds an `ErrorDetail` (#377), so this one comes from a real call;
+        // the other two detail variants' `Display` is tested in `src/error.rs`.
         (
-            VoltaError::InvalidParameter("bad param".into()),
-            "Invalid parameter",
-        ),
-        (
-            VoltaError::OpError("something failed".into()),
-            "Operation failed",
+            RawTensor::new(vec![1.0, 2.0], &[2], false)
+                .try_reshape(&[3])
+                .expect_err("2 elements do not reshape to 3"),
+            "Invalid parameter: reshape: cannot reshape",
         ),
     ];
 

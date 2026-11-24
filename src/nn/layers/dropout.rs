@@ -1,10 +1,16 @@
+use crate::error::OrPanic;
 use crate::io::StateDict;
-use crate::nn::Module;
-use crate::tensor::{RawTensor, Tensor, TensorOps};
-use rand::Rng;
+use crate::nn::hyper;
+use crate::nn::{Layer, Module};
+use crate::tensor::Tensor;
+use rand::RngExt;
 
+/// Zeroes each element with probability `p` in training mode, scaling the rest by `1 / (1 - p)`; the identity in evaluation mode.
+#[derive(Debug, Clone, Copy)]
 pub struct Dropout {
+    /// Probability that an element is zeroed.
     p: f32,
+    /// Whether dropout is active.
     training: bool,
 }
 
@@ -13,19 +19,42 @@ impl Dropout {
     ///
     /// # Arguments
     /// * `p` - Probability of an element being zeroed out (default: 0.5)
+    ///
     /// # Panics
-    /// dropout prob must be in \[0,1\]
+    /// If `p` is not in `[0, 1]` (see [`Self::try_new`]).
     #[must_use]
+    #[track_caller]
     pub fn new(p: f32) -> Self {
-        assert!(
-            (0.0..=1.0).contains(&p),
-            "Dropout probability must be in [0, 1]"
-        );
-        Self { p, training: true }
+        Self::try_new(p).or_panic("Dropout")
+    }
+
+    /// [`Self::new`], checking `p` first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` if `p` is not in `[0, 1]` (or is NaN).
+    pub fn try_new(p: f32) -> crate::Result<Self> {
+        hyper::unit_interval("Dropout", "p", p)?;
+        Ok(Self { p, training: true })
     }
 }
 
 impl Module for Dropout {
+    fn parameters(&self) -> Vec<Tensor> {
+        vec![]
+    }
+
+    fn state_dict(&self) -> StateDict {
+        StateDict::new()
+    }
+
+    fn plan_load<'a>(&self, _plan: &mut crate::nn::LoadPlan<'a>) {}
+
+    fn train(&mut self, mode: bool) {
+        self.training = mode;
+    }
+}
+
+impl Layer for Dropout {
     fn forward(&self, x: &Tensor) -> Tensor {
         if !self.training || self.p == 0.0 {
             return x.clone();
@@ -34,10 +63,7 @@ impl Module for Dropout {
         let keep_prob = 1.0 - self.p;
         let scale = 1.0 / keep_prob;
 
-        let (shape, device) = {
-            let x_borrow = x.borrow();
-            (x_borrow.shape.clone(), x_borrow.device.clone())
-        };
+        let shape = x.borrow().shape.clone();
         let size: usize = shape.iter().product();
 
         // Generate mask: 1 with prob (1-p), 0 with prob p
@@ -53,25 +79,10 @@ impl Module for Dropout {
                 .collect()
         });
 
-        let mask = RawTensor::new(mask_data, &shape, false).to_device(device);
+        // On x's device and in its dtype; the f32 scale widens exactly.
+        let mask = x.constant_like(mask_data, shape.truncate_rank());
 
         // Apply mask: x * mask
         x.elem_mul(&mask)
-    }
-
-    fn parameters(&self) -> Vec<Tensor> {
-        vec![]
-    }
-
-    fn state_dict(&self) -> StateDict {
-        StateDict::new()
-    }
-
-    fn load_state_dict(&mut self, _state: &StateDict) {
-        // Stateless
-    }
-
-    fn train(&mut self, mode: bool) {
-        self.training = mode;
     }
 }

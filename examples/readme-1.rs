@@ -1,8 +1,7 @@
-use volta::{
-    Adam, Sequential, TensorOps, io,
-    nn::{Linear, Module, ReLU},
-    tensor::{RawTensor, mse_loss},
-};
+//! The first example in the README
+use volta::io;
+use volta::nn::{Adam, Layer, Linear, Module, ReLU, Sequential};
+use volta::tensor::{RawTensor, mse_loss};
 
 fn main() {
     // 1. Define a simple model with named layers: 2 -> 8 -> 1
@@ -25,27 +24,35 @@ fn main() {
 
     // 4. Training loop
     println!("Training a simple MLP to learn XOR...");
+    let mut first_loss = f32::NAN;
+    let mut final_loss = f32::NAN;
     for epoch in 0..=300 {
         optimizer.zero_grad();
 
         let pred = model.forward(&x).reshape(&[4]); //alignment
         let loss = mse_loss(&pred, &y);
-
-        if epoch % 20 == 0 {
-            println!(
-                "Epoch {}: loss = {:.6}",
-                epoch,
-                loss.borrow().data.first().copied().unwrap_or(f32::NAN)
-            );
+        final_loss = loss.item();
+        if epoch == 0 {
+            first_loss = final_loss;
         }
 
-        loss.backward();
+        if epoch % 20 == 0 {
+            println!("Epoch {epoch}: loss = {final_loss:.6}");
+        }
+
+        loss.into_loss().expect("scalar loss").backward();
         optimizer.step();
     }
+    // The CI smoke run (`just examples-smoke`) relies on this: a NaN or a loss that never
+    // drops exits non-zero.
+    assert!(
+        final_loss.is_finite() && final_loss < first_loss,
+        "training did not reduce the loss: first {first_loss}, final {final_loss}"
+    );
 
     // 5. Save and Load State Dict (human-readable keys: "fc1.weight", "fc1.bias", etc.)
     let state = model.state_dict();
-    io::save_state_dict(&state, "model.bin").expect("Failed to save");
+    io::save_safetensors(&state, "model.safetensors").expect("Failed to save");
 
     // Verify loading
     let mut new_model = Sequential::builder()
@@ -53,6 +60,8 @@ fn main() {
         .add_unnamed(Box::new(ReLU))
         .add_named("fc2", Box::new(Linear::new(8, 1, true)))
         .build();
-    let loaded_state = io::load_state_dict("model.bin").expect("Failed to load");
-    new_model.load_state_dict(&loaded_state);
+    let loaded_state = io::load_safetensors("model.safetensors").expect("Failed to load");
+    new_model
+        .load_state_dict(&loaded_state)
+        .expect("Failed to load state");
 }

@@ -1,32 +1,18 @@
 // GPU-accelerated convolution backward: gradient with respect to input
 // Computes: ∂L/∂X[b,ic,ih,iw] = Σ ∂L/∂Y[b,oc,oh,ow] * W[oc,ic,kh,kw]
 
-struct ConvBackwardInputParams {
-    batch_size: u32,
-    in_channels: u32,
-    out_channels: u32,
-    height: u32,
-    width: u32,
-    kernel_h: u32,
-    kernel_w: u32,
-    stride_h: u32,
-    stride_w: u32,
-    pad_h: u32,
-    pad_w: u32,
-    h_out: u32,
-    w_out: u32,
-    _padding: u32,
-}
-
-@group(0) @binding(0) var<storage, read> out_grad: array<f32>;
-@group(0) @binding(1) var<storage, read> weight: array<f32>;
-@group(0) @binding(2) var<storage, read_write> grad_input: array<f32>;
-@group(0) @binding(3) var<uniform> params: ConvBackwardInputParams;
+@group(0) @binding(0) var<storage, read> out_grad: array<ELEM>;
+@group(0) @binding(1) var<storage, read> weight: array<ELEM>;
+@group(0) @binding(2) var<storage, read_write> grad_input: array<ELEM>;
+@group(0) @binding(3) var<uniform> params: ConvParams;
 
 @compute @workgroup_size(16, 16, 1)
 fn conv_backward_input_main(
-    @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(workgroup_id) wg_id: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+    @builtin(local_invocation_id) local_id: vec3<u32>,
 ) {
+    let global_id = tile_global_id(wg_id, num_wg, local_id, (params.in_channels + 15u) / 16u);
     // Decode thread position
     let in_ch = global_id.x;
     let flat_spatial = global_id.y;
@@ -59,8 +45,14 @@ fn conv_backward_input_main(
                 // In forward: out[oh,ow] = in[ih-ph+kh, iw-pw+kw] * weight[kh,kw]
                 // So: ih = oh * stride_h - pad_h + kh
                 // Therefore: oh = (ih + pad_h - kh) / stride_h
-                let oh_candidate = (ih + params.pad_h - kh);
-                let ow_candidate = (iw + params.pad_w - kw);
+                // A tap above or left of the padded input (`ih + pad_h < kh`) has no
+                // output position; test it before subtracting, without u32 wraparound
+                // (#314).
+                if (ih + params.pad_h < kh || iw + params.pad_w < kw) {
+                    continue;
+                }
+                let oh_candidate = ih + params.pad_h - kh;
+                let ow_candidate = iw + params.pad_w - kw;
 
                 // Check if this is a valid output position
                 if (oh_candidate % params.stride_h == 0u && ow_candidate % params.stride_w == 0u) {
@@ -70,11 +62,11 @@ fn conv_backward_input_main(
                     if (oh < params.h_out && ow < params.w_out) {
                         // Get output gradient at this position
                         let out_grad_idx = ((batch * params.out_channels + oc) * params.h_out + oh) * params.w_out + ow;
-                        let grad_val = out_grad[out_grad_idx];
+                        let grad_val = ld_out_grad(out_grad_idx);
 
                         // Get weight at this kernel position
                         let weight_idx = ((oc * params.in_channels + in_ch) * params.kernel_h + kh) * params.kernel_w + kw;
-                        let weight_val = weight[weight_idx];
+                        let weight_val = ld_weight(weight_idx);
 
                         sum += grad_val * weight_val;
                     }
@@ -85,5 +77,5 @@ fn conv_backward_input_main(
 
     // Write result
     let input_idx = ((batch * params.in_channels + in_ch) * params.height + ih) * params.width + iw;
-    grad_input[input_idx] = sum;
+    st_grad_input(input_idx, sum);
 }

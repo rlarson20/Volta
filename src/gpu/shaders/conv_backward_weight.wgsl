@@ -1,32 +1,18 @@
 // GPU-accelerated convolution backward: gradient with respect to weights
 // Computes: ∂L/∂W[oc,ic,kh,kw] = Σ X[b,ic,oh*sh+kh-ph,ow*sw+kw-pw] * ∂L/∂Y[b,oc,oh,ow]
 
-struct ConvBackwardWeightParams {
-    batch_size: u32,
-    in_channels: u32,
-    out_channels: u32,
-    height: u32,
-    width: u32,
-    kernel_h: u32,
-    kernel_w: u32,
-    stride_h: u32,
-    stride_w: u32,
-    pad_h: u32,
-    pad_w: u32,
-    h_out: u32,
-    w_out: u32,
-    _padding: u32,
-}
-
-@group(0) @binding(0) var<storage, read> out_grad: array<f32>;
-@group(0) @binding(1) var<storage, read> input: array<f32>;
-@group(0) @binding(2) var<storage, read_write> grad_weight: array<f32>;
-@group(0) @binding(3) var<uniform> params: ConvBackwardWeightParams;
+@group(0) @binding(0) var<storage, read> out_grad: array<ELEM>;
+@group(0) @binding(1) var<storage, read> input: array<ELEM>;
+@group(0) @binding(2) var<storage, read_write> grad_weight: array<ELEM>;
+@group(0) @binding(3) var<uniform> params: ConvParams;
 
 @compute @workgroup_size(16, 16, 1)
 fn conv_backward_weight_main(
-    @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(workgroup_id) wg_id: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+    @builtin(local_invocation_id) local_id: vec3<u32>,
 ) {
+    let global_id = tile_global_id(wg_id, num_wg, local_id, (params.out_channels + 15u) / 16u);
     // Decode thread position
     let out_ch = global_id.x;
     let flat_kernel = global_id.y;
@@ -71,11 +57,11 @@ fn conv_backward_weight_main(
                     iw_unpadded >= 0 && iw_unpadded < width_i32) {
                     // Get input value at this position
                     let input_idx = ((batch * params.in_channels + in_ch) * params.height + u32(ih_unpadded)) * params.width + u32(iw_unpadded);
-                    let input_val = input[input_idx];
+                    let input_val = ld_input(input_idx);
 
                     // Get output gradient at this position
                     let out_grad_idx = ((batch * params.out_channels + out_ch) * params.h_out + oh) * params.w_out + ow;
-                    let grad_val = out_grad[out_grad_idx];
+                    let grad_val = ld_out_grad(out_grad_idx);
 
                     sum += input_val * grad_val;
                 }
@@ -85,5 +71,5 @@ fn conv_backward_weight_main(
 
     // Write result
     let weight_idx = ((out_ch * params.in_channels + in_ch) * params.kernel_h + kh) * params.kernel_w + kw;
-    grad_weight[weight_idx] = sum;
+    st_grad_weight(weight_idx, sum);
 }

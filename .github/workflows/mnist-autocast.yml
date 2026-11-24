@@ -1,0 +1,51 @@
+name: MNIST Autocast
+on:
+  # P7's done-criterion (`just mnist-autocast`, examples/mnist_autocast.rs): 5 seeds of an MNIST
+  # MLP trained in f32 and under bf16 autocast; the example exits 1 when the mean test
+  # accuracies differ by more than 0.2 points. Too slow and data-heavy for every PR, so it runs
+  # nightly and by hand. Not a required check (.github/rulesets/ name only ci.yml's jobs).
+  schedule:
+    - cron: "15 5 * * *" # Nightly
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mnist-autocast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+
+      # The four decompressed IDX files (about 55 MB). MNIST never changes, so the key is fixed
+      # and a nightly run keeps the entry from being evicted. `just mnist-data` skips files that
+      # exist and checks every file's SHA-256 either way; the cache is saved only when the job
+      # succeeds, so a bad download is never stored. Bump the suffix to force a fresh download.
+      - name: Cache MNIST
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: data/mnist
+          key: mnist-idx-v1
+
+      - name: MNIST, f32 vs bf16 autocast (5 seeds)
+        run: just mnist-autocast
+
+  # A scheduled failure is open work, so it becomes an issue (#258); without this a weekly or
+  # nightly job just goes red where nobody looks. Not `merge-gate`: only macOS gates main.
+  report-failure:
+    needs: mnist-autocast
+    if: always() && needs.mnist-autocast.result == 'failure' && github.event_name == 'schedule'
+    permissions:
+      actions: read
+      issues: write
+    uses: ./.github/workflows/report-failure.yml
+    with:
+      title: "MNIST Autocast scheduled failure on ${{ github.ref_name }}"
+      labels: kind:bug,area:ci,P1
+      workflow: mnist-autocast.yml
+      details: >-
+        The f32 and bf16-autocast MNIST accuracies differ by more than 0.2 points, or the run failed. Reproduce with `just mnist-autocast`.

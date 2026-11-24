@@ -1,0 +1,1004 @@
+//! Validated geometry for ops whose arguments used to be positional `usize`s.
+//!
+//! A spec is computed once, in forward, from the input and weight [`Shape`]s.
+//! Backward and the GPU kernel wrappers read the spec instead of re-deriving
+//! dimensions from tensors (the B4 failure mode), so a transposed
+//! `batch_size`/`channels` pair is a field-name error, not a silent one.
+
+use crate::error::{Result, VoltaError};
+use crate::shape::{Axis, Shape};
+
+/// Reads the four dims of an NCHW-style shape, or says which tensor was not 4D.
+fn dims4(op: &'static str, shape: &Shape, what: &'static str) -> Result<[usize; 4]> {
+    if shape.rank() != 4 {
+        return Err(VoltaError::invalid(
+            op,
+            what,
+            format!("{what} must be 4D, got shape {:?}", shape.truncate_rank()),
+        ));
+    }
+    Ok([
+        shape.dim(Axis(0))?,
+        shape.dim(Axis(1))?,
+        shape.dim(Axis(2))?,
+        shape.dim(Axis(3))?,
+    ])
+}
+
+/// Rejects a zero stride in either direction.
+fn check_stride(op: &'static str, stride: (usize, usize)) -> Result<()> {
+    if stride.0 == 0 || stride.1 == 0 {
+        return Err(VoltaError::invalid(
+            op,
+            "stride",
+            format!("stride must be non-zero, got {stride:?}"),
+        ));
+    }
+    Ok(())
+}
+
+/// The error for a geometry whose intermediate extent overflows `usize`.
+fn overflow(op: &'static str, what: &str, axis: &str, detail: &str) -> VoltaError {
+    VoltaError::invalid(
+        op,
+        "padding",
+        format!("{what} {axis} overflows usize ({detail})"),
+    )
+}
+
+/// Output extent of a sliding window: `(padded - kernel) / stride + 1`.
+///
+/// `padded = input + 2 * pad` is checked, so a huge padding is an
+/// `InvalidParameter` in every profile rather than a debug panic or a release
+/// wrap to a small, plausible extent.
+fn window_out(
+    op: &'static str,
+    axis: &str,
+    input: usize,
+    kernel: usize,
+    stride: usize,
+    pad: usize,
+) -> Result<usize> {
+    let padded = pad
+        .checked_mul(2)
+        .and_then(|p| input.checked_add(p))
+        .ok_or_else(|| {
+            overflow(
+                op,
+                "padded input",
+                axis,
+                &format!("input {input}, padding {pad}"),
+            )
+        })?;
+    if kernel > padded {
+        return Err(VoltaError::invalid(
+            op,
+            "input",
+            format!(
+                "kernel {axis} {kernel} is larger than padded input {axis} {padded} \
+                 (input {input}, padding {pad})"
+            ),
+        ));
+    }
+    Ok((padded - kernel) / stride + 1)
+}
+
+/// Validated geometry of a `Conv2d` forward pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Conv2dSpec {
+    /// Batch size `B`.
+    pub batch: usize,
+    /// Input channels.
+    pub in_ch: usize,
+    /// Output channels.
+    pub out_ch: usize,
+    /// Input height, before padding.
+    pub in_h: usize,
+    /// Input width, before padding.
+    pub in_w: usize,
+    /// Kernel height.
+    pub kernel_h: usize,
+    /// Kernel width.
+    pub kernel_w: usize,
+    /// Vertical stride (non-zero).
+    pub stride_h: usize,
+    /// Horizontal stride (non-zero).
+    pub stride_w: usize,
+    /// Zero padding added to each of the top and bottom.
+    pub pad_h: usize,
+    /// Zero padding added to each of the left and right.
+    pub pad_w: usize,
+    /// Output height.
+    pub out_h: usize,
+    /// Output width.
+    pub out_w: usize,
+}
+
+impl Conv2dSpec {
+    /// `input` is `[B, C, H, W]`, `weight` is `[O, C, Kh, Kw]`.
+    pub(crate) fn new(
+        input: &Shape,
+        weight: &Shape,
+        stride: (usize, usize),
+        padding: (usize, usize),
+    ) -> Result<Self> {
+        /// The op named in errors.
+        const OP: &str = "Conv2d";
+        let [batch, in_ch, in_h, in_w] = dims4(OP, input, "input")?;
+        let [out_ch, w_in_ch, kernel_h, kernel_w] = dims4(OP, weight, "weight")?;
+        if w_in_ch != in_ch {
+            return Err(VoltaError::invalid(
+                OP,
+                "input",
+                format!(
+                    "channel mismatch: input has {in_ch} channels but weight expects {w_in_ch}"
+                ),
+            ));
+        }
+        check_stride(OP, stride)?;
+        let (stride_h, stride_w) = stride;
+        let (pad_h, pad_w) = padding;
+        let out_h = window_out(OP, "height", in_h, kernel_h, stride_h, pad_h)?;
+        let out_w = window_out(OP, "width", in_w, kernel_w, stride_w, pad_w)?;
+        Ok(Self {
+            batch,
+            in_ch,
+            out_ch,
+            in_h,
+            in_w,
+            kernel_h,
+            kernel_w,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            out_h,
+            out_w,
+        })
+    }
+
+    /// Input height after padding.
+    pub(crate) fn padded_h(&self) -> usize {
+        self.in_h + 2 * self.pad_h
+    }
+
+    /// Input width after padding.
+    pub(crate) fn padded_w(&self) -> usize {
+        self.in_w + 2 * self.pad_w
+    }
+
+    /// Output shape as `[B, C, H, W]`.
+    pub(crate) fn output_dims(&self) -> [usize; 4] {
+        [self.batch, self.out_ch, self.out_h, self.out_w]
+    }
+
+    /// The window over the zero-padded input, with no further padding.
+    ///
+    /// `im2col`/`col2im` run on the already-padded tensor, so they see
+    /// `padded_h x padded_w` input and the same kernel and stride.
+    pub(crate) fn padded_window(&self) -> Window2dSpec {
+        Window2dSpec {
+            batch: self.batch,
+            channels: self.in_ch,
+            in_h: self.padded_h(),
+            in_w: self.padded_w(),
+            kernel_h: self.kernel_h,
+            kernel_w: self.kernel_w,
+            stride_h: self.stride_h,
+            stride_w: self.stride_w,
+            pad_h: 0,
+            pad_w: 0,
+            out_h: self.out_h,
+            out_w: self.out_w,
+        }
+    }
+}
+
+/// Validated geometry of a `ConvTranspose2d` forward pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ConvTranspose2dSpec {
+    /// Batch size `B`.
+    pub batch: usize,
+    /// Input channels.
+    pub in_ch: usize,
+    /// Output channels.
+    pub out_ch: usize,
+    /// Input height, before padding.
+    pub in_h: usize,
+    /// Input width, before padding.
+    pub in_w: usize,
+    /// Kernel height.
+    pub kernel_h: usize,
+    /// Kernel width.
+    pub kernel_w: usize,
+    /// Vertical stride (non-zero).
+    pub stride_h: usize,
+    /// Horizontal stride (non-zero).
+    pub stride_w: usize,
+    /// Rows trimmed from each of the top and bottom of the full output.
+    pub pad_h: usize,
+    /// Columns trimmed from each of the left and right of the full output.
+    pub pad_w: usize,
+    /// Output height.
+    pub out_h: usize,
+    /// Output width.
+    pub out_w: usize,
+}
+
+impl ConvTranspose2dSpec {
+    /// `input` is `[B, C_in, H, W]`, `weight` is `[C_in, C_out, Kh, Kw]`.
+    pub(crate) fn new(
+        input: &Shape,
+        weight: &Shape,
+        stride: (usize, usize),
+        padding: (usize, usize),
+    ) -> Result<Self> {
+        /// The op named in errors.
+        const OP: &str = "ConvTranspose2d";
+        let [batch, in_ch, in_h, in_w] = dims4(OP, input, "input")?;
+        let [w_in_ch, out_ch, kernel_h, kernel_w] = dims4(OP, weight, "weight")?;
+        if w_in_ch != in_ch {
+            return Err(VoltaError::invalid(
+                OP,
+                "input",
+                format!(
+                    "channel mismatch: input has {in_ch} channels but weight expects {w_in_ch}"
+                ),
+            ));
+        }
+        check_stride(OP, stride)?;
+        let (stride_h, stride_w) = stride;
+        let (pad_h, pad_w) = padding;
+        let out_h = transpose_out(OP, "height", in_h, kernel_h, stride_h, pad_h)?;
+        let out_w = transpose_out(OP, "width", in_w, kernel_w, stride_w, pad_w)?;
+        Ok(Self {
+            batch,
+            in_ch,
+            out_ch,
+            in_h,
+            in_w,
+            kernel_h,
+            kernel_w,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            out_h,
+            out_w,
+        })
+    }
+
+    /// Output shape as `[B, C, H, W]`.
+    pub(crate) fn output_dims(&self) -> [usize; 4] {
+        [self.batch, self.out_ch, self.out_h, self.out_w]
+    }
+}
+
+/// Output extent of a transposed convolution: `(input - 1) * stride + kernel - 2 * pad`.
+///
+/// Every step is checked: a huge stride, kernel or padding is an
+/// `InvalidParameter`, never a debug panic or a release wrap.
+fn transpose_out(
+    op: &'static str,
+    axis: &str,
+    input: usize,
+    kernel: usize,
+    stride: usize,
+    pad: usize,
+) -> Result<usize> {
+    let detail = || format!("input {input}, kernel {kernel}, stride {stride}, padding {pad}");
+    let full = input
+        .checked_sub(1)
+        .and_then(|n| n.checked_mul(stride))
+        .and_then(|n| n.checked_add(kernel))
+        .ok_or_else(|| overflow(op, "transposed conv output", axis, &detail()))?;
+    // A padding whose double overflows is larger than any `full`, so the
+    // output would be non-positive: report it as that, not as an overflow.
+    let trim = pad.saturating_mul(2);
+    if full <= trim {
+        return Err(VoltaError::invalid(
+            op,
+            "input",
+            format!(
+                "output {axis} would be non-positive \
+                 (input {input}, kernel {kernel}, stride {stride}, padding {pad})"
+            ),
+        ));
+    }
+    Ok(full - 2 * pad)
+}
+
+/// Validated sliding-window geometry over `[B, C, H, W]`, with no weight.
+///
+/// Used by `MaxPool2d`, and (with zero padding, on the already-padded tensor)
+/// by `im2col`/`col2im`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Window2dSpec {
+    /// Batch size `B`.
+    pub batch: usize,
+    /// Channels (unchanged by the window).
+    pub channels: usize,
+    /// Input height, before padding.
+    pub in_h: usize,
+    /// Input width, before padding.
+    pub in_w: usize,
+    /// Kernel height.
+    pub kernel_h: usize,
+    /// Kernel width.
+    pub kernel_w: usize,
+    /// Vertical stride (non-zero).
+    pub stride_h: usize,
+    /// Horizontal stride (non-zero).
+    pub stride_w: usize,
+    /// Zero padding added to each of the top and bottom.
+    pub pad_h: usize,
+    /// Zero padding added to each of the left and right.
+    pub pad_w: usize,
+    /// Output height.
+    pub out_h: usize,
+    /// Output width.
+    pub out_w: usize,
+}
+
+impl Window2dSpec {
+    /// `input` is `[B, C, H, W]`.
+    pub(crate) fn new(
+        input: &Shape,
+        kernel: (usize, usize),
+        stride: (usize, usize),
+        padding: (usize, usize),
+    ) -> Result<Self> {
+        /// The op named in errors.
+        const OP: &str = "MaxPool2d";
+        let [batch, channels, in_h, in_w] = dims4(OP, input, "input")?;
+        if kernel.0 == 0 || kernel.1 == 0 {
+            return Err(VoltaError::invalid(
+                OP,
+                "kernel_size",
+                format!("kernel must be positive, got {kernel:?}"),
+            ));
+        }
+        check_stride(OP, stride)?;
+        let (kernel_h, kernel_w) = kernel;
+        let (stride_h, stride_w) = stride;
+        let (pad_h, pad_w) = padding;
+        let out_h = window_out(OP, "height", in_h, kernel_h, stride_h, pad_h)?;
+        let out_w = window_out(OP, "width", in_w, kernel_w, stride_w, pad_w)?;
+        Ok(Self {
+            batch,
+            channels,
+            in_h,
+            in_w,
+            kernel_h,
+            kernel_w,
+            stride_h,
+            stride_w,
+            pad_h,
+            pad_w,
+            out_h,
+            out_w,
+        })
+    }
+
+    /// Input height after padding.
+    pub(crate) fn padded_h(&self) -> usize {
+        self.in_h + 2 * self.pad_h
+    }
+
+    /// Input width after padding.
+    pub(crate) fn padded_w(&self) -> usize {
+        self.in_w + 2 * self.pad_w
+    }
+
+    /// Output shape as `[B, C, H, W]`.
+    pub(crate) fn output_dims(&self) -> [usize; 4] {
+        [self.batch, self.channels, self.out_h, self.out_w]
+    }
+}
+
+/// Validated geometry of a matrix product `[..batch, m, k] @ [..batch, k, n]`.
+///
+/// Both operands must have the same rank (at least 2); batch dims may broadcast
+/// against each other, so `[2, 1, m, k] @ [1, 3, k, n]` gives batch `[2, 3]`.
+/// Vector forms (rank 1) are not covered: `matmul` handles them separately.
+/// A rank mismatch is rejected here, which is what makes B4 unreachable: the
+/// backward never has to guess which operand's rank indexes which shape.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MatmulSpec {
+    /// Batch dims of the left operand (before broadcasting).
+    pub a_batch: Vec<usize>,
+    /// Batch dims of the right operand (before broadcasting).
+    pub b_batch: Vec<usize>,
+    /// Broadcast batch dims of the result.
+    pub out_batch: Vec<usize>,
+    /// Rows of the left matrix.
+    pub m: usize,
+    /// Shared inner dimension.
+    pub k: usize,
+    /// Columns of the right matrix.
+    pub n: usize,
+}
+
+impl MatmulSpec {
+    /// Validates `a` and `b` and computes the broadcast geometry; rejects mismatched ranks or
+    /// inner dims, and an output (or an operand broadcast to the output batch) that is not a
+    /// valid [`Shape`] (more than [`crate::shape::MAX_NUMEL`] elements).
+    pub(crate) fn new(a: &Shape, b: &Shape) -> Result<Self> {
+        /// The op named in errors.
+        const OP: &str = "matmul";
+        let (a_dims, b_dims) = (a.truncate_rank(), b.truncate_rank());
+        let (rank_a, rank_b) = (a_dims.len(), b_dims.len());
+        if rank_a < 2 || rank_b < 2 {
+            return Err(VoltaError::invalid(
+                OP,
+                None,
+                format!("needs rank >= 2 operands, got {a_dims:?} @ {b_dims:?}"),
+            ));
+        }
+        if rank_a != rank_b {
+            return Err(VoltaError::invalid(
+                OP,
+                None,
+                format!(
+                    "operands must have equal rank, got {a_dims:?} @ {b_dims:?} \
+                 (rank {rank_a} vs {rank_b})"
+                ),
+            ));
+        }
+        let (a_batch, a_mat) = a_dims.split_at(rank_a - 2);
+        let (b_batch, b_mat) = b_dims.split_at(rank_b - 2);
+        let (&[m, k], &[k2, n]) = (a_mat, b_mat) else {
+            unreachable!("split_at(rank - 2) leaves exactly two trailing dims");
+        };
+        if k != k2 {
+            return Err(VoltaError::invalid(
+                OP,
+                None,
+                format!("dimension mismatch: {a_dims:?} @ {b_dims:?} (inner dims {k} vs {k2})"),
+            ));
+        }
+        let out_batch = a_batch
+            .iter()
+            .zip(b_batch)
+            .map(|(&x, &y)| match (x, y) {
+                (x, y) if x == y => Ok(x),
+                (1, y) => Ok(y),
+                (x, 1) => Ok(x),
+                _ => Err(VoltaError::invalid(
+                    OP,
+                    None,
+                    format!("batch dims {a_batch:?} and {b_batch:?} do not broadcast"),
+                )),
+            })
+            .collect::<Result<Vec<usize>>>()?;
+        // Validate every buffer the forward allocates (the output, and the operands broadcast to
+        // the output batch) before anything is allocated. This bounds `m * n`, `m * k` and
+        // `k * n` by `MAX_NUMEL`, which the `unsafe` gemm calls rely on (#165).
+        for dims in [
+            with_matrix(&out_batch, m, n),
+            with_matrix(&out_batch, m, k),
+            with_matrix(&out_batch, k, n),
+        ] {
+            Shape::from_dims(dims)?;
+        }
+        Ok(Self {
+            a_batch: a_batch.to_vec(),
+            b_batch: b_batch.to_vec(),
+            out_batch,
+            m,
+            k,
+            n,
+        })
+    }
+
+    /// Number of independent `m x k @ k x n` products (1 when there are no batch dims).
+    pub(crate) fn batch_count(&self) -> usize {
+        self.out_batch.iter().product()
+    }
+
+    /// `true` when there are batch dims, i.e. the product is not a plain 2D matmul.
+    pub(crate) fn is_batched(&self) -> bool {
+        !self.out_batch.is_empty()
+    }
+
+    /// Dims of `a`: `[..a_batch, m, k]`.
+    pub(crate) fn a_dims(&self) -> Vec<usize> {
+        with_matrix(&self.a_batch, self.m, self.k)
+    }
+
+    /// Dims of `b`: `[..b_batch, k, n]`.
+    pub(crate) fn b_dims(&self) -> Vec<usize> {
+        with_matrix(&self.b_batch, self.k, self.n)
+    }
+
+    /// Dims of the result: `[..out_batch, m, n]`.
+    pub(crate) fn out_dims(&self) -> Vec<usize> {
+        with_matrix(&self.out_batch, self.m, self.n)
+    }
+
+    /// `a` broadcast to the output batch: `[..out_batch, m, k]`.
+    pub(crate) fn a_expanded_dims(&self) -> Vec<usize> {
+        with_matrix(&self.out_batch, self.m, self.k)
+    }
+
+    /// `b` broadcast to the output batch: `[..out_batch, k, n]`.
+    pub(crate) fn b_expanded_dims(&self) -> Vec<usize> {
+        with_matrix(&self.out_batch, self.k, self.n)
+    }
+}
+
+/// `[..batch, rows, cols]`.
+fn with_matrix(batch: &[usize], rows: usize, cols: usize) -> Vec<usize> {
+    let mut dims = batch.to_vec();
+    dims.extend([rows, cols]);
+    dims
+}
+
+/// The scalar that fills the border added by [`pad_with`](crate::Tensor::pad_with).
+///
+/// Padding used to be hard-wired to `0.0`, which is right for convolution and
+/// wrong for max pooling (H1: a zero border beat all-negative inputs). The
+/// value is now a required argument, and only named constants exist, so the
+/// choice is visible at every call site.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PadValue(f32);
+
+impl PadValue {
+    /// Zero padding, the neutral element for sums and convolution.
+    pub const ZERO: Self = Self(0.0);
+    /// Negative infinity, the neutral element for max pooling.
+    pub const NEG_INF: Self = Self(f32::NEG_INFINITY);
+
+    /// The raw fill value, for kernels.
+    pub(crate) const fn get(self) -> f32 {
+        self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shape(dims: &[usize]) -> Shape {
+        Shape::from_dims(dims).unwrap()
+    }
+
+    fn err_text<T>(r: Result<T>) -> String {
+        match r {
+            Ok(_) => panic!("expected Err"),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[test]
+    fn conv_output_dims_table() {
+        // (in_h, in_w, k_h, k_w, stride, pad, out_h, out_w)
+        let cases = [
+            (8, 8, 3, 3, (1, 1), (0, 0), 6, 6),
+            (8, 8, 3, 3, (1, 1), (1, 1), 8, 8),
+            (8, 8, 3, 3, (2, 2), (1, 1), 4, 4),
+            (9, 9, 3, 3, (3, 3), (0, 0), 3, 3),
+            (8, 8, 5, 5, (2, 2), (2, 2), 4, 4),
+            (7, 11, 3, 5, (1, 2), (2, 0), 9, 4),
+            (4, 4, 1, 1, (1, 1), (0, 0), 4, 4),
+        ];
+        for (ih, iw, kh, kw, stride, pad, oh, ow) in cases {
+            let spec = Conv2dSpec::new(
+                &shape(&[2, 3, ih, iw]),
+                &shape(&[5, 3, kh, kw]),
+                stride,
+                pad,
+            )
+            .unwrap();
+            assert_eq!(
+                (spec.out_h, spec.out_w),
+                (oh, ow),
+                "in {ih}x{iw} k {kh}x{kw} s {stride:?} p {pad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn conv_spec_fields_come_from_the_right_axes() {
+        let spec =
+            Conv2dSpec::new(&shape(&[2, 3, 8, 9]), &shape(&[5, 3, 3, 2]), (2, 1), (1, 0)).unwrap();
+        assert_eq!(spec.batch, 2);
+        assert_eq!(spec.in_ch, 3);
+        assert_eq!(spec.out_ch, 5);
+        assert_eq!((spec.in_h, spec.in_w), (8, 9));
+        assert_eq!((spec.kernel_h, spec.kernel_w), (3, 2));
+        assert_eq!((spec.stride_h, spec.stride_w), (2, 1));
+        assert_eq!((spec.pad_h, spec.pad_w), (1, 0));
+        assert_eq!((spec.padded_h(), spec.padded_w()), (10, 9));
+        assert_eq!(spec.output_dims(), [2, 5, spec.out_h, spec.out_w]);
+    }
+
+    #[test]
+    fn padded_window_is_the_zero_padding_view_of_the_padded_input() {
+        let spec =
+            Conv2dSpec::new(&shape(&[2, 3, 8, 9]), &shape(&[5, 3, 3, 2]), (2, 1), (1, 2)).unwrap();
+        let window = spec.padded_window();
+        assert_eq!(
+            (window.batch, window.channels, window.in_h, window.in_w),
+            (2, 3, 10, 13)
+        );
+        assert_eq!((window.kernel_h, window.kernel_w), (3, 2));
+        assert_eq!((window.stride_h, window.stride_w), (2, 1));
+        assert_eq!((window.pad_h, window.pad_w), (0, 0));
+        assert_eq!((window.out_h, window.out_w), (spec.out_h, spec.out_w));
+    }
+
+    #[test]
+    fn conv_rejects_non_4d_input() {
+        let msg = err_text(Conv2dSpec::new(
+            &shape(&[3, 8, 8]),
+            &shape(&[5, 3, 3, 3]),
+            (1, 1),
+            (0, 0),
+        ));
+        assert!(msg.contains("input must be 4D"), "{msg}");
+    }
+
+    #[test]
+    fn conv_rejects_non_4d_weight() {
+        let msg = err_text(Conv2dSpec::new(
+            &shape(&[1, 3, 8, 8]),
+            &shape(&[5, 3, 3]),
+            (1, 1),
+            (0, 0),
+        ));
+        assert!(msg.contains("weight must be 4D"), "{msg}");
+    }
+
+    #[test]
+    fn conv_rejects_channel_mismatch() {
+        let msg = err_text(Conv2dSpec::new(
+            &shape(&[1, 4, 8, 8]),
+            &shape(&[5, 3, 3, 3]),
+            (1, 1),
+            (0, 0),
+        ));
+        assert!(msg.contains("channel"), "{msg}");
+    }
+
+    #[test]
+    fn conv_rejects_zero_stride() {
+        let msg = err_text(Conv2dSpec::new(
+            &shape(&[1, 3, 8, 8]),
+            &shape(&[5, 3, 3, 3]),
+            (0, 1),
+            (0, 0),
+        ));
+        assert!(msg.contains("stride"), "{msg}");
+    }
+
+    #[test]
+    fn conv_rejects_kernel_larger_than_padded_input() {
+        let msg = err_text(Conv2dSpec::new(
+            &shape(&[1, 3, 4, 4]),
+            &shape(&[5, 3, 7, 3]),
+            (1, 1),
+            (1, 0),
+        ));
+        assert!(msg.contains("larger than padded input"), "{msg}");
+    }
+
+    #[test]
+    fn conv_accepts_kernel_equal_to_padded_input() {
+        let spec =
+            Conv2dSpec::new(&shape(&[1, 3, 3, 3]), &shape(&[5, 3, 5, 5]), (1, 1), (1, 1)).unwrap();
+        assert_eq!((spec.out_h, spec.out_w), (1, 1));
+    }
+
+    #[test]
+    fn transpose_output_dims_table() {
+        // (in, k, stride, pad, out): out = (in - 1) * stride + k - 2 * pad
+        let cases = [
+            (4, 3, 1, 0, 6),
+            (4, 3, 2, 1, 7),
+            (4, 4, 2, 1, 8),
+            (1, 3, 1, 1, 1),
+            (5, 2, 3, 0, 14),
+        ];
+        for (n, k, s, p, out) in cases {
+            let spec = ConvTranspose2dSpec::new(
+                &shape(&[2, 3, n, n]),
+                &shape(&[3, 5, k, k]),
+                (s, s),
+                (p, p),
+            )
+            .unwrap();
+            assert_eq!(
+                (spec.out_h, spec.out_w),
+                (out, out),
+                "in {n} k {k} s {s} p {p}"
+            );
+        }
+    }
+
+    #[test]
+    fn transpose_spec_fields_come_from_the_right_axes() {
+        let spec =
+            ConvTranspose2dSpec::new(&shape(&[2, 3, 4, 5]), &shape(&[3, 7, 2, 3]), (1, 2), (0, 1))
+                .unwrap();
+        assert_eq!((spec.batch, spec.in_ch, spec.out_ch), (2, 3, 7));
+        assert_eq!((spec.in_h, spec.in_w), (4, 5));
+        assert_eq!((spec.kernel_h, spec.kernel_w), (2, 3));
+        // height: (4 - 1) * 1 + 2 - 0 = 5; width: (5 - 1) * 2 + 3 - 2 = 9
+        assert_eq!(spec.output_dims(), [2, 7, 5, 9]);
+    }
+
+    #[test]
+    fn transpose_rejects_channel_mismatch() {
+        // weight axis 0 is C_in, so a [3, ...] input against a [4, ...] weight is wrong.
+        let msg = err_text(ConvTranspose2dSpec::new(
+            &shape(&[1, 3, 4, 4]),
+            &shape(&[4, 5, 3, 3]),
+            (1, 1),
+            (0, 0),
+        ));
+        assert!(msg.contains("channel"), "{msg}");
+    }
+
+    #[test]
+    fn transpose_rejects_zero_stride() {
+        let msg = err_text(ConvTranspose2dSpec::new(
+            &shape(&[1, 3, 4, 4]),
+            &shape(&[3, 5, 3, 3]),
+            (1, 0),
+            (0, 0),
+        ));
+        assert!(msg.contains("stride"), "{msg}");
+    }
+
+    #[test]
+    fn transpose_rejects_non_positive_output() {
+        // (1 - 1) * 1 + 1 - 2 * 1 < 0
+        let msg = err_text(ConvTranspose2dSpec::new(
+            &shape(&[1, 3, 1, 1]),
+            &shape(&[3, 5, 1, 1]),
+            (1, 1),
+            (1, 1),
+        ));
+        assert!(msg.contains("output"), "{msg}");
+    }
+
+    #[test]
+    fn conv_rejects_padding_that_overflows_the_padded_extent() {
+        // 4 + 2 * (usize::MAX / 2) = usize::MAX + 3: wraps to 2 in release.
+        let msg = err_text(Conv2dSpec::new(
+            &shape(&[1, 3, 4, 4]),
+            &shape(&[5, 3, 1, 1]),
+            (1, 1),
+            (0, usize::MAX / 2),
+        ));
+        assert!(msg.contains("padded input width overflows usize"), "{msg}");
+    }
+
+    #[test]
+    fn pool_rejects_padding_that_overflows_the_padded_extent() {
+        let msg = err_text(Window2dSpec::new(
+            &shape(&[1, 1, 4, 4]),
+            (1, 1),
+            (1, 1),
+            (usize::MAX / 2, 0),
+        ));
+        assert!(msg.contains("padded input height overflows usize"), "{msg}");
+    }
+
+    #[test]
+    fn window_accepts_the_largest_padding_that_fits() {
+        // 1 + 2 * ((usize::MAX - 1) / 2) = usize::MAX exactly: no overflow.
+        let pad = (usize::MAX - 1) / 2;
+        let spec =
+            Window2dSpec::new(&shape(&[1, 1, 1, 1]), (1, 1), (usize::MAX, 1), (pad, 0)).unwrap();
+        assert_eq!(spec.padded_h(), usize::MAX);
+        // (usize::MAX - 1) / usize::MAX + 1 = 1
+        assert_eq!(spec.output_dims(), [1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn transpose_rejects_stride_that_overflows_the_output() {
+        // (4 - 1) * (usize::MAX / 2) overflows.
+        let msg = err_text(ConvTranspose2dSpec::new(
+            &shape(&[1, 3, 4, 4]),
+            &shape(&[3, 5, 3, 3]),
+            (usize::MAX / 2, 1),
+            (0, 0),
+        ));
+        assert!(
+            msg.contains("transposed conv output height overflows usize"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn transpose_rejects_kernel_that_overflows_the_output() {
+        // (2 - 1) * usize::MAX + 1 overflows in the add, not the multiply.
+        let msg = err_text(transpose_out(
+            "ConvTranspose2d",
+            "width",
+            2,
+            1,
+            usize::MAX,
+            0,
+        ));
+        assert!(
+            msg.contains("transposed conv output width overflows usize"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn transpose_treats_padding_that_overflows_when_doubled_as_non_positive() {
+        let msg = err_text(ConvTranspose2dSpec::new(
+            &shape(&[1, 3, 4, 4]),
+            &shape(&[3, 5, 3, 3]),
+            (1, 1),
+            (usize::MAX, 0),
+        ));
+        assert!(msg.contains("would be non-positive"), "{msg}");
+    }
+
+    #[test]
+    fn transpose_rejects_non_4d_input() {
+        let msg = err_text(ConvTranspose2dSpec::new(
+            &shape(&[3, 4, 4]),
+            &shape(&[3, 5, 3, 3]),
+            (1, 1),
+            (0, 0),
+        ));
+        assert!(msg.contains("input must be 4D"), "{msg}");
+    }
+
+    #[test]
+    fn pool_output_dims_table() {
+        // (in, k, stride, pad, out)
+        let cases = [
+            (8, 2, 2, 0, 4),
+            (8, 3, 2, 1, 4),
+            (7, 3, 1, 0, 5),
+            (5, 5, 1, 2, 5),
+        ];
+        for (n, k, s, p, out) in cases {
+            let spec = Window2dSpec::new(&shape(&[2, 3, n, n]), (k, k), (s, s), (p, p)).unwrap();
+            assert_eq!(
+                (spec.out_h, spec.out_w),
+                (out, out),
+                "in {n} k {k} s {s} p {p}"
+            );
+        }
+    }
+
+    #[test]
+    fn pool_spec_fields_come_from_the_right_axes() {
+        let spec = Window2dSpec::new(&shape(&[2, 3, 8, 6]), (2, 3), (2, 1), (0, 1)).unwrap();
+        assert_eq!((spec.batch, spec.channels), (2, 3));
+        assert_eq!((spec.in_h, spec.in_w), (8, 6));
+        assert_eq!((spec.kernel_h, spec.kernel_w), (2, 3));
+        assert_eq!((spec.stride_h, spec.stride_w), (2, 1));
+        assert_eq!((spec.pad_h, spec.pad_w), (0, 1));
+        assert_eq!(spec.output_dims(), [2, 3, 4, 6]);
+    }
+
+    #[test]
+    fn pool_rejects_non_4d_input() {
+        let msg = err_text(Window2dSpec::new(&shape(&[8, 8]), (2, 2), (2, 2), (0, 0)));
+        assert!(msg.contains("input must be 4D"), "{msg}");
+    }
+
+    #[test]
+    fn pool_rejects_zero_stride() {
+        let msg = err_text(Window2dSpec::new(
+            &shape(&[1, 1, 8, 8]),
+            (2, 2),
+            (0, 0),
+            (0, 0),
+        ));
+        assert!(msg.contains("stride"), "{msg}");
+    }
+
+    #[test]
+    fn window_rejects_zero_kernel() {
+        let msg = err_text(Window2dSpec::new(
+            &shape(&[1, 1, 8, 8]),
+            (0, 2),
+            (1, 1),
+            (0, 0),
+        ));
+        assert!(msg.contains("kernel must be positive"), "{msg}");
+    }
+
+    #[test]
+    fn window_padded_extents_include_both_sides() {
+        let spec = Window2dSpec::new(&shape(&[1, 1, 8, 6]), (2, 2), (2, 2), (1, 2)).unwrap();
+        assert_eq!((spec.padded_h(), spec.padded_w()), (10, 10));
+    }
+
+    #[test]
+    fn pool_rejects_kernel_larger_than_padded_input() {
+        let msg = err_text(Window2dSpec::new(
+            &shape(&[1, 1, 2, 2]),
+            (5, 5),
+            (1, 1),
+            (1, 1),
+        ));
+        assert!(msg.contains("larger than padded input"), "{msg}");
+    }
+
+    // ===== MatmulSpec =====
+
+    #[test]
+    fn matmul_2d_has_no_batch() {
+        let spec = MatmulSpec::new(&shape(&[3, 4]), &shape(&[4, 5])).unwrap();
+        assert_eq!((spec.m, spec.k, spec.n), (3, 4, 5));
+        assert!(!spec.is_batched());
+        assert_eq!(spec.batch_count(), 1);
+        assert_eq!(spec.out_dims(), vec![3, 5]);
+        assert_eq!(spec.a_dims(), vec![3, 4]);
+        assert_eq!(spec.b_dims(), vec![4, 5]);
+    }
+
+    #[test]
+    fn matmul_3d_equal_batch() {
+        let spec = MatmulSpec::new(&shape(&[2, 3, 4]), &shape(&[2, 4, 5])).unwrap();
+        assert_eq!((spec.m, spec.k, spec.n), (3, 4, 5));
+        assert!(spec.is_batched());
+        assert_eq!(spec.batch_count(), 2);
+        assert_eq!(spec.out_dims(), vec![2, 3, 5]);
+    }
+
+    #[test]
+    fn matmul_batch_dims_broadcast_within_equal_rank() {
+        let spec = MatmulSpec::new(&shape(&[2, 1, 3, 4]), &shape(&[1, 6, 4, 5])).unwrap();
+        assert_eq!(spec.a_batch, vec![2, 1]);
+        assert_eq!(spec.b_batch, vec![1, 6]);
+        assert_eq!(spec.out_batch, vec![2, 6]);
+        assert_eq!(spec.batch_count(), 12);
+        assert_eq!(spec.a_dims(), vec![2, 1, 3, 4]);
+        assert_eq!(spec.b_dims(), vec![1, 6, 4, 5]);
+        assert_eq!(spec.a_expanded_dims(), vec![2, 6, 3, 4]);
+        assert_eq!(spec.b_expanded_dims(), vec![2, 6, 4, 5]);
+        assert_eq!(spec.out_dims(), vec![2, 6, 3, 5]);
+    }
+
+    #[test]
+    fn matmul_rejects_rank_mismatch_the_b4_shape() {
+        // The audit's B4 repro: [2,3,4] @ [2,1,4,6].
+        let msg = err_text(MatmulSpec::new(&shape(&[2, 3, 4]), &shape(&[2, 1, 4, 6])));
+        assert!(msg.contains("equal rank"), "{msg}");
+    }
+
+    #[test]
+    fn matmul_spec_rejects_an_output_over_max_numel() {
+        let msg = err_text(MatmulSpec::new(
+            &shape(&[100_000, 1]),
+            &shape(&[1, 100_000]),
+        ));
+        assert!(msg.contains("elements >"), "{msg}");
+    }
+
+    #[test]
+    fn matmul_rejects_2d_against_3d() {
+        let msg = err_text(MatmulSpec::new(&shape(&[3, 4]), &shape(&[2, 4, 5])));
+        assert!(msg.contains("equal rank"), "{msg}");
+    }
+
+    #[test]
+    fn matmul_rejects_rank_below_two() {
+        let msg = err_text(MatmulSpec::new(&shape(&[4]), &shape(&[4, 5])));
+        assert!(msg.contains("rank >= 2"), "{msg}");
+    }
+
+    #[test]
+    fn matmul_rejects_inner_dim_mismatch() {
+        let msg = err_text(MatmulSpec::new(&shape(&[2, 3, 4]), &shape(&[2, 5, 6])));
+        assert!(msg.contains("inner dims"), "{msg}");
+    }
+
+    #[test]
+    fn matmul_rejects_batch_dims_that_do_not_broadcast() {
+        let msg = err_text(MatmulSpec::new(&shape(&[2, 3, 4]), &shape(&[3, 4, 5])));
+        assert!(msg.contains("do not broadcast"), "{msg}");
+    }
+}

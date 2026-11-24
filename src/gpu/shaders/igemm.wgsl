@@ -1,6 +1,8 @@
 // Implicit GEMM (iGEMM) Convolution GPU Shader
 // Tiled computation without materializing im2col matrix
-// Each workgroup computes a tile of output channels and spatial positions
+// Each workgroup computes one 16x16 tile: 16 output channels by 16 spatial positions, one
+// output per invocation. The host launches one workgroup per tile (`Groups::Tiles`, #307),
+// so every output is written exactly once.
 
 struct IGEMMParams {
     batch_size: u32,
@@ -23,9 +25,9 @@ struct IGEMMParams {
     _padding: u32,
 }
 
-@group(0) @binding(0) var<storage, read> input: array<f32>;
-@group(0) @binding(1) var<storage, read> weight: array<f32>;
-@group(0) @binding(2) var<storage, read_write> output: array<f32>;
+@group(0) @binding(0) var<storage, read> input: array<ELEM>;
+@group(0) @binding(1) var<storage, read> weight: array<ELEM>;
+@group(0) @binding(2) var<storage, read_write> output: array<ELEM>;
 @group(0) @binding(3) var<uniform> params: IGEMMParams;
 
 // Workgroup-local storage for accumulating partial results
@@ -33,7 +35,14 @@ struct IGEMMParams {
 // for this simple tiled approach
 
 @compute @workgroup_size(16, 16, 1)
-fn igemm_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn igemm_main(
+    @builtin(workgroup_id) wg_id: vec3<u32>,
+    @builtin(num_workgroups) num_wg: vec3<u32>,
+    @builtin(local_invocation_id) local_id: vec3<u32>,
+) {
+    // x over output channels, y over batch * h_out * w_out, 16 of each per workgroup
+    // (`oc_tile` and `s_tile` are 16, the workgroup size).
+    let global_id = tile_global_id(wg_id, num_wg, local_id, (params.out_channels + 15u) / 16u);
     let batch_size = params.batch_size;
     let in_channels = params.in_channels;
     let out_channels = params.out_channels;
@@ -47,33 +56,14 @@ fn igemm_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let pad_w = params.pad_w;
     let h_out = params.h_out;
     let w_out = params.w_out;
-    let oc_tile = params.oc_tile;
     let ic_tile = params.ic_tile;
-    let s_tile = params.s_tile;
 
-    // Decode global_id to (out_channel, spatial_position)
-    // global_id.x = output channel (tiled)
-    // global_id.y = spatial position in batch (tiled)
-    // global_id.z = tile ID (oc_tile * s_tile workgroups per tile)
-
-    let oc = global_id.x;
-    let spatial_idx = global_id.y;
-    let tile_id = global_id.z;
-
-    // Calculate which tile we're in
-    let tiles_per_oc = (out_channels + oc_tile - 1u) / oc_tile;
-    let tiles_per_spatial = ((batch_size * h_out * w_out) + s_tile - 1u) / s_tile;
-
-    let oc_tile_idx = tile_id / tiles_per_spatial;
-    let spatial_tile_idx = tile_id % tiles_per_spatial;
-
-    // Calculate actual output channel and spatial position
-    let actual_oc = oc_tile_idx * oc_tile + oc;
+    let actual_oc = global_id.x;
     if (actual_oc >= out_channels) {
         return;
     }
 
-    let actual_spatial = spatial_tile_idx * s_tile + spatial_idx;
+    let actual_spatial = global_id.y;
     let total_spatial = batch_size * h_out * w_out;
     if (actual_spatial >= total_spatial) {
         return;
@@ -98,12 +88,15 @@ fn igemm_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // For each kernel position
             for (var kh: u32 = 0u; kh < kernel_h; kh++) {
                 for (var kw: u32 = 0u; kw < kernel_w; kw++) {
-                    // Input position with padding
-                    let h_in = oh * stride_h + kh - pad_h;
-                    let w_in = ow * stride_w + kw - pad_w;
+                    // Position in the padded input. The padding test compares before subtracting
+                    // `pad`, so no coordinate relies on u32 wraparound (#314).
+                    let h_pad = oh * stride_h + kh;
+                    let w_pad = ow * stride_w + kw;
 
-                    // Check if within valid bounds (not in padding area)
-                    if (h_in >= 0u && h_in < height && w_in >= 0u && w_in < width) {
+                    // Skip the padding rows and columns (they contribute zero)
+                    if (h_pad >= pad_h && h_pad < pad_h + height && w_pad >= pad_w && w_pad < pad_w + width) {
+                        let h_in = h_pad - pad_h;
+                        let w_in = w_pad - pad_w;
                         // Input index: NCHW format
                         // input[b, ic, h_in, w_in]
                         let input_idx = b * in_channels * height * width +
@@ -118,7 +111,7 @@ fn igemm_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                                         kh * kernel_w +
                                         kw;
 
-                        sum += input[input_idx] * weight[weight_idx];
+                        sum += ld_input(input_idx) * ld_weight(weight_idx);
                     }
                 }
             }
@@ -134,5 +127,5 @@ fn igemm_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     oh * w_out +
                     ow;
 
-    output[output_idx] = sum;
+    st_output(output_idx, sum);
 }

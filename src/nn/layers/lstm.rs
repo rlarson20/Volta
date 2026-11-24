@@ -1,7 +1,8 @@
-use crate::Storage;
+use crate::error::OrPanic;
 use crate::io::{StateDict, TensorData};
-use crate::nn::Module;
-use crate::tensor::{RawTensor, Tensor, TensorOps};
+use crate::nn::hyper;
+use crate::nn::{Module, RecurrentLayer, SealedLayer};
+use crate::tensor::{RawTensor, Tensor};
 
 /// LSTM Cell - processes one timestep at a time
 ///
@@ -12,9 +13,9 @@ use crate::tensor::{RawTensor, Tensor, TensorOps};
 /// - o = `sigmoid(W_io @ x + W_ho @ h + b_o)`  (output gate)
 /// - `c_next` = f * c + i * g                  (new cell state)
 /// - `h_next` = o * `tanh(c_next)`               (new hidden state)
+#[derive(Debug)]
 pub struct LSTMCell {
-    #[allow(dead_code)]
-    input_size: usize,
+    /// Width of the hidden and cell state.
     hidden_size: usize,
     /// Combined weights for input: `[4*hidden_size, input_size]`
     /// Order: input, forget, cell, output gates
@@ -29,62 +30,90 @@ pub struct LSTMCell {
 
 impl LSTMCell {
     /// Create a new LSTM cell
+    ///
+    /// # Panics
+    /// If `input_size` or `hidden_size` is zero (see [`Self::try_new`]).
     #[must_use]
+    #[track_caller]
     pub fn new(input_size: usize, hidden_size: usize, bias: bool) -> Self {
+        Self::try_new(input_size, hidden_size, bias).or_panic("LSTMCell")
+    }
+
+    /// [`Self::new`], checking the sizes first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` naming the argument if `input_size` or
+    /// `hidden_size` is zero.
+    /// A parameter of more than [`crate::shape::MAX_NUMEL`] elements is refused the same
+    /// way, before anything is allocated (#460).
+    pub fn try_new(input_size: usize, hidden_size: usize, bias: bool) -> crate::Result<Self> {
+        hyper::at_least_one("LSTMCell", "input_size", input_size)?;
+        hyper::at_least_one("LSTMCell", "hidden_size", hidden_size)?;
+        // weight_ih is [4H, in] and weight_hh is [4H, H].
+        hyper::param_numel(
+            "LSTMCell",
+            "input_size, hidden_size",
+            &[4, hidden_size, input_size.max(hidden_size)],
+        )?;
         // Initialize weights using Xavier/Glorot uniform
         let weight_ih = RawTensor::xavier_uniform(&[4 * hidden_size, input_size]);
         let weight_hh = RawTensor::xavier_uniform(&[4 * hidden_size, hidden_size]);
 
-        weight_ih.borrow_mut().requires_grad = true;
-        weight_hh.borrow_mut().requires_grad = true;
+        weight_ih.set_requires_grad(true);
+        weight_hh.set_requires_grad(true);
 
         let (bias_ih, bias_hh) = if bias {
             let b_ih = RawTensor::zeros(&[4 * hidden_size]);
             let b_hh = RawTensor::zeros(&[4 * hidden_size]);
-            b_ih.borrow_mut().requires_grad = true;
-            b_hh.borrow_mut().requires_grad = true;
+            b_ih.set_requires_grad(true);
+            b_hh.set_requires_grad(true);
             (Some(b_ih), Some(b_hh))
         } else {
             (None, None)
         };
 
-        Self {
-            input_size,
+        Ok(Self {
             hidden_size,
             weight_ih,
             weight_hh,
             bias_ih,
             bias_hh,
-        }
+        })
     }
 
-    /// Forward pass for a single timestep
-    ///
-    /// # Arguments
-    /// * `input` - Input tensor of shape `[batch, input_size]`
-    /// * `state` - Optional tuple of (h, c) where h and c are `[batch, hidden_size]`
-    ///
-    /// # Returns
-    /// Tuple of `(h_next, c_next)` both of shape `[batch, hidden_size]`
-    #[allow(clippy::many_single_char_names)]
-    pub fn forward_step(
-        &self,
-        input: &Tensor,
-        state: Option<(&Tensor, &Tensor)>,
-    ) -> (Tensor, Tensor) {
-        let batch_size = input.borrow().shape.first().copied().unwrap_or(1);
+    /// Gate `gate_idx`'s columns of the combined `[batch, 4*hidden_size]` gates tensor.
+    /// A `shrink`, so the gradient flows back into `gates` and the result stays on its device.
+    fn slice_gate(&self, gates: &Tensor, gate_idx: usize) -> Tensor {
+        let start = gate_idx * self.hidden_size;
+        let batch_size = gates.shape().dim_at(0);
+        gates.shrink(&[(0, batch_size), (start, start + self.hidden_size)])
+    }
+}
 
-        // Initialize hidden and cell states if not provided
-        let (h, c) = if let Some((h, c)) = state {
-            (h.clone(), c.clone())
-        } else {
-            let h = RawTensor::zeros(&[batch_size, self.hidden_size]);
-            let c = RawTensor::zeros(&[batch_size, self.hidden_size]);
-            (h, c)
-        };
+impl SealedLayer for LSTMCell {}
 
-        // Compute gates: input @ weight_ih + h @ weight_hh + bias
-        let gates = input.matmul(&self.weight_ih.transpose());
+impl RecurrentLayer for LSTMCell {
+    /// `(h, c)`, each `[batch, hidden_size]`.
+    type State = (Tensor, Tensor);
+
+    fn initial_state(&self, batch: usize) -> Self::State {
+        // On the parameters' device, so a GPU cell starts from GPU state.
+        let zeros = vec![0.0; batch * self.hidden_size];
+        (
+            self.weight_ih
+                .constant_like(zeros.clone(), &[batch, self.hidden_size]),
+            self.weight_ih
+                .constant_like(zeros, &[batch, self.hidden_size]),
+        )
+    }
+
+    /// One timestep. `x` is `[batch, input_size]`; `state` holds `(h, c)` and is overwritten with
+    /// `(h_next, c_next)`. Returns `h_next`.
+    fn step(&self, x: &Tensor, state: &mut Self::State) -> Tensor {
+        let (h, c) = (&state.0, &state.1);
+
+        // Compute gates: x @ weight_ih + h @ weight_hh + bias
+        let gates = x.matmul(&self.weight_ih.transpose());
         let gates = gates.add(&h.matmul(&self.weight_hh.transpose()));
 
         let gates = if let Some(ref b_ih) = self.bias_ih {
@@ -99,59 +128,21 @@ impl LSTMCell {
         };
 
         // Split gates into i, f, g, o (each is [batch, hidden_size])
-        let i_gate = self.slice_gate(&gates, 0); // input gate
-        let f_gate = self.slice_gate(&gates, 1); // forget gate
-        let g_gate = self.slice_gate(&gates, 2); // cell gate
-        let o_gate = self.slice_gate(&gates, 3); // output gate
+        let i = self.slice_gate(&gates, 0).sigmoid();
+        let f = self.slice_gate(&gates, 1).sigmoid();
+        let g = self.slice_gate(&gates, 2).tanh();
+        let o = self.slice_gate(&gates, 3).sigmoid();
 
-        // Apply activations
-        let i = i_gate.sigmoid();
-        let f = f_gate.sigmoid();
-        let g = g_gate.tanh();
-        let o = o_gate.sigmoid();
-
-        // Update cell state: c_next = f * c + i * g
-        let c_next = f.elem_mul(&c).add(&i.elem_mul(&g));
-
-        // Update hidden state: h_next = o * tanh(c_next)
+        // c_next = f * c + i * g;  h_next = o * tanh(c_next)
+        let c_next = f.elem_mul(c).add(&i.elem_mul(&g));
         let h_next = o.elem_mul(&c_next.tanh());
 
-        (h_next, c_next)
-    }
-
-    /// Helper to extract a gate from the combined gates tensor
-    fn slice_gate(&self, gates: &Tensor, gate_idx: usize) -> Tensor {
-        let start = gate_idx * self.hidden_size;
-        let end = (gate_idx + 1) * self.hidden_size;
-
-        // Extract columns [start:end] for all rows
-        // gates shape: [batch, 4*hidden_size]
-        let batch_size = gates.borrow().shape.first().copied().unwrap_or(1);
-        let data = &gates.borrow().data;
-
-        let mut gate_data = Vec::with_capacity(batch_size * self.hidden_size);
-        for i in 0..batch_size {
-            let row_start = i * 4 * self.hidden_size;
-            if let Some(slice) = data.get(row_start + start..row_start + end) {
-                gate_data.extend_from_slice(slice);
-            }
-        }
-
-        RawTensor::new(
-            gate_data,
-            &[batch_size, self.hidden_size],
-            gates.borrow().requires_grad,
-        )
+        *state = (h_next.clone(), c_next);
+        h_next
     }
 }
 
 impl Module for LSTMCell {
-    fn forward(&self, x: &Tensor) -> Tensor {
-        // For Module trait, just return hidden state
-        let (h, _c) = self.forward_step(x, None);
-        h
-    }
-
     fn parameters(&self) -> Vec<Tensor> {
         let mut params = vec![self.weight_ih.clone(), self.weight_hh.clone()];
         if let Some(ref b_ih) = self.bias_ih {
@@ -182,32 +173,90 @@ impl Module for LSTMCell {
         state
     }
 
-    fn load_state_dict(&mut self, state: &StateDict) {
-        if let Some(w) = state.get("weight_ih") {
-            let mut t = self.weight_ih.borrow_mut();
-            t.data = Storage::cpu(w.data.clone());
-            t.shape.clone_from(&w.shape);
+    fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+        plan.param("weight_ih", &self.weight_ih);
+        plan.param("weight_hh", &self.weight_hh);
+        if let Some(bias_ih) = &self.bias_ih {
+            plan.param("bias_ih", bias_ih);
         }
-        if let Some(w) = state.get("weight_hh") {
-            let mut t = self.weight_hh.borrow_mut();
-            t.data = Storage::cpu(w.data.clone());
-            t.shape.clone_from(&w.shape);
+        if let Some(bias_hh) = &self.bias_hh {
+            plan.param("bias_hh", bias_hh);
         }
-        if let Some(b) = state.get("bias_ih")
-            && self.bias_ih.is_some()
-        {
-            let bias_tensor = self.bias_ih.as_ref().unwrap();
-            let mut t = bias_tensor.borrow_mut();
-            t.data = Storage::cpu(b.data.clone());
-            t.shape.clone_from(&b.shape);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two steps from zero state on the same input, so `assert_trainable!` (which needs `Layer`)
+    /// can drive the cell. One step is not enough: with `h = 0`, `weight_hh`'s gradient
+    /// (`dgatesᵀ · h`) is exactly zero, and with `c = 0` the forget gate gets none.
+    struct TwoSteps(LSTMCell);
+
+    impl Module for TwoSteps {
+        fn parameters(&self) -> Vec<Tensor> {
+            self.0.parameters()
         }
-        if let Some(b) = state.get("bias_hh")
-            && self.bias_hh.is_some()
-        {
-            let bias_tensor = self.bias_hh.as_ref().unwrap();
-            let mut t = bias_tensor.borrow_mut();
-            t.data = Storage::cpu(b.data.clone());
-            t.shape.clone_from(&b.shape);
+        fn state_dict(&self) -> StateDict {
+            self.0.state_dict()
+        }
+        fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+            self.0.plan_load(plan);
+        }
+    }
+
+    impl crate::nn::Layer for TwoSteps {
+        fn forward(&self, x: &Tensor) -> Tensor {
+            let mut state = self.0.initial_state(x.shape().dim_at(0));
+            let _ = self.0.step(x, &mut state);
+            self.0.step(x, &mut state)
+        }
+    }
+
+    #[test]
+    fn test_lstmcell_assert_trainable() {
+        let cell = TwoSteps(LSTMCell::new(4, 8, true));
+        let x = crate::macros::trainable_input(&[2, 4]);
+        crate::macros::assert_trainable!(cell, x);
+    }
+
+    /// Finite-difference check of one step's gradient with respect to `x`, `h`, and `c`, from a
+    /// random nonzero state under a random weighted loss of both `h_next` and `c_next`. A gate
+    /// slice at the wrong offset, or one that drops its gradient (B2), fails it.
+    #[test]
+    fn test_lstmcell_step_gradcheck() {
+        crate::tensor::manual_seed(0x157);
+        let cell = LSTMCell::new(3, 4, true);
+        let x = RawTensor::randn(&[2, 3]);
+        let h = RawTensor::randn(&[2, 4]);
+        let c = RawTensor::randn(&[2, 4]);
+        let w_h = RawTensor::randn(&[2, 4]);
+        let w_c = RawTensor::randn(&[2, 4]);
+        let loss = |x: &Tensor, h: &Tensor, c: &Tensor| {
+            let mut state = (h.clone(), c.clone());
+            let h_next = cell.step(x, &mut state);
+            h_next.elem_mul(&w_h).add(&state.1.elem_mul(&w_c)).sum()
+        };
+
+        for (name, input) in [("x", &x), ("h", &h), ("c", &c)] {
+            input.set_requires_grad(true);
+            let (max_err, mean_err, passed) = RawTensor::check_gradients(
+                input,
+                |t| match name {
+                    "x" => loss(t, &h, &c),
+                    "h" => loss(&x, t, &c),
+                    _ => loss(&x, &h, t),
+                },
+                1e-2,
+                // Worst of 900 checks (300 seeds x 3 inputs) was 1.6e-2; a 1.1x-scaled
+                // gradient is off by 0.1.
+                3e-2,
+            );
+            assert!(
+                passed,
+                "LSTMCell d/d{name} check failed: max_error={max_err:.6e}, mean_error={mean_err:.6e}"
+            );
         }
     }
 }

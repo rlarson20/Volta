@@ -1,212 +1,135 @@
-use crate::autograd::GradFn;
+use crate::autograd::{GradFn, edge};
+use crate::device::Device;
+use crate::device_policy::kernel_failed;
+use crate::macros::define_ops;
+use crate::real::{Real, compute_dtype, dispatch_real};
+use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
-use statrs::function::erf::erf as statrs_erf;
-use std::cell::RefCell;
-use std::rc::Rc;
 
-/// Unary operations: single input, single output
-///
-/// Each operation has a corresponding derivative:
-/// - Neg: d(-x)/dx = -1
-/// - Recip: d(1/x)/dx = -1/x²
-/// - Sqrt: d(√x)/dx = 1/(2√x)
-/// - Exp: d(eˣ)/dx = eˣ
-/// - Log: d(ln(x))/dx = 1/x
-/// - Exp2: d(2ˣ)/dx = 2ˣ·ln(2)
-/// - Log2: d(log₂(x))/dx = 1/(x·ln(2))
-/// - Sin: d(sin(x))/dx = cos(x)
-/// - Cos: d(cos(x))/dx = -sin(x)
-/// - Tanh: d(tanh(x))/dx = 1 - tanh²(x)
-/// - Sigmoid: d(σ(x))/dx = σ(x)·(1-σ(x))
-/// - `ReLU`: d(max(0,x))/dx = x > 0 ? 1 : 0
-/// - Erf: d(erf(x))/dx = 2/√π · exp(-x²)
-#[derive(Clone, Copy)]
-pub enum UnaryOp {
-    Neg,
-    Recip,
-    Sqrt,
-    Exp2,
-    Exp,
-    Log2,
-    Log,
-    Sin,
-    Cos,
-    Tanh,
-    Sigmoid,
-    ReLU,
-    Erf,
+// One row per op: CPU forward, CPU backward, and the GPU pipelines (or `cpu_only`).
+// Adding an op is one row here plus, if it has a GPU kernel, a WGSL entry point and a
+// `ComputePipelines` field. See `define_ops!` for the row grammar.
+define_ops! {
+    /// Unary operations: single input, single output
+    ///
+    /// Each variant's doc gives its derivative.
+    unary UnaryOp {
+        /// d(-x)/dx = -1
+        Neg => |x| -x, |g, _x| -g, gpu(neg, neg_backward);
+        /// d(1/x)/dx = -1/x²
+        // `-g * (1/x) * (1/x)`, not `-g / (x * x)`: `x * x` overflows or underflows where
+        // the gradient is finite (#92). The `recip_backward` kernel computes the same
+        // quotient another way, with `over_square` (`frexp`/`ldexp`), because Metal's fast
+        // math may reassociate `r * r` back into `1/(x * x)`.
+        Recip => |x| 1.0 / x, |g, x| { let r = 1.0 / x; -g * r * r }, gpu(recip, recip_backward);
+        /// d(√x)/dx = 1/(2√x)
+        Sqrt => |x| x.sqrt(), |g, x| g / (2.0 * x.sqrt()), gpu(sqrt, sqrt_backward);
+        /// d(2ˣ)/dx = 2ˣ·ln(2)
+        Exp2 => |x| x.exp2(),
+            |g, x| g * x.exp2() * fl::LN_2,
+            gpu(exp2, exp2_backward);
+        /// d(eˣ)/dx = eˣ
+        Exp => |x| x.exp(), |g, x| g * x.exp(), gpu(exp, exp_backward);
+        /// d(log₂(x))/dx = 1/(x·ln(2))
+        Log2 => |x| x.log2(),
+            |g, x| g / (x * fl::LN_2),
+            gpu(log2, log2_backward);
+        /// d(ln(x))/dx = 1/x
+        Log => |x| x.ln(), |g, x| g / x, gpu(log, log_backward);
+        /// d(sin(x))/dx = cos(x)
+        Sin => |x| x.sin(), |g, x| g * x.cos(), gpu(sin, sin_backward);
+        /// d(cos(x))/dx = -sin(x)
+        Cos => |x| x.cos(), |g, x| -g * x.sin(), gpu(cos, cos_backward);
+        /// d(tanh(x))/dx = 1 - tanh²(x)
+        Tanh => |x| x.tanh(),
+            |g, x| {
+                let t = x.tanh();
+                g * t.mul_add(-t, 1.0)
+            },
+            gpu(tanh, tanh_backward);
+        /// d(σ(x))/dx = σ(x)·(1-σ(x))
+        Sigmoid => |x| 1.0 / (1.0 + (-x).exp()),
+            |g, x| {
+                let s = 1.0 / (1.0 + (-x).exp());
+                g * s * (1.0 - s)
+            },
+            gpu(sigmoid, sigmoid_backward);
+        /// max(0, x), with NaN kept (torch.relu(NaN) is NaN); d/dx = x > 0 ? 1 : 0
+        ReLU => |x| if x.is_nan() { x } else { x.max(0.0) }, |g, x| if x > 0.0 { g } else { 0.0 }, gpu(relu, relu_backward);
+        /// d(erf(x))/dx = 2/√π · exp(-x²)
+        Erf => |x| fl::erf(x),
+            |g, x| g * (2.0 / fl::PI.sqrt()) * (-x * x).exp(),
+            gpu(erf, erf_backward);
+    }
 }
 
 /// Gradient function for unary operations
 ///
 /// Stores which operation was performed so backward can apply the correct derivative.
-pub struct UnaryGradFn {
+#[derive(Clone)]
+pub(crate) struct UnaryGradFn {
+    /// The forward op, which selects the derivative.
     op: UnaryOp,
 }
 
-impl GradFn for UnaryGradFn {
-    #[allow(clippy::too_many_lines)]
-    fn backward(&self, out_grad: &RawTensor, parents: &[Tensor]) -> Vec<Option<Tensor>> {
+impl UnaryGradFn {
+    /// The op's name in device errors and fallback events, e.g. `"Unary(Exp)"`.
+    pub(crate) fn op_name(&self) -> String {
+        format!("Unary({:?})", self.op)
+    }
+
+    /// Whether backward reads the input's values. Only `Neg`'s derivative is a constant.
+    /// Every op is spelled out so a new one has to decide.
+    pub(crate) const fn saves_input(&self) -> bool {
+        match self.op {
+            UnaryOp::Neg => false,
+            UnaryOp::Recip
+            | UnaryOp::Sqrt
+            | UnaryOp::Exp2
+            | UnaryOp::Exp
+            | UnaryOp::Log2
+            | UnaryOp::Log
+            | UnaryOp::Sin
+            | UnaryOp::Cos
+            | UnaryOp::Tanh
+            | UnaryOp::Sigmoid
+            | UnaryOp::ReLU
+            | UnaryOp::Erf => true,
+        }
+    }
+
+    /// Gradient for the single input: `out_grad` times the op's derivative.
+    pub(crate) fn backward(
+        &self,
+        out_grad: &RawTensor,
+        parents: &[Tensor],
+    ) -> Vec<Option<Storage>> {
         let x = parents
             .first()
             .map(|p| p.borrow())
             .expect("unary ops require 1 parent");
 
-        // Check GPU path - if both out_grad and x are on GPU, use GPU backward
-        #[cfg(feature = "gpu")]
-        {
-            if out_grad.device.is_gpu()
-                && x.device.is_gpu()
-                && let kernel = unary_backward_kernel_name(self.op)
-                && let Some(grad_storage) =
-                    RawTensor::gpu_unary_backward(&out_grad.data, &x.data, kernel)
-            {
-                return vec![Some(RawTensor::new_with_storage(
-                    grad_storage,
-                    &x.shape,
-                    x.device.clone(),
-                    false,
-                ))];
-            }
+        // GPU path when both are on the GPU and the op has a kernel. A `None` from the
+        // kernel is then a failure, not a reason to compute on the CPU.
+        if out_grad.device.is_gpu() && x.device.is_gpu() && self.op.has_gpu_kernel() {
+            let grad_storage = RawTensor::gpu_unary_backward(&out_grad.data, &x.data, self.op)
+                .unwrap_or_else(|| kernel_failed(&self.op_name()));
+            return vec![Some(grad_storage)];
         }
 
-        // CPU fallback
-        // Apply chain rule: ∂L/∂x = ∂L/∂y · ∂y/∂x
-        // where y = f(x) is the unary operation
-        let grad_data: Vec<f32> = match self.op {
-            UnaryOp::Neg => out_grad.data.iter().map(|&g| -g).collect(),
-            UnaryOp::Recip => out_grad
+        // CPU path (CPU tensors, or a `cpu_only` op). Chain rule: ∂L/∂x = ∂L/∂y · ∂y/∂x, with the derivative from
+        // the `UnaryOp` table, in x's dtype.
+        let op = self.op;
+        let grad = dispatch_real!(x.data.dtype(), T => Storage::from_compute(x.data.dtype(),
+            out_grad
                 .data
+                .host::<T>()
                 .iter()
-                .zip(&x.data)
-                .map(|(&g, &x)| -g / (x * x))
-                .collect(),
-            UnaryOp::Sqrt => out_grad
-                .data
-                .iter()
-                .zip(&x.data)
-                .map(|(&g, &x)| g / (2.0 * x.sqrt()))
-                .collect(),
-            UnaryOp::Exp => out_grad
-                .data
-                .iter()
-                .zip(&x.data)
-                .map(|(&g, &x)| g * x.exp())
-                .collect(),
-            UnaryOp::Log => out_grad
-                .data
-                .iter()
-                .zip(&x.data)
-                .map(|(&g, &x)| g / x)
-                .collect(),
-            UnaryOp::Exp2 => {
-                let ln2 = std::f32::consts::LN_2;
-                out_grad
-                    .data
-                    .iter()
-                    .zip(&x.data)
-                    .map(|(&g, &x)| g * x.exp2() * ln2)
-                    .collect()
-            }
-            UnaryOp::Log2 => {
-                let ln2 = std::f32::consts::LN_2;
-                out_grad
-                    .data
-                    .iter()
-                    .zip(&x.data)
-                    .map(|(&g, &x)| g / (x * ln2))
-                    .collect()
-            }
-            UnaryOp::Sin => out_grad
-                .data
-                .iter()
-                .zip(&x.data)
-                .map(|(&g, &x)| g * x.cos())
-                .collect(),
-            UnaryOp::Cos => out_grad
-                .data
-                .iter()
-                .zip(&x.data)
-                .map(|(&g, &x)| -g * x.sin())
-                .collect(),
-            UnaryOp::Tanh => out_grad
-                .data
-                .iter()
-                .zip(&x.data)
-                .map(|(&g, &x)| {
-                    let t = x.tanh();
-                    g * t.mul_add(-t, 1.0)
-                })
-                .collect(),
-            UnaryOp::Sigmoid => out_grad
-                .data
-                .iter()
-                .zip(&x.data)
-                .map(|(&g, &x)| {
-                    let s = 1.0 / (1.0 + (-x).exp());
-                    g * s * (1.0 - s)
-                })
-                .collect(),
-            UnaryOp::ReLU => out_grad
-                .data
-                .iter()
-                .zip(&x.data)
-                .map(|(&g, &x)| if x > 0.0 { g } else { 0.0 })
-                .collect(),
-            UnaryOp::Erf => {
-                let two_over_sqrt_pi = 2.0 / std::f32::consts::PI.sqrt();
-                out_grad
-                    .data
-                    .iter()
-                    .zip(&x.data)
-                    .map(|(&g, &x)| g * two_over_sqrt_pi * (-x * x).exp())
-                    .collect()
-            }
-        };
-        vec![Some(RawTensor::new(grad_data, &x.shape, false))]
-    }
-
-    fn clone_box(&self) -> Box<dyn GradFn> {
-        Box::new(Self { op: self.op })
-    }
-}
-// Map a `UnaryOp` to the corresponding GPU kernel name, if supported.
-#[cfg(feature = "gpu")]
-const fn unary_kernel_name(op: UnaryOp) -> &'static str {
-    match op {
-        UnaryOp::Neg => "neg",
-        UnaryOp::Exp => "exp",
-        UnaryOp::Log => "log",
-        UnaryOp::Tanh => "tanh",
-        UnaryOp::Sigmoid => "sigmoid",
-        UnaryOp::ReLU => "relu",
-        UnaryOp::Sqrt => "sqrt",
-        UnaryOp::Recip => "recip",
-        UnaryOp::Exp2 => "exp2",
-        UnaryOp::Log2 => "log2",
-        UnaryOp::Sin => "sin",
-        UnaryOp::Cos => "cos",
-        UnaryOp::Erf => "erf",
-    }
-}
-
-// Map a `UnaryOp` to the corresponding GPU backward kernel name, if supported.
-#[cfg(feature = "gpu")]
-const fn unary_backward_kernel_name(op: UnaryOp) -> &'static str {
-    match op {
-        UnaryOp::Neg => "neg_backward",
-        UnaryOp::Exp => "exp_backward",
-        UnaryOp::Log => "log_backward",
-        UnaryOp::Tanh => "tanh_backward",
-        UnaryOp::Sigmoid => "sigmoid_backward",
-        UnaryOp::ReLU => "relu_backward",
-        UnaryOp::Sqrt => "sqrt_backward",
-        UnaryOp::Recip => "recip_backward",
-        UnaryOp::Exp2 => "exp2_backward",
-        UnaryOp::Log2 => "log2_backward",
-        UnaryOp::Sin => "sin_backward",
-        UnaryOp::Cos => "cos_backward",
-        UnaryOp::Erf => "erf_backward",
+                .zip(x.data.host::<T>().iter())
+                .map(|(&g, &x)| T::unary_backward(op, g, x))
+                .collect::<Vec<T>>(),
+        ));
+        vec![Some(grad)]
     }
 }
 
@@ -216,71 +139,109 @@ impl RawTensor {
     ///
     /// This is the unified implementation for all unary ops.
     /// Creates a new tensor and sets up gradient tracking if needed.
-    #[allow(clippy::cast_possible_truncation)]
+    ///
+    /// # Panics
+    /// If the dtype is not a float (integer and bool tensors have no unary kernels).
+    #[must_use]
     pub fn unary_op(t: &Tensor, op: UnaryOp) -> Tensor {
-        let (data, shape, req, device) = {
+        let dtype = compute_dtype(|| UnaryGradFn { op }.op_name(), &[t.dtype()]);
+        let (data, shape, device) = {
             let s = t.borrow();
-            (
-                s.data.clone(),
-                s.shape.clone(),
-                s.requires_grad,
-                s.device.clone(),
-            )
+            (s.data.clone(), s.shape.clone(), s.device.clone())
         };
 
-        // Fast path: if the tensor already lives on GPU and we have a matching
-        // kernel, try to execute the op there.
-        #[cfg(feature = "gpu")]
-        {
-            if Self::common_gpu_device(&[t]).is_some()
-                && let kernel = unary_kernel_name(op)
-                && let Some(storage) = Self::gpu_unary(&data, kernel)
-            {
-                let out = Rc::new(RefCell::new(Self {
-                    data: storage,
-                    shape,
-                    grad: None,
-                    requires_grad: req,
-                    grad_fn: None,
-                    parents: vec![t.clone()],
-                    device,
-                }));
-
-                if req {
-                    out.borrow_mut().grad_fn = Some(Box::new(UnaryGradFn { op }));
-                }
-                return out;
-            }
+        // GPU path when the tensor is on the GPU and the op has a kernel. A `None` from
+        // the kernel is then a failure, not a reason to compute on the CPU.
+        if device.is_gpu() && op.has_gpu_kernel() {
+            let storage = Self::gpu_unary(&data, op)
+                .unwrap_or_else(|| kernel_failed(&UnaryGradFn { op }.op_name()));
+            return edge(
+                [t.clone()],
+                storage,
+                shape,
+                device,
+                GradFn::Unary(UnaryGradFn { op }),
+            );
         }
 
-        // CPU fallback (or when GPU feature is disabled / kernel missing).
-        let host_data = data.to_vec();
-        let result: Vec<f32> = host_data
+        // CPU path (CPU tensor, or a `cpu_only` op on the GPU: `edge()` applies the policy).
+        let result = dispatch_real!(dtype, T => Storage::from_compute(dtype,
+            data.host::<T>().iter().map(|&x| T::unary(op, x)).collect::<Vec<T>>(),
+        ));
+
+        edge(
+            [t.clone()],
+            result,
+            shape,
+            Device::CPU,
+            GradFn::Unary(UnaryGradFn { op }),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tensor::{check_gradients, manual_seed, randn};
+
+    /// Inputs inside each op's domain, away from kinks (`ReLU` at 0) and poles.
+    fn domain_input(op: UnaryOp) -> Tensor {
+        manual_seed(0x0123);
+        let raw = randn(&[3, 4]);
+        let vals: Vec<f32> = raw
+            .data()
             .iter()
-            .map(|&x| match op {
-                UnaryOp::Neg => -x,
-                UnaryOp::Recip => 1.0 / x,
-                UnaryOp::Sqrt => x.sqrt(),
-                UnaryOp::Exp2 => x.exp2(),
-                UnaryOp::Exp => x.exp(),
-                UnaryOp::Log2 => x.log2(),
-                UnaryOp::Log => x.ln(),
-                UnaryOp::Sin => x.sin(),
-                UnaryOp::Cos => x.cos(),
-                UnaryOp::Tanh => x.tanh(),
-                UnaryOp::Sigmoid => 1.0 / (1.0 + (-x).exp()),
-                UnaryOp::ReLU => x.max(0.0),
-                UnaryOp::Erf => statrs_erf(f64::from(x)) as f32,
+            .map(|&v| match op {
+                // Positive and away from 0: Log/Log2/Sqrt need x > 0, Recip has a pole.
+                UnaryOp::Log | UnaryOp::Log2 | UnaryOp::Sqrt | UnaryOp::Recip => 0.5 + v.abs(),
+                // |x| >= 0.3 so the finite-difference step never straddles the kink.
+                UnaryOp::ReLU => (0.3 + v.abs()).copysign(v),
+                UnaryOp::Neg
+                | UnaryOp::Exp2
+                | UnaryOp::Exp
+                | UnaryOp::Sin
+                | UnaryOp::Cos
+                | UnaryOp::Tanh
+                | UnaryOp::Sigmoid
+                | UnaryOp::Erf => v,
             })
             .collect();
+        RawTensor::new(vals, &[3, 4], true)
+    }
 
-        let out = Self::new(result, &shape, req);
-
-        // Set up backpropagation if this tensor requires gradients
-        if out.borrow().requires_grad {
-            out.borrow_mut().parents = vec![t.clone()];
-            out.borrow_mut().grad_fn = Some(Box::new(UnaryGradFn { op }));
+    #[test]
+    fn unary_gradcheck_every_op() {
+        for &op in UnaryOp::ALL {
+            let x = domain_input(op);
+            let (max_err, _mean, passed) =
+                check_gradients(&x, |t| RawTensor::unary_op(t, op).sum(), 1e-2, 1e-2);
+            assert!(passed, "{op:?}: gradcheck max_error={max_err:.3e}");
         }
-        out
+    }
+
+    #[test]
+    fn unary_all_lists_each_variant_once() {
+        assert_eq!(UnaryOp::ALL.len(), 13);
+        for (i, a) in UnaryOp::ALL.iter().enumerate() {
+            for b in UnaryOp::ALL.iter().skip(i + 1) {
+                assert_ne!(a, b);
+            }
+        }
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn every_unary_op_has_gpu_pipelines() {
+        // Erf used to name kernels that didn't exist (forward silently fell back to CPU,
+        // backward panicked). Now every op either has both pipelines or says `cpu_only`.
+        let Some(ctx) = crate::gpu::get_gpu_context() else {
+            return;
+        };
+        for &op in UnaryOp::ALL {
+            assert!(
+                op.gpu_pipelines(ctx.pipelines()).is_some(),
+                "{op:?} has no GPU pipelines"
+            );
+        }
     }
 }

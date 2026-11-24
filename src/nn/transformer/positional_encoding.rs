@@ -1,12 +1,14 @@
 use crate::Device;
+use crate::error::OrPanic;
 use crate::io::StateDict;
-use crate::nn::Module;
+use crate::nn::hyper;
 use crate::nn::layers::embedding::Embedding;
-use crate::tensor::TensorOps;
+use crate::nn::{Layer, Module, insert_prefixed};
 use crate::tensor::{RawTensor, Tensor};
 
 /// Positional encoding type
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PositionalEncodingType {
     /// Sinusoidal (fixed, non-learnable) positional encoding
     Sinusoidal,
@@ -27,14 +29,26 @@ pub enum PositionalEncodingType {
 ///
 /// # Example
 /// ```no_run
-/// # use volta::nn::transformer::{PositionalEncoding, PositionalEncodingType};
+/// # use volta::nn::{PositionalEncoding, PositionalEncodingType};
 /// # use volta::Device;
 /// let pos_enc = PositionalEncoding::new(512, 1024, PositionalEncodingType::Sinusoidal);
 /// ```
-#[derive(Clone, Debug)]
+///
+/// Like every layer, `PositionalEncoding` is not `Clone`: a derived clone would share the
+/// learned weight (a [`crate::Tensor`] handle) instead of copying it (#108).
+///
+/// ```compile_fail
+/// use volta::nn::{PositionalEncoding, PositionalEncodingType};
+/// let p = PositionalEncoding::new(4, 4, PositionalEncodingType::Learned);
+/// let _copy = p.clone();
+/// ```
+#[derive(Debug)]
 pub struct PositionalEncoding {
+    /// Width of each position's vector.
     embed_dim: usize,
+    /// Longest sequence supported.
     max_len: usize,
+    /// Whether the encoding is fixed sinusoids or learned.
     encoding_type: PositionalEncodingType,
     /// Sinusoidal: pre-computed fixed encoding tensor
     encoding: Option<Tensor>,
@@ -46,37 +60,69 @@ impl PositionalEncoding {
     /// Create a new positional encoding layer
     ///
     /// # Arguments
-    /// * `embed_dim` - Embedding dimension (must be even)
+    /// * `embed_dim` - Embedding dimension (must be even for `Sinusoidal`; any width for
+    ///   `Learned`)
     /// * `max_len` - Maximum sequence length
     /// * `encoding_type` - Type of positional encoding
     /// # Panics
-    /// `embed_dim` must be even for sinusoidal positional encoding
+    /// If an argument is out of range (see [`Self::try_new`]).
     #[must_use]
+    #[track_caller]
     pub fn new(embed_dim: usize, max_len: usize, encoding_type: PositionalEncodingType) -> Self {
-        assert!(
-            embed_dim.is_multiple_of(2),
-            "embed_dim must be even for sinusoidal positional encoding"
-        );
+        Self::try_new(embed_dim, max_len, encoding_type).or_panic("PositionalEncoding")
+    }
 
+    /// [`Self::new`], checking the arguments first.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` naming the argument if `embed_dim` or `max_len` is
+    /// zero, or `encoding_type` is `Sinusoidal` and `embed_dim` is odd (the table is
+    /// sin/cos pairs).
+    /// A parameter of more than [`crate::shape::MAX_NUMEL`] elements is refused the same
+    /// way, before anything is allocated (#460).
+    pub fn try_new(
+        embed_dim: usize,
+        max_len: usize,
+        encoding_type: PositionalEncodingType,
+    ) -> crate::Result<Self> {
+        hyper::at_least_one("PositionalEncoding", "embed_dim", embed_dim)?;
+        hyper::at_least_one("PositionalEncoding", "max_len", max_len)?;
+        // The sinusoid table and the learned embedding are both [max_len, embed_dim].
+        hyper::param_numel(
+            "PositionalEncoding",
+            "embed_dim, max_len",
+            &[max_len, embed_dim],
+        )?;
         let (encoding, learned_embedding) = match encoding_type {
-            PositionalEncodingType::Sinusoidal => (
-                Some(Self::create_sinusoidal_encoding(
-                    embed_dim,
-                    max_len,
-                    Device::CPU,
-                )),
-                None,
-            ),
+            PositionalEncodingType::Sinusoidal => {
+                if !embed_dim.is_multiple_of(2) {
+                    return Err(crate::VoltaError::invalid(
+                        "PositionalEncoding",
+                        "embed_dim",
+                        format!(
+                            "embed_dim must be even for sinusoidal positional encoding, got {embed_dim}"
+                        ),
+                    ));
+                }
+                (
+                    Some(Self::create_sinusoidal_encoding(
+                        embed_dim,
+                        max_len,
+                        Device::CPU,
+                    )),
+                    None,
+                )
+            }
             PositionalEncodingType::Learned => (None, Some(Embedding::new(max_len, embed_dim))),
         };
 
-        Self {
+        Ok(Self {
             embed_dim,
             max_len,
             encoding_type,
             encoding,
             learned_embedding,
-        }
+        })
     }
 
     /// Create sinusoidal positional encoding
@@ -104,97 +150,7 @@ impl PositionalEncoding {
         }
 
         let encoding = RawTensor::new(encoding_data, &[max_len, embed_dim], false);
-        TensorOps::to_device(&encoding, device)
-    }
-
-    /// Add positional encoding to input embeddings
-    ///
-    /// # Arguments
-    /// * `x` - Input tensor of shape [batch, `seq_len`, `embed_dim`]
-    ///
-    /// # Returns
-    /// Output tensor of shape [batch, `seq_len`, `embed_dim`] with positional encoding added
-    /// # Panics
-    /// Sequence length exceeds max length
-    pub fn forward(&self, x: &Tensor) -> Tensor {
-        let shape = x.borrow().shape.clone();
-        let seq_len = *shape.get(1).unwrap();
-
-        assert!(
-            seq_len <= self.max_len,
-            "Sequence length {} exceeds maximum length {}",
-            seq_len,
-            self.max_len
-        );
-
-        match self.encoding_type {
-            PositionalEncodingType::Sinusoidal => {
-                // Get the positional encoding for the sequence
-                let enc = self
-                    .encoding
-                    .as_ref()
-                    .expect("Sinusoidal encoding should be created");
-
-                let input_shape = x.borrow().shape.clone();
-                let batch_size = *input_shape.first().unwrap();
-                let seq_len = *input_shape.get(1).unwrap();
-                let embed_dim = *input_shape.get(2).unwrap();
-
-                // Slice encoding to match sequence length: [max_len, embed_dim] -> [seq_len, embed_dim]
-                let enc_slice = TensorOps::shrink(enc, &[(0, seq_len), (0, embed_dim)]);
-
-                // Add encoding to each batch element individually
-                // Process each batch slice as [seq_len, embed_dim]
-                let mut result_data = Vec::with_capacity(batch_size * seq_len * embed_dim);
-                let x_data = x.borrow().data.to_vec();
-                let enc_data = enc_slice.borrow().data.to_vec();
-                let slice_size = seq_len * embed_dim;
-
-                for b in 0..batch_size {
-                    let start = b * slice_size;
-                    for i in 0..slice_size {
-                        let x_val = x_data.get(start + i).copied().unwrap_or(0.0);
-                        let enc_val = enc_data.get(i).copied().unwrap_or(0.0);
-                        result_data.push(x_val + enc_val);
-                    }
-                }
-
-                RawTensor::new(result_data, &[batch_size, seq_len, embed_dim], false)
-            }
-            PositionalEncodingType::Learned => {
-                let emb = self
-                    .learned_embedding
-                    .as_ref()
-                    .expect("Learned embedding should be created");
-
-                let input_shape = x.borrow().shape.clone();
-                let batch_size = *input_shape.first().unwrap();
-                let seq_len = *input_shape.get(1).unwrap();
-                let embed_dim = *input_shape.get(2).unwrap();
-
-                // Create position indices [0, 1, ..., seq_len-1]
-                let positions: Vec<usize> = (0..seq_len).collect();
-                // Look up learned embeddings: [seq_len, embed_dim]
-                let pos_emb = emb.forward(&positions);
-
-                // Add to each batch element
-                let mut result_data = Vec::with_capacity(batch_size * seq_len * embed_dim);
-                let x_data = x.borrow().data.to_vec();
-                let emb_data = pos_emb.borrow().data.to_vec();
-                let slice_size = seq_len * embed_dim;
-
-                for b in 0..batch_size {
-                    let start = b * slice_size;
-                    for i in 0..slice_size {
-                        let x_val = x_data.get(start + i).copied().unwrap_or(0.0);
-                        let emb_val = emb_data.get(i).copied().unwrap_or(0.0);
-                        result_data.push(x_val + emb_val);
-                    }
-                }
-
-                RawTensor::new(result_data, &[batch_size, seq_len, embed_dim], false)
-            }
-        }
+        encoding.to_device(device)
     }
 
     /// Get the encoding type
@@ -215,43 +171,102 @@ impl PositionalEncoding {
         self.embed_dim
     }
 
-    /// Get trainable parameters (only for Learned encoding)
-    #[must_use]
-    pub fn parameters(&self) -> Vec<Tensor> {
+    /// The `[max_len, embed_dim]` table whose first `seq_len` rows are added: the fixed
+    /// sinusoids, or the learned embedding's weight. Positions are always `0..seq_len`, so
+    /// the rows are a `shrink`, not an `Embedding` lookup.
+    fn table(&self) -> &Tensor {
+        match self.encoding_type {
+            PositionalEncodingType::Sinusoidal => self
+                .encoding
+                .as_ref()
+                .expect("Sinusoidal encoding should be created"),
+            PositionalEncodingType::Learned => {
+                &self
+                    .learned_embedding
+                    .as_ref()
+                    .expect("Learned embedding should be created")
+                    .weight
+            }
+        }
+    }
+}
+
+impl Module for PositionalEncoding {
+    /// The learned embedding's weight; none for sinusoidal encoding.
+    fn parameters(&self) -> Vec<Tensor> {
         match &self.learned_embedding {
             Some(emb) => emb.parameters(),
             None => vec![],
         }
     }
 
-    /// Get the state dictionary for serialization
-    #[must_use]
-    pub fn state_dict(&self) -> StateDict {
+    fn state_dict(&self) -> StateDict {
         match &self.learned_embedding {
             Some(emb) => {
-                let inner = emb.state_dict();
                 let mut state = StateDict::new();
-                for (key, value) in &inner {
-                    state.insert(format!("learned_embedding.{key}"), value.clone());
-                }
+                insert_prefixed(&mut state, "learned_embedding.", emb.state_dict());
                 state
             }
             None => StateDict::new(),
         }
     }
 
-    /// Load weights from a state dictionary
-    pub fn load_state_dict(&mut self, state: &StateDict) {
-        if let Some(emb) = &mut self.learned_embedding {
-            let mut inner_state = StateDict::new();
-            let prefix = "learned_embedding.";
-            for (key, value) in state {
-                if let Some(stripped) = key.strip_prefix(prefix) {
-                    inner_state.insert(stripped.to_string(), value.clone());
-                }
-            }
-            emb.load_state_dict(&inner_state);
+    fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+        if let Some(emb) = &self.learned_embedding {
+            plan.child("learned_embedding.", emb);
         }
+    }
+
+    /// Converts the learned weight, and also the fixed sinusoid table, which is not a
+    /// parameter and so is not converted by the default.
+    fn to_dtype(&mut self, dtype: crate::DType) {
+        if let Some(enc) = &self.encoding {
+            enc.cast_in_place(dtype);
+        }
+        if let Some(emb) = &mut self.learned_embedding {
+            emb.to_dtype(dtype);
+        }
+    }
+
+    /// Moves the learned weight, and also the fixed sinusoid table, which is not a parameter
+    /// and so is not moved by the default.
+    fn to_device(&mut self, device: Device) {
+        if let Some(enc) = &self.encoding {
+            self.encoding = Some(enc.to_device(device.clone()));
+        }
+        if let Some(emb) = &mut self.learned_embedding {
+            emb.to_device(device);
+        }
+    }
+}
+
+impl Layer for PositionalEncoding {
+    /// Adds the encoding for positions `0..seq_len` to `x` (`[batch, seq_len, embed_dim]`),
+    /// built from graph ops, so the gradient reaches `x` and, in learned mode, the weight.
+    ///
+    /// # Panics
+    /// If `x` is not rank 3, its last dim is not `embed_dim`, or `seq_len > max_len`.
+    #[track_caller]
+    fn forward(&self, x: &Tensor) -> Tensor {
+        let [batch, seq_len, embed_dim] = x.shape().fixed::<3>();
+        assert_eq!(
+            embed_dim, self.embed_dim,
+            "PositionalEncoding: input embed_dim {embed_dim} != layer embed_dim {}",
+            self.embed_dim
+        );
+        assert!(
+            seq_len <= self.max_len,
+            "Sequence length {} exceeds maximum length {}",
+            seq_len,
+            self.max_len
+        );
+
+        let rows = self
+            .table()
+            .shrink(&[(0, seq_len), (0, embed_dim)])
+            .reshape(&[1, seq_len, embed_dim])
+            .expand(&[batch, seq_len, embed_dim]);
+        x.add(&rows)
     }
 }
 
@@ -316,8 +331,9 @@ mod tests {
 
         // At least some values should be different
         let differences = output_data
+            .to_host_f32()
             .iter()
-            .zip(input_data.iter())
+            .zip(input_data.to_host_f32().iter())
             .filter(|(out, inp)| (**out - **inp).abs() > 1e-6)
             .count();
 
@@ -348,6 +364,16 @@ mod tests {
         assert_eq!(output.borrow().shape, vec![2, 10, 64]);
     }
 
+    /// #107: only the sinusoidal table needs an even width; a learned encoding takes any.
+    #[test]
+    fn test_learned_encoding_odd_embed_dim() {
+        let pos_enc = PositionalEncoding::new(5, 4, PositionalEncodingType::Learned);
+        assert_eq!(pos_enc.embed_dim(), 5);
+        let x = RawTensor::new(vec![0.5; 2 * 3 * 5], &[2, 3, 5], false);
+        let output = pos_enc.forward(&x);
+        assert_eq!(output.borrow().shape, vec![2, 3, 5]);
+    }
+
     #[test]
     fn test_learned_encoding_modifies_input() {
         let pos_enc = PositionalEncoding::new(32, 64, PositionalEncodingType::Learned);
@@ -359,8 +385,9 @@ mod tests {
         let input_data = x.borrow().data.clone();
 
         let differences = output_data
+            .to_host_f32()
             .iter()
-            .zip(input_data.iter())
+            .zip(input_data.to_host_f32().iter())
             .filter(|(out, inp)| (**out - **inp).abs() > 1e-6)
             .count();
 
@@ -407,5 +434,132 @@ mod tests {
                 .any(|(k, _)| k.starts_with("learned_embedding.")),
             "State dict keys should be prefixed with 'learned_embedding.'"
         );
+    }
+
+    use crate::index::fetch;
+
+    /// Seeded random `[2, 5, 6]` input that requires grad, and a random loss weight.
+    fn input_and_weight() -> (Tensor, Tensor) {
+        crate::tensor::manual_seed(0xB3);
+        let x = RawTensor::randn(&[2, 5, 6]);
+        x.set_requires_grad(true);
+        (x, RawTensor::randn(&[2, 5, 6]))
+    }
+
+    #[test]
+    fn test_sinusoidal_encoding_matches_formula() {
+        let pe = PositionalEncoding::new(6, 10, PositionalEncodingType::Sinusoidal);
+        let (x, _) = input_and_weight();
+        let out = pe.forward(&x).data();
+        let x_data = x.data();
+        assert_eq!(out.len(), x_data.len());
+        for b in 0..2 {
+            for pos in 0..5 {
+                for i in 0..3 {
+                    let angle = pos as f32 * 10000_f32.powf(-((2 * i) as f32) / 6.0);
+                    let at = (b * 5 + pos) * 6 + 2 * i;
+                    for (k, expected) in [(at, angle.sin()), (at + 1, angle.cos())] {
+                        let added = fetch(&out, k) - fetch(&x_data, k);
+                        assert!(
+                            (added - expected).abs() < 1e-5,
+                            "b={b} pos={pos} i={i}: added {added}, expected {expected}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_learned_encoding_adds_weight_rows() {
+        let pe = PositionalEncoding::new(6, 10, PositionalEncodingType::Learned);
+        let (x, _) = input_and_weight();
+        let out = pe.forward(&x).data();
+        let x_data = x.data();
+        let table = pe.parameters().first().expect("learned weight").data();
+        assert_eq!(out.len(), x_data.len());
+        for k in 0..out.len() {
+            let row_col = k % (5 * 6);
+            let added = fetch(&out, k) - fetch(&x_data, k);
+            assert!(
+                (added - fetch(&table, row_col)).abs() < 1e-6,
+                "index {k}: added {added}, expected weight[{row_col}]"
+            );
+        }
+    }
+
+    /// The output is `x + rows`, so for the loss `sum(out * w)` the input gradient is `w`
+    /// in both modes (B3: the old forward rebuilt its output from raw data, so `x` got none).
+    #[test]
+    fn test_positional_encoding_input_gradient_is_loss_weight() {
+        for kind in [
+            PositionalEncodingType::Sinusoidal,
+            PositionalEncodingType::Learned,
+        ] {
+            let pe = PositionalEncoding::new(6, 10, kind);
+            let (x, w) = input_and_weight();
+            pe.forward(&x)
+                .elem_mul(&w)
+                .sum()
+                .into_loss()
+                .expect("scalar loss")
+                .backward();
+            let grad = x.grad().expect("input has a gradient");
+            let w = w.data();
+            assert_eq!(grad.len(), w.len());
+            for (k, (g, expected)) in grad.iter().zip(&w).enumerate() {
+                assert!(
+                    (g - expected).abs() < 1e-6,
+                    "{kind:?} index {k}: {g} vs {expected}"
+                );
+            }
+        }
+    }
+
+    /// Row `p < seq_len` of the learned weight's gradient is `sum_b w[b, p, :]`; rows at or
+    /// past `seq_len` were not used and get zero.
+    #[test]
+    fn test_learned_encoding_weight_gradient() {
+        let pe = PositionalEncoding::new(6, 10, PositionalEncodingType::Learned);
+        let (x, w) = input_and_weight();
+        pe.forward(&x)
+            .elem_mul(&w)
+            .sum()
+            .into_loss()
+            .expect("scalar loss")
+            .backward();
+        let grad = pe
+            .parameters()
+            .first()
+            .expect("learned weight")
+            .grad()
+            .expect("weight has a gradient");
+        let w = w.data();
+        assert_eq!(grad.len(), 10 * 6);
+        for (k, g) in grad.iter().enumerate() {
+            let expected = if k < 5 * 6 {
+                fetch(&w, k) + fetch(&w, 5 * 6 + k)
+            } else {
+                0.0
+            };
+            assert!(
+                (g - expected).abs() < 1e-5,
+                "weight grad {k}: {g} vs {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_learned_encoding_assert_trainable() {
+        let pe = PositionalEncoding::new(8, 16, PositionalEncodingType::Learned);
+        let x = crate::macros::trainable_input(&[2, 4, 8]);
+        crate::macros::assert_trainable!(pe, x);
+    }
+
+    #[test]
+    #[should_panic(expected = "input embed_dim 4 != layer embed_dim 6")]
+    fn test_positional_encoding_rejects_wrong_embed_dim() {
+        let pe = PositionalEncoding::new(6, 10, PositionalEncodingType::Sinusoidal);
+        let _ = pe.forward(&RawTensor::zeros(&[1, 3, 4]));
     }
 }

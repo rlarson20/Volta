@@ -2,12 +2,13 @@ use std::fmt;
 // ===== DEVICE ENUM =====
 
 /// Compute device for tensor operations
-///
-/// In progress adding GPU support with wgpu.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum Device {
+    /// Host memory.
     #[default]
     CPU,
+    /// A GPU, identified by the adapter name.
     GPU(String),
 }
 
@@ -57,8 +58,9 @@ impl Device {
         crate::gpu::get_gpu_context().map(|ctx| Self::GPU(ctx.device_name().to_string()))
     }
 
-    /// When GPU feature is disabled, gpu() always returns None
+    /// When GPU feature is disabled, `gpu()` always returns `None`
     #[cfg(not(feature = "gpu"))]
+    #[must_use]
     pub fn gpu() -> Option<Self> {
         None
     }

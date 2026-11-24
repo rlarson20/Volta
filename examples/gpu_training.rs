@@ -6,14 +6,18 @@
 //! - `DataLoader` with automatic GPU prefetch
 //! - Full training loop staying on GPU
 //! - Performance comparison with CPU training
-#![allow(clippy::cast_possible_truncation)]
 use std::time::Instant;
+use volta::nn::{Adam, Layer, Linear, Module, ReLU, Sequential};
 use volta::{
-    Adam, Device, Linear, Module, RawTensor, ReLU, Sequential, Tensor, TensorOps, mse_loss,
+    Device, DevicePolicy, RawTensor, Tensor, mse_loss, take_fallback_events, with_device_policy,
 };
 
 fn main() {
     println!("=== Volta GPU Training Example ===\n");
+
+    // `Linear`'s bias add broadcasts, and the GPU has no broadcasting kernel yet, so opt
+    // into running those ops on the CPU. Under the default `Strict` policy they panic.
+    let _prefer = with_device_policy(DevicePolicy::PreferGpu);
 
     // Check GPU availability
     #[cfg(feature = "gpu")]
@@ -37,14 +41,19 @@ fn main() {
     let y_data = vec![0.0, 1.0, 1.0, 0.0];
 
     println!("\n--- Approach 1: Using new_on_device() Constructors ---");
-    train_with_device_constructors(x_data.clone(), y_data.clone(), &device.clone());
+    train_with_device_constructors(x_data.clone(), y_data.clone(), &device);
 
     println!("\n--- Approach 2: Using to_device() on Existing Model ---");
-    train_with_to_device(x_data.clone(), y_data.clone(), &device.clone());
+    train_with_to_device(x_data.clone(), y_data.clone(), &device);
 
     println!("\n--- Performance Comparison ---");
-    compare_cpu_vs_gpu(x_data, y_data);
+    compare_cpu_vs_gpu(&x_data, &y_data);
 
+    let fallbacks = take_fallback_events();
+    println!(
+        "\n{} op call(s) ran on the CPU for GPU inputs (no GPU kernel yet)",
+        fallbacks.len()
+    );
     println!("\n=== GPU Training Example Complete ===");
 }
 
@@ -66,7 +75,7 @@ fn train_with_device_constructors(x_data: Vec<f32>, y_data: Vec<f32>, device: &D
     // Verify parameters are on correct device
     {
         let params = model.parameters();
-        let param_device = params.first().unwrap().borrow().device.clone();
+        let param_device = params.first().unwrap().device();
         println!("Parameters device: {}", param_device.name());
     }
 
@@ -96,14 +105,14 @@ fn train_with_to_device(x_data: Vec<f32>, y_data: Vec<f32>, device: &Device) {
     ]);
 
     {
-        let initial_device = model.parameters().first().unwrap().borrow().device.clone();
+        let initial_device = model.parameters().first().unwrap().device();
         println!("Initial parameters device: {}", initial_device.name());
     }
 
     // Move entire model to device
     model.to_device(device.clone());
     {
-        let final_device = model.parameters().first().unwrap().borrow().device.clone();
+        let final_device = model.parameters().first().unwrap().device();
         println!("After to_device(): {}", final_device.name());
     }
 
@@ -117,12 +126,11 @@ fn train_with_to_device(x_data: Vec<f32>, y_data: Vec<f32>, device: &Device) {
 }
 
 /// Compare CPU vs GPU training performance
-#[allow(clippy::similar_names)]
-fn compare_cpu_vs_gpu(x_data: Vec<f32>, y_data: Vec<f32>) {
+fn compare_cpu_vs_gpu(x_data: &[f32], y_data: &[f32]) {
     // CPU training
     println!("Training on CPU...");
-    let x_cpu = RawTensor::new(x_data.clone(), &[4, 2], false);
-    let y_cpu = RawTensor::new(y_data.clone(), &[4, 1], false);
+    let x_cpu = RawTensor::new(x_data.to_vec(), &[4, 2], false);
+    let y_cpu = RawTensor::new(y_data.to_vec(), &[4, 1], false);
 
     let model_cpu = Sequential::new(vec![
         Box::new(Linear::new(2, 8, true)),
@@ -144,8 +152,8 @@ fn compare_cpu_vs_gpu(x_data: Vec<f32>, y_data: Vec<f32>) {
     #[cfg(feature = "gpu")]
     if let Some(device) = Device::gpu() {
         println!("\nTraining on GPU...");
-        let x_gpu = RawTensor::new(x_data, &[4, 2], false).to_device(device.clone());
-        let y_gpu = RawTensor::new(y_data, &[4, 1], false).to_device(device.clone());
+        let x_gpu = RawTensor::new(x_data.to_vec(), &[4, 2], false).to_device(device.clone());
+        let y_gpu = RawTensor::new(y_data.to_vec(), &[4, 1], false).to_device(device.clone());
 
         let mut model_gpu = Sequential::new(vec![
             Box::new(Linear::new(2, 8, true)),
@@ -175,48 +183,51 @@ fn compare_cpu_vs_gpu(x_data: Vec<f32>, y_data: Vec<f32>) {
 
 /// Train a model for specified number of epochs
 fn train_model(model: &Sequential, opt: &mut Adam, x: &Tensor, y: &Tensor, epochs: usize) {
-    let mut initial_loss = 0.0;
-    let mut final_loss = 0.0;
+    let mut first_loss = f32::NAN;
+    let mut final_loss = f32::NAN;
 
     for epoch in 0..epochs {
         opt.zero_grad();
         let predictions = model.forward(x);
         let loss = mse_loss(&predictions, y);
 
+        // Read only the first and last loss: each `item()` is a device readback.
         if epoch == 0 {
-            initial_loss = loss.borrow().data.first().copied().unwrap_or(f32::NAN);
+            first_loss = loss.item();
         }
         if epoch == epochs - 1 {
-            final_loss = loss.borrow().data.first().copied().unwrap_or(f32::NAN);
+            final_loss = loss.item();
         }
 
-        loss.backward();
+        loss.clone().into_loss().expect("scalar loss").backward();
         opt.step();
 
         if epoch % 20 == 0 {
-            println!(
-                "  Epoch {:>3}: Loss = {:.6}",
-                epoch,
-                loss.borrow().data.first().copied().unwrap_or(f32::NAN)
-            );
+            println!("  Epoch {:>3}: Loss = {:.6}", epoch, loss.item());
         }
     }
 
-    println!("  Final loss: {final_loss:.6} (started at {initial_loss:.6})");
+    println!("  Final loss: {final_loss:.6} (started at {first_loss:.6})");
+    // The CI smoke run (`just examples-smoke`) relies on this: a NaN or a loss that never
+    // drops exits non-zero.
+    assert!(
+        final_loss.is_finite() && final_loss < first_loss,
+        "training did not reduce the loss: first {first_loss}, final {final_loss}"
+    );
 
     // Test predictions
     println!("  Predictions:");
     let final_preds = model.forward(x);
-    let pred_data = &final_preds.borrow().data;
-    let y_data = &y.borrow().data;
-    let x_data = &x.borrow().data;
+    let pred_data = final_preds.data();
+    let y_data = y.data();
+    let x_data = x.data();
     for i in 0..4 {
         println!(
             "    Input: [{:.0}, {:.0}] -> Target: {:.0}, Predicted: {:.4}",
-            x_data.get(i * 2).copied().unwrap_or(f32::NAN),
-            x_data.get(i * 2 + 1).copied().unwrap_or(f32::NAN),
-            y_data.get(i).copied().unwrap_or(f32::NAN),
-            pred_data.get(i).copied().unwrap_or(f32::NAN)
+            x_data.get(i * 2).copied().expect("index in range"),
+            x_data.get(i * 2 + 1).copied().expect("index in range"),
+            y_data.get(i).copied().expect("index in range"),
+            pred_data.get(i).copied().expect("index in range")
         );
     }
 }

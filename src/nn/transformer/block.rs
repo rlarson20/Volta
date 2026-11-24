@@ -1,8 +1,7 @@
+use crate::error::OrPanic;
 use crate::io::StateDict;
-use crate::nn::{FeedForward, LayerNorm, Module};
+use crate::nn::{FeedForward, Layer, LayerNorm, Module, MultiHeadAttention, insert_prefixed};
 use crate::tensor::Tensor;
-use crate::tensor::TensorOps;
-use std::rc::Rc;
 
 /// Transformer Block (Pre-LN architecture)
 ///
@@ -20,33 +19,24 @@ use std::rc::Rc;
 /// # Arguments
 /// * `embed_dim` - Embedding dimension
 /// * `num_heads` - Number of attention heads
-/// * `expansion_factor` - FFN expansion factor (default 4)
-/// * `dropout` - Dropout probability (default 0.1)
+/// * `expansion_factor` - FFN expansion factor
+/// * `dropout` - Dropout probability
 ///
 /// # Example
 /// ```no_run
-/// # use volta::nn::transformer::TransformerBlock;
+/// # use volta::nn::TransformerBlock;
 /// let block = TransformerBlock::new(512, 8, 4, 0.1);
 /// ```
+#[derive(Debug)]
 pub struct TransformerBlock {
-    // First layer norm (before attention)
+    /// Layer norm applied before attention.
     norm1: LayerNorm,
-    // Multi-head attention
-    attention: Rc<dyn Module>, // Using Rc to avoid circular dependency with MHA
-    // Second layer norm (before FFN)
+    /// Self-attention sublayer.
+    attention: MultiHeadAttention,
+    /// Layer norm applied before the feed-forward network.
     norm2: LayerNorm,
-    // Feed-forward network
+    /// Feed-forward sublayer.
     ffn: FeedForward,
-    // Dropout probability
-    #[allow(dead_code)]
-    dropout: f32,
-    // Configuration
-    #[allow(dead_code)]
-    embed_dim: usize,
-    #[allow(dead_code)]
-    num_heads: usize,
-    #[allow(dead_code)]
-    expansion_factor: usize,
 }
 
 impl TransformerBlock {
@@ -55,22 +45,39 @@ impl TransformerBlock {
     /// # Arguments
     /// * `embed_dim` - Embedding dimension
     /// * `num_heads` - Number of attention heads
-    /// * `expansion_factor` - FFN expansion factor (default 4)
-    /// * `dropout` - Dropout probability (default 0.1)
+    /// * `expansion_factor` - FFN expansion factor
+    /// * `dropout` - Dropout probability
+    ///
+    /// # Panics
+    /// If an argument is out of range (see [`Self::try_new`]).
     #[must_use]
+    #[track_caller]
     pub fn new(embed_dim: usize, num_heads: usize, expansion_factor: usize, dropout: f32) -> Self {
-        Self {
+        Self::try_new(embed_dim, num_heads, expansion_factor, dropout).or_panic("TransformerBlock")
+    }
+
+    /// [`Self::new`], checking every argument before building a sublayer.
+    ///
+    /// # Errors
+    /// `VoltaError::InvalidParameter` from the sublayer that would refuse the argument
+    /// ([`MultiHeadAttention::try_new`], [`FeedForward::try_new`]): a zero size,
+    /// `embed_dim` not a multiple of `num_heads`, or `dropout` outside `[0, 1]`.
+    /// A parameter of more than [`crate::shape::MAX_NUMEL`] elements is refused the same
+    /// way, before anything is allocated (#460).
+    pub fn try_new(
+        embed_dim: usize,
+        num_heads: usize,
+        expansion_factor: usize,
+        dropout: f32,
+    ) -> crate::Result<Self> {
+        MultiHeadAttention::check(embed_dim, num_heads, dropout)?;
+        FeedForward::check(embed_dim, expansion_factor, dropout)?;
+        Ok(Self {
             norm1: LayerNorm::new(vec![embed_dim]),
-            // Note: We'll use a simple attention wrapper for now
-            // In a real implementation, this would be MultiHeadAttention
-            attention: Rc::new(SimpleAttention::new(embed_dim, num_heads)),
+            attention: MultiHeadAttention::new(embed_dim, num_heads, dropout),
             norm2: LayerNorm::new(vec![embed_dim]),
             ffn: FeedForward::new(embed_dim, expansion_factor, dropout),
-            dropout,
-            embed_dim,
-            num_heads,
-            expansion_factor,
-        }
+        })
     }
 
     /// Forward pass for the transformer block
@@ -81,11 +88,12 @@ impl TransformerBlock {
     ///
     /// # Returns
     /// Output tensor of shape [batch, `seq_len`, `embed_dim`]
-    pub fn forward(&self, x: &Tensor, _causal: bool) -> Tensor {
-        // Pre-LN Architecture:
+    #[must_use]
+    pub fn forward(&self, x: &Tensor, causal: bool) -> Tensor {
+        // Pre-LN Architecture. Neither sublayer adds its own residual; the block adds both.
         // 1. LN → Attention → Add
         let x_norm1 = self.norm1.forward(x);
-        let attn_out = self.attention.forward(&x_norm1);
+        let attn_out = self.attention.forward(&x_norm1, causal, None);
         let x = x.add(&attn_out);
 
         // 2. LN → FFN → Add
@@ -102,138 +110,45 @@ impl TransformerBlock {
 }
 
 impl Module for TransformerBlock {
-    fn forward(&self, x: &Tensor) -> Tensor {
-        self.forward(x, false)
-    }
-
     fn parameters(&self) -> Vec<Tensor> {
-        let mut params = vec![];
-
-        // Layer norm parameters
-        params.extend(self.norm1.parameters());
-        params.extend(self.norm2.parameters());
-
-        // FFN parameters
-        params.extend(self.ffn.parameters());
-
-        // Attention parameters
-        params.extend(self.attention.parameters());
-
-        params
+        // Layer norms, FFN, then attention; a tensor tied across them is listed once.
+        crate::nn::unique_parameters(
+            self.norm1
+                .parameters()
+                .into_iter()
+                .chain(self.norm2.parameters())
+                .chain(self.ffn.parameters())
+                .chain(self.attention.parameters()),
+        )
     }
 
     fn state_dict(&self) -> StateDict {
         let mut state = StateDict::new();
-
-        // Layer norms
-        let norm1_state = self.norm1.state_dict();
-        for (key, value) in norm1_state {
-            state.insert(format!("norm1.{key}"), value);
-        }
-        let norm2_state = self.norm2.state_dict();
-        for (key, value) in norm2_state {
-            state.insert(format!("norm2.{key}"), value);
-        }
-
-        // FFN
-        let ffn_state = self.ffn.state_dict();
-        for (key, value) in ffn_state {
-            state.insert(format!("ffn.{key}"), value);
-        }
-
-        // Attention
-        let attn_state = self.attention.state_dict();
-        for (key, value) in attn_state {
-            state.insert(format!("attention.{key}"), value);
-        }
-
+        insert_prefixed(&mut state, "norm1.", self.norm1.state_dict());
+        insert_prefixed(&mut state, "norm2.", self.norm2.state_dict());
+        insert_prefixed(&mut state, "ffn.", self.ffn.state_dict());
+        insert_prefixed(&mut state, "attention.", self.attention.state_dict());
         state
     }
 
-    fn load_state_dict(&mut self, state: &StateDict) {
-        // Load layer norm 1
-        let mut norm1_state = StateDict::new();
-        for (key, value) in state {
-            if let Some(sub_key) = key.strip_prefix("norm1.") {
-                norm1_state.insert(sub_key.to_string(), value.clone());
-            }
-        }
-        if !norm1_state.is_empty() {
-            self.norm1.load_state_dict(&norm1_state);
-        }
-
-        // Load layer norm 2
-        let mut norm2_state = StateDict::new();
-        for (key, value) in state {
-            if let Some(sub_key) = key.strip_prefix("norm2.") {
-                norm2_state.insert(sub_key.to_string(), value.clone());
-            }
-        }
-        if !norm2_state.is_empty() {
-            self.norm2.load_state_dict(&norm2_state);
-        }
-
-        // Load FFN
-        let mut ffn_state = StateDict::new();
-        for (key, value) in state {
-            if let Some(sub_key) = key.strip_prefix("ffn.") {
-                ffn_state.insert(sub_key.to_string(), value.clone());
-            }
-        }
-        if !ffn_state.is_empty() {
-            self.ffn.load_state_dict(&ffn_state);
-        }
-
-        // Note: attention uses Rc<dyn Module> and Module::load_state_dict requires &mut self,
-        // so we cannot call load_state_dict on the trait object through Rc.
-        // When TransformerBlock is upgraded to use MultiHeadAttention directly,
-        // attention state loading will work through the concrete type.
+    fn plan_load<'a>(&self, plan: &mut crate::nn::LoadPlan<'a>) {
+        plan.child("norm1.", &self.norm1);
+        plan.child("norm2.", &self.norm2);
+        plan.child("ffn.", &self.ffn);
+        plan.child("attention.", &self.attention);
     }
 
-    fn train(&mut self, _mode: bool) {
-        // Notify sub-layers
+    fn train(&mut self, mode: bool) {
+        self.norm1.train(mode);
+        self.norm2.train(mode);
+        self.ffn.train(mode);
+        self.attention.train(mode);
     }
 }
 
-// Simple attention wrapper for testing
-// In production, this would use MultiHeadAttention
-struct SimpleAttention {
-    #[allow(dead_code)]
-    embed_dim: usize,
-    #[allow(dead_code)]
-    num_heads: usize,
-}
-
-impl SimpleAttention {
-    fn new(embed_dim: usize, num_heads: usize) -> Self {
-        Self {
-            embed_dim,
-            num_heads,
-        }
-    }
-}
-
-impl Module for SimpleAttention {
+impl Layer for TransformerBlock {
     fn forward(&self, x: &Tensor) -> Tensor {
-        // For now, just return the input (identity)
-        // This is a placeholder for the actual attention mechanism
-        x.clone()
-    }
-
-    fn parameters(&self) -> Vec<Tensor> {
-        vec![]
-    }
-
-    fn state_dict(&self) -> StateDict {
-        StateDict::new()
-    }
-
-    fn load_state_dict(&mut self, _state: &StateDict) {
-        // No parameters to load
-    }
-
-    fn train(&mut self, _mode: bool) {
-        // No training mode difference
+        self.forward(x, false)
     }
 }
 
@@ -244,10 +159,19 @@ mod tests {
 
     #[test]
     fn test_block_creation() {
-        let block = TransformerBlock::new(512, 8, 4, 0.1);
-        assert_eq!(block.embed_dim, 512);
-        assert_eq!(block.num_heads, 8);
-        assert_eq!(block.expansion_factor, 4);
+        // The sublayers carry the sizes: two `LayerNorm`s (gamma, beta), the FFN's
+        // `d -> 4d -> d` Linears (with bias) and four `d -> d` attention projections, of
+        // which only the output projection has a bias.
+        let (d, expansion) = (512, 4);
+        let block = TransformerBlock::new(d, 8, expansion, 0.1);
+        let numel: usize = block
+            .parameters()
+            .iter()
+            .map(|p| p.borrow().shape.iter().product::<usize>())
+            .sum();
+        let hidden = expansion * d;
+        let expected = 2 * 2 * d + (d * hidden + hidden) + (hidden * d + d) + (4 * d * d + d);
+        assert_eq!(numel, expected);
     }
 
     #[test]
@@ -287,5 +211,83 @@ mod tests {
 
         // Should have norm1.gamma, norm1.beta, norm2.gamma, norm2.beta, ffn parameters
         assert!(state.len() >= 4);
+    }
+
+    #[test]
+    fn test_block_assert_trainable() {
+        // Covers every parameter: norm1, attention's q/k/v/out projections, norm2, ffn.
+        let block = TransformerBlock::new(16, 2, 2, 0.0);
+        let x = crate::macros::trainable_input(&[2, 3, 16]);
+        crate::macros::assert_trainable!(block, x);
+    }
+
+    #[test]
+    fn test_block_state_dict_includes_attention() {
+        let block = TransformerBlock::new(16, 2, 2, 0.0);
+        let state = block.state_dict();
+        assert!(
+            state.keys().any(|k| k.starts_with("attention.q_proj.")),
+            "attention keys missing: {:?}",
+            state.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_block_attention_state_dict_roundtrip() {
+        let src = TransformerBlock::new(16, 2, 2, 0.0);
+        let mut dst = TransformerBlock::new(16, 2, 2, 0.0);
+        let x = crate::macros::trainable_input(&[2, 3, 16]);
+
+        let before = dst.forward(&x, false).data();
+        dst.load_state_dict(&src.state_dict())
+            .expect("matching state loads");
+        let after = dst.forward(&x, false).data();
+        let expected = src.forward(&x, false).data();
+
+        assert_eq!(after.len(), expected.len());
+        assert_ne!(before, after, "loading should change the output");
+        for (a, e) in after.iter().zip(expected.iter()) {
+            assert!((a - e).abs() < 1e-5, "loaded block differs: {a} vs {e}");
+        }
+    }
+
+    #[test]
+    fn test_block_causal_changes_output() {
+        let block = TransformerBlock::new(16, 2, 2, 0.0);
+        let x = crate::macros::trainable_input(&[1, 4, 16]);
+
+        let open = block.forward(&x, false).data();
+        let causal = block.forward(&x, true).data();
+
+        assert_eq!(open.len(), causal.len());
+        assert!(
+            open.iter()
+                .zip(causal.iter())
+                .any(|(a, b)| (a - b).abs() > 1e-6),
+            "causal masking had no effect, so attention is not being applied"
+        );
+    }
+
+    /// #123: the input gradient through both pre-LN sublayers and residuals, by finite
+    /// differences in f64 under a random weighted loss, with and without the causal mask.
+    #[test]
+    fn test_block_input_gradient_matches_finite_differences() {
+        for causal in [false, true] {
+            crate::tensor::manual_seed(0xB10C);
+            let mut block = TransformerBlock::new(4, 2, 2, 0.0);
+            block.to_dtype(crate::DType::F64);
+            let x = crate::nn::transformer::f64_operand(&[2, 3, 4], true);
+            let w = crate::nn::transformer::f64_operand(&[2, 3, 4], false);
+            let (max, mean, ok) = RawTensor::check_gradients(
+                &x,
+                |t| block.forward(t, causal).elem_mul(&w).sum(),
+                1e-6,
+                1e-6,
+            );
+            assert!(
+                ok,
+                "TransformerBlock input gradient (causal={causal}): max={max:.3e} mean={mean:.3e}"
+            );
+        }
     }
 }

@@ -1,9 +1,32 @@
-use crate::io::StateDict;
+use crate::error::OrPanic;
+use crate::error::{Result, VoltaError};
+use crate::index::span;
+use crate::io::{StateDict, TensorData};
+use crate::shape::fixed_dims;
+use std::collections::{BTreeMap, BTreeSet};
 
+/// One queued edit of a [`StateDict`], applied by [`StateDictMapper::try_map`].
+pub type TransformationBox = Box<dyn Fn(&mut StateDict) -> Result<()>>;
 /// Builder for composable state dict transformations
 ///
 /// `StateDictMapper` allows you to transform state dicts when loading external models.
 /// Transformations are applied in the order they are added.
+///
+/// # Weight layouts
+///
+/// Only Volta's `Linear` differs from PyTorch, so only `Linear` weights need a transpose.
+/// Transposing anything else corrupts it, and on a square matrix the shape check in
+/// `load_state_dict` can't tell.
+///
+/// | Layer | Volta | PyTorch |
+/// | --- | --- | --- |
+/// | `Linear.weight` | `[in, out]` | `[out, in]` (transpose) |
+/// | `Embedding.weight` | `[vocab, dim]` | `[vocab, dim]` |
+/// | `LSTMCell.weight_ih` / `weight_hh` | `[4H, in]` / `[4H, H]` | same (`weight_ih_l0`, ...) |
+/// | `Conv2d.weight` | `[out, in, kH, kW]` | same |
+///
+/// So name the `Linear` layers explicitly ([`StateDictMapper::transpose_linear`],
+/// [`load_pytorch_linear_weights`]) rather than matching keys by pattern.
 ///
 /// # Examples
 ///
@@ -17,13 +40,22 @@ use crate::io::StateDict;
 ///     .transpose("encoder.weight")  // PyTorch stores [out, in], Volta uses [in, out]
 ///     .strip_prefix("model.");
 ///
-/// let volta_state = mapper.map(pytorch_state);
+/// let volta_state = mapper.try_map(pytorch_state)?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-pub type TransformationBox = Box<dyn Fn(&mut StateDict)>;
 #[must_use]
 pub struct StateDictMapper {
+    /// Edits to apply, in insertion order.
     transformations: Vec<TransformationBox>,
+}
+
+/// The number of edits; they are closures, so their contents can't be shown.
+impl std::fmt::Debug for StateDictMapper {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StateDictMapper")
+            .field("transformations", &self.transformations.len())
+            .finish()
+    }
 }
 
 impl StateDictMapper {
@@ -36,23 +68,24 @@ impl StateDictMapper {
 
     /// Rename a single key
     ///
-    /// If the key doesn't exist, this operation is a no-op.
+    /// If the key doesn't exist, this operation is a no-op. If `to` already names another
+    /// entry, [`StateDictMapper::try_map`] returns [`VoltaError::StateKeyCollision`]
+    /// rather than overwrite it.
     pub fn rename(mut self, from: impl Into<String>, to: impl Into<String>) -> Self {
         let from = from.into();
         let to = to.into();
 
         self.transformations
             .push(Box::new(move |state: &mut StateDict| {
-                if let Some(value) = state.remove(&from) {
-                    state.insert(to.clone(), value);
-                }
+                rekey(state, |key| (key == from).then(|| to.clone()))
             }));
         self
     }
 
     /// Rename all keys with a given prefix
     ///
-    /// Example: `rename_prefix("old.", "new.")` changes "old.weight" to "new.weight"
+    /// Example: `rename_prefix("old.", "new.")` changes "old.weight" to "new.weight".
+    /// Two keys that end up with the same name are a [`VoltaError::StateKeyCollision`].
     pub fn rename_prefix(
         mut self,
         old_prefix: impl Into<String>,
@@ -63,70 +96,51 @@ impl StateDictMapper {
 
         self.transformations
             .push(Box::new(move |state: &mut StateDict| {
-                let mut updates = Vec::new();
-                for (key, value) in state.iter() {
-                    if key.starts_with(&old_prefix) {
-                        let suffix = &key[old_prefix.len()..];
-                        updates.push((key.clone(), format!("{new_prefix}{suffix}"), value.clone()));
-                    }
-                }
-                for (old_key, new_key, value) in updates {
-                    state.remove(&old_key);
-                    state.insert(new_key, value);
-                }
+                rekey(state, |key| {
+                    key.strip_prefix(&old_prefix)
+                        .map(|suffix| format!("{new_prefix}{suffix}"))
+                })
             }));
         self
     }
 
     /// Strip a prefix from all keys
     ///
-    /// Example: `strip_prefix("model.")` changes "model.encoder.weight" to "encoder.weight"
+    /// Example: `strip_prefix("model.")` changes "model.encoder.weight" to "encoder.weight".
+    /// A stripped key that equals another key (`model.w` next to `w`) is a
+    /// [`VoltaError::StateKeyCollision`].
     pub fn strip_prefix(mut self, prefix: impl Into<String>) -> Self {
         let prefix = prefix.into();
 
         self.transformations
             .push(Box::new(move |state: &mut StateDict| {
-                let mut updates = Vec::new();
-                for (key, value) in state.iter() {
-                    if let Some(stripped) = key.strip_prefix(&prefix) {
-                        updates.push((key.clone(), stripped.to_string(), value.clone()));
-                    }
-                }
-                for (old_key, new_key, value) in updates {
-                    state.remove(&old_key);
-                    state.insert(new_key, value);
-                }
+                rekey(state, |key| key.strip_prefix(&prefix).map(str::to_string))
             }));
         self
     }
 
     /// Add a prefix to all keys
     ///
-    /// Example: `add_prefix("encoder.")` changes "weight" to "encoder.weight"
+    /// Example: `add_prefix("encoder.")` changes "weight" to "encoder.weight". Every key is
+    /// renamed from the original map, so `{w, xw}` with prefix `x` becomes `{xw, xxw}`.
     pub fn add_prefix(mut self, prefix: impl Into<String>) -> Self {
         let prefix = prefix.into();
 
         self.transformations
             .push(Box::new(move |state: &mut StateDict| {
-                let mut updates = Vec::new();
-                for (key, value) in state.iter() {
-                    let new_key = format!("{prefix}{key}");
-                    updates.push((key.clone(), new_key, value.clone()));
-                }
-                for (old_key, new_key, value) in updates {
-                    state.remove(&old_key);
-                    state.insert(new_key, value);
-                }
+                rekey(state, |key| Some(format!("{prefix}{key}")))
             }));
         self
     }
 
     /// Transpose a specific 2D tensor (for Linear weight conversion)
     ///
-    /// `PyTorch` Linear layers store weights as [`out_features`, `in_features`],
+    /// PyTorch Linear layers store weights as [`out_features`, `in_features`],
     /// while Volta stores them as [`in_features`, `out_features`].
     ///
-    /// This operation only affects 2D tensors. Non-2D tensors are left unchanged.
+    /// This operation only affects 2D tensors. Non-2D tensors are left unchanged. A
+    /// malformed 2-D entry makes [`StateDictMapper::try_apply`] return its
+    /// [`TensorData::validate`] error.
     pub fn transpose(mut self, key: impl Into<String>) -> Self {
         let key = key.into();
 
@@ -135,31 +149,61 @@ impl StateDictMapper {
                 if let Some(tensor_data) = state.get_mut(&key)
                     && tensor_data.shape.len() == 2
                 {
-                    let rows = tensor_data.shape.first().copied().unwrap_or(1);
-                    let cols = tensor_data.shape.get(1).copied().unwrap_or(1);
-                    let mut transposed = vec![0.0; rows * cols];
-
-                    // Transpose row-major layout: [R, C] -> [C, R]
-                    for i in 0..rows {
-                        for j in 0..cols {
-                            if let Some(src) = tensor_data.data.get(i * cols + j)
-                                && let Some(dst) = transposed.get_mut(j * rows + i)
-                            {
-                                *dst = *src;
-                            }
-                        }
-                    }
-
-                    tensor_data.data = transposed;
-                    tensor_data.shape = vec![cols, rows];
+                    transpose_2d(&key, tensor_data)?;
                 }
+                Ok(())
             }));
         self
     }
 
-    /// Transpose all tensors matching a pattern
+    /// Transpose the `Linear` layer `name`'s weight (`{name}.weight`, or `weight` when
+    /// `name` is empty) from PyTorch's `[out, in]` to Volta's `[in, out]`.
     ///
-    /// Example: `transpose_pattern("weight")` transposes all keys containing "weight"
+    /// Unlike [`StateDictMapper::transpose`], a missing key or a non-2-D tensor is an
+    /// error, not a no-op: the caller said this layer is a `Linear`. The check runs when
+    /// the mapper runs, not here: [`StateDictMapper::try_apply`] and
+    /// [`StateDictMapper::try_map`] return [`VoltaError::InvalidParameter`], and
+    /// [`StateDictMapper::apply`] and [`StateDictMapper::map`] panic at their caller.
+    pub fn transpose_linear(mut self, name: impl Into<String>) -> Self {
+        let name = name.into();
+        let key = if name.is_empty() {
+            "weight".to_string()
+        } else {
+            format!("{name}.weight")
+        };
+
+        self.transformations
+            .push(Box::new(move |state: &mut StateDict| {
+                // An error, not a panic: a panic here would run inside this boxed closure,
+                // at `apply` time, and report this file instead of the caller's (#260).
+                let Some(tensor_data) = state.get_mut(&key) else {
+                    return Err(VoltaError::invalid(
+                        "StateDictMapper::transpose_linear",
+                        Some("name"),
+                        format!("no key {key:?}"),
+                    ));
+                };
+                if tensor_data.shape.len() != 2 {
+                    return Err(VoltaError::invalid(
+                        "StateDictMapper::transpose_linear",
+                        Some("name"),
+                        format!(
+                            "{key:?} has shape {:?}, not a 2-D Linear weight",
+                            tensor_data.shape
+                        ),
+                    ));
+                }
+                transpose_2d(&key, tensor_data)
+            }));
+        self
+    }
+
+    /// Transpose all 2-D tensors whose key contains `pattern`
+    ///
+    /// Example: `transpose_pattern("weight")` transposes all keys containing "weight".
+    /// That includes `Embedding` and `LSTMCell` weights, which must not be transposed (see
+    /// the layout table on [`StateDictMapper`]); use [`StateDictMapper::transpose_linear`]
+    /// to convert PyTorch `Linear` weights.
     pub fn transpose_pattern(mut self, pattern: impl Into<String>) -> Self {
         let pattern = pattern.into();
 
@@ -175,46 +219,38 @@ impl StateDictMapper {
                     if let Some(tensor_data) = state.get_mut(&key)
                         && tensor_data.shape.len() == 2
                     {
-                        let rows = tensor_data.shape.first().copied().unwrap_or(1);
-                        let cols = tensor_data.shape.get(1).copied().unwrap_or(1);
-                        let mut transposed = vec![0.0; rows * cols];
-
-                        for i in 0..rows {
-                            for j in 0..cols {
-                                if let Some(src) = tensor_data.data.get(i * cols + j)
-                                    && let Some(dst) = transposed.get_mut(j * rows + i)
-                                {
-                                    *dst = *src;
-                                }
-                            }
-                        }
-
-                        tensor_data.data = transposed;
-                        tensor_data.shape = vec![cols, rows];
+                        transpose_2d(&key, tensor_data)?;
                     }
                 }
+                Ok(())
             }));
         self
     }
 
     /// Select only specific keys (for partial loading)
     ///
-    /// All other keys are removed from the state dict.
-    pub fn select_keys(mut self, keys: Vec<String>) -> Self {
+    /// All other keys are removed from the state dict. `keys` is anything that yields
+    /// names: `["fc1.weight", "fc1.bias"]`, a `Vec<String>`, an iterator.
+    pub fn select_keys<K: Into<String>>(mut self, keys: impl IntoIterator<Item = K>) -> Self {
+        let keys: BTreeSet<String> = keys.into_iter().map(Into::into).collect();
         self.transformations
             .push(Box::new(move |state: &mut StateDict| {
                 state.retain(|k, _| keys.contains(k));
+                Ok(())
             }));
         self
     }
 
     /// Exclude specific keys
     ///
-    /// The specified keys are removed from the state dict.
-    pub fn exclude_keys(mut self, keys: Vec<String>) -> Self {
+    /// The specified keys are removed from the state dict. `keys` takes the same forms as
+    /// in [`Self::select_keys`].
+    pub fn exclude_keys<K: Into<String>>(mut self, keys: impl IntoIterator<Item = K>) -> Self {
+        let keys: BTreeSet<String> = keys.into_iter().map(Into::into).collect();
         self.transformations
             .push(Box::new(move |state: &mut StateDict| {
                 state.retain(|k, _| !keys.contains(k));
+                Ok(())
             }));
         self
     }
@@ -226,23 +262,122 @@ impl StateDictMapper {
     where
         F: Fn(&mut StateDict) + 'static,
     {
-        self.transformations.push(Box::new(f));
+        self.transformations
+            .push(Box::new(move |state: &mut StateDict| {
+                f(state);
+                Ok(())
+            }));
         self
     }
 
-    /// Apply all transformations to a state dict (in-place)
-    pub fn apply(&self, state: &mut StateDict) {
+    /// Apply all transformations to a state dict (in-place), stopping at the first error.
+    ///
+    /// # Errors
+    /// [`VoltaError::StateKeyCollision`] if a renaming step would give two entries the
+    /// same name, [`VoltaError::InvalidParameter`] if a
+    /// [`StateDictMapper::transpose_linear`] key is missing or not 2-D, and the
+    /// [`TensorData::validate`] error if an entry a transpose step reaches is malformed.
+    /// That step leaves the failing entry as it was, but the steps before it have already
+    /// been applied.
+    pub fn try_apply(&self, state: &mut StateDict) -> Result<()> {
         for transform in &self.transformations {
-            transform(state);
+            transform(state)?;
+        }
+        Ok(())
+    }
+
+    /// Apply all transformations to a state dict (in-place)
+    ///
+    /// # Panics
+    /// Wherever [`StateDictMapper::try_apply`] returns an error.
+    #[track_caller]
+    pub fn apply(&self, state: &mut StateDict) {
+        if let Err(e) = self.try_apply(state) {
+            panic!("StateDictMapper::apply: {e}");
         }
     }
 
-    /// Apply transformations and return new state dict
-    #[must_use]
-    pub fn map(&self, mut state: StateDict) -> StateDict {
-        self.apply(&mut state);
-        state
+    /// Apply transformations and return the new state dict.
+    ///
+    /// # Errors
+    /// As [`StateDictMapper::try_apply`].
+    pub fn try_map(&self, mut state: StateDict) -> Result<StateDict> {
+        self.try_apply(&mut state)?;
+        Ok(state)
     }
+
+    /// Apply transformations and return new state dict
+    ///
+    /// # Panics
+    /// Wherever [`StateDictMapper::try_map`] returns an error.
+    #[must_use]
+    #[track_caller]
+    pub fn map(&self, state: StateDict) -> StateDict {
+        self.try_map(state).or_panic("StateDictMapper::map")
+    }
+}
+
+/// Renames the keys of `state` all at once: `new_name(key)` gives a key's new name, or
+/// `None` to keep it. Every new name is computed from the original keys, so a key that
+/// is another key's new name is renamed too, not overwritten.
+///
+/// # Errors
+/// [`VoltaError::StateKeyCollision`] if two entries would end up with the same name;
+/// `state` is then unchanged.
+fn rekey(state: &mut StateDict, new_name: impl Fn(&str) -> Option<String>) -> Result<()> {
+    // Final name -> the original key that ends up under it.
+    let mut claimed: BTreeMap<String, &String> = BTreeMap::new();
+    for old in state.keys() {
+        let target = new_name(old).unwrap_or_else(|| old.clone());
+        if let Some(first) = claimed.insert(target.clone(), old) {
+            return Err(VoltaError::StateKeyCollision {
+                key: target,
+                first: first.clone(),
+                second: old.clone(),
+            });
+        }
+    }
+    let renames: Vec<(String, String)> = claimed
+        .into_iter()
+        .filter(|(new, old)| new != *old)
+        .map(|(new, old)| (old.clone(), new))
+        .collect();
+
+    // No collisions, so every new name is free once the renamed entries are taken out.
+    let mut moved = Vec::with_capacity(renames.len());
+    for (old, new) in renames {
+        let value = state
+            .remove(&old)
+            .unwrap_or_else(|| unreachable!("{old:?} was read from the map's own keys"));
+        moved.push((new, value));
+    }
+    state.extend(moved);
+    Ok(())
+}
+
+/// Transpose a row-major 2-D tensor in place: `[R, C]` -> `[C, R]`. Moves whole
+/// elements (`dtype.size_of()` bytes each), so it works for every dtype.
+///
+/// # Errors
+/// The [`TensorData::validate`] error, naming `key`, if the entry is malformed: a byte
+/// count that does not match its shape and dtype, or a zero or oversized dimension
+/// (#459: a `[0, usize::MAX]` entry passed the byte check and then looped `usize::MAX`
+/// times here). The entry is checked before anything is allocated.
+fn transpose_2d(key: &str, tensor_data: &mut TensorData) -> Result<()> {
+    tensor_data.validate(key)?;
+    let [rows, cols] = fixed_dims::<2>(&tensor_data.shape);
+    let size = tensor_data.dtype.size_of();
+    // Output row `j` is input column `j`: append its elements in order.
+    let mut transposed = Vec::with_capacity(tensor_data.data.len());
+    for j in 0..cols {
+        for i in 0..rows {
+            let at = (i * cols + j) * size;
+            transposed.extend_from_slice(span(&tensor_data.data, at..at + size));
+        }
+    }
+    tensor_data.data = transposed;
+    tensor_data.shape = vec![cols, rows];
+    Ok(())
 }
 
 impl Default for StateDictMapper {
@@ -251,31 +386,49 @@ impl Default for StateDictMapper {
     }
 }
 
-/// Load `PyTorch` Linear weights (requires transpose)
+/// Convert a PyTorch state dict for Volta by transposing the weights of the named
+/// `Linear` layers
 ///
-/// `PyTorch` Linear layers store weights as [`out_features`, `in_features`],
-/// while Volta stores them as [`in_features`, `out_features`].
+/// PyTorch Linear layers store weights as [`out_features`, `in_features`], while Volta
+/// stores them as [`in_features`, `out_features`]. Other layers share PyTorch's layout
+/// (see the table on [`StateDictMapper`]), and key names can't tell a `Linear` weight from
+/// an `Embedding` weight, so the caller names the `Linear` layers: `&["fc1", "fc2"]`
+/// transposes `fc1.weight` and `fc2.weight` and nothing else.
 ///
-/// This convenience function transposes all keys containing "weight".
+/// # Panics
+/// If a named layer has no `{name}.weight` key or it is not 2-D.
 #[must_use]
-pub fn load_pytorch_linear_weights(state: StateDict) -> StateDict {
-    StateDictMapper::new()
-        .transpose_pattern("weight")
+#[track_caller]
+pub fn load_pytorch_linear_weights(state: StateDict, linear_layers: &[&str]) -> StateDict {
+    linear_layers
+        .iter()
+        .fold(StateDictMapper::new(), |m, name| m.transpose_linear(*name))
         .map(state)
 }
 
 /// Load `HuggingFace` transformer weights
 ///
-/// Strips the model prefix and transposes Linear weights.
+/// Strips the model prefix, then transposes the weights of the named `Linear` layers, as
+/// [`load_pytorch_linear_weights`] does. Names are given without the prefix.
 ///
 /// # Arguments
 /// * `state` - The loaded state dict from `HuggingFace`
 /// * `model_prefix` - The prefix to strip (e.g., `"model"`, `"bert"`, `"transformer"`)
+/// * `linear_layers` - The `Linear` layers whose weights to transpose, after stripping
+///
+/// # Panics
+/// If a named layer has no `{name}.weight` key after stripping, or it is not 2-D.
 #[must_use]
-pub fn load_huggingface_weights(state: StateDict, model_prefix: &str) -> StateDict {
-    StateDictMapper::new()
-        .strip_prefix(format!("{model_prefix}."))
-        .transpose_pattern("weight")
+#[track_caller]
+pub fn load_huggingface_weights(
+    state: StateDict,
+    model_prefix: &str,
+    linear_layers: &[&str],
+) -> StateDict {
+    let mapper = StateDictMapper::new().strip_prefix(format!("{model_prefix}."));
+    linear_layers
+        .iter()
+        .fold(mapper, |m, name| m.transpose_linear(*name))
         .map(state)
 }
 
@@ -285,45 +438,69 @@ pub fn load_huggingface_weights(state: StateDict, model_prefix: &str) -> StateDi
 /// ```
 /// use volta::io::mapping::create_key_mapping;
 ///
-/// let mapper = create_key_mapping(vec![
+/// let mapper = create_key_mapping([
 ///     ("fc1.weight", "encoder.weight"),
 ///     ("fc1.bias", "encoder.bias"),
 ///     ("fc2.weight", "decoder.weight"),
 ///     ("fc2.bias", "decoder.bias"),
 /// ]);
 /// ```
-pub fn create_key_mapping(mappings: Vec<(&str, &str)>) -> StateDictMapper {
-    let mut mapper = StateDictMapper::new();
-    for (from, to) in mappings {
-        mapper = mapper.rename(from, to);
-    }
-    mapper
+pub fn create_key_mapping<F: Into<String>, T: Into<String>>(
+    mappings: impl IntoIterator<Item = (F, T)>,
+) -> StateDictMapper {
+    mappings
+        .into_iter()
+        .fold(StateDictMapper::new(), |mapper, (from, to)| {
+            mapper.rename(from, to)
+        })
 }
 
-/// Load partial state dict (for transfer learning)
+/// Select one sub-module's entries from a state dict (for transfer learning).
 ///
-/// Strips a prefix and keeps only those keys.
+/// Keeps only the keys that start with `{prefix}.` and strips that prefix from them;
+/// every other key is dropped. `{"enc.w", "dec.w"}` with prefix `enc` becomes `{"w"}`.
+/// It transforms a [`StateDict`] and loads nothing; pass the result to the sub-module's
+/// [`crate::nn::Module::load_state_dict`] (strict), or to
+/// [`crate::nn::Module::load_state_dict_partial`] if it covers only part of it.
 #[must_use]
-pub fn load_partial(state: StateDict, prefix: &str) -> StateDict {
-    StateDictMapper::new()
-        .strip_prefix(format!("{prefix}."))
-        .map(state)
+pub fn load_partial(mut state: StateDict, prefix: &str) -> StateDict {
+    let prefix_dot = format!("{prefix}.");
+    // Dropping first makes the strip injective: every remaining key has the prefix, so no
+    // two can collide after it is removed.
+    state.retain(|key, _| key.starts_with(&prefix_dot));
+    StateDictMapper::new().strip_prefix(prefix_dot).map(state)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::fetch;
     use crate::io::TensorData;
     use std::collections::BTreeMap;
+
+    /// #111: keys outside the prefix are dropped, not passed through under their old name.
+    #[test]
+    fn load_partial_keeps_only_the_prefixed_keys() {
+        let mut s = StateDict::new();
+        for (k, v) in [
+            ("enc.w", 1.0),
+            ("enc.b", 2.0),
+            ("dec.w", 3.0),
+            ("encoder.w", 4.0),
+        ] {
+            s.insert(k.into(), TensorData::from_f32(vec![v], vec![1]));
+        }
+        let out = load_partial(s, "enc");
+        assert_eq!(out.keys().collect::<Vec<_>>(), ["b", "w"]);
+        assert_eq!(out["w"].to_vec_as::<f32>().unwrap(), vec![1.0]);
+        assert_eq!(out["b"].to_vec_as::<f32>().unwrap(), vec![2.0]);
+    }
 
     fn create_test_state() -> StateDict {
         let mut state = BTreeMap::new();
         state.insert(
             "weight".to_string(),
-            TensorData {
-                data: vec![1.0, 2.0, 3.0, 4.0],
-                shape: vec![2, 2],
-            },
+            TensorData::from_f32(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]),
         );
         state
     }
@@ -349,15 +526,35 @@ mod tests {
         assert!(!mapped.contains_key("new_key"));
     }
 
+    /// #459: a transpose step returns the entry's validation error for a malformed entry
+    /// (a zero dim, or a byte count that doesn't match), from every transpose method,
+    /// instead of hanging or panicking.
+    #[test]
+    fn transpose_steps_reject_malformed_entries() {
+        let zero_dim = TensorData::from_typed(Vec::<f32>::new(), vec![0, 3]);
+        let mut short = TensorData::from_f32(vec![1.0; 4], vec![2, 2]);
+        short.data.truncate(12);
+        for (bad, want) in [(zero_dim, "zero dimension"), (short, "")] {
+            let state = || BTreeMap::from([("fc.weight".to_string(), bad.clone())]);
+            for mapper in [
+                StateDictMapper::new().transpose("fc.weight"),
+                StateDictMapper::new().transpose_linear("fc"),
+                StateDictMapper::new().transpose_pattern("weight"),
+            ] {
+                let err = mapper.try_map(state()).expect_err("malformed entry");
+                assert!(err.to_string().contains("fc.weight"), "{err}");
+                assert!(err.to_string().contains(want), "{err}");
+            }
+        }
+    }
+
     #[test]
     fn test_transpose_2d() {
         let mut state = BTreeMap::new();
         state.insert(
             "fc.weight".to_string(),
-            TensorData {
-                data: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-                shape: vec![2, 3], // [2 rows, 3 cols]
-            },
+            // [2 rows, 3 cols]
+            TensorData::from_f32(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]),
         );
 
         let mapper = StateDictMapper::new().transpose("fc.weight");
@@ -367,7 +564,10 @@ mod tests {
         assert_eq!(weight.shape, vec![3, 2]); // Transposed
         // Original: [1,2,3, 4,5,6] (row-major)
         // Transposed: [1,4, 2,5, 3,6] (row-major)
-        assert_eq!(weight.data, vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+        assert_eq!(
+            weight.to_vec_as::<f32>().unwrap(),
+            vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
+        );
     }
 
     #[test]
@@ -375,10 +575,8 @@ mod tests {
         let mut state = BTreeMap::new();
         state.insert(
             "bias".to_string(),
-            TensorData {
-                data: vec![1.0, 2.0, 3.0],
-                shape: vec![3], // 1D tensor
-            },
+            // 1D tensor
+            TensorData::from_f32(vec![1.0, 2.0, 3.0], vec![3]),
         );
 
         let mapper = StateDictMapper::new().transpose("bias");
@@ -386,7 +584,7 @@ mod tests {
 
         let bias = mapped.get("bias").unwrap();
         assert_eq!(bias.shape, vec![3]); // Unchanged
-        assert_eq!(bias.data, vec![1.0, 2.0, 3.0]); // Unchanged
+        assert_eq!(bias.to_vec_as::<f32>().unwrap(), vec![1.0, 2.0, 3.0]); // Unchanged
     }
 
     #[test]
@@ -394,17 +592,11 @@ mod tests {
         let mut state = BTreeMap::new();
         state.insert(
             "model.fc1.weight".to_string(),
-            TensorData {
-                data: vec![1.0],
-                shape: vec![1],
-            },
+            TensorData::from_f32(vec![1.0], vec![1]),
         );
         state.insert(
             "model.fc2.weight".to_string(),
-            TensorData {
-                data: vec![2.0],
-                shape: vec![1],
-            },
+            TensorData::from_f32(vec![2.0], vec![1]),
         );
 
         let mapper = StateDictMapper::new().strip_prefix("model.");
@@ -430,28 +622,18 @@ mod tests {
         let mut state = BTreeMap::new();
         state.insert(
             "weight1".to_string(),
-            TensorData {
-                data: vec![1.0],
-                shape: vec![1],
-            },
+            TensorData::from_f32(vec![1.0], vec![1]),
         );
         state.insert(
             "weight2".to_string(),
-            TensorData {
-                data: vec![2.0],
-                shape: vec![1],
-            },
+            TensorData::from_f32(vec![2.0], vec![1]),
         );
         state.insert(
             "weight3".to_string(),
-            TensorData {
-                data: vec![3.0],
-                shape: vec![1],
-            },
+            TensorData::from_f32(vec![3.0], vec![1]),
         );
 
-        let mapper =
-            StateDictMapper::new().select_keys(vec!["weight1".to_string(), "weight2".to_string()]);
+        let mapper = StateDictMapper::new().select_keys(["weight1", "weight2"]);
         let mapped = mapper.map(state);
 
         assert_eq!(mapped.len(), 2);
@@ -465,20 +647,14 @@ mod tests {
         let mut state = BTreeMap::new();
         state.insert(
             "weight1".to_string(),
-            TensorData {
-                data: vec![1.0],
-                shape: vec![1],
-            },
+            TensorData::from_f32(vec![1.0], vec![1]),
         );
         state.insert(
             "weight2".to_string(),
-            TensorData {
-                data: vec![2.0],
-                shape: vec![1],
-            },
+            TensorData::from_f32(vec![2.0], vec![1]),
         );
 
-        let mapper = StateDictMapper::new().exclude_keys(vec!["weight2".to_string()]);
+        let mapper = StateDictMapper::new().exclude_keys(["weight2"]);
         let mapped = mapper.map(state);
 
         assert_eq!(mapped.len(), 1);
@@ -491,10 +667,7 @@ mod tests {
         let mut state = BTreeMap::new();
         state.insert(
             "model.encoder.fc.weight".to_string(),
-            TensorData {
-                data: vec![1.0, 2.0, 3.0, 4.0],
-                shape: vec![2, 2],
-            },
+            TensorData::from_f32(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]),
         );
 
         let mapper = StateDictMapper::new()
@@ -506,7 +679,9 @@ mod tests {
 
         assert!(mapped.contains_key("enc.fc.weight"));
         let weight = mapped.get("enc.fc.weight").unwrap();
-        assert_eq!(weight.shape, vec![2, 2]); // Transposed (but 2x2 is symmetric)
+        // The shape alone can't show a transpose of a square matrix; the data can.
+        assert_eq!(weight.shape, vec![2, 2]);
+        assert_eq!(weight.to_vec_as::<f32>().unwrap(), vec![1.0, 3.0, 2.0, 4.0]);
     }
 
     #[test]
@@ -514,33 +689,41 @@ mod tests {
         let mut state = BTreeMap::new();
         state.insert(
             "fc1.weight".to_string(),
-            TensorData {
-                data: vec![1.0, 2.0, 3.0, 4.0],
-                shape: vec![2, 2],
-            },
+            TensorData::from_f32(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]),
         );
         state.insert(
             "fc1.bias".to_string(),
-            TensorData {
-                data: vec![1.0, 2.0],
-                shape: vec![2],
-            },
+            TensorData::from_f32(vec![1.0, 2.0], vec![2]),
         );
         state.insert(
             "fc2.weight".to_string(),
-            TensorData {
-                data: vec![5.0, 6.0, 7.0, 8.0],
-                shape: vec![2, 2],
-            },
+            TensorData::from_f32(vec![5.0, 6.0, 7.0, 8.0], vec![2, 2]),
         );
 
         let mapper = StateDictMapper::new().transpose_pattern("weight");
         let mapped = mapper.map(state);
 
-        // Both "weight" keys should be transposed, bias should not
-        assert_eq!(mapped.get("fc1.weight").unwrap().shape, vec![2, 2]);
-        assert_eq!(mapped.get("fc2.weight").unwrap().shape, vec![2, 2]);
-        assert_eq!(mapped.get("fc1.bias").unwrap().shape, vec![2]); // Unchanged
+        // Both "weight" keys are transposed (square, so only the data shows it); bias is not
+        assert_eq!(
+            mapped
+                .get("fc1.weight")
+                .unwrap()
+                .to_vec_as::<f32>()
+                .unwrap(),
+            vec![1.0, 3.0, 2.0, 4.0]
+        );
+        assert_eq!(
+            mapped
+                .get("fc2.weight")
+                .unwrap()
+                .to_vec_as::<f32>()
+                .unwrap(),
+            vec![5.0, 7.0, 6.0, 8.0]
+        );
+        assert_eq!(
+            mapped.get("fc1.bias").unwrap().to_vec_as::<f32>().unwrap(),
+            vec![1.0, 2.0]
+        ); // Unchanged
     }
 
     #[test]
@@ -548,15 +731,258 @@ mod tests {
         let mut state = BTreeMap::new();
         state.insert(
             "linear.weight".to_string(),
-            TensorData {
-                data: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-                shape: vec![2, 3], // PyTorch: [out=2, in=3]
-            },
+            // PyTorch: [out=2, in=3]
+            TensorData::from_f32(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![2, 3]),
         );
 
-        let mapped = load_pytorch_linear_weights(state);
+        let mapped = load_pytorch_linear_weights(state, &["linear"]);
 
         let weight = mapped.get("linear.weight").unwrap();
         assert_eq!(weight.shape, vec![3, 2]); // Volta: [in=3, out=2]
+        assert_eq!(
+            weight.to_vec_as::<f32>().unwrap(),
+            vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
+        );
+    }
+
+    /// A PyTorch state with a square, asymmetric `Linear` and a square `Embedding`: only the
+    /// named `Linear` is transposed, and the loaded layer computes PyTorch's `x @ W.T + b`.
+    /// The shape check in `load_state_dict` can't catch a wrong transpose here, so the test
+    /// compares values.
+    #[test]
+    fn test_square_linear_loads_and_matches_pytorch_forward() {
+        use crate::nn::{Layer, Linear, Module, SequentialBuilder};
+        use crate::tensor::RawTensor;
+
+        let mut state = BTreeMap::new();
+        // PyTorch nn.Linear(2, 2): W = [[1, 2], [3, 4]] as [out, in], b = [0.5, -0.5].
+        state.insert(
+            "fc.weight".to_string(),
+            TensorData::from_f32(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]),
+        );
+        state.insert(
+            "fc.bias".to_string(),
+            TensorData::from_f32(vec![0.5, -0.5], vec![2]),
+        );
+        // An Embedding weight, [vocab, dim] in both PyTorch and Volta: must not move.
+        state.insert(
+            "emb.weight".to_string(),
+            TensorData::from_f32(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]),
+        );
+
+        let mapped = load_pytorch_linear_weights(state, &["fc"]);
+        assert_eq!(
+            mapped
+                .get("emb.weight")
+                .unwrap()
+                .to_vec_as::<f32>()
+                .unwrap(),
+            vec![1.0, 2.0, 3.0, 4.0]
+        );
+
+        let mut model = SequentialBuilder::new()
+            .add_named("fc", Box::new(Linear::new(2, 2, true)))
+            .build();
+        // `emb.weight` has no layer here, so the strict load would refuse it.
+        model
+            .load_state_dict_partial(&mapped)
+            .expect("mapped state loads");
+
+        // PyTorch: y = x @ W.T + b = [1*1 + -2*2 + 0.5, 1*3 + -2*4 - 0.5] = [-2.5, -5.5].
+        // Loaded untransposed, the first output would be 1*1 + -2*3 + 0.5 = -4.5.
+        let y = model.forward(&RawTensor::new(vec![1.0, -2.0], &[1, 2], false));
+        assert_eq!(y.data(), vec![-2.5, -5.5]);
+    }
+
+    #[test]
+    fn test_load_huggingface_weights_strips_then_transposes_named() {
+        let mut state = BTreeMap::new();
+        state.insert(
+            "bert.proj.weight".to_string(),
+            TensorData::from_f32(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]),
+        );
+        state.insert(
+            "bert.embeddings.weight".to_string(),
+            TensorData::from_f32(vec![1.0, 2.0, 3.0, 4.0], vec![2, 2]),
+        );
+
+        let mapped = load_huggingface_weights(state, "bert", &["proj"]);
+
+        assert_eq!(
+            mapped
+                .get("proj.weight")
+                .unwrap()
+                .to_vec_as::<f32>()
+                .unwrap(),
+            vec![1.0, 3.0, 2.0, 4.0]
+        );
+        assert_eq!(
+            mapped
+                .get("embeddings.weight")
+                .unwrap()
+                .to_vec_as::<f32>()
+                .unwrap(),
+            vec![1.0, 2.0, 3.0, 4.0]
+        );
+    }
+
+    /// #260: the `try_` form returns the missing key as an error, leaving `state` as it was.
+    #[test]
+    fn test_transpose_linear_missing_key_is_an_error() {
+        let state = create_test_state();
+        let err = StateDictMapper::new()
+            .transpose_linear("fc9")
+            .try_map(state)
+            .expect_err("fc9.weight is missing");
+        assert!(
+            matches!(&err, VoltaError::InvalidParameter(m) if m.message.contains("\"fc9.weight\"")),
+            "{err}"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "transpose_linear: no key \"fc9.weight\"")]
+    fn test_transpose_linear_missing_key_panics() {
+        let _ = load_pytorch_linear_weights(create_test_state(), &["fc9"]);
+    }
+
+    #[test]
+    #[should_panic(expected = "not a 2-D Linear weight")]
+    fn test_transpose_linear_non_2d_panics() {
+        let mut state = BTreeMap::new();
+        state.insert(
+            "conv.weight".to_string(),
+            TensorData::from_f32(vec![0.0; 8], vec![2, 1, 2, 2]),
+        );
+        let _ = load_pytorch_linear_weights(state, &["conv"]);
+    }
+
+    /// A one-element entry holding `v`.
+    fn entry(v: f32) -> TensorData {
+        TensorData::from_f32(vec![v], vec![1])
+    }
+
+    /// A state dict with one-element entries `keys[i] = i`.
+    fn state_of(keys: &[&str]) -> StateDict {
+        keys.iter()
+            .zip(0u8..)
+            .map(|(k, i)| ((*k).to_string(), entry(f32::from(i))))
+            .collect()
+    }
+
+    /// The `(key, value)` pairs of a state dict of one-element entries.
+    fn pairs(state: &StateDict) -> Vec<(String, f32)> {
+        state
+            .iter()
+            .map(|(k, v)| {
+                let values = v.to_vec_as::<f32>().expect("test entries are valid f32");
+                (k.clone(), fetch(&values, 0))
+            })
+            .collect()
+    }
+
+    /// `add_prefix` renames from the original keys: `w`'s new name `xw` is itself an old
+    /// key, which moves on to `xxw` instead of being overwritten.
+    #[test]
+    fn test_add_prefix_onto_an_existing_key_keeps_both() {
+        let mapped = StateDictMapper::new()
+            .add_prefix("x")
+            .try_map(state_of(&["w", "xw"]))
+            .expect("add_prefix is injective");
+        assert_eq!(
+            pairs(&mapped),
+            vec![("xw".to_string(), 0.0), ("xxw".to_string(), 1.0)]
+        );
+    }
+
+    /// Stripping `m.` from `m.w` collides with the unprefixed `w`: an error naming both,
+    /// and the input is not consumed piecemeal.
+    #[test]
+    fn test_strip_prefix_collision_is_an_error() {
+        let mut state = state_of(&["m.w", "w"]);
+        let err = StateDictMapper::new()
+            .strip_prefix("m.")
+            .try_apply(&mut state)
+            .unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                VoltaError::StateKeyCollision { key, first, second }
+                    if key == "w" && first == "m.w" && second == "w"
+            ),
+            "{err:?}"
+        );
+        assert_eq!(
+            pairs(&state),
+            vec![("m.w".to_string(), 0.0), ("w".to_string(), 1.0)]
+        );
+    }
+
+    /// Stripping a prefix whose stripped names are another key's original name, while
+    /// that key moves too, is not a collision.
+    #[test]
+    fn test_strip_prefix_chain_keeps_every_entry() {
+        let mapped = StateDictMapper::new()
+            .strip_prefix("m.")
+            .try_map(state_of(&["m.m.w", "m.w"]))
+            .expect("m.m.w -> m.w and m.w -> w are distinct");
+        assert_eq!(
+            pairs(&mapped),
+            vec![("m.w".to_string(), 0.0), ("w".to_string(), 1.0)]
+        );
+    }
+
+    /// Renaming onto a key that stays would overwrite it: an error, input unchanged.
+    #[test]
+    fn test_rename_onto_existing_key_is_an_error() {
+        let mut state = state_of(&["a", "b"]);
+        let err = StateDictMapper::new()
+            .rename("a", "b")
+            .try_apply(&mut state)
+            .unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                VoltaError::StateKeyCollision { key, first, second }
+                    if key == "b" && first == "a" && second == "b"
+            ),
+            "{err:?}"
+        );
+        assert_eq!(
+            pairs(&state),
+            vec![("a".to_string(), 0.0), ("b".to_string(), 1.0)]
+        );
+    }
+
+    /// Renaming a key to itself is a no-op, not a collision with itself.
+    #[test]
+    fn test_rename_to_itself_is_a_noop() {
+        let mapped = StateDictMapper::new()
+            .rename("a", "a")
+            .try_map(state_of(&["a"]))
+            .expect("no collision");
+        assert_eq!(pairs(&mapped), vec![("a".to_string(), 0.0)]);
+    }
+
+    /// `rename_prefix` shares the bug class: `old.w -> new.w` next to an existing `new.w`.
+    #[test]
+    fn test_rename_prefix_collision_is_an_error() {
+        let err = StateDictMapper::new()
+            .rename_prefix("old.", "new.")
+            .try_map(state_of(&["new.w", "old.w"]))
+            .expect_err("old.w -> new.w collides with new.w");
+        assert!(
+            matches!(&err, VoltaError::StateKeyCollision { key, .. } if key == "new.w"),
+            "{err:?}"
+        );
+    }
+
+    /// The panicking `map` reports the collision rather than dropping an entry.
+    #[test]
+    #[should_panic(expected = "both map to")]
+    fn test_map_panics_on_collision() {
+        let _ = StateDictMapper::new()
+            .rename("a", "b")
+            .map(state_of(&["a", "b"]));
     }
 }
