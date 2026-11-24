@@ -6,7 +6,9 @@ Sections drafted with the assistance of [git-cliff](https://git-cliff.org/) (see
 
 ## [Unreleased]
 
-## [0.4.0] - 2026-11-24 - The Cleanup Release
+## [0.4.0] - 2026-11-24
+
+The Cleanup Release
 
 The `improvements` branch merged into `main`: an opaque `Tensor`, typed shapes, dtypes and mixed precision, loud failures, and fixes checked against PyTorch.
 
@@ -246,32 +248,6 @@ Outputs differ from 0.3.0:
 
 - `#[must_use]` was added to many functions and methods.
 - Stateless layers (`ReLU`, `Sigmoid`, `Tanh`, `Dropout`, `Flatten`, `MaxPool2d`, `PixelShuffle`) now implement `Copy`.
-
-## Cliff notes
-
-### Breaking
-
-Hand-written from the commit log; git-cliff flags only the 11 `!` commits. Each line names the PR, the merge PR, or the commit that made the change.
-
-- `Tensor` is opaque: `RawTensor` fields are hidden and `Tensor::from_raw` is removed. In-place updates go through `Tensor` methods (bfd4ec7, #376, #390, #393).
-- `Tensor::shape()` returns `Shape`, dim arguments take `Axis`, and `Shape::from_dims` rejects zero dims (merge of `shape-public-return`, 567946f, 31e2edd).
-- The `TensorOps` trait is deleted and its methods are inherent on `Tensor`. `TensorOps::backward` is replaced by `into_loss` / `ScalarLoss` (132790f, f1c07fe).
-- `Module` is split into `Module`, `Layer`, `IndexedLayer` and `RecurrentLayer`: `forward` moves to `Layer`, and `LSTMCell::forward_step` becomes `RecurrentLayer::step` (1a51ab7).
-- Full reductions (`sum`, `mean`, `max`, the losses, a 1-D dot) return rank-0 tensors (shape `[]`, not `[1]`); zero-dim operands promote like `torch.result_type` (#438, squashed into #436).
-- The `GradFn` trait and the `*GradFn` structs are no longer public; the graph uses a closed enum (8ce5eae).
-- `Conv2d::set_algo` takes `&mut self` (#335).
-- One canonical path per item: the crate root re-exports only the core modules, and layers and optimizers live at `volta::nn::X` (#382).
-- Public enums and data structs are `#[non_exhaustive]` (#379, #365).
-- `Storage` is an opaque struct with no `Deref`/`Index`; host access is explicit and typed, and CPU storage is copy-on-write. `HostBuf` is crate-private (#4, #5, #20, #432).
-- `DevicePolicy::Strict` is the default: a GPU input to an op with no GPU kernel panics instead of running on the CPU. `PreferGpu` opts in to the fallback (2040b99).
-- Default features are empty: `gpu` and `accelerate` are opt-in (#422).
-- Errors: functions fed by outside data return `Result<_, VoltaError>` and have `try_` forms; file loaders return `volta::Result`, and `VoltaError` variants carry an `ErrorDetail` (#435, #436, #440).
-- `Module::load_state_dict` is strict; the lenient form is `load_state_dict_partial` (#420).
-- `BinaryOp::Cmplt` is removed; comparisons are `CmpOp` and return Bool (#25).
-- `io::mapping::load_pytorch_linear_weights` and `load_huggingface_weights` take the Linear layer names (c32fb28).
-- The `blas-src` feature is removed; `accelerate` gates the link itself (5cc8f29).
-- Removed: bincode (safetensors is the only state-dict format, #256), `TypedTensorData` and its loader and saver (#412), the GPU monitors, `GpuContext`, `GpuKernels` and the buffer pools from the public API (#293, #338, 55be134), and the public `assert_trainable!` macro (#388).
-- Tensors carry a dtype: kernels refuse a dtype they don't support, and mixed dtypes promote under `DTypePolicy` (#19–#25).
 
 ### Added
 
