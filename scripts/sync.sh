@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
-# After PRs merge: fast-forward `improvements` and delete local branches it already holds
+# After PRs merge: fast-forward `main` and delete local branches it already holds
 # (see dev-docs/WORKFLOW.md, "Why `just sync` asks GitHub").
 #
 #   scripts/sync.sh [dry-run]
 #
 # A branch is deleted when one of these holds, checked in order:
-#   ancestor  its tip is an ancestor of origin/improvements (merge commit, fast-forward, or a
+#   ancestor  its tip is an ancestor of origin/main (merge commit, fast-forward, or a
 #             stacked PR whose lower branch merged), whether or not it had a PR;
-#   squash    a PR from it merged into improvements and that PR's final commit is the local tip;
-#   content   a PR from it merged and its content reached improvements (base improvements, or
-#             its final commit is an ancestor of origin/improvements), the branch's tree equals
+#   squash    a PR from it merged into main and that PR's final commit is the local tip;
+#   content   a PR from it merged and its content reached main (base main, or
+#             its final commit is an ancestor of origin/main), the branch's tree equals
 #             that final commit, and every non-merge commit the branch has beyond it matches a
-#             commit in improvements by patch (`git patch-id`). This is the stacked-PR case where
+#             commit in main by patch (`git patch-id`). This is the stacked-PR case where
 #             a local `Merge branch 'lower' into upper` moved the tip but not the content.
 # Every other branch is kept, and the message says why.
 set -euo pipefail
 
-base=improvements
+base=main
 remote=origin/$base
 
 die() {
@@ -41,21 +41,21 @@ git fetch --prune --quiet
 
 # Squash merging leaves no ancestor link, so git alone cannot see those merges: ask GitHub.
 # All states and bases: an open or unmerged PR explains a kept branch, and a stacked PR merged
-# into a lower branch, not into improvements.
+# into a lower branch, not into main.
 prs=$(gh pr list --state all --limit 1000 --json number,state,baseRefName,headRefName,headRefOid)
 
 delete() { # branch rule
 	if $dry; then echo "would delete: $1 ($2)"; else git branch -D --quiet "$1" && echo "deleted: $1 ($2)"; fi
 }
 
-# Patch ids of every non-merge commit in improvements, computed once, on first use.
+# Patch ids of every non-merge commit in main, computed once, on first use.
 landed=""
 landed_ids() {
 	[[ -n $landed ]] || landed=$(git log --no-merges -p "$remote" | git patch-id --stable | cut -d' ' -f1 | sort -u)
 	echo "$landed"
 }
 
-# True when each non-merge commit in from..to has a patch-equivalent commit in improvements.
+# True when each non-merge commit in from..to has a patch-equivalent commit in main.
 # A commit with no patch (empty) has no id and counts as missing.
 extras_landed() { # from to
 	local c id
@@ -72,7 +72,7 @@ have_commit() { # oid pr-number
 }
 
 for b in $(git for-each-ref --format='%(refname:short)' refs/heads); do
-	[[ $b == "$base" || $b == main ]] && continue
+	[[ $b == "$base" ]] && continue
 	tip=$(git rev-parse "refs/heads/$b")
 
 	if git merge-base --is-ancestor "$tip" "$remote"; then

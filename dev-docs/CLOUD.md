@@ -36,7 +36,7 @@ Work that a Linux CPU can verify, and that reviews as a PR. Candidates are open 
 - **Metal-specific evidence:** H5, GPU parity on Apple hardware, GPU speed. Without lavapipe a passing GPU test here was skipped. With lavapipe the GPU tests run on a software Vulkan device: that verifies the kernels' logic and the device-policy paths, not Metal's precision, limits or driver. Say "GPU tests ran on lavapipe" and still hand Metal off as "needs `just test-gpu` on the Mac"; don't close a `needs-mac` issue from the cloud.
 - **Performance and the Accelerate path:** benches, speed claims, and timing thresholds. `bench_matmul_speedup` (`src/lib.rs`) uses the non-Accelerate threshold and may flake on a shared VM. Report it; don't loosen it.
 - **Shader validation** runs anywhere: `just validate-shaders` is `cargo test --features gpu,accelerate --lib shader_template` (naga is a dev-dependency).
-- **Git:** never push to `main` or `improvements`, never force-push, never `--no-verify` or `SKIP=`. Branch and target PRs as in "Pull requests" below.
+- **Git:** never push to `main`, never force-push, never `--no-verify` or `SKIP=`. Branch and target PRs as in "Pull requests" below.
 
 ## How to work there
 
@@ -48,11 +48,11 @@ Work that a Linux CPU can verify, and that reviews as a PR. Candidates are open 
 
 ## Pull requests
 
-Each PR branches from `improvements` and targets it. Open PRs are independent and can be reviewed and merged in any order; `improvements` merges into `main` at the merge gate (`CLAUDE.md`). The local `just pr` / `just sync` commands and the reasoning behind these rules are in `dev-docs/WORKFLOW.md`.
+Each PR branches from `main` and targets it. Open PRs are independent and can be reviewed and merged in any order. `improvements` is retired; don't target it (`DECISIONS.md`, "One branch: `main`"). The local `just pr` / `just sync` commands and the reasoning behind these rules are in `dev-docs/WORKFLOW.md`.
 
-- **Branch from `improvements`,** from its current tip, with one branch per task. Don't branch from another open PR's branch.
+- **Branch from `main`,** from its current tip, with one branch per task. Don't branch from another open PR's branch.
 - **One task per PR.** Keep the diff reviewable. A follow-up to an open PR is a new PR once that one has merged; before then, push to its branch.
 - **Describe it.** Say what changed and why, write `Fixes #N` for each issue it closes, and list what ran and what was not verified (see above).
-- **Squash-merge** (one commit per PR). The ruleset on `improvements` allows no other merge method. Write the squash commit message as a commit message, not a list of the branch's commits.
-- **Conflicts.** If another PR merged first and yours conflicts, bring your branch up to date with `improvements` and resolve it there. In a cloud session, merge `improvements` into your branch; force-pushing is ruled out above. A local session may rebase instead and push with `--force-with-lease`. Never force-push `improvements` or `main`.
-- **Dependent work.** If a task needs another open PR's change, wait for it to merge, or say so in the description and ask before basing a branch on it. A PR whose base isn't `improvements` needs the user's say-so.
+- **Squash-merge** (one commit per PR). The ruleset on `main` allows no other merge method. Write the squash commit message as a commit message, not a list of the branch's commits.
+- **Conflicts.** If another PR merged first and yours conflicts, bring your branch up to date with `main` and resolve it there. In a cloud session, merge `main` into your branch; force-pushing is ruled out above. A local session may rebase instead and push with `--force-with-lease`. Never force-push `main`.
+- **Dependent work.** If a task needs another open PR's change, wait for it to merge, or say so in the description and ask before basing a branch on it. A PR whose base isn't `main` needs the user's say-so.

@@ -1,13 +1,13 @@
 name: CI
 on:
   push:
-    branches: [main, improvements]
+    branches: [main]
   pull_request:
 
 permissions:
   contents: read
 
-# A superseded push to a PR branch is cancelled; runs on main and improvements always finish.
+# A superseded push to a PR branch is cancelled; runs on main always finish.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -16,7 +16,7 @@ concurrency:
 # Toolchain, tools and cache come from the local action .github/actions/setup-rust (#258).
 #
 # Required checks (.github/rulesets/*.json): cpu-only (1.89), cpu-only (stable), linux-lavapipe
-# and macos-cross, plus macos (stable) into main. ignore-issues, examples-smoke, bench-smoke and
+# and macos-cross. ignore-issues, examples-smoke, bench-smoke and
 # wasm32 run on every PR but are not required; making one required is a ruleset edit
 # (`.github/rulesets/`, applied with `just rulesets`).
 
@@ -180,8 +180,8 @@ jobs:
   # feature powerset for aarch64-apple-darwin, which covers the Accelerate matmul path, the Metal
   # backend's dependencies and the macos cfgs. Required on every PR, in place of a macOS runner
   # (scarce, slow to queue). Running Metal and Accelerate is the `macos` job in macos.yml:
-  # required into main, post-merge on improvements (DECISIONS.md, "macOS checks move off the PR
-  # gate"). ubuntu-latest ships clang, which compiles the one C build script (see the justfile).
+  # post-merge on main and advisory on Mac-relevant PRs (DECISIONS.md, "macOS checks move off the
+  # PR gate", "One branch: main"). ubuntu-latest ships clang, which compiles the one C build script (see the justfile).
   macos-cross:
     runs-on: ubuntu-latest
     timeout-minutes: 30

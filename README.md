@@ -2,7 +2,7 @@
 
 <small>A PyTorch-like deep learning framework in pure Rust</small>
 
-[![Build Status](https://img.shields.io/github/actions/workflow/status/rlarson20/volta/ci.yml?branch=improvements)](https://github.com/rlarson20/volta/actions)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/rlarson20/volta/ci.yml?branch=main)](https://github.com/rlarson20/volta/actions)
 [![Crates.io](https://img.shields.io/crates/v/volta.svg)](https://crates.io/crates/volta)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/rlarson20/Volta)

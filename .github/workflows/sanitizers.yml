@@ -58,7 +58,7 @@ jobs:
       - run: just asan
 
   # A scheduled failure is open work, so it becomes an issue (#258). Not `merge-gate`: these
-  # jobs are advisory, and only macOS gates main.
+  # jobs are advisory, and only macOS gates a release.
   report-failure:
     needs: [miri, asan]
     if: >-

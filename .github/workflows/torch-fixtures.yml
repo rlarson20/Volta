@@ -27,7 +27,7 @@ jobs:
       - run: uv run scripts/torch_ref/check_fixtures.py
 
   # A scheduled failure is open work, so it becomes an issue (#258); without this a weekly or
-  # nightly job just goes red where nobody looks. Not `merge-gate`: only macOS gates main.
+  # nightly job just goes red where nobody looks. Not `merge-gate`: only macOS gates a release.
   report-failure:
     needs: check
     if: always() && needs.check.result == 'failure' && github.event_name == 'schedule'

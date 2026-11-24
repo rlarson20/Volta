@@ -4,7 +4,7 @@ on:
   # line/region coverage on the CPU lane to the job summary, so a PR that drops coverage on the
   # autograd core shows it. Gate on a number only once a baseline exists (#154).
   # PRs that can't change coverage (docs, workflows, examples) skip it (#258); the push to
-  # improvements always runs, so the baseline stays current.
+  # main always runs, so the baseline stays current.
   pull_request:
     paths:
       - src/**
@@ -15,7 +15,7 @@ on:
       - .github/workflows/coverage.yml
       - .github/actions/setup-rust/**
   push:
-    branches: [improvements]
+    branches: [main]
   workflow_dispatch:
 
 permissions:

@@ -6,7 +6,7 @@
 #   scripts/status.sh [YYYY-MM-DD]
 #
 # The date is where the digest starts (default: 7 days ago). Needs `gh` signed in, `jq`, and
-# a checkout whose `origin/improvements` is fetched.
+# a checkout whose `origin/main` is fetched.
 set -euo pipefail
 
 repo=rlarson20/Volta
@@ -36,9 +36,9 @@ count() {
 
 echo "## State of Volta, $(date -u +%F) (since $since)"
 echo
-echo "### Merged into improvements"
+echo "### Merged into main"
 echo
-list "is:pr is:merged base:improvements merged:>=$since"
+list "is:pr is:merged base:main merged:>=$since"
 echo
 echo "### Design PRs (wait for RJ to read the diff)"
 echo
@@ -61,7 +61,7 @@ done
 echo
 echo "### Decisions and public surface touched since $since"
 echo
-git log --since="$since" --format='- %h %s' origin/improvements -- DECISIONS.md src/lib.rs Cargo.toml |
+git log --since="$since" --format='- %h %s' origin/main -- DECISIONS.md src/lib.rs Cargo.toml |
 	grep . || echo "- none"
 echo
 echo "### Filed since $since"
