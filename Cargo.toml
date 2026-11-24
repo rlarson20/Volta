@@ -9,7 +9,7 @@ readme = "README.md"
 repository = "https://github.com/rlarson20/Volta"
 documentation = "https://docs.rs/volta"
 keywords = ["ml", "machine-learning", "autodiff", "tensor"]
-categories = ["science", "mathematics, artificial-intelligence"]
+categories = ["science", "mathematics", "artificial-intelligence"]
 # Ship the library, its unit tests (`src/lib_tests/`) and the examples. Leave out the
 # integration tests and benches: `tests/fixtures/` alone is about 1.9 MB of PyTorch
 # reference data no downstream user can use (#462), and both run from the repository,
