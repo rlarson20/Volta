@@ -1,14 +1,253 @@
 # Changelog
 
-All notable changes to Volta are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Cargo's semver rules](https://doc.rust-lang.org/cargo/reference/semver.html): before 1.0, a minor bump (`0.x.0`) may break the API and a patch bump (`0.x.y`) may not.
+Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 
-The 0.4.0 entries were drafted with [git-cliff](https://git-cliff.org/) (`cliff.toml`) and edited by hand. Each line ends with the PR or commit it comes from.
+Sections drafted with the assistance of [git-cliff](https://git-cliff.org/) (see `cliff.toml`).
 
 ## [Unreleased]
 
-## [0.4.0] - YYYY-MM-DD
+## [0.4.0] - 2026-11-24 - The Cleanup Release
 
 The `improvements` branch merged into `main`: an opaque `Tensor`, typed shapes, dtypes and mixed precision, loud failures, and fixes checked against PyTorch.
+
+### `Tensor` and `Autograd`
+
+#### `Tensor` is now opaque; `RawTensor` fields are now hidden.
+
+Changed: `data`, `shape`, `grad`, `requires_grad`, `grad_fn`, `parents` and `device` are no longer public fields. `RawTensor` gained private `version` fields, preventing struct literal construction.
+Migration: use the `Tensor` accessor methods.
+Source: bfd4ec7, #376; `struct_pub_field_missing` and `constructible_struct_adds_private_field` semver lints.
+
+#### Removed: `RawTensor` op methods
+
+Changed: `add`, `sub`, `elem_mul`, `div`, `max_elem`, `modulo`, `cmplt`, `matmul_raw`, `pad`, `compute_strides`, `sum`, `max_reduce`, `mean`, `mulacc`, `where_op`, `neg`, `recip`, `sqrt`, `exp2`, `log2`, `exp`, `log`, `sin`, `cos`, `tanh`, `sigmoid`, `relu`, `empty`, `backward` and `invalidate_gpu_cache` are removed.
+Migration: use `Tensor`'s methods.
+Source: #376, `inherent_method_missing` semver lint.
+
+#### Removed: `Tensor::from_raw` (#390) and `new_tensor` (#376)
+
+#### Removed: `TensorOps`
+
+Changed: Its methods were already inherent to `Tensor`.
+Migration: drop `use volta::TensorOps`.
+Source: 132790f
+
+#### Breaking: `.backward()` requires scalar loss
+
+Changed: `{TensorOps,RawTensor}::backward` were removed. Backward runs only through `t.into_loss()?.backward()`. `into_loss` returns `NotScalar` when `numel != 1` and `NoGradRequired` when the tensor has no grad. The implicit all-ones seed for non-scalar roots is gone.
+Migration: If you relied on that seed, call `.sum()` first.
+Source: f1c07fe
+
+#### `Tensor::shape()` returns `Shape`, not `Vec<usize>`
+
+Migration: read a dim with `shape.dim(Axis(i))`, get a slice with `truncate_rank()`. `assert_eq!(t.shape(), vec![..])` still compiles.
+Source: 840ceaf
+
+#### Dim arguments take `Axis`
+
+Changed: `(try_)sum_dim`, `(max/mean)_dim`, and `(log_)softmax` all take `dim: Axis`. `permute` takes `&[Axis]`. Out of range axes now panic (`try_sum_dim` returns `Err`) instead of defaulting silently.
+Migration: Where you passed `n`, pass `Axis(n)`.
+Source: 567946f
+
+#### Shape Validation
+
+Changed: `Shape::from_dims` rejects zero dimensions, shapes with more than `MAX_NUMEL` elements, and op outputs go through the same checks. Integer shape defaults that used to turn a rank bug into a size-1 axis now panic.
+Source: 31e2edd, 380f563
+
+#### Full reductions return rank-0
+
+Changed: `sum`, `mean` and `max` over all elements, the losses built on them, and 1D dot product return shape `[]` instead of `[1]`. 0-dim operands promote like `torch.result_type`, so `f16[n] * f32[]` remains f16, while `f16[n] * f32[1]` becomes f32.
+Migration: `item()` still works. Code that checks `shape == [1]` or indexes dim 0 of a loss breaks.
+Source: #438, #436 via 370b1e3
+
+#### Only leaf tensors keep gradients
+
+Changed: Intermediate tensors no longer have `grad` after backward, as in PyTorch.
+Source: #89
+
+#### DType rules
+
+Changed: Integer and bool tensors are `NotDifferentiable`. `set_grad` panics on a gradient of another dtype. Mixed-dtype ops promote under `DTypePolicy` instead of reading f64 as f32. `load_weight` returns `DTypeMismatch` for a non-f32 destination.
+Source: 5c7fdcc, #19-25
+
+#### `GradFn` is private
+
+Changed: `GradFn` trait and every `*GradFn` struct left the public API when closed `GradFn` enum replaced `Box<dyn GradFn>`. User defined autograd ops are no longer possible at the moment.
+Source: 8ce5eae, `{trait,struct}_missing` semver lints
+
+### `Storage`
+
+#### Removed: `Deref` / `Index` / `IntoIterator` on `Storage`
+
+Changed: removed `iter`, `iter_mut`, `as_slice`, `as_mut_slice`, `as_f32_slice(_mut)`, `as_f64_slice`, `as_f16_slice`, `as_bf16_slice`, `cpu_f32`, `cpu_f64`, `cpu_f16`, `cpu_bf16`, `to_dtype`, `gpu_buffer` and `try_as_bytes`.
+Migration: `Storage::from_typed`, `as_host::<T>()`, `as_host_mut::<T>()` (copy-on-write), `to_vec`, and `to_f32_vec` (a lossy decode). `from_bytes` and `try_from_bytes` take `&[u8]`.
+Source: 4418437, 5c7fdcc.
+
+#### `Storage` is now an opaque struct, not an enum.
+
+Changed: `Storage::{Cpu,Gpu}` no longer exist, and `HostBuf` is crate-private.
+Source: #432, `enum_changed_kind` semver lint.
+
+#### `GpuBuffer`, `GpuBuffer::{buffer,copy_region}` gone from package root (#365) (#382)
+
+### Item Paths (#382)
+
+Crate root now only exports 8 core modules: `tensor`, `autograd`, `amp`, `dtype`, `device`, `device_policy`, `shape` and `error`.
+The following table shows how everything else was moved:
+
+| Was                                                                                                                                                                                                                                                                           | Now                         |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| `volta::Linear`, `Conv2d`, `Sequential`, `SequentialBuilder`, `ReLU`, `Sigmoid`, `Tanh`, `Dropout`, `Flatten`, `MaxPool2d`, `BatchNorm1d`, `BatchNorm2d`, `Embedding`, `LSTMCell`, `PixelShuffle`, `ConvTranspose2d`, `Module`; `volta::nn::layers::*`, `volta::nn::optim::*` | `volta::nn::X` (flat)       |
+| `volta::{SGD,Adam,Muon}`                                                                                                                                                                                                                                                      | `volta::nn::SGD` etc        |
+| `volta::BinaryOp`, `UnaryOp`, `ReduceOp`, `MovementOp`, `TernaryOp`; `volta::ops::binary::*`, etc.                                                                                                                                                                            | `volta::ops::X`             |
+| `volta::load_safetensors`, `save_safetensors`, `load_safetensors_with_mapping`                                                                                                                                                                                                | `volta::io::X`              |
+| `volta::mapping::*`                                                                                                                                                                                                                                                           | `volta::io::mapping::*`     |
+| `volta::normalize`, `to_one_hot`, `load_mnist_images`, `load_mnist_labels`; `volta::data::mnist::*`, `data::transforms::*`                                                                                                                                                    | `volta::data::X`            |
+| `volta::ProgressBar`, `volta::utils::progress::*`                                                                                                                                                                                                                             | `volta::utils::ProgressBar` |
+| `volta::is_gpu_available`, `gpu_sync`, `gpu_cleanup`, `gpu_compact`, `gpu_pending_count`, `gpu_pool_stats`, `gpu_sync_threshold`                                                                                                                                              | `volta::gpu::X`             |
+| `volta::Storage`                                                                                                                                                                                                                                                              | `volta::storage::Storage`   |
+
+Added at the root so the rule holds: `no_grad`, `NoGradGuard`, `AutocastGuard`, `autocast_dtype`, `MAX_NUMEL` and `MAX_FALLBACK_EVENTS`.
+`assert_trainable!` is no longer exported (#388).
+
+### `nn`
+
+#### `Module` is split
+
+Changed: `Module` keeps `parameters` and `state_dict`, but no `forward`. `Layer : Module` adds `forward` and is held by `Sequential`. `Embedding` is a sealed `IndexedLayer` with `forward_indices`. `LSTMCell` is a sealed `RecurrentLayer` with `initial_{state,step}`, and `forward_step` is removed. Putting an `Embedding` in a `Sequential` is now a compile-time error.
+Migration: Implement `Layer` for custom layers, and import `volta::nn::Layer` to call `forward`.
+Source: 1a51ab7; `trait_method_missing` semver lint
+
+#### `load_state_dict` returns `Result`, is now strict
+
+Changed: A missing or unexpected key returns `StateKeyMismatch` and nothing is written. The lenient form is now `load_state_dict_partial`, and custom layers implement it. Loads are atomic (plan, then apply).
+Source: 4a68601, #420, #439.
+
+#### `Conv2d::set_algo` takes `&mut self`. Migration: `let mut conv = ....` (#335)
+
+#### `TransformerBlock` holds a real `MultiHeadAttention`.
+
+Changed: it used to hold the parameterless `SimpleAttention`, so it now has `attention.*` state-dict keys. Attention no longer adds a residual; the block does.
+Source: 1a51ab7, #163
+
+#### Constructors validate their hyperparameters.
+
+Changed: bad values now panic with a named error, each constructor has a `try_new`, and an overflowing parameter returns `Err`.
+Source: #440, #470.
+
+#### Losses reject a pred/target shape mismatch instead of broadcasting. (#95, #253)
+
+#### Optimizers refuse non-leaf parameters (#295), a parameter listed twice such as a tied weight (#101), and, for `Adam`, half-precision parameters (#372).
+
+#### `BatchNorm` refuses one value per channel in training mode (#161) and a mismatched input `dtype` (#349).
+
+### Error handling
+
+#### Data from outside the program returns `Result`.
+
+Changed: tensor constructors, reshape and expand have `try_` twins, and the panicking form wraps the twin. `to_one_hot`, `load_weight` and `load_state_dict_checked` return `Result`.
+Source: 4a68601
+
+#### Error payloads are structured.
+
+Changed: `VoltaError::InvalidParameter`, `DeviceError` and `OpError` carry `ErrorDetail { op, arg, message }` instead of a `String`.
+Migration: read `.detail()` or `detail.message`.
+Source: #435
+
+#### The IO loaders return `volta::Result`, `not std::io::Result`.
+
+Changed: this covers `load_safetensors`, `save_safetensors`, `load_safetensors_with_mapping` and the MNIST loaders. A file that can't be decoded is the new `VoltaError::Decode { path, key, detail }`.
+Source: #436
+
+#### More types are `#[non_exhaustive]`
+
+Changed: the enums `Device`, `DType`, `BinaryOp`, `UnaryOp`, `ReduceOp`, `MovementOp` and `TernaryOp`, and the structs `TensorData` and `StateDictDiff`. Matches need a _ arm, and the structs need their constructors (`TensorData::from_f32`, `from_typed`, `from_tensor`).
+Source: #379, 5b82e42
+
+#### Removed: `BinaryOp::Cmplt`
+
+Changed: Comparisons are now `CmpOp` and return `Bool` tensors.
+Source: #25; `enum_variant_missing` semver lint
+
+### IO
+
+#### Removed: `bincode`
+
+Changed: `io::save_state_dict, load_state_dict, load_state_dict_with_mapping` are gone, and old .bin checkpoints no longer load.
+Migration: use the `*_safetensors` functions.
+Source: #256
+
+#### `TypedTensorData`, `load_safetensors_raw` and `save_safetensors_typed` are removed.
+
+Migration: `TensorData`, `load_safetensors` and `save_safetensors`. `to_storage` now takes the key.
+Source: #412
+
+#### The mapping helpers take layer names.
+
+Changed: `load_pytorch_linear_weights(state, linear_layers: &[&str])` takes 2 arguments instead of 1, and `load_huggingface_weights(state, model_prefix, linear_layers)` takes 3 instead of 2, because transposes now go by layer name, not key pattern.
+Source: c32fb28
+
+#### `create_key_mapping`, `select_keys` and `exclude_keys` are generic `(impl IntoIterator<Item: Into<String>>)`
+
+Migration: Existing `Vec<String>` callers still compile, so this only breaks turbofish or function-pointer uses.
+Source: #376
+
+### `Device` and `GPU`
+
+#### `DevicePolicy::Strict` is the default.
+
+Changed: a GPU input to an op with no GPU kernel panics instead of running silently on the CPU.
+Migration: wrap such code in with_device_policy(PreferGpu, ..).
+Source: 2040b99
+
+#### A GPU kernel that fails now panics instead of falling back to the CPU (1fc289c)
+
+#### GPU internals left the public API:
+
+- `GpuContext` and `get_gpu_context`, along with `sync_checked`, `sync_with_retry` and `GpuSyncError` (#293)
+- The `monitor`, `system_monitor` and `early_warning` modules, with `SystemMonitor`, `MonitorStats`, `EarlyWarningSystem`, `TrendData`, `ResourceStatus`, `HealthStatus`, `check_system_resources` and `get_process_memory_mb` (#293, #338)
+- `GpuKernels`, `BufferPool`, `BufferPoolConfig`, `StagingBufferPool`, `StagingPoolStats`, `OptimizerStepParams` and `MovementParams` (55be134)
+
+### Features and build
+
+#### Default features are empty.
+
+Changed: 0.3.0 defaulted to `gpu` and `accelerate`.
+Migration: add `features = ["gpu", "accelerate"]` to get the old build.
+Source: #422
+
+#### The blas-src feature is gone.
+
+Changed: it was the implicit feature of an optional dependency that did nothing build.rs didn't already do. `accelerate = []` now gates the link in `build.rs`. The implicit `wgpu` and `pollster` features are also no longer on by default.
+◦ Source: 5cc8f29; `feature_missing` semver lint
+
+#### Big-endian targets refuse to build (#411)
+
+#### `ProgressBar` is no longer `Sync` or `RefUnwindSafe`
+
+Changed: It now holds a `Cell`.
+Source: #273; `auto_trait_impl_removed` semver lint
+
+### Result changes without API changes
+
+Outputs differ from 0.3.0:
+
+- `Max` ties and `NaN` follow torch (#220)
+- Modulo is floored, so the result has the divisor's sign (#157)
+- `Div`/`Recip` backward stopped squaring the denominator (#284)
+- `bce_loss` clamps its logs (#164)
+- `Attention` has no residual (#163)
+- Transformer dropout is actually applied (#225)
+- Pairwise summation changes low-order bits in sums, matmul and conv gradients (#211, #271, #330, #369, #370, #381, #385)
+- `Adam` counts steps per parameter (#208)
+- `Muon` uses the reference Newton-Schulz implementation (8f3d0d4)
+
+#### Flagged by semver checks but non-breaking:
+
+- `#[must_use]` was added to many functions and methods.
+- Stateless layers (`ReLU`, `Sigmoid`, `Tanh`, `Dropout`, `Flatten`, `MaxPool2d`, `PixelShuffle`) now implement `Copy`.
+
+## Cliff notes
 
 ### Breaking
 
