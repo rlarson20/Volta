@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Rebases a stack of PRs after each squash merge into improvements (dev-docs/FINISHING.md).
-# `improvements` takes squash merges only, so once the bottom PR merges, the next branch
+# Rebases a stack of PRs after each squash merge into main (`just restack`).
+# `main` takes squash merges only, so once the bottom PR merges, the next branch
 # still carries the bottom's original commits. This replays only its own commits onto
-# improvements, force-pushes it (with lease) and retargets its PR.
+# main, force-pushes it (with lease) and retargets its PR.
 #
 #   scripts/restack.sh save <branch>...   once, before the first merge, bottom branch first
 #   scripts/restack.sh next               after each squash merge on GitHub
@@ -34,7 +34,7 @@ die() {
 
 gitdir=$(git rev-parse --git-common-dir)
 order_file="$gitdir/restack-order"
-base=improvements
+base=main
 
 # The saved stack, bottom first, into the array `stack`.
 load() {

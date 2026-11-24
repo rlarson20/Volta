@@ -1,7 +1,7 @@
 # DECISIONS.md — Design decisions
 
 Why the code is the way it is, and what was tried and rejected. What was done is in the commit log; what is open is in the GitHub issues.
-Updated: 2026-11-22
+Updated: 2026-11-24
 
 **Read this first.** Entries are kept when a later one reverses them, for the reasoning. A reversed entry, or a reversed choice inside one, carries a `**Superseded by:**` line that names the entry in force. Superseded so far:
 
@@ -18,6 +18,8 @@ Updated: 2026-11-22
 | "Half types run the f32 kernels": half parameters step in every optimizer | "Adam refuses half parameters" (#317) |
 | "Implicit promotion": no scalars, `[1]` promotes fully | "Full reductions are rank-0" (#100) |
 | "Rulesets enforce the merge gate": `macos (stable)` on the `improvements` gate | "macOS checks move off the PR gate" (#233) |
+| "Rulesets enforce the merge gate": an `improvements` ruleset, and merge commits only into `main` | "One branch: `main`" |
+| "macOS checks move off the PR gate": `macos (stable)` required on PRs into `main`, and `merge-gate` blocking the merge into `main` | "One branch: `main`" |
 
 A new entry that reverses an older one adds a row here and a `**Superseded by:**` line to the older entry, in the same PR.
 
@@ -936,6 +938,8 @@ Autograd is a sequential graph walk over `Rc<RefCell<_>>`, and nothing in it is 
 
 **Revision (2026-11-13):** `improvements` now requires `macos-cross` in place of `macos (stable)`; `main` requires both. See "macOS checks move off the PR gate (#233)".
 
+**Superseded by:** "One branch: `main`" for the `improvements` ruleset and for merge commits into `main`. The other choices above still hold for `main`.
+
 ### macOS checks move off the PR gate (#233)
 
 **Context:** every PR waited on the one `macos (stable)` job. GitHub's free macOS runners are scarce: PRs queued for one, the job was the slowest lane (both clippy passes, docs, the whole feature powerset and the tests), and some runs got no runner at all (#121). With several agent PRs open at once, that serialized all of them.
@@ -955,6 +959,22 @@ Autograd is a sequential graph walk over `Rc<RefCell<_>>`, and nothing in it is 
 - *A self-hosted runner on the maintainer's M2:* the laptop is not always on, and it would run CI code on a personal machine.
 - *Paid runners (GitHub's larger M-series, Namespace, WarpBuild, Cirrus):* free runners only.
 - *A path-filtered required check on every PR:* it keeps the queue on every GPU-touching PR, which is most of them in a GPU phase, and a workflow-level `paths:` filter leaves a required check pending forever on the PRs it skips.
+
+**Superseded by:** "One branch: `main`" for the PR into `main`: `macos (stable)` is no longer required there, and a `merge-gate` issue blocks the next release instead of the next merge into `main`. The split between `macos-cross` and `macos (stable)` stands.
+
+### One branch: `main`
+
+**Context:** `improvements` collected squash-merged PRs and merged into `main` per phase, so `main` held only gated phases. With v0.4.0 released from `main` and the phases done (Phase 4 is optional), the second branch cost more than it bought: every PR, script and doc named it, a release needed an extra PR between branches, Dependabot and the crates.io fix (#476/#479/#480) took two hops, and the GitHub default branch (`main`) was not where work landed.
+
+**Decision:** `main` is the only long-lived branch. Every PR branches from `main` and squash-merges into it; `.github/rulesets/main.json` allows squash only and requires the Linux checks (`cpu-only` on 1.89 and stable, `linux-lavapipe`, `macos-cross`). `macos (stable)` keeps the role it had on `improvements`: it runs after every merge to `main` and on PRs that touch Mac-relevant paths or carry `macos-ci`, and a post-merge failure opens a `merge-gate` issue. The gate moves from the branch merge to the release: a release is tagged only when no `merge-gate` issue is open (`CLAUDE.md`, "Merge and release gate"). A release PR bumps `Cargo.toml`, so it runs both the macOS job and the semver workflow, which now runs only on PRs into `main` that touch `Cargo.toml`.
+
+**Why squash only:** it is the history `improvements` already had (one commit per PR, one `git revert` per bad PR), and `just sync` and `just restack` are built for it. Merge commits into `main` existed so a phase landing kept its history; with no phase merges, that reason is gone.
+
+**What this gives up:** `main` can now hold a commit that fails on Metal or Accelerate at run time, until the post-merge run reports it. Before, only `improvements` could. A user who depends on the git branch instead of a crates.io release can get that commit; releases still cannot, because of the release gate.
+
+**Rejected:**
+- *Keep `macos (stable)` required on every PR into `main`:* that puts the scarce macOS runner back on every PR's critical path, which is what #233 removed.
+- *Keep `improvements` for Phase 4:* Phase 4 is optional and has no date; a long-lived branch for it can be made when it starts, if it needs one.
 
 ### `unused_self` and `needless_pass_by_value` are denied; exceptions are per-site `#[expect]` (#171)
 

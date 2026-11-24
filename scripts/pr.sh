@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Turn finished work into a pull request against `improvements` (see dev-docs/WORKFLOW.md).
+# Turn finished work into a pull request against `main` (see dev-docs/WORKFLOW.md).
 #
 #   scripts/pr.sh [options] [branch-name]
 #
@@ -10,13 +10,13 @@
 #   --no-edit           use the prefilled body as is; no editor
 # Together, `-m`, `--body-file` and a branch name make a run that never prompts.
 #
-# Run it on local `improvements` with commits ahead of origin (the ones the ruleset won't let you
+# Run it on local `main` with commits ahead of origin (the ones the ruleset won't let you
 # push) and/or staged changes: the staged changes are committed, then the commits move to a new
-# branch and local `improvements` goes back to origin's tip. Run it on a feature branch and it
+# branch and local `main` goes back to origin's tip. Run it on a feature branch and it
 # just pushes that branch and opens the PR. Every check runs before anything changes.
 set -euo pipefail
 
-base=improvements
+base=main
 remote=origin/$base
 
 die() {
@@ -46,7 +46,6 @@ command -v gh >/dev/null || die "the GitHub CLI (gh) is not installed"
 cd "$(git rev-parse --show-toplevel)"
 
 branch=$(git symbolic-ref --quiet --short HEAD) || die "HEAD is detached; switch to a branch first"
-[[ $branch == main ]] && die "refusing to open a PR from main"
 git fetch --quiet origin "$base"
 
 # Unstaged edits to tracked files make pre-commit's stash and the branch move unsafe.
