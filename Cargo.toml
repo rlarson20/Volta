@@ -9,7 +9,7 @@ readme = "README.md"
 repository = "https://github.com/rlarson20/Volta"
 documentation = "https://docs.rs/volta"
 keywords = ["ml", "machine-learning", "autodiff", "tensor"]
-categories = ["science", "science::ml"]
+categories = ["science", "mathematics", "artificial-intelligence"]
 # Ship the library, its unit tests (`src/lib_tests/`) and the examples. Leave out the
 # integration tests and benches: `tests/fixtures/` alone is about 1.9 MB of PyTorch
 # reference data no downstream user can use (#462), and both run from the repository,
@@ -151,10 +151,10 @@ explicit_iter_loop = "deny"            # Use iter() explicitly in for loops
 semicolon_if_nothing_returned = "deny" # Consistent semicolon usage
 
 # Type and trait improvements
-default_trait_access = "deny" # Use Type::default() instead of Default::default()
-implicit_clone = "deny"       # Make clones explicit for clarity
-assigning_clones = "deny"     # Use clone_from when assigning clones
-cast_lossless = "deny"        # Use From/Into for lossless casts
+default_trait_access = "deny"               # Use Type::default() instead of Default::default()
+implicit_clone = "deny"                     # Make clones explicit for clarity
+assigning_clones = "deny"                   # Use clone_from when assigning clones
+cast_lossless = "deny"                      # Use From/Into for lossless casts
 redundant_closure_for_method_calls = "deny" # Pass `Tensor::exp`, not `|t| t.exp()`
 
 # Pattern matching
@@ -202,9 +202,9 @@ unimplemented = "deny"              # Same: no unimplemented!() stubs
 undocumented_unsafe_blocks = "deny" # Every unsafe block states its SAFETY invariant
 
 # Misc improvements
-unreadable_literal = "deny" # Use underscores in large numeric literals (1_000_000)
-use_self = "deny"           # Use Self instead of repeating type name
-unused_self = "deny"        # A method that never reads `self` is an associated fn
+unreadable_literal = "deny"     # Use underscores in large numeric literals (1_000_000)
+use_self = "deny"               # Use Self instead of repeating type name
+unused_self = "deny"            # A method that never reads `self` is an associated fn
 needless_pass_by_value = "deny" # Take `&T` unless the function consumes the argument
 
 # -----------------------------------------------------------------------------
