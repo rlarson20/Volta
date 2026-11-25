@@ -1,0 +1,53 @@
+name: Release check
+# The package checks a release has to pass (scripts/release.sh check; dev-docs/RELEASING.md),
+# run on the release PR so a bad category, an undated or unedited CHANGELOG section, or a
+# failing `cargo publish --dry-run` shows up before the merge, not after the tag (#481; in
+# v0.4.0 all three were found only by the real upload). A PR whose Cargo.toml version equals
+# main's is not a release PR, and the job passes without checking. Not a required check
+# (.github/rulesets/ name only ci.yml's jobs).
+on:
+  pull_request:
+    branches: [main]
+    paths: [Cargo.toml, Cargo.lock, CHANGELOG.md]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          tools: ""
+
+      - name: Is this a release?
+        id: version
+        run: |
+          set -euo pipefail
+          new=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "volta") | .version')
+          # The first `version = ` line is [package]'s (scripts/release.sh prepare relies on it too).
+          old=$(git show origin/main:Cargo.toml | sed -n 's/^version = "\(.*\)"$/\1/p' | head -1)
+          echo "version=$new" >> "$GITHUB_OUTPUT"
+          if [[ $GITHUB_EVENT_NAME == workflow_dispatch || $new != "$old" ]]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "Checking $new (main has $old)."
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "Cargo.toml version $new is main's; not a release PR, nothing to check."
+          fi
+
+      - name: Package checks
+        if: steps.version.outputs.release == 'true'
+        run: scripts/release.sh check "${{ steps.version.outputs.version }}"

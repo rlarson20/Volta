@@ -376,6 +376,20 @@ prs:
 semver:
 	cargo semver-checks check-release --only-explicit-features --features gpu
 
+# ===== RELEASING ===== (dev-docs/RELEASING.md, #481). Nothing here publishes: release.yml
+# does, after RJ approves its `release` environment.
+# Start a release: branch release-vX.Y.Z from main, bump Cargo.toml, draft the CHANGELOG section (needs git-cliff)
+release-prepare version:
+	scripts/release.sh prepare {{version}}
+
+# Package checks for a release: version, dated and edited CHANGELOG section, crates.io metadata, publish dry run
+release-check version:
+	scripts/release.sh check {{version}}
+
+# On main after the release PR merged: check the release gate, then sign (GPG) and push tag vX.Y.Z
+release-tag version:
+	scripts/release.sh tag {{version}}
+
 # Resolve every direct dependency at its declared lower bound, then build (#443), so a bound
 # in Cargo.toml that can never resolve (as `log = "0.4"` did under wgpu's `^0.4.29`) fails
 # here instead of going unnoticed. Only the resolve needs the nightly; the check runs on

@@ -10,7 +10,7 @@ In a cloud session (Linux, `CLAUDE_CODE_REMOTE` set, no `rtk`, no GPU), read `de
 
 Update this section when a phase lands or the merge gate changes. Keep it short; what landed is in the commit log and `DECISIONS.md`.
 
-- **Releases:** v0.4.0 is out (crates.io and GitHub Releases, 2026-11-24, tag `v0.4.0` on `main`). The [milestones](https://github.com/rlarson20/Volta/milestones) are the plan: v0.5.0 (Phase 4), v1.0.0 (breaking changes and readiness), Backlog. Breaking goes to v1.0.0 (v0.5.0 if Phase 4), anything else to Backlog. Release automation is #481. The State of Volta issue (#456) carries the latest digest.
+- **Releases:** v0.4.0 is out (crates.io and GitHub Releases, 2026-11-24, tag `v0.4.0` on `main`). The [milestones](https://github.com/rlarson20/Volta/milestones) are the plan: v0.5.0 (Phase 4), v1.0.0 (breaking changes and readiness), Backlog. Breaking goes to v1.0.0 (v0.5.0 if Phase 4), anything else to Backlog. Releases are cut with `just release-prepare` / `release-tag` and published by `release.yml` after RJ approves it (`dev-docs/RELEASING.md`, #481). The State of Volta issue (#456) carries the latest digest.
 - **Branches:** one branch, `main` (the GitHub default). Every PR branches from `main` and squash-merges into it; `improvements` is retired (`DECISIONS.md`, "One branch: `main`").
 - **Roadmap:** `docs/plans/ADDENDUM.md` § Sequencing defines the phases. Phases 0–3 and 5 (dtypes and mixed precision, PRs #19–#28) are done. Phase 4 (arena graph, sealed `Backend` trait, proptest DAG checks) is optional and comes last.
 - **Open work lives in [GitHub issues](https://github.com/rlarson20/Volta/issues), nowhere else.** Each defect ID (`S<n>`, `A<n>`) has one issue naming its `#[ignore = "S<n>: ..."]` repro and its audit section. Pick work with `is:open label:P0 -label:blocked` (then P1, ...). The audits in `docs/audits/` are dated, append-only evidence, not status: correct them by appending, and tell the user (`.claude/rules/audits.md`). PyTorch fixtures are regenerated with `just torch-fixtures` (needs `uv`).
@@ -64,6 +64,7 @@ Read these when the need comes up; don't preload them.
 | Step-by-step: adding an op or layer | `dev-docs/DEVELOPMENT.md` |
 | Conv algorithms and selection | `dev-docs/CONV2D_IMPLEMENTATION.md` |
 | What's valid in a cloud session; Linux/no-GPU differences | `dev-docs/CLOUD.md` |
+| Cutting a release: steps, checks, one-time setup | `dev-docs/RELEASING.md` |
 | Local PR workflow: `just pr`, `just sync`, `just prs`, and why | `dev-docs/WORKFLOW.md` |
 | What's left that needs RJ's Mac, admin rights or decision (temporary) | `dev-docs/FINISHING.md` |
 
