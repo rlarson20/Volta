@@ -135,16 +135,13 @@ pub struct ReadmeDoctests;
 //
 // The crate-level test modules live in `src/lib_tests/`, one file each. `#[path]` keeps
 // each module at the crate root, so test names (`unary_tests::..`) are unchanged.
+// An op family has one file, `<family>_tests.rs` (`unary`, `binary`, `reduce`, ...).
 //
 // The test suite validates:
 // - Basic operations (add, mul, etc.)
 // - Gradient correctness (chain rule, broadcasting)
 // - Complex scenarios (neural networks, matmul variants)
 // - Numerical gradient checking (validates all gradients)
-
-#[cfg(test)]
-#[path = "lib_tests/tests.rs"]
-mod tests;
 
 #[cfg(test)]
 #[path = "lib_tests/unary_tests.rs"]
@@ -199,18 +196,6 @@ mod gpu_half_tests;
 // neural-network layers that previously had only indirect coverage. They
 // are declared the same way as the modules above and rely on
 // `RawTensor::check_gradients_simple` for backward-pass validation.
-
-#[cfg(test)]
-#[path = "lib_tests/binary_ops_tests.rs"]
-mod binary_ops_tests;
-
-#[cfg(test)]
-#[path = "lib_tests/unary_ops_tests.rs"]
-mod unary_ops_tests;
-
-#[cfg(test)]
-#[path = "lib_tests/reduce_ops_tests.rs"]
-mod reduce_ops_tests;
 
 #[cfg(test)]
 #[path = "lib_tests/matmul_tests.rs"]

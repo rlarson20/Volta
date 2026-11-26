@@ -24,7 +24,7 @@ Every op ends in `edge()`, the only function that attaches `parents` and `grad_f
 
 - A gradient check, `check_gradients`, with seeded random inputs and a randomly weighted loss (a plain `.sum()` hides wrong pairings and zeroes some gradients). Cover unequal-rank and broadcast shapes; B4 shipped because only equal-rank shapes were tested.
 - Where the op has a GPU path, a CPU/GPU parity test in `tests/parity_*.rs`, and run `just test-gpu` on real hardware. GPU tests skip silently without an adapter, so "passes" does not mean GPU-verified.
-- Put the test next to the op, or in `src/lib_tests/<family>_tests.rs` (declared in `lib.rs` with `#[path]`).
+- Put the test next to the op, or in its family's one file, `src/lib_tests/<family>_tests.rs` (`unary`, `binary`, `reduce`, `ternary`, `movement`, ...; declared in `lib.rs` with `#[path]`), where its name is `<family>_tests::<test>`.
 
 ## Adding a new neural network layer
 
