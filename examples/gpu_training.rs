@@ -3,7 +3,7 @@
 //! This example demonstrates end-to-end GPU training in Volta, showing:
 //! - Creating models with device-aware constructors
 //! - Using `Module::to_device()` to move models to GPU
-//! - `DataLoader` with automatic GPU prefetch
+//! - `DataLoader::with_device`, which moves each batch to the GPU
 //! - Full training loop staying on GPU
 //! - Performance comparison with CPU training
 use std::time::Instant;

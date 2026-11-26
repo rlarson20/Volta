@@ -2579,7 +2579,7 @@ pub struct DataLoader {
     indices: Vec<usize>,
     /// Position in `indices` of the next batch.
     current: usize,
-    /// If set, each batch is moved to this device (GPU prefetch).
+    /// If set, `next` moves each batch to this device before returning it.
     device: Option<crate::device::Device>,
 }
 
@@ -2701,17 +2701,19 @@ impl DataLoader {
             shuffle,
             indices,
             current: 0,
-            device: None, // Default: no GPU prefetch
+            device: None, // Default: batches stay on the CPU
         })
     }
 
-    /// Enable automatic GPU prefetch for batches
+    /// Move each batch to `device` as it is produced
     ///
-    /// When set, batches will automatically be transferred to the specified device.
-    /// This avoids manual `.to_device()` calls in the training loop.
+    /// `next` builds the batch on the CPU, then calls `to_device` on the data and
+    /// targets before returning them. This saves the `.to_device()` calls in the
+    /// training loop. It is not a prefetch: the copy is synchronous, inside `next`,
+    /// so it doesn't overlap with the previous step's compute.
     ///
     /// # Arguments
-    /// * `device` - Device to prefetch batches to (typically GPU)
+    /// * `device` - Device the batches are moved to (typically GPU)
     ///
     /// # Example
     /// ```no_run
@@ -2783,7 +2785,7 @@ impl Iterator for DataLoader {
         let data_tensor = RawTensor::new(batch_data, &batch_shape, false);
         let target_tensor = RawTensor::new(batch_targets, &target_batch_shape, false);
 
-        // Transfer to device if GPU prefetch is enabled
+        // Move to the target device, if one was set (synchronous)
         if let Some(ref device) = self.device {
             Some((
                 data_tensor.to_device(device.clone()),
