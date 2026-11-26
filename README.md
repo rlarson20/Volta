@@ -31,7 +31,7 @@ This project is an educational endeavor to demystify the inner workings of moder
 - **IO System:** Save and load model weights (state dicts) in SafeTensors format.
 - **BLAS Acceleration (macOS):** Optional acceleration for matrix multiplication via Apple's Accelerate framework.
 - **GPU Backend:** Experimental WGPU-based GPU support for core tensor operations (elementwise, matmul, reductions, movement ops) with automatic backward pass on GPU.
-- **Validation-Focused:** A central-difference gradient checker (`RawTensor::check_gradients`) tests each op's and layer's backward pass, and PyTorch fixtures pin forward values and gradients. The checker can still pass some wrong gradients ([#484](https://github.com/rlarson20/Volta/issues/484)).
+- **Validation-Focused:** A central-difference gradient checker (`RawTensor::check_gradients`) tests each op's and layer's backward pass, and PyTorch fixtures pin forward values and gradients. The checker measures each element's error relative to the larger gradient (with a floor of 1e-3) and divides by the step the input actually took, so small or rounded gradients don't pass by default (#484, #485).
 
 ## Project Status
 
