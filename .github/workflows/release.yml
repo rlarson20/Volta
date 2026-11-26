@@ -1,0 +1,111 @@
+name: Release
+# Publishes a release from a tag that RJ signed and pushed with `just release-tag X.Y.Z`
+# (dev-docs/RELEASING.md; DECISIONS.md, "Releases: a signed local tag, CI publishes"; #481).
+#
+# 1. verify:  scripts/release.sh verify-tag. The tag is annotated, GPG-signed and verified by
+#             GitHub, and on main. ci.yml and macos.yml passed on its commit after the push to
+#             main. No merge-gate issue is open. Then the package checks and `cargo publish --dry-run`.
+# 2. publish: waits in the `release` environment until RJ approves it, then uploads to
+#             crates.io with trusted publishing (OIDC; no stored token).
+# 3. github-release: creates the GitHub Release, with the CHANGELOG section as its notes.
+#
+# Nothing else publishes. A tag that fails `verify` publishes nothing; delete it, fix main and
+# tag again. Once `publish` has run, the version is on crates.io for good: fix forward with
+# the next patch release.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions: {}
+
+# One release at a time, and never cancel one half-way.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      issues: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          tools: ""
+          cache: "false"
+      - id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+      # GitHub creates a missing environment on first use, with no protection rules, so a
+      # deleted or never-configured `release` environment would publish without approval.
+      # Fail closed instead.
+      - name: The release environment requires a reviewer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          n=$(gh api "repos/$GITHUB_REPOSITORY/environments/release" \
+            --jq '[.protection_rules[] | select(.type == "required_reviewers")] | length')
+          [[ $n -ge 1 ]] || { echo "::error::the release environment has no required reviewer (dev-docs/RELEASING.md, one-time setup)"; exit 1; }
+      - name: Verify the tag, the release gate and the package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/release.sh verify-tag "${{ steps.version.outputs.version }}"
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Required reviewer: RJ (repository Settings > Environments > release). This approval is
+    # the last human step before an upload that can't be undone.
+    environment:
+      name: release
+      url: https://crates.io/crates/volta/${{ needs.verify.outputs.version }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          tools: ""
+          cache: "false"
+      - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+        id: auth
+      - name: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish --locked
+
+  github-release:
+    needs: [verify, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Create the GitHub Release from the CHANGELOG section
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          scripts/release.sh notes "$VERSION" > "$RUNNER_TEMP/notes.md"
+          gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "v$VERSION" --notes-file "$RUNNER_TEMP/notes.md"

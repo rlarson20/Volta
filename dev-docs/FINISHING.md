@@ -53,3 +53,9 @@ Each of these issues has a research comment that ends in a recommendation. Reply
   - #217: unblock it when you want the write-up.
 
 Done when every listed issue has your reply.
+
+## 5. Set up automated releases (#481)
+
+It needs repository admin and your crates.io login, so agents can't do it. Follow "One-time setup" in `dev-docs/RELEASING.md`: create the `release` environment with you as required reviewer, add the crates.io trusted publisher (`release.yml`, environment `release`), and install git-cliff.
+
+Done when `gh api repos/rlarson20/Volta/environments/release --jq '[.protection_rules[].type]'` lists `required_reviewers` and crates.io shows the trusted publisher.
