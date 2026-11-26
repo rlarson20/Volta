@@ -636,6 +636,11 @@ impl std::fmt::Debug for Tensor {
 /// through a weighted loss is many orders larger.
 const DEGENERATE_GRAD: f64 = 1e-6;
 
+/// Smallest gradient magnitude [`RawTensor::check_gradients`] measures an error relative
+/// to. An element whose gradients are both below it is held to `tolerance * 1e-3` in
+/// absolute terms (#484).
+const GRAD_SCALE_FLOOR: f64 = 1e-3;
+
 // ===== TENSOR CONSTRUCTORS =====
 impl RawTensor {
     /// Create a new tensor from data and shape (fallible)
@@ -1782,7 +1787,8 @@ impl RawTensor {
     /// For each parameter, we compute:
     ///
     /// Analytical gradient: What our `backward()` computes
-    /// Numerical gradient: (f(x+ε) - f(x-ε)) / (2ε)
+    /// Numerical gradient: (f(x+ε) - f(x-ε)) / ((x+ε) - (x-ε)), where the denominator is
+    /// the step the input actually took after rounding to its dtype, not 2ε (#485)
     ///
     /// The central difference formula is more accurate than forward difference.
     ///
@@ -1790,7 +1796,10 @@ impl RawTensor {
     /// * `tensor` - The input tensor whose gradients to check
     /// * `loss_fn` - Function that computes a scalar loss from the tensor
     /// * `epsilon` - Step size for finite differences (typically 1e-5 to 1e-2)
-    /// * `tolerance` - Maximum acceptable relative error (typically 1e-3 to 1e-2)
+    /// * `tolerance` - Maximum acceptable error, relative to the larger of the two
+    ///   gradients at each element, or to 1e-3 where both are smaller (typically 1e-3
+    ///   to 1e-2). So an element passes when `|a - n| < tolerance * max(|a|, |n|, 1e-3)`;
+    ///   below 1e-3 that is an absolute bound of `tolerance * 1e-3`.
     ///
     /// # Returns
     /// (`max_error`, `mean_error`, passed)
@@ -1829,7 +1838,8 @@ impl RawTensor {
     /// precision, so the check would fail correct gradients. Cast the inputs to f32 or
     /// f64 first (torch's `gradcheck` warns about non-double inputs; Volta refuses).
     /// Also if `loss_fn` doesn't return a scalar that requires grad, or `tensor` ends
-    /// up without a gradient.
+    /// up without a gradient, or `epsilon` is so small against an element that `x + ε`
+    /// and `x - ε` round to the same value.
     pub fn check_gradients<F>(
         tensor: &Tensor,
         loss_fn: F,
@@ -1903,29 +1913,43 @@ impl RawTensor {
             let _no_grad = crate::autograd::no_grad();
             dispatch_real!(dtype, T => {
                 let step = T::from_f64(f64::from(epsilon));
+                // The perturbed input, and the value its element `i` actually took: in
+                // f32, `x ± ε` rounds (at |x| ≈ 1000 the ulp is 6.1e-5), so the step taken
+                // isn't exactly `ε` (#485).
                 let perturbed = |i: usize, up: bool| {
                     let mut data = original_data.clone();
-                    data.with_host_mut::<T, _>(|host| {
+                    let taken = data.with_host_mut::<T, _>(|host| {
                         let x = slot(host, i);
                         if up {
                             *x += step;
                         } else {
                             *x -= step;
                         }
+                        x.to_f64()
                     });
-                    Self::new_with_storage(
+                    let t = Self::new_with_storage(
                         data.to_device(&device),
                         original_shape.clone(),
                         device.clone(),
                         requires_grad,
-                    )
+                    );
+                    (t, taken)
                 };
                 for i in 0..original_data.len() {
-                    let val_plus = loss_value(&loss_fn(&perturbed(i, true)));
-                    let val_minus = loss_value(&loss_fn(&perturbed(i, false)));
-                    //central diff
-                    *slot(&mut numerical_grad, i) =
-                        (val_plus - val_minus) / (2.0 * f64::from(epsilon));
+                    let (plus, x_plus) = perturbed(i, true);
+                    let (minus, x_minus) = perturbed(i, false);
+                    let val_plus = loss_value(&loss_fn(&plus));
+                    let val_minus = loss_value(&loss_fn(&minus));
+                    // Central difference over the step the input actually took. `ε` is
+                    // positive and far above an ulp of every value the check is meant
+                    // for, so the two inputs differ.
+                    let taken = x_plus - x_minus;
+                    assert!(
+                        taken > 0.0,
+                        "check_gradients: epsilon {epsilon} is below the precision of \
+                         element {i} (both perturbations round to the same value)"
+                    );
+                    *slot(&mut numerical_grad, i) = (val_plus - val_minus) / taken;
                 }
             });
         }
@@ -1941,11 +1965,13 @@ impl RawTensor {
             analytical_grad.iter().zip(&numerical_grad).enumerate()
         {
             let error = (analytical - numerical).abs();
-            // When both gradients are extremely small, pure relative error becomes noisy
-            // and can falsely flag otherwise correct gradients (e.g., BatchNorm sum outputs
-            // that should be exactly zero). In that regime, we compare absolute error instead.
-            let scale = analytical.abs().max(numerical.abs());
-            let relative_error = if scale > 1e-3 { error / scale } else { error };
+            // Relative to the larger gradient, but never to less than `GRAD_SCALE_FLOOR`:
+            // an exactly-zero gradient must not divide by zero, and finite-difference
+            // noise on a near-zero gradient must not count as a 100% error. The floor
+            // divides rather than switching to the absolute error, which below 1e-3 let
+            // any pair of small gradients pass (#484).
+            let scale = analytical.abs().max(numerical.abs()).max(GRAD_SCALE_FLOOR);
+            let relative_error = error / scale;
 
             if relative_error.is_finite() {
                 max_error = max_error.max(relative_error);
@@ -3062,6 +3088,43 @@ mod tensor_tests {
         assert_ne!(first, identity, "the first epoch should be shuffled");
         assert_ne!(first, second, "reset should reshuffle");
         assert_ne!(first, shuffled_orders(8).0, "another seed, another order");
+    }
+
+    /// #484: a gradient that is off by 2x everywhere fails, even when every element is
+    /// below 1e-3. `mean(x * detach(x))` backpropagates `x/N`, half the true `2x/N`; at
+    /// 128x128 every element is under 1e-3, where the old check compared absolute errors
+    /// and passed it. f64, so the finite difference resolves gradients this small (in
+    /// f32 the loss's rounding, about 3e-5 here, is a quarter of the gradient).
+    #[test]
+    fn check_gradients_fails_a_wrong_gradient_below_1e_3() {
+        manual_seed(7);
+        let x = RawTensor::randn(&[128, 128]).to_dtype(DType::F64);
+        x.set_requires_grad(true);
+        let (max_e, _, passed) =
+            RawTensor::check_gradients(&x, |t| t.elem_mul(&t.detach()).mean(), 1e-3, 1e-2);
+        assert!(!passed, "a 2x-wrong gradient passed, max_error={max_e:.3e}");
+        // The correct gradient of the same loss passes.
+        let (max_e, _, passed) =
+            RawTensor::check_gradients(&x, |t| t.elem_mul(t).mean(), 1e-3, 1e-2);
+        assert!(passed, "the correct gradient failed, max_error={max_e:.3e}");
+    }
+
+    /// #485: at |x| ~ 1000 in f32, `x +- 1e-3` rounds to `x +- 9.766e-4`, so dividing by
+    /// `2e-3` instead of the step taken puts a 2.4% error on an exact gradient. The loss
+    /// is computed in f64, so its own rounding doesn't hide the step's.
+    #[test]
+    fn check_gradients_divides_by_the_step_taken() {
+        let x = RawTensor::new(vec![1000.0, 2000.0, 3000.0, 4096.5], &[4], true);
+        let (max_e, _, passed) = RawTensor::check_gradients(
+            &x,
+            |t| {
+                let t = t.to_dtype(DType::F64);
+                t.elem_mul(&t).sum()
+            },
+            1e-3,
+            1e-3,
+        );
+        assert!(passed, "an exact gradient failed, max_error={max_e:.3e}");
     }
 
     /// `check_gradients` clears the input's existing gradient before its analytic pass.
