@@ -195,20 +195,13 @@ impl MultiHeadAttention {
         // Reshape back: [batch, num_heads, L, head_dim] -> [batch, L, embed_dim]
         let attn_output = self.reshape_from_heads(&attn_output, batch_size, q_len);
 
-        // Reshape to 2D for output projection
-        let attn_2d = attn_output.reshape(&[batch_size * q_len, self.embed_dim]);
-        let output_2d = self.out_proj.forward(&attn_2d);
-        output_2d.reshape(&[batch_size, q_len, self.embed_dim])
+        self.out_proj.forward(&attn_output)
     }
 
     /// Applies `proj` to `[batch, len, embed_dim]` and splits the result into heads,
     /// `[batch, num_heads, len, head_dim]`.
     fn project(&self, proj: &Linear, x: &Tensor, batch_size: usize, len: usize) -> Tensor {
-        let x_2d = x.reshape(&[batch_size * len, self.embed_dim]);
-        let projected = proj
-            .forward(&x_2d)
-            .reshape(&[batch_size, len, self.embed_dim]);
-        self.reshape_for_heads(&projected, batch_size, len)
+        self.reshape_for_heads(&proj.forward(x), batch_size, len)
     }
 
     /// Splits `[batch, seq_len, embed_dim]` into heads: `[batch, num_heads, seq_len, head_dim]`.

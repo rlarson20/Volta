@@ -146,6 +146,10 @@ impl Linear {
 
     /// Forward pass through the layer
     ///
+    /// `x` is `[.., in_features]` with any number of leading dims (`[in_features]`,
+    /// `[B, in_features]`, `[B, T, in_features]`, ...), and the result is
+    /// `[.., out_features]`, as in PyTorch's `nn.Linear`.
+    ///
     /// # Panics
     /// If `x`'s last dimension is not `in_features`, or `x` is on another device than the
     /// parameters.
@@ -162,7 +166,19 @@ impl Linear {
         // One low-precision op under `amp::autocast`: input, weight and bias are cast
         // together, so the bias add stays in the low dtype (PyTorch's `linear`).
         let (x, weight, bias) = crate::amp::lower_layer(x, &self.weight, self.bias.as_ref());
-        let out = x.matmul(&weight);
+        // `matmul` takes operands of equal rank (or a vector), so fold the leading dims of a
+        // rank >= 3 input into one, `[.., in] -> [prod, in]`, and unfold them after. A
+        // reshape is a graph op, so gradients flow through both.
+        let rank = x_shape.rank();
+        let out = if rank >= 3 {
+            let rows = x_shape.numel_before(rank - 1);
+            let out_shape = x_shape.with_dim(rank - 1, out_f);
+            x.reshape(&[rows, in_f])
+                .matmul(&weight)
+                .reshape(out_shape.truncate_rank())
+        } else {
+            x.matmul(&weight)
+        };
         if let Some(b) = &bias { out.add(b) } else { out }
     }
 }
