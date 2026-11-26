@@ -128,26 +128,16 @@ impl FeedForward {
             input_shape.truncate_rank()
         );
 
-        // Reshape to 2D for Linear layers: [batch, seq_len, embed_dim] -> [batch * seq_len, embed_dim]
-        let batch_size = input_shape.dim_at(0);
-        let seq_len = input_shape.dim_at(1);
-        let embed_dim = input_shape.dim_at(2);
-
-        let x_2d = x.reshape(&[batch_size * seq_len, embed_dim]);
-
-        // Expand: [batch * seq_len, embed_dim] -> [batch * seq_len, intermediate_dim]
-        let x = self.expand.forward(&x_2d);
+        // `Linear` maps the last dim and keeps the leading ones (#486).
+        let x = self.expand.forward(x);
 
         // Apply GELU activation, then dropout (identity in eval mode)
         let x = self.activation.forward(&x);
         let x = self.dropout.forward(&x);
 
-        // Contract: [batch * seq_len, intermediate_dim] -> [batch * seq_len, embed_dim]
+        // Contract: [batch, seq_len, intermediate_dim] -> [batch, seq_len, embed_dim]
         let x = self.contract.forward(&x);
-        let x = self.dropout.forward(&x);
-
-        // Reshape back to 3D: [batch * seq_len, embed_dim] -> [batch, seq_len, embed_dim]
-        x.reshape(&[batch_size, seq_len, embed_dim])
+        self.dropout.forward(&x)
     }
 
     /// Get the intermediate (hidden) dimension, `embed_dim * expansion_factor`
