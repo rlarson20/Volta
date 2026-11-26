@@ -2,7 +2,7 @@
 //
 // Op codes:
 // 0 = SGD: param -= lr * grad
-// 1 = SGD with momentum: v = momentum*v - lr*grad; param += v
+// 1 = SGD with momentum: v = momentum*v + grad; param -= lr*v (torch's form, #492)
 // 2 = Adam: param -= lr * (m * m_hat_scale) / (sqrt(v * v_hat_scale) + eps)
 //    The host computes m_hat_scale = 1/(1-beta1^t) and v_hat_scale = 1/(1-beta2^t) in f64
 //    (#304): an f32 pow per element is off by up to 2.4e-4 relative at t = 1.
@@ -47,11 +47,11 @@ fn main(
         // Simple SGD: param = param - lr * grad
         st_params(idx, ld_params(idx) - p.lr * grad);
     } else if (p.op == 1u) {
-        // SGD with momentum
-        // v = momentum * v - lr * grad
-        st_state1(idx, p.beta1 * ld_state1(idx) - p.lr * grad);
-        // param = param + v
-        st_params(idx, ld_params(idx) + ld_state1(idx));
+        // SGD with momentum, in torch's form (#492): the velocity holds gradients only
+        // v = momentum * v + grad
+        st_state1(idx, p.beta1 * ld_state1(idx) + grad);
+        // param = param - lr * v
+        st_params(idx, ld_params(idx) - p.lr * ld_state1(idx));
     } else {
         // Adam optimizer
         // m = beta1 * m + (1 - beta1) * grad
