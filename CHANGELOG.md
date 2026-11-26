@@ -6,6 +6,10 @@ Sections drafted with the assistance of [git-cliff](https://git-cliff.org/) (see
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-26
+
+Minor: added release automation, this is the initial test
+
 ## [0.4.0] - 2026-11-24
 
 The Cleanup Release
@@ -493,7 +497,8 @@ Summarized from the commit log; there was no changelog at the time.
 
 Initial release: a CPU tensor with reverse-mode autograd; unary, binary, reduce, movement and ternary ops and matmul; Linear, Conv, ReLU and Sequential; SGD and Adam; basic IO.
 
-[Unreleased]: https://github.com/rlarson20/Volta/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/rlarson20/Volta/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/rlarson20/Volta/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/rlarson20/Volta/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/rlarson20/Volta/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/rlarson20/Volta/compare/v0.1.0...v0.2.0
