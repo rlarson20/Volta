@@ -25,13 +25,13 @@ This project is an educational endeavor to demystify the inner workings of moder
 - **Broadcasting:** Full NumPy-style broadcasting support for arithmetic operations.
 - **Neural Network Layers:** `Linear`, `Conv2d`, `ConvTranspose2d`, `MaxPool2d`, `Embedding`, `LSTMCell`, `PixelShuffle`, `LayerNorm`, `Flatten`, `ReLU`, `GELU`, `Sigmoid`, `Tanh`, `Dropout`, `BatchNorm1d`, `BatchNorm2d`.
 - **Optimizers:** `SGD` (momentum + weight decay), `Adam` (bias-corrected + weight decay), and experimental `Muon`.
-- **External Model Loading:** Load weights from PyTorch, HuggingFace, and other frameworks via `StateDictMapper` with automatic weight transposition and key remapping. Supports SafeTensors format.
+- **External Model Loading:** Load weights from PyTorch, HuggingFace, and other frameworks via `StateDictMapper`: key remapping, plus a transpose for each `Linear` weight you name (PyTorch stores it `[out, in]`, Volta `[in, out]`). Supports SafeTensors format.
 - **Named Layers:** Human-readable state dict keys with `Sequential::builder()` pattern for robust serialization.
-- **SafeTensors dtypes:** f16, bf16, f64, i32, i64, u8, and bool files load (converted to f32); every op, layer, and optimizer computes in f32, f64, f16 or bf16 on the CPU and in f32, f16 or bf16 on the GPU (`Module::to_dtype` converts a model); `amp::autocast` and `GradScaler` give mixed precision (`docs/plans/ADDENDUM.md` §11).
+- **SafeTensors dtypes:** f16, bf16, f64, i32, i64, u8, and bool files load, each entry in its stored dtype (`load_state_dict` casts it to the parameter's dtype); every op, layer, and optimizer computes in f32, f64, f16 or bf16 on the CPU and in f32, f16 or bf16 on the GPU (`Module::to_dtype` converts a model); `amp::autocast` and `GradScaler` give mixed precision (`docs/plans/ADDENDUM.md` §11).
 - **IO System:** Save and load model weights (state dicts) in SafeTensors format.
 - **BLAS Acceleration (macOS):** Optional acceleration for matrix multiplication via Apple's Accelerate framework.
 - **GPU Backend:** Experimental WGPU-based GPU support for core tensor operations (elementwise, matmul, reductions, movement ops) with automatic backward pass on GPU.
-- **Validation-Focused:** Includes a robust numerical gradient checker to ensure the correctness of all implemented operations.
+- **Validation-Focused:** A central-difference gradient checker (`RawTensor::check_gradients`) tests each op's and layer's backward pass, and PyTorch fixtures pin forward values and gradients. The checker can still pass some wrong gradients ([#484](https://github.com/rlarson20/Volta/issues/484)).
 
 ## Project Status
 
@@ -366,7 +366,7 @@ cargo run --release --example vae              # Variational Autoencoder
 cargo run --example char_language_model        # Character-level LSTM language model
 cargo run --example char_transformer_model     # Character-level Transformer language model
 cargo run --release --example mnist_rnn        # MNIST rows as a sequence, LSTM classifier
-cargo run --release --example time_sequence    # LSTM sine-wave prediction (trains to NaN today, #88)
+cargo run --release --example time_sequence    # LSTM sine-wave prediction
 
 # External model loading
 cargo run --example load_external_mnist        # Load PyTorch weights via SafeTensors
@@ -381,16 +381,12 @@ cargo run --example regression                 # Polynomial curve fitting
 
 ## Roadmap
 
-The next major steps for Volta are focused on expanding its capabilities to handle more complex models and improving performance.
+The plan is the [milestones](https://github.com/rlarson20/Volta/milestones), and feature ideas are [issues labeled `kind:feature`](https://github.com/rlarson20/Volta/issues?q=is%3Aopen+label%3Akind%3Afeature).
 
-1. **Complete GPU Integration:** Port the remaining layers to the GPU (`ConvTranspose2d` has no GPU path), optimize GEMM kernels with shared memory tiling.
-2. **Performance Optimization:** Implement SIMD for element-wise operations, optimize broadcasting on GPU, kernel fusion for composite operations.
-3. **Learning Rate Schedulers:** Cosine annealing, step decay, warmup schedules.
-
-### Outstanding Issues
+### Known limitations
 
 - **Conv2d Memory Inefficiency**: `im2col` implementation in `src/nn/layers/conv.rs` materializes the entire matrix in memory. Large batch sizes or high-resolution images will easily OOM even on high-end machines. Somewhat mitigated through algorithm selection in convolutional layer.
-- **GPU Kernel Efficiency**: Current GPU matmul uses naive implementation without shared memory tiling. Significant performance gains possible with optimized GEMM kernels.
+- **ConvTranspose2d on the GPU**: it has no GPU path and computes on the CPU.
 - **Dtypes**: tensors of every dtype can be built, read back (`to_vec_as`), and cast (`RawTensor::from_typed`, `to_dtype`). Ops compute in f32, f64, f16 and bf16 on the CPU (half types in f32, rounding each output) and in f32, f16 and bf16 on the GPU (bf16, and f16 without `SHADER_F16`, as packed 16-bit emulation); integer and bool tensors are data (movement, comparisons, `where`, indices, class targets), and integer arithmetic panics. Mixed operands promote as in PyTorch unless `DTypePolicy::Strict`. `state_dict` keeps each parameter's dtype, so a model of any float dtype saves and loads bit-exact (loading into another dtype casts).
 - **Single-threaded**: Uses `Rc<RefCell>` instead of `Arc<Mutex>`, limiting to single-threaded execution on CPU.
 
