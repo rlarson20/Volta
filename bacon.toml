@@ -13,8 +13,9 @@ command = ["cargo", "clippy", "--all-targets"]
 need_stdout = false
 
 # Exploratory: everything in clippy::pedantic on top of the Cargo.toml set. Not a gate.
-# `cast_precision_loss` and `needless_pass_by_value` are allowed in Cargo.toml (with the reason), and
-# `-W clippy::pedantic` would switch them back on, so they are allowed again below.
+# `cast_precision_loss` is allowed in Cargo.toml (with the reason), and `-W clippy::pedantic` would
+# switch it back on, so it is allowed again below. `needless_pass_by_value` is denied in Cargo.toml
+# (#171), so it stays on here too.
 [jobs.pedantic]
 command = [
     "cargo",
@@ -31,8 +32,6 @@ command = [
     "clippy::too_many_lines",
     "-A",
     "clippy::cast_precision_loss",
-    "-A",
-    "clippy::needless_pass_by_value",
     "-A",                                         # messes with underscore used for recursion-only parameter lint
     "clippy::used_underscore_binding",
 ]
