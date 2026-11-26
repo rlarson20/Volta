@@ -35,6 +35,8 @@ pub(crate) trait Real:
 
     /// Nearest value of this type (exact for `f64`; `f32` rounds).
     fn from_f64(x: f64) -> Self;
+    /// The value as `f64` (exact: both types widen without rounding).
+    fn to_f64(self) -> f64;
     /// A count, exact below 2^24 (`f32`) or 2^53 (`f64`).
     fn from_usize(n: usize) -> Self;
 
@@ -74,6 +76,9 @@ macro_rules! real {
             )]
             fn from_usize(n: usize) -> Self {
                 n as $t
+            }
+            fn to_f64(self) -> f64 {
+                f64::from(self)
             }
             fn unary(op: UnaryOp, x: Self) -> Self {
                 op.$unary(x)
