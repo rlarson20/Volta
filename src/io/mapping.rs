@@ -396,14 +396,29 @@ impl Default for StateDictMapper {
 /// transposes `fc1.weight` and `fc2.weight` and nothing else.
 ///
 /// # Panics
-/// If a named layer has no `{name}.weight` key or it is not 2-D.
+/// Wherever [`try_load_pytorch_linear_weights`] returns an error.
 #[must_use]
 #[track_caller]
 pub fn load_pytorch_linear_weights(state: StateDict, linear_layers: &[&str]) -> StateDict {
+    try_load_pytorch_linear_weights(state, linear_layers).or_panic("load_pytorch_linear_weights")
+}
+
+/// [`load_pytorch_linear_weights`], returning an error instead of panicking. What the file
+/// holds decides whether the named keys exist, so a checkpoint that lacks one is an error
+/// (DECISIONS.md, "Panic inside the program, `Result` where data comes from outside").
+///
+/// # Errors
+/// [`VoltaError::InvalidParameter`] naming the key if a named layer has no
+/// `{name}.weight` entry or it is not 2-D, or the entry's validation error if it is
+/// malformed (see [`StateDictMapper::try_map`]).
+pub fn try_load_pytorch_linear_weights(
+    state: StateDict,
+    linear_layers: &[&str],
+) -> Result<StateDict> {
     linear_layers
         .iter()
         .fold(StateDictMapper::new(), |m, name| m.transpose_linear(*name))
-        .map(state)
+        .try_map(state)
 }
 
 /// Load `HuggingFace` transformer weights
@@ -417,7 +432,7 @@ pub fn load_pytorch_linear_weights(state: StateDict, linear_layers: &[&str]) -> 
 /// * `linear_layers` - The `Linear` layers whose weights to transpose, after stripping
 ///
 /// # Panics
-/// If a named layer has no `{name}.weight` key after stripping, or it is not 2-D.
+/// Wherever [`try_load_huggingface_weights`] returns an error.
 #[must_use]
 #[track_caller]
 pub fn load_huggingface_weights(
@@ -425,11 +440,24 @@ pub fn load_huggingface_weights(
     model_prefix: &str,
     linear_layers: &[&str],
 ) -> StateDict {
+    try_load_huggingface_weights(state, model_prefix, linear_layers)
+        .or_panic("load_huggingface_weights")
+}
+
+/// [`load_huggingface_weights`], returning an error instead of panicking.
+///
+/// # Errors
+/// As [`try_load_pytorch_linear_weights`], for the keys after stripping `model_prefix`.
+pub fn try_load_huggingface_weights(
+    state: StateDict,
+    model_prefix: &str,
+    linear_layers: &[&str],
+) -> Result<StateDict> {
     let mapper = StateDictMapper::new().strip_prefix(format!("{model_prefix}."));
     linear_layers
         .iter()
         .fold(mapper, |m, name| m.transpose_linear(*name))
-        .map(state)
+        .try_map(state)
 }
 
 /// Create a mapper from key-to-key mappings
@@ -855,6 +883,40 @@ mod tests {
             TensorData::from_f32(vec![0.0; 8], vec![2, 1, 2, 2]),
         );
         let _ = load_pytorch_linear_weights(state, &["conv"]);
+    }
+
+    /// #490: both loaders' `try_` forms return a missing key and a non-2-D weight as
+    /// `InvalidParameter` naming the key.
+    #[test]
+    fn test_try_loaders_return_missing_and_non_2d_keys_as_errors() {
+        let is_invalid_naming = |err: &VoltaError, key: &str| matches!(err, VoltaError::InvalidParameter(m) if m.message.contains(key));
+        let err = try_load_pytorch_linear_weights(create_test_state(), &["fc9"])
+            .expect_err("fc9.weight is missing");
+        assert!(is_invalid_naming(&err, "\"fc9.weight\""), "{err}");
+
+        let conv = || {
+            let mut state = BTreeMap::new();
+            state.insert(
+                "bert.conv.weight".to_string(),
+                TensorData::from_f32(vec![0.0; 8], vec![2, 2, 2]),
+            );
+            state
+        };
+        let err = try_load_huggingface_weights(conv(), "bert", &["conv"])
+            .expect_err("a 3-D weight is not a Linear weight");
+        assert!(is_invalid_naming(&err, "\"conv.weight\""), "{err}");
+        assert!(err.to_string().contains("not a 2-D Linear weight"), "{err}");
+
+        let err = try_load_huggingface_weights(conv(), "bert", &["fc9"])
+            .expect_err("fc9.weight is missing after stripping");
+        assert!(is_invalid_naming(&err, "\"fc9.weight\""), "{err}");
+
+        let mut stripped = conv();
+        let entry = stripped.remove("bert.conv.weight").expect("just inserted");
+        stripped.insert("conv.weight".to_string(), entry);
+        let err = try_load_pytorch_linear_weights(stripped, &["conv"])
+            .expect_err("a 3-D weight is not a Linear weight");
+        assert!(is_invalid_naming(&err, "\"conv.weight\""), "{err}");
     }
 
     /// A one-element entry holding `v`.
