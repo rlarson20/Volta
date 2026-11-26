@@ -7,9 +7,12 @@ use crate::tensor::Tensor;
 ///
 /// Update rule:
 /// - Without momentum: θ ← θ - lr·∇θ
-/// - With momentum: v ← β·v - lr·∇θ, θ ← θ + v
+/// - With momentum: v ← β·v + ∇θ, θ ← θ - lr·v
 ///
-/// Momentum helps accelerate convergence and dampen oscillations.
+/// Momentum helps accelerate convergence and dampen oscillations. The velocity holds
+/// gradients only, with `lr` applied at each step, as in PyTorch (`momentum_buffer`, no
+/// dampening or Nesterov). So a learning rate that changes between steps applies to the
+/// whole velocity at once, and the buffer means the same thing as torch's (#492).
 #[derive(Debug)]
 pub struct SGD {
     /// Parameters being optimized.
@@ -219,15 +222,15 @@ impl SGD {
                     "SGD velocity dtype; convert the model before the optimizer's first step"
                 );
                 vel.with_host_mut::<T, _>(|vel_slice| {
-                    // Update velocity: v = momentum·v - lr·grad
+                    // Update velocity: v = momentum·v + grad (torch's form, #492)
                     for (v, &g) in vel_slice.iter_mut().zip(active_grad.host::<T>().iter()) {
-                        *v = momentum.mul_add(*v, -(lr * g));
+                        *v = momentum.mul_add(*v, g);
                     }
 
-                    // Update parameters: θ = θ + v
+                    // Update parameters: θ = θ - lr·v
                     data.with_host_mut::<T, _>(|p_data| {
                         for (d, &v) in p_data.iter_mut().zip(vel_slice.iter()) {
-                            *d += v;
+                            *d -= lr * v;
                         }
                     });
                 });
@@ -254,5 +257,102 @@ impl SGD {
     )]
     fn step_gpu_param(&mut self, _i: usize) {
         unreachable!("GPU step should not be called without GPU feature");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SGD;
+    use crate::index::fetch;
+    use crate::storage::Storage;
+    use crate::tensor::{RawTensor, Tensor};
+
+    /// Starting parameter.
+    const P0: [f32; 4] = [0.5, -1.25, 2.0, 0.75];
+    /// Learning rate at each of the five steps: it drops after step 2 and rises at step 4,
+    /// as a scheduler would.
+    const LRS: [f32; 5] = [0.1, 0.1, 0.02, 0.05, 0.05];
+    const MOMENTUM: f32 = 0.9;
+    const WEIGHT_DECAY: f32 = 0.01;
+
+    /// The gradient fed at step `k`.
+    fn grad(k: usize) -> Vec<f32> {
+        (0..P0.len())
+            .map(|i| {
+                #[expect(clippy::cast_precision_loss, reason = "small test indices")]
+                let (i, k) = (i as f32, k as f32);
+                (0.7 * i + 1.3 * k).sin() + 0.25
+            })
+            .collect()
+    }
+
+    /// The parameter after each step under PyTorch's `SGD` (no dampening, not Nesterov):
+    /// `g += wd·θ; v = β·v + g (v = g on the first step); θ -= lr·v`, in f64 with the f32
+    /// hyperparameters widened.
+    fn torch_reference() -> Vec<Vec<f64>> {
+        let (beta, wd) = (f64::from(MOMENTUM), f64::from(WEIGHT_DECAY));
+        let mut p: Vec<f64> = P0.iter().copied().map(f64::from).collect();
+        let mut v = vec![0.0f64; P0.len()];
+        LRS.iter()
+            .enumerate()
+            .map(|(k, &lr)| {
+                for ((p, v), g) in p.iter_mut().zip(&mut v).zip(grad(k)) {
+                    let g = f64::from(g) + wd * *p;
+                    *v = beta * *v + g;
+                    *p -= f64::from(lr) * *v;
+                }
+                p.clone()
+            })
+            .collect()
+    }
+
+    /// Steps `param` (on any device) with the learning rate changed between steps, and
+    /// compares it against [`torch_reference`] after each step.
+    fn check_lr_schedule(param: &Tensor, rel_tol: f64) {
+        let mut opt = SGD::new(vec![param.clone()], fetch(&LRS, 0), MOMENTUM, WEIGHT_DECAY);
+        let want = torch_reference();
+        for (k, (&lr, want)) in LRS.iter().zip(&want).enumerate() {
+            opt.lr = lr;
+            param.zero_grad();
+            param.set_grad(Storage::cpu(grad(k)));
+            opt.step();
+            let got = param.data();
+            assert_eq!(got.len(), want.len());
+            for (i, (&g, &w)) in got.iter().zip(want).enumerate() {
+                let err = (f64::from(g) - w).abs() / w.abs().max(1.0);
+                assert!(
+                    err <= rel_tol,
+                    "step {k} (lr {lr}), element {i}: got {g}, torch {w}, rel err {err:.3e}"
+                );
+            }
+        }
+    }
+
+    /// #492: the velocity holds gradients and `lr` scales it at each step, as in torch, so
+    /// a learning rate that changes mid-run still matches torch. The old form
+    /// (`v = β·v - lr·g; θ += v`) kept earlier steps' velocity at their old `lr`.
+    #[test]
+    fn momentum_matches_torch_when_lr_changes() {
+        let p = RawTensor::new(P0.to_vec(), &[P0.len()], true);
+        check_lr_schedule(&p, 8.0 * f64::from(f32::EPSILON));
+    }
+
+    /// #492 on the GPU kernel. Returns early without an adapter, unless
+    /// `VOLTA_REQUIRE_GPU` is set.
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn gpu_momentum_matches_torch_when_lr_changes() {
+        use crate::device::Device;
+        let Some(gpu) = Device::gpu() else {
+            assert!(
+                std::env::var_os("VOLTA_REQUIRE_GPU").is_none(),
+                "VOLTA_REQUIRE_GPU is set but no GPU is available"
+            );
+            return;
+        };
+        let p = RawTensor::new(P0.to_vec(), &[P0.len()], false).to_device(gpu);
+        p.set_requires_grad(true);
+        assert_ne!(p.device(), Device::CPU);
+        check_lr_schedule(&p, 32.0 * f64::from(f32::EPSILON));
     }
 }
