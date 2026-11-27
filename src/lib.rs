@@ -219,6 +219,16 @@ mod dropout_tests;
 #[path = "lib_tests/batchnorm_tests.rs"]
 mod batchnorm_tests;
 
+// The f64 numerical gradient check shared by `f64_tests` and `dag_tests`.
+#[cfg(test)]
+#[path = "lib_tests/gradcheck_f64.rs"]
+mod gradcheck_f64;
+
+// Random-DAG gradient checks over the core ops (ADDENDUM §10.2, #532).
+#[cfg(test)]
+#[path = "lib_tests/dag_tests.rs"]
+mod dag_tests;
+
 #[cfg(test)]
 #[path = "lib_tests/f64_tests.rs"]
 mod f64_tests;

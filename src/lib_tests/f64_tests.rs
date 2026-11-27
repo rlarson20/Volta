@@ -2,93 +2,16 @@
 //! numerical gradient check in f64 at a tolerance (1e-7) five orders of magnitude tighter
 //! than the f32 checks use (1e-2), and f64 values keep f64 precision.
 //!
-//! The check is a test-only f64 copy of `check_gradients`: there is no public f64 gradient
-//! check yet.
+//! The check is the test-only f64 copy of `check_gradients` in `gradcheck_f64`: there is no
+//! public f64 gradient check yet.
 
 use super::*;
 use crate::autograd::no_grad;
+use crate::gradcheck_f64::{EPS, TOL, assert_grad, leaf, leaf_from, values, weighted};
 use crate::ops::ReduceOp;
 use crate::ops::{BinaryOp, UnaryOp};
 use crate::storage::Storage;
 use crate::tensor::manual_seed;
-
-/// Relative tolerance of the f64 gradient checks.
-const TOL: f64 = 1e-7;
-/// Central-difference step: truncation error ~ EPS² and rounding error ~ 1e-16 / EPS
-/// balance near 1e-10.
-const EPS: f64 = 1e-6;
-
-/// Seeded normal values as an f64 leaf that requires grad.
-fn leaf(shape: &[usize], seed: u64) -> Tensor {
-    leaf_from(shape, seed, |v| v)
-}
-
-/// Seeded normal values mapped through `f`, as an f64 leaf that requires grad.
-fn leaf_from(shape: &[usize], seed: u64, f: impl Fn(f64) -> f64) -> Tensor {
-    manual_seed(seed);
-    let raw = RawTensor::randn(shape);
-    let vals: Vec<f64> = raw.data().iter().map(|&v| f(f64::from(v))).collect();
-    let x = RawTensor::from_typed(vals, shape);
-    x.set_requires_grad(true);
-    x
-}
-
-/// The f64 values of `t`, through the public lossless readback.
-fn values(t: &Tensor) -> Vec<f64> {
-    t.to_vec_as::<f64>().expect("an f64 tensor")
-}
-
-/// Weighted sum `sum(out * w)` with fixed random f64 weights, so every output element
-/// gets a different gradient (a plain sum would hide permutations and broadcasts).
-fn weighted(out: &Tensor, seed: u64) -> Tensor {
-    let w = leaf(out.shape().truncate_rank(), seed);
-    w.set_requires_grad(false);
-    out.elem_mul(&w).sum()
-}
-
-/// Max relative error between `x`'s analytic gradient of `f` and a central difference,
-/// both in f64. Relative to `max(|analytic|, |numeric|, 1)`.
-fn gradcheck(x: &Tensor, f: impl Fn(&Tensor) -> Tensor) -> f64 {
-    RawTensor::zero_grad(x);
-    let loss = f(x);
-    assert_eq!(loss.dtype(), DType::F64, "the loss must be f64");
-    loss.into_loss().expect("scalar loss").backward();
-    let grad = x.grad_storage().expect("x has a gradient");
-    assert_eq!(
-        grad.dtype(),
-        DType::F64,
-        "an f64 tensor has an f64 gradient"
-    );
-    let analytic = grad.as_host::<f64>().expect("f64").to_vec();
-
-    let (base, shape) = {
-        let t = x.borrow();
-        (t.data.clone(), t.shape.clone())
-    };
-    let _no_grad = no_grad();
-    let eval = |delta: f64, i: usize| {
-        let mut data = base.clone();
-        *crate::index::slot(data.as_host_mut::<f64>().expect("f64"), i) += delta;
-        let t = RawTensor::new_with_storage(data, shape.clone(), Device::CPU, false);
-        crate::index::fetch(&values(&f(&t)), 0)
-    };
-    let mut max_err: f64 = 0.0;
-    for (i, &a) in analytic.iter().enumerate() {
-        let numeric = (eval(EPS, i) - eval(-EPS, i)) / (2.0 * EPS);
-        let err = (a - numeric).abs() / a.abs().max(numeric.abs()).max(1.0);
-        max_err = max_err.max(err);
-    }
-    max_err
-}
-
-/// Asserts the gradient check passes, naming the case.
-fn assert_grad(name: &str, x: &Tensor, f: impl Fn(&Tensor) -> Tensor) {
-    let err = gradcheck(x, f);
-    assert!(
-        err < TOL,
-        "{name}: f64 gradcheck max relative error {err:.3e}"
-    );
-}
 
 /// Sums in f64 round like f64, not like f32: ten 0.1s.
 #[test]
