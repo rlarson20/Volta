@@ -10,6 +10,54 @@ use crate::spec::MatmulSpec;
 use crate::storage::Storage;
 use crate::{RawTensor, Tensor};
 
+/// A vector form of `a @ b` (rank 1 on either side, the other rank 1 or 2) as a 2D
+/// product: the spec of `[1, n] @ ..` or `.. @ [n, 1]`, and the product's own dims (`[m]`,
+/// `[p]`, or `[]` for a dot product). `None` for the matrix forms.
+///
+/// # Panics
+/// If the inner dims differ, with the same message as the CPU path.
+fn vector_as_matrix(a: &Shape, b: &Shape) -> Option<(MatmulSpec, Vec<usize>)> {
+    let (ad, bd) = (a.truncate_rank(), b.truncate_rank());
+    let (a2, b2, out) = match (ad, bd) {
+        (&[m, n], &[n2]) => {
+            assert_eq!(n, n2, "Matmul dimension mismatch: ({m},{n}) @ ({n2})");
+            ([m, n], [n2, 1], vec![m])
+        }
+        (&[n], &[n2, p]) => {
+            assert_eq!(n, n2, "Matmul dimension mismatch: ({n}) @ ({n2},{p})");
+            ([1, n], [n2, p], vec![p])
+        }
+        (&[n], &[n2]) => {
+            assert_eq!(n, n2, "Dot product dimension mismatch: ({n}) @ ({n2})");
+            ([1, n], [n2, 1], vec![])
+        }
+        _ => return None,
+    };
+    let spec = MatmulSpec::new(&Shape::derived(a2.to_vec()), &Shape::derived(b2.to_vec()))
+        .or_panic("matmul");
+    Some((spec, out))
+}
+
+/// Whether the GPU matmul kernels cover `spec`: every matrix form whose rank fits the
+/// strided gather that broadcasts batch dims. A higher rank is a gap.
+fn gpu_matmul_supported(spec: &MatmulSpec) -> bool {
+    spec.out_batch.len() + 2 <= 8
+}
+
+impl RawTensor {
+    /// A matmul operand (`own` dims) at the full batch (`full` dims) on the GPU: the storage
+    /// itself when its batch dims don't broadcast, else a gathered copy.
+    ///
+    /// # Panics
+    /// If the gather fails (`kernel_failed`).
+    fn gpu_batch_operand(data: &Storage, own: &[usize], full: &[usize]) -> Storage {
+        if own == full {
+            return data.clone();
+        }
+        Self::gpu_broadcast_to(data, own, full).unwrap_or_else(|| kernel_failed("MatMul"))
+    }
+}
+
 // ===== TRANSPOSE GRADIENT =====
 
 /// Gradient function for 2D transpose
@@ -30,6 +78,12 @@ impl TransposeGradFn {
         out_grad: &RawTensor,
         _parents: &[Tensor],
     ) -> Vec<Option<Storage>> {
+        if out_grad.device.is_gpu() {
+            let transposed =
+                RawTensor::gpu_permute_any(&out_grad.data, out_grad.shape.truncate_rank(), &[1, 0])
+                    .unwrap_or_else(|| kernel_failed("Transpose"));
+            return vec![Some(transposed)];
+        }
         let transposed = dispatch_real!(out_grad.data.dtype(), T => Storage::from_compute(out_grad.data.dtype(),
             RawTensor::transpose_2d(&out_grad.data.host::<T>(), out_grad.shape.truncate_rank()),
         ));
@@ -276,6 +330,21 @@ impl RawTensor {
         (data_a, shape_a): (&Storage, &Shape),
         (data_b, shape_b): (&Storage, &Shape),
     ) -> Tensor {
+        // On the GPU a vector operand is a one-row (left) or one-column (right) matrix,
+        // which is the same buffer; the product's shape drops that axis again.
+        if let Some(device) = Self::common_gpu_device(&[self_t, other])
+            && let Some((spec, out_dims)) = vector_as_matrix(shape_a, shape_b)
+        {
+            let storage =
+                Self::gpu_matmul(data_a, data_b, &spec).unwrap_or_else(|| kernel_failed("MatMul"));
+            return edge(
+                [self_t.clone(), other.clone()],
+                storage,
+                Shape::derived(out_dims),
+                device,
+                GradFn::MatMul(MatMulGradFn::matrix(spec)),
+            );
+        }
         match (shape_a.rank(), shape_b.rank()) {
             (2, 1) => {
                 let (a_host, b_host) = (data_a.host::<T>(), data_b.host::<T>());
@@ -337,22 +406,29 @@ impl RawTensor {
                 // batch broadcasting once; everything below reads m/k/n from it.
                 let spec = MatmulSpec::new(shape_a, shape_b).or_panic("");
 
+                // If both inputs live on the same GPU device, run the GPU kernel: one launch
+                // for every product of a batch, after gathering an operand whose batch dims
+                // broadcast. A `None` from it is a failure, not a reason to use the CPU.
+                if let Some(device) = Self::common_gpu_device(&[self_t, other])
+                    && gpu_matmul_supported(&spec)
+                {
+                    let a =
+                        Self::gpu_batch_operand(data_a, &spec.a_dims(), &spec.a_expanded_dims());
+                    let b =
+                        Self::gpu_batch_operand(data_b, &spec.b_dims(), &spec.b_expanded_dims());
+                    let storage =
+                        Self::gpu_matmul(&a, &b, &spec).unwrap_or_else(|| kernel_failed("MatMul"));
+                    return edge(
+                        [self_t.clone(), other.clone()],
+                        storage,
+                        Shape::derived(spec.out_dims()),
+                        device,
+                        GradFn::MatMul(MatMulGradFn::matrix(spec)),
+                    );
+                }
+
                 if !spec.is_batched() {
                     // Standard 2D matmul: (m,k) @ (k,n) -> (m,n)
-                    //
-                    // If both inputs live on the same GPU device, run the GPU kernel. A
-                    // `None` from it is a failure, not a reason to use the CPU.
-                    if let Some(device) = Self::common_gpu_device(&[self_t, other]) {
-                        let storage = Self::gpu_matmul(data_a, data_b, &spec)
-                            .unwrap_or_else(|| kernel_failed("MatMul"));
-                        return edge(
-                            [self_t.clone(), other.clone()],
-                            storage,
-                            Shape::derived(spec.out_dims()),
-                            device,
-                            GradFn::MatMul(MatMulGradFn::matrix(spec)),
-                        );
-                    }
 
                     // CPU path: BLAS/Accelerate or matrixmultiply on host data.
                     let result_data = T::gemm(
@@ -430,12 +506,24 @@ impl RawTensor {
 
         assert_eq!(shape.rank(), 2, "Transpose expects 2D tensor");
         let dtype = self_t.dtype();
+        let [dim0, dim1] = shape.fixed::<2>();
+
+        if let Some(device) = Self::common_gpu_device(&[self_t]) {
+            let transposed = Self::gpu_permute_any(&data, shape.truncate_rank(), &[1, 0])
+                .unwrap_or_else(|| kernel_failed("Transpose"));
+            return edge(
+                [self_t.clone()],
+                transposed,
+                Shape::derived(vec![dim1, dim0]),
+                device,
+                GradFn::Transpose(TransposeGradFn),
+            );
+        }
 
         // A data copy, any dtype: through bit carriers (`real::Bits`), like movement ops.
         let transposed = dispatch_bits!(dtype, B => Storage::from_bits(dtype,
             &Self::transpose_2d(data.bits::<B>(), shape.truncate_rank()),
         ));
-        let [dim0, dim1] = shape.fixed::<2>();
         let new_shape = vec![dim1, dim0];
 
         edge(
@@ -541,21 +629,37 @@ impl MatMulGradFn {
             .map(|p| p.borrow())
             .expect("matmul requires 2 parents");
 
-        // Only the plain 2D×2D case has GPU backward kernels. `edge()` put both inputs on
-        // the output's device, so a GPU `out_grad` means GPU inputs. Every other form is a
-        // gap and uses the CPU path below (the device policy applies in `accumulate_grad`).
+        // Every form a GPU forward ran has a spec (a vector form is a 1-row or 1-column
+        // matrix). `edge()` put both inputs on the output's device, so a GPU `out_grad`
+        // means GPU inputs. A rank past the gather's is a gap and uses the CPU path below
+        // (the device policy applies in `accumulate_grad`).
         // A `None` from a kernel is a failure: computing every required gradient or
         // panicking means no parameter is silently left without one.
         if out_grad.device.is_gpu()
-            && let Some(spec) = self.spec.as_ref().filter(|s| !s.is_batched())
+            && let Some(spec) = self.spec.as_ref().filter(|s| gpu_matmul_supported(s))
         {
+            // Each gradient comes out at the full batch; one whose operand's batch dims
+            // broadcast is summed back down to the operand's shape.
+            let (a_full, b_full) = (spec.a_expanded_dims(), spec.b_expanded_dims());
+            let reduce = |g: Storage, full: &[usize], own: &[usize]| {
+                if full == own {
+                    g
+                } else {
+                    RawTensor::gpu_sum_to_shape(&g, full, own)
+                        .unwrap_or_else(|| kernel_failed("MatMul"))
+                }
+            };
             let grad_x = x.requires_grad.then(|| {
-                RawTensor::gpu_matmul_backward_a(&out_grad.data, &y.data, spec)
-                    .unwrap_or_else(|| kernel_failed("MatMul"))
+                let b = RawTensor::gpu_batch_operand(&y.data, &spec.b_dims(), &b_full);
+                let g = RawTensor::gpu_matmul_backward_a(&out_grad.data, &b, spec)
+                    .unwrap_or_else(|| kernel_failed("MatMul"));
+                reduce(g, &a_full, &spec.a_dims())
             });
             let grad_y = y.requires_grad.then(|| {
-                RawTensor::gpu_matmul_backward_b(&x.data, &out_grad.data, spec)
-                    .unwrap_or_else(|| kernel_failed("MatMul"))
+                let a = RawTensor::gpu_batch_operand(&x.data, &spec.a_dims(), &a_full);
+                let g = RawTensor::gpu_matmul_backward_b(&a, &out_grad.data, spec)
+                    .unwrap_or_else(|| kernel_failed("MatMul"));
+                reduce(g, &b_full, &spec.b_dims())
             });
             return vec![grad_x, grad_y];
         }

@@ -93,6 +93,19 @@ impl BatchNorm {
         self.running_var.cast_in_place(dtype);
     }
 
+    /// Moves the parameters and the running statistics (PyTorch moves buffers with the
+    /// module), so a GPU layer updates and reads its statistics on the device (#464).
+    fn to_device(&self, device: &crate::Device) {
+        for t in [
+            &self.gamma,
+            &self.beta,
+            &self.running_mean,
+            &self.running_var,
+        ] {
+            t.move_to_device(device);
+        }
+    }
+
     /// The parameters and the running statistics.
     fn state_dict(&self) -> StateDict {
         let mut state = StateDict::new();
@@ -139,9 +152,10 @@ impl BatchNorm {
             self.update_running(&batch_mean, &batch_var, n);
             (batch_mean, batch_var)
         } else {
-            // Running stats are host-side layer state (updated in place in training), so
-            // copy them onto the input's device, in their own dtype: `constant_like(..,
-            // data())` would round f64 stats to f32.
+            // The running stats move with the layer, but the input may be elsewhere (a CPU
+            // layer fed a GPU input fails at the parameters below), so put them on the
+            // input's device, in their own dtype: `constant_like(.., data())` would round
+            // f64 stats to f32.
             let stat = |t: &Tensor| {
                 t.detach()
                     .reshape(&stat_dims)
@@ -165,6 +179,33 @@ impl BatchNorm {
     fn update_running(&self, batch_mean: &Tensor, batch_var: &Tensor, n: usize) {
         let _no_grad = crate::autograd::no_grad();
         let dtype = self.running_mean.dtype();
+        if self.running_mean.device().is_gpu() {
+            // On the GPU the update is tensor ops, so the statistics never leave the device
+            // (#464: reading them back stalled every training step). Same formula as the
+            // host loop below, without its fused multiply-add.
+            let m = self.momentum;
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "a batch count as the f32 Bessel factor, as the host path's from_usize"
+            )]
+            let unbiased = m * n as f32 / (n as f32 - 1.0);
+            let c = [self.num_features];
+            let blend = |running: &Tensor, batch: &Tensor, take: f32| {
+                let keep = running.constant_like(vec![1.0 - m], &[1]);
+                let take = running.constant_like(vec![take], &[1]);
+                running
+                    .elem_mul(&keep)
+                    .add(&batch.reshape(&c).to_dtype(dtype).elem_mul(&take))
+                    .to_dtype(dtype)
+                    .into_grad_storage()
+            };
+            let mean = blend(&self.running_mean, batch_mean, m);
+            let var = blend(&self.running_var, batch_var, unbiased);
+            // Both statistics are rewritten in place (S9; `update_data` bumps each version).
+            self.running_mean.update_data(|rm| *rm = mean);
+            self.running_var.update_data(|rv| *rv = var);
+            return;
+        }
         // Both statistics are rewritten in place (S9; `update_data` bumps each version).
         self.running_mean.update_data(|rm| {
             self.running_var.update_data(|rv| {
@@ -344,6 +385,11 @@ macro_rules! batchnorm_module {
             /// Converts the running statistics too: they are buffers, not parameters.
             fn to_dtype(&mut self, dtype: crate::DType) {
                 self.core.to_dtype(self, dtype);
+            }
+
+            /// Moves the running statistics too: they are buffers, not parameters.
+            fn to_device(&mut self, device: crate::Device) {
+                self.core.to_device(&device);
             }
 
             fn state_dict(&self) -> StateDict {

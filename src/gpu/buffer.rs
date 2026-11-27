@@ -146,14 +146,26 @@ impl GpuBuffer {
         let ctx = get_gpu_context()?;
         let buffer = Self::allocate(bytes.len(), label)?;
         ctx.queue().write_buffer(&buffer, 0, bytes);
-        ctx.increment_pending();
-        ctx.maybe_sync();
+        ctx.wrote_buffer();
         Some(Self {
             buffer: Some(buffer),
             len,
             dtype,
             pool: Some(ctx.buffer_pool_arc()),
         })
+    }
+
+    /// A buffer of raw `u32` values, such as indices a kernel reads as `array<u32>`. It is
+    /// not a tensor: its dtype is `Bool`, the GPU's one 4-byte integer carrier, and it is
+    /// only ever bound to a kernel that declares it `array<u32>` (as `MaxResult`'s count).
+    #[must_use]
+    pub(crate) fn from_u32s(data: &[u32]) -> Option<Self> {
+        Self::upload(
+            DType::Bool,
+            data.len(),
+            bytemuck::cast_slice(data),
+            "Index Buffer",
+        )
     }
 
     /// Create a new f32 GPU buffer from CPU data
@@ -210,12 +222,22 @@ impl GpuBuffer {
     /// A zero-initialized buffer of `len` `dtype` elements (all-zero bits are 0.0 or
     /// `false` in every GPU element type).
     ///
-    /// Costs a host allocation and an upload of `gpu_bytes(dtype, len)` bytes. For a kernel
-    /// output that the kernel writes in full, use [`Self::uninit_of`].
+    /// The GPU clears it (`clear_buffer`, one small submit); nothing is copied from the host
+    /// (#464: the zero fill used to be an upload of `gpu_bytes(dtype, len)` bytes). For a
+    /// kernel output that the kernel writes in full, use [`Self::uninit_of`].
     #[must_use]
     pub(crate) fn zeros_of(dtype: DType, len: usize) -> Option<Self> {
-        let bytes = vec![0u8; gpu_bytes(dtype, len)];
-        Self::upload(dtype, len, &bytes, "Tensor Buffer (zeros)")
+        let ctx = get_gpu_context()?;
+        let out = Self::uninit_of(dtype, len)?;
+        let mut encoder = ctx
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Zero Fill Encoder"),
+            });
+        // The whole allocation, which the pool may have rounded up: every byte is ours.
+        encoder.clear_buffer(out.buffer(), 0, None);
+        ctx.submit(Some(encoder.finish()));
+        Some(out)
     }
 
     /// A buffer of `len` `dtype` elements whose contents are unspecified (#310): a pooled
@@ -265,11 +287,8 @@ impl GpuBuffer {
                 label: Some("Read Buffer Encoder"),
             });
         encoder.copy_buffer_to_buffer(buffer, 0, &staging_buffer, 0, byte_size);
-        let copy = ctx.queue().submit(Some(encoder.finish()));
-        // Counted, but no `maybe_sync`: the blocking poll below waits for this submit and
-        // everything before it. It does not reset the counter, so the next `maybe_sync` may
-        // sync an already idle queue once, which costs a poll and nothing else.
-        ctx.increment_pending();
+        let copy = ctx.submit(Some(encoder.finish()));
+        crate::gpu_counters::note_readback();
 
         // Map the staging buffer and wait for the copy (and everything before it: a queue
         // completes in order). Waiting on this submission, not on `None` (the device's last
@@ -449,9 +468,7 @@ impl GpuBuffer {
             0,
             byte_size as u64,
         );
-        ctx.queue().submit(Some(encoder.finish()));
-        ctx.increment_pending();
-        ctx.maybe_sync();
+        ctx.submit(Some(encoder.finish()));
 
         Some(Self {
             buffer: Some(new_buffer),

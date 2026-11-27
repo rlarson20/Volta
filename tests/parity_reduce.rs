@@ -34,7 +34,7 @@ fn max_reduce_whole_tensor_parity() {
 
 #[test]
 fn sum_dim_keepdim_parity() {
-    expect_gaps(&["SumDim"], || {
+    expect_gaps(&[], || {
         assert_reduce_parity(
             "sum_dim keepdim",
             |t| t.sum_dim(Axis(1), true),
@@ -46,7 +46,7 @@ fn sum_dim_keepdim_parity() {
 
 #[test]
 fn sum_dim_no_keepdim_parity() {
-    expect_gaps(&["SumDim"], || {
+    expect_gaps(&[], || {
         assert_reduce_parity(
             "sum_dim",
             |t| t.sum_dim(Axis(0), false),
@@ -58,7 +58,7 @@ fn sum_dim_no_keepdim_parity() {
 
 #[test]
 fn mean_dim_keepdim_parity() {
-    expect_gaps(&["MeanDim"], || {
+    expect_gaps(&[], || {
         assert_reduce_parity(
             "mean_dim keepdim",
             |t| t.mean_dim(Axis(1), true),
@@ -70,7 +70,7 @@ fn mean_dim_keepdim_parity() {
 
 #[test]
 fn mean_dim_no_keepdim_parity() {
-    expect_gaps(&["MeanDim"], || {
+    expect_gaps(&[], || {
         assert_reduce_parity(
             "mean_dim",
             |t| t.mean_dim(Axis(0), false),
@@ -82,7 +82,7 @@ fn mean_dim_no_keepdim_parity() {
 
 #[test]
 fn max_dim_keepdim_parity() {
-    expect_gaps(&["MaxDim"], || {
+    expect_gaps(&[], || {
         assert_reduce_parity(
             "max_dim keepdim",
             |t| t.max_dim(Axis(1), true),

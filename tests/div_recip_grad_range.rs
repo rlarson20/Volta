@@ -93,10 +93,8 @@ mod gpu {
         assert_rel("gpu recip grad", &recip_grad(&b, &w), &[-1e-20, -1e20]);
     }
 
-    /// GPU broadcast backward is a device-policy gap today (the two-pass kernels are
-    /// unreachable until #60), so under `PreferGpu` this runs the CPU formula on GPU
-    /// inputs. It pins the result for when the `div_broadcast_pass*` kernels (same fix)
-    /// are wired in.
+    /// GPU broadcast backward runs the same-shape `div` backward kernel on the expanded
+    /// operands, then sums the gradient back to `b`'s shape (#60), all under `Strict`.
     #[test]
     fn gpu_div_grad_b_broadcast_is_finite_at_a_small_denominator() {
         if skip_if_no_gpu() {
@@ -105,7 +103,7 @@ mod gpu {
         println!("GPU-RAN gpu_div_grad_b_broadcast_is_finite_at_a_small_denominator");
         let a = leaf(vec![1e-30, 2e-30], true);
         let b = leaf(vec![1e-30], true);
-        let _prefer = volta::with_device_policy(volta::DevicePolicy::PreferGpu);
+        let _strict = volta::with_device_policy(volta::DevicePolicy::Strict);
         assert_rel("gpu div broadcast grad b", &div_grad_b(&a, &b), &[-3e30]);
     }
 }

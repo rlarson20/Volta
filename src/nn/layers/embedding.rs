@@ -1,5 +1,6 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
+use crate::device_policy::kernel_failed;
 use crate::dtype::DType;
 use crate::error::OrPanic;
 use crate::index::{fetch, slot, span};
@@ -158,16 +159,24 @@ impl Layer for Embedding {
         let rows = self.rows(indices);
         let weight_borrowed = self.weight.borrow();
         let dtype = weight_borrowed.data.dtype();
-        let output = dispatch_real!(dtype, T => {
-            let weight_data = weight_borrowed.data.host::<T>();
-            // Gather: one weight row per index.
-            let mut output_data = Vec::with_capacity(rows.len() * self.dim);
-            for &row in &rows {
-                let start = row * self.dim;
-                output_data.extend_from_slice(span(&weight_data, start..start + self.dim));
-            }
-            Storage::from_compute(dtype, output_data)
-        });
+        // The indices stay on the host (the GPU holds no integer dtype); the weight's
+        // device decides where the gather runs.
+        let device = RawTensor::common_gpu_device(&[&self.weight]);
+        let output = if device.is_some() {
+            RawTensor::gpu_embedding_forward(&weight_borrowed.data, &rows, self.dim)
+                .unwrap_or_else(|| kernel_failed("Embedding"))
+        } else {
+            dispatch_real!(dtype, T => {
+                let weight_data = weight_borrowed.data.host::<T>();
+                // Gather: one weight row per index.
+                let mut output_data = Vec::with_capacity(rows.len() * self.dim);
+                for &row in &rows {
+                    let start = row * self.dim;
+                    output_data.extend_from_slice(span(&weight_data, start..start + self.dim));
+                }
+                Storage::from_compute(dtype, output_data)
+            })
+        };
         drop(weight_borrowed);
 
         let mut output_shape = indices.shape().truncate_rank().to_vec();
@@ -178,7 +187,7 @@ impl Layer for Embedding {
             [self.weight.clone()],
             output,
             Shape::derived(output_shape),
-            Device::CPU,
+            device.unwrap_or(Device::CPU),
             GradFn::Embedding(EmbeddingGradFn {
                 indices: rows,
                 vocab_size: self.vocab_size,
@@ -228,6 +237,17 @@ impl EmbeddingGradFn {
     ) -> Vec<Option<Storage>> {
         // out_grad: [num_indices, embedding_dim]
         // Scatter gradients to weight: [vocab_size, embedding_dim]
+
+        if out_grad.data.is_gpu() {
+            let grad = RawTensor::gpu_embedding_backward(
+                &out_grad.data,
+                &self.indices,
+                self.vocab_size,
+                self.embedding_dim,
+            )
+            .unwrap_or_else(|| kernel_failed("Embedding"));
+            return vec![Some(grad)];
+        }
 
         // Accumulate gradients for each index, in the gradient's dtype
         let grad_tensor = dispatch_real!(out_grad.data.dtype(), T => {

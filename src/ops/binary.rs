@@ -23,15 +23,15 @@ define_ops! {
             /// x + y
             Add => |a, b| a + b,
                 |g, _a, _b| (g, g),
-                gpu(add, add_backward_a, add_backward_b, add_broadcast_pass1, add_broadcast_pass2);
+                gpu(add, add_backward_a, add_backward_b);
             /// x - y
             Sub => |a, b| a - b,
                 |g, _a, _b| (g, -g),
-                gpu(sub, sub_backward_a, sub_backward_b, sub_broadcast_pass1, sub_broadcast_pass2);
+                gpu(sub, sub_backward_a, sub_backward_b);
             /// x * y (element-wise)
             Mul => |a, b| a * b,
                 |g, a, b| (g * b, g * a),
-                gpu(mul, mul_backward_a, mul_backward_b, mul_broadcast_pass1, mul_broadcast_pass2);
+                gpu(mul, mul_backward_a, mul_backward_b);
             /// x / y (element-wise): ∂/∂x = 1/y, ∂/∂y = -x/y². The y-gradient is
             /// `-g * x * (1/y) * (1/y)`: squaring y first overflows to inf (gradient 0) for
             /// |y| above ~1.8e19 and underflows to 0 (gradient inf) below ~1e-19 in f32,
@@ -43,13 +43,13 @@ define_ops! {
                     let b_inv = 1.0 / b;
                     (g / b, -g * a * b_inv * b_inv)
                 },
-                gpu(div, div_backward_a, div_backward_b, div_broadcast_pass1, div_broadcast_pass2);
+                gpu(div, div_backward_a, div_backward_b);
             /// max(x, y) (element-wise), as `torch.maximum`: NaN if either input is NaN. The
             /// gradient goes to the larger input, a tie splits it in half, and a NaN input
             /// gives both sides all of it (S4, `ops::max_rule`).
             Max => |a, b| crate::ops::max_rule::maximum(a, b),
                 |g, a, b| crate::ops::max_rule::maximum_backward(g, a, b),
-                gpu(max, max_backward_a, max_backward_b, max_broadcast_pass1, max_broadcast_pass2);
+                gpu(max, max_backward_a, max_backward_b);
             /// x mod y, floored like `torch.remainder` (the result takes y's sign):
             /// ∂/∂x = 1, ∂/∂y = -floor(x/y)
             ///
@@ -67,7 +67,7 @@ define_ops! {
                     if r != 0.0 && ((r < 0.0) != (b < 0.0)) { r + b } else { r }
                 },
                 |g, a, b| (g, -g * (a / b).floor()),
-                gpu(mod_op, mod_backward_a, mod_backward_b, mod_broadcast_pass1, mod_broadcast_pass2);
+                gpu(mod_op, mod_backward_a, mod_backward_b);
         }
         non_differentiable {}
     }

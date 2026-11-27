@@ -1,5 +1,6 @@
 use crate::autograd::{GradFn, edge};
 use crate::device::Device;
+use crate::device_policy::kernel_failed;
 use crate::error::OrPanic;
 use crate::index::{fetch, slot};
 use crate::io::StateDict;
@@ -31,8 +32,12 @@ pub struct MaxPool2d {
 /// Gradient function for [`MaxPool2d`]: sends each output gradient to the input element that won its window.
 #[derive(Clone)]
 pub(crate) struct MaxPool2dGradFn {
-    /// For each output element, the linear index into the input of its window's maximum.
-    max_indices: Vec<usize>,
+    /// For each output element, the linear index into the padded input of its window's
+    /// maximum. `None` after a GPU forward, whose backward recomputes the winners from the
+    /// padded input by the same rule (the GPU holds no integer dtype).
+    max_indices: Option<Vec<usize>>,
+    /// The window geometry.
+    spec: Window2dSpec,
 }
 
 impl MaxPool2d {
@@ -131,6 +136,22 @@ impl MaxPool2d {
             x.clone()
         };
 
+        let out_shape = Shape::derived(spec.output_dims());
+        if let Some(device) = RawTensor::common_gpu_device(&[&x_padded]) {
+            let out_storage = RawTensor::gpu_maxpool_forward(&x_padded.borrow().data, &spec)
+                .unwrap_or_else(|| kernel_failed(Self::OP));
+            return edge(
+                [x_padded],
+                out_storage,
+                out_shape,
+                device,
+                GradFn::MaxPool2d(MaxPool2dGradFn {
+                    max_indices: None,
+                    spec,
+                }),
+            );
+        }
+
         let data = x_padded.borrow().data.clone();
         let (out_storage, max_indices) = dispatch_real!(dtype, T => {
         let data = data.host::<T>();
@@ -186,9 +207,12 @@ impl MaxPool2d {
         edge(
             [x_padded],
             out_storage,
-            Shape::derived(spec.output_dims()),
+            out_shape,
             Device::CPU,
-            GradFn::MaxPool2d(MaxPool2dGradFn { max_indices }),
+            GradFn::MaxPool2d(MaxPool2dGradFn {
+                max_indices: Some(max_indices),
+                spec,
+            }),
         )
     }
 }
@@ -211,22 +235,34 @@ impl Layer for MaxPool2d {
 }
 
 impl MaxPool2dGradFn {
+    /// Whether backward reads the padded input: only after a GPU forward, which kept no
+    /// winner indices (S9).
+    pub(crate) const fn saves_input(&self) -> bool {
+        self.max_indices.is_none()
+    }
+
     /// Scatters `out_grad` to the recorded maxima; all other input elements get zero.
     pub(crate) fn backward(
         &self,
         out_grad: &RawTensor,
         parents: &[Tensor],
     ) -> Vec<Option<Storage>> {
-        let input_shape = parents
+        let parent = parents
             .first()
             .expect("MaxPool2d backward: one parent")
-            .borrow()
-            .shape
-            .clone();
+            .borrow();
+        let Some(max_indices) = &self.max_indices else {
+            // A GPU forward: `edge()` put the padded input on the output's device.
+            let grad = RawTensor::gpu_maxpool_backward(&parent.data, &out_grad.data, &self.spec)
+                .unwrap_or_else(|| kernel_failed(MaxPool2d::OP));
+            return vec![Some(grad)];
+        };
+        let input_shape = parent.shape.clone();
+        drop(parent);
         dispatch_real!(out_grad.data.dtype(), T => {
             let mut grad_input = vec![T::ZERO; input_shape.iter().product()];
             let g_host = out_grad.data.host::<T>();
-            for (idx, &max_linear_idx) in self.max_indices.iter().enumerate() {
+            for (idx, &max_linear_idx) in max_indices.iter().enumerate() {
                 let grad_val = fetch(&g_host, idx);
                 *slot(&mut grad_input, max_linear_idx) += grad_val;
             }

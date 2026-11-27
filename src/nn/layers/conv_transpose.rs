@@ -292,49 +292,53 @@ impl ConvTranspose2dGradFn {
         let cols = out_channels * kh * kw;
         let plane = in_h * in_w;
         let dtype = out_grad.data.dtype();
-        let mut grads = dispatch_real!(dtype, T => {
-        let dcol = (need_input || need_weight)
-            .then(|| ConvTranspose2d::im2col_transpose(&out_grad.data.host::<T>(), &self.spec));
+        let mut grads = if out_grad.data.is_gpu() {
+            self.backward_gpu(out_grad, input, need_input, need_weight)
+        } else {
+            dispatch_real!(dtype, T => {
+            let dcol = (need_input || need_weight)
+                .then(|| ConvTranspose2d::im2col_transpose(&out_grad.data.host::<T>(), &self.spec));
 
-        let grad_input = need_input.then(|| {
-            let dcol = dcol.as_deref().expect("dcol is built when a gradient is needed");
-            let w_t = RawTensor::transpose_2d(
-                &self.weight.borrow().data.host::<T>(),
-                &[in_channels, cols],
-            );
-            // [B*H_in*W_in, C_in], channels last; permute back to [B, C_in, H_in, W_in].
-            let gi_rows = T::gemm(dcol, &w_t, rows, cols, in_channels);
-            let mut grad_input_data = vec![T::ZERO; batch * in_channels * plane];
-            for b in 0..batch {
-                for p in 0..plane {
-                    for c in 0..in_channels {
-                        *slot(&mut grad_input_data, (b * in_channels + c) * plane + p) =
-                            fetch(&gi_rows, (b * plane + p) * in_channels + c);
-                    }
-                }
-            }
-            Storage::from_compute(dtype, grad_input_data)
-        });
-
-        let grad_weight = need_weight.then(|| {
-            let dcol = dcol.as_deref().expect("dcol is built when a gradient is needed");
-            // X_rᵀ = [C_in, B*H_in*W_in]: row c is channel c of every image, back to back.
-            let input_data = input.borrow().data.host::<T>().into_owned();
-            let mut x_t = vec![T::ZERO; in_channels * rows];
-            for c in 0..in_channels {
+            let grad_input = need_input.then(|| {
+                let dcol = dcol.as_deref().expect("dcol is built when a gradient is needed");
+                let w_t = RawTensor::transpose_2d(
+                    &self.weight.borrow().data.host::<T>(),
+                    &[in_channels, cols],
+                );
+                // [B*H_in*W_in, C_in], channels last; permute back to [B, C_in, H_in, W_in].
+                let gi_rows = T::gemm(dcol, &w_t, rows, cols, in_channels);
+                let mut grad_input_data = vec![T::ZERO; batch * in_channels * plane];
                 for b in 0..batch {
                     for p in 0..plane {
-                        *slot(&mut x_t, c * rows + b * plane + p) =
-                            fetch(&input_data, (b * in_channels + c) * plane + p);
+                        for c in 0..in_channels {
+                            *slot(&mut grad_input_data, (b * in_channels + c) * plane + p) =
+                                fetch(&gi_rows, (b * plane + p) * in_channels + c);
+                        }
                     }
                 }
-            }
-            // [C_in, C_out*K_h*K_w] is the weight's own layout.
-            let grad_weight_data = T::gemm(&x_t, dcol, in_channels, rows, cols);
-            Storage::from_compute(dtype, grad_weight_data)
-        });
-        vec![grad_input, grad_weight]
-        });
+                Storage::from_compute(dtype, grad_input_data)
+            });
+
+            let grad_weight = need_weight.then(|| {
+                let dcol = dcol.as_deref().expect("dcol is built when a gradient is needed");
+                // X_rᵀ = [C_in, B*H_in*W_in]: row c is channel c of every image, back to back.
+                let input_data = input.borrow().data.host::<T>().into_owned();
+                let mut x_t = vec![T::ZERO; in_channels * rows];
+                for c in 0..in_channels {
+                    for b in 0..batch {
+                        for p in 0..plane {
+                            *slot(&mut x_t, c * rows + b * plane + p) =
+                                fetch(&input_data, (b * in_channels + c) * plane + p);
+                        }
+                    }
+                }
+                // [C_in, C_out*K_h*K_w] is the weight's own layout.
+                let grad_weight_data = T::gemm(&x_t, dcol, in_channels, rows, cols);
+                Storage::from_compute(dtype, grad_weight_data)
+            });
+            vec![grad_input, grad_weight]
+            })
+        };
 
         // 3. Gradient w.r.t. bias (if present). A layer with a bias always passes it as the
         // third parent, so a missing one is a malformed graph, not a frozen bias.
@@ -360,6 +364,59 @@ impl ConvTranspose2dGradFn {
         }
 
         grads
+    }
+}
+
+impl ConvTranspose2dGradFn {
+    /// [`Self::backward`]'s input and weight gradients on the GPU: `dcol` from the
+    /// `im2col_t` kernel, then the same two products as the CPU path, built from GPU tensor
+    /// ops under `no_grad` (matmul, transpose, permute), so nothing leaves the device.
+    fn backward_gpu(
+        &self,
+        out_grad: &RawTensor,
+        input: &Tensor,
+        need_input: bool,
+        need_weight: bool,
+    ) -> Vec<Option<Storage>> {
+        let ConvTranspose2dSpec {
+            batch,
+            in_ch,
+            out_ch,
+            in_h,
+            in_w,
+            kernel_h,
+            kernel_w,
+            ..
+        } = self.spec;
+        let (rows, cols) = (batch * in_h * in_w, out_ch * kernel_h * kernel_w);
+        if !need_input && !need_weight {
+            return vec![None, None];
+        }
+        let _no_grad = crate::autograd::no_grad();
+        let dcol = RawTensor::gpu_conv_transpose_im2col(&out_grad.data, &self.spec)
+            .unwrap_or_else(|| crate::device_policy::kernel_failed("ConvTranspose2d"));
+        let dcol = RawTensor::new_with_storage(
+            dcol,
+            Shape::derived([rows, cols]),
+            out_grad.device.clone(),
+            false,
+        );
+        // ∂L/∂X_r = dcol @ W_rᵀ, [B*H_in*W_in, C_in], permuted back to [B, C_in, H_in, W_in].
+        let grad_input = need_input.then(|| {
+            let w_r = self.weight.reshape(&[in_ch, cols]);
+            dcol.matmul(&w_r.transpose())
+                .reshape(&[batch, in_h, in_w, in_ch])
+                .permute(&[Axis(0), Axis(3), Axis(1), Axis(2)])
+                .into_grad_storage()
+        });
+        // ∂L/∂W_r = X_rᵀ @ dcol, with X_rᵀ = [C_in, B*H_in*W_in].
+        let grad_weight = need_weight.then(|| {
+            let x_t = input
+                .permute(&[Axis(1), Axis(0), Axis(2), Axis(3)])
+                .reshape(&[in_ch, rows]);
+            x_t.matmul(&dcol).into_grad_storage()
+        });
+        vec![grad_input, grad_weight]
     }
 }
 
@@ -430,25 +487,36 @@ impl Layer for ConvTranspose2d {
             input_reshaped.matmul(&weight_reshaped)
         };
 
-        // 4. col2im to the output shape, then 5. the bias per output channel, in one host
-        // computation (rounded once for half types). There is no GPU kernel for this
-        // layer: the output is CPU storage and `edge()` applies the device policy. The
-        // bias is read from the host (a GPU bias syncs), never combined with the CPU
+        // 4. col2im to the output shape, then 5. the bias per output channel, in one pass
+        // (rounded once for half types): the `col2im_t` kernel when every input is on the
+        // GPU, else on the host, where `edge()` applies the device policy to a mixed set.
+        // The host path reads the bias from the host, never combining it with the CPU
         // result as a tensor, which would mix devices (audit A1).
         let col_data = matmul_result.borrow().data.clone();
         let out_dims = spec.output_dims();
         let plane: usize = out_dims.iter().skip(2).product();
-        let final_data = dispatch_real!(col_data.dtype(), T => {
-            let mut out = Self::col2im_transpose(&col_data.host::<T>(), &spec);
-            if let Some(bias) = &bias {
-                let b = bias.borrow().data.host::<T>().into_owned();
-                assert_eq!(b.len(), out_channels, "ConvTranspose2d bias length");
-                for (i, v) in out.iter_mut().enumerate() {
-                    *v += fetch(&b, (i / plane) % out_channels);
+        let mut on = vec![x, &weight];
+        if let Some(b) = &bias {
+            on.push(b);
+        }
+        let device = RawTensor::common_gpu_device(&on);
+        let final_data = if device.is_some() {
+            let bias_data = bias.as_ref().map(|b| b.borrow().data.clone());
+            RawTensor::gpu_conv_transpose_col2im(&col_data, bias_data.as_ref(), &spec)
+                .unwrap_or_else(|| crate::device_policy::kernel_failed("ConvTranspose2d"))
+        } else {
+            dispatch_real!(col_data.dtype(), T => {
+                let mut out = Self::col2im_transpose(&col_data.host::<T>(), &spec);
+                if let Some(bias) = &bias {
+                    let b = bias.borrow().data.host::<T>().into_owned();
+                    assert_eq!(b.len(), out_channels, "ConvTranspose2d bias length");
+                    for (i, v) in out.iter_mut().enumerate() {
+                        *v += fetch(&b, (i / plane) % out_channels);
+                    }
                 }
-            }
-            Storage::from_compute(col_data.dtype(), out)
-        });
+                Storage::from_compute(col_data.dtype(), out)
+            })
+        };
         let final_shape = Shape::derived(out_dims);
 
         let has_bias = bias.is_some();
@@ -465,7 +533,7 @@ impl Layer for ConvTranspose2d {
             inputs,
             final_data,
             final_shape,
-            Device::CPU,
+            device.unwrap_or(Device::CPU),
             GradFn::ConvTranspose2d(ConvTranspose2dGradFn {
                 spec,
                 weight,

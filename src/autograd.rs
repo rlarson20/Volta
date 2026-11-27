@@ -191,7 +191,7 @@ impl GradFn {
     /// Whether this op's backward reads the values of parent `i` when it runs, so that an
     /// in-place write to it after the forward pass would change the gradient (S9). An op
     /// whose derivative doesn't depend on an input's values (`Add`, `Sum`, a reshape), or
-    /// that saved what it needs in its own state (`MaxPool2d`'s indices, `Where`'s mask),
+    /// that saved what it needs in its own state (CPU `MaxPool2d`'s indices, `Where`'s mask),
     /// returns `false`: PyTorch doesn't complain about those either. Every variant is
     /// spelled out so a new one has to decide.
     pub(crate) fn saves_input(&self, i: usize) -> bool {
@@ -200,6 +200,10 @@ impl GradFn {
             Self::Binary(g) => g.saves_input(),
             // The winners are the input's elements equal to the maximum.
             Self::MaxReduce(_) => true,
+            // On the GPU these keep no winner indices: backward recomputes them from the
+            // input (`saves_input` on each says which run it was).
+            Self::MaxDim(g) => g.saves_input(),
+            Self::MaxPool2d(g) => g.saves_input(),
             // The first two operands (x and y; input and weight). `MulAcc`'s addend and a
             // conv's bias (parent 2) are not read.
             Self::MulAcc(_)
@@ -212,11 +216,9 @@ impl GradFn {
             | Self::Sum(_)
             | Self::Mean(_)
             | Self::SumDim(_)
-            | Self::MaxDim(_)
             | Self::Where(_)
             | Self::Movement(_)
             | Self::Im2col(_)
-            | Self::MaxPool2d(_)
             | Self::Embedding(_)
             | Self::Gather(_)
             | Self::ToDevice(_)

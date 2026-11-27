@@ -3,6 +3,10 @@
 //! This module contains the logic for dispatching compute shaders.
 //! Each operation creates a command buffer, binds the appropriate
 //! pipeline and buffers, and submits work to the GPU.
+mod axis;
+mod window;
+pub(crate) use axis::{AxisView, MAX_GATHER_RANK};
+
 use super::shader_template::Elem;
 use super::{GpuBuffer, GpuContext, get_gpu_context};
 use crate::dtype::DType;
@@ -22,21 +26,28 @@ pub struct MatMulParams {
     pub k: u32,
     /// Columns of `B` and of `C`.
     pub n: u32,
-    /// Pads the struct to a multiple of 16 bytes, as a WGSL uniform requires; always zero.
-    pub _padding: u32,
+    /// Independent products stacked in each buffer (1 for a plain 2D product). Also pads
+    /// the struct to the 16 bytes a WGSL uniform requires.
+    pub batch: u32,
 }
 
 impl MatMulParams {
-    /// The `m x k @ k x n` dims packed for the shaders.
+    /// The dims of `spec`'s `batch_count()` stacked `m x k @ k x n` products, packed for
+    /// the shaders.
     ///
     /// # Panics
-    /// If a dimension does not fit a `u32`.
-    fn new(m: usize, k: usize, n: usize) -> Self {
+    /// If a dimension, or an index into the largest stacked buffer, does not fit a `u32`.
+    fn of(spec: &crate::spec::MatmulSpec) -> Self {
+        let batch = spec.batch_count();
+        let (m, k, n) = (spec.m, spec.k, spec.n);
+        for len in [m * k, k * n, m * n] {
+            pack_u32(len * batch);
+        }
         Self {
             m: pack_u32(m),
             k: pack_u32(k),
             n: pack_u32(n),
-            _padding: 0,
+            batch: pack_u32(batch),
         }
     }
 }
@@ -665,9 +676,8 @@ fn uniform_buffer(ctx: &GpuContext, bytes: &[u8]) -> wgpu::Buffer {
         })
 }
 
-/// Record `passes`, in order, in one command buffer and submit it, then count it as
-/// pending (`increment_pending`) and let the throttle decide whether to wait
-/// (`maybe_sync`). Every kernel submits through here, so none can skip either step (#131).
+/// Record `passes`, in order, in one command buffer and submit it through
+/// `GpuContext::submit`, which counts it and applies back-pressure (#131).
 ///
 /// A pass borrows the `wgpu::Buffer`s it binds, so the caller holds every `GpuBuffer` it binds past
 /// this call: dropping one returns it to the shared pool, where another thread could write
@@ -706,9 +716,7 @@ fn run_passes(ctx: &GpuContext, label: &str, passes: &[Pass<'_>]) {
             }
         }
     }
-    ctx.queue().submit(Some(encoder.finish()));
-    ctx.increment_pending();
-    ctx.maybe_sync();
+    ctx.submit(Some(encoder.finish()));
 }
 
 /// Run `pipeline` once over `groups`, with `buffers` bound at 0, 1, .. and, unless
@@ -995,135 +1003,15 @@ impl GpuKernels {
         Some(result)
     }
 
-    /// Execute a binary backward operation with RACE-FREE broadcasting support
-    ///
-    /// This uses a two-pass algorithm to avoid race conditions in gradient reduction:
-    /// - Pass 1: Each thread scatters (`target_idx_a`, `target_idx_b`, `grad_value`) to temp buffer
-    /// - Pass 2: Each thread reduces contributions for its gradient position
-    ///
-    /// # Arguments
-    /// * `out_grad` - Gradient of the output (upstream gradient)
-    /// * `a` - First input from forward pass
-    /// * `b` - Second input from forward pass
-    /// * `op` - Which operation; returns `None` if it is non-differentiable
-    /// * `out_shape` - Shape of the output tensor
-    /// * `a_shape` - Shape of the first input tensor
-    /// * `b_shape` - Shape of the second input tensor
-    ///
-    /// # Returns
-    /// A tuple of (gradient wrt a, gradient wrt b)
-    #[must_use]
-    pub fn binary_backward_broadcast_safe(
-        out_grad: &GpuBuffer,
-        a: &GpuBuffer,
-        b: &GpuBuffer,
-        op: BinaryOp,
-        out_shape: &[usize],
-        a_shape: &[usize],
-        b_shape: &[usize],
-    ) -> Option<(GpuBuffer, GpuBuffer)> {
-        assert_same_dtype("binary_backward_broadcast_safe", &[out_grad, a, b]);
-        let kernel = "binary_backward_broadcast_safe";
-        assert_len(kernel, "out_grad", out_grad, out_shape.iter().product());
-        assert_len(kernel, "a", a, a_shape.iter().product());
-        assert_len(kernel, "b", b, b_shape.iter().product());
-        let ctx = get_gpu_context()?;
-
-        // Calculate temporary buffer size
-        // For add/sub: 3 floats per output (idx_a, idx_b, val)
-        // For mul/div: 3 floats per output (idx_a, idx_b, val) - values read in pass2
-        // For max: 5 floats per output (idx_a, idx_b, val, a_val, b_val)
-        let temp_size = if op == BinaryOp::Max {
-            out_grad.len() * 5
-        } else {
-            out_grad.len() * 3
-        };
-        let temp_buffer = GpuBuffer::zeros_of(out_grad.dtype(), temp_size)?;
-
-        // Create unified result buffer (concatenated a_grad and b_grad)
-        let result_grad = GpuBuffer::zeros_of(out_grad.dtype(), a.len() + b.len())?;
-
-        // Prepare shape parameters (pad to 4D)
-        let mut out_shape_padded = [1u32; 4];
-        let mut a_shape_padded = [1u32; 4];
-        let mut b_shape_padded = [1u32; 4];
-
-        let out_rank = pack_u32(out_shape.len());
-        let a_rank = pack_u32(a_shape.len());
-        let b_rank = pack_u32(b_shape.len());
-
-        // Pad shapes to match (align to right for NumPy-style broadcasting)
-        let out_offset = 4usize.saturating_sub(out_shape.len());
-        let a_offset = 4usize.saturating_sub(a_shape.len());
-        let b_offset = 4usize.saturating_sub(b_shape.len());
-
-        for (i, &dim) in out_shape.iter().enumerate() {
-            let idx = out_offset + i;
-            *slot(&mut out_shape_padded, idx) = pack_u32(dim);
-        }
-        for (i, &dim) in a_shape.iter().enumerate() {
-            let idx = a_offset + i;
-            *slot(&mut a_shape_padded, idx) = pack_u32(dim);
-        }
-        for (i, &dim) in b_shape.iter().enumerate() {
-            let idx = b_offset + i;
-            *slot(&mut b_shape_padded, idx) = pack_u32(dim);
-        }
-
-        let params = BinaryBackwardParams {
-            out_shape: out_shape_padded,
-            a_shape: a_shape_padded,
-            b_shape: b_shape_padded,
-            out_rank,
-            a_rank,
-            b_rank,
-            _padding: 0,
-        };
-
-        let params_buffer = uniform_buffer(ctx, bytemuck::bytes_of(&params));
-        let backward = op.gpu_backward(ctx.pipelines_for(out_grad.dtype()))?;
-        let bindings = vec![
-            (0, out_grad.binding()),
-            (1, a.binding()),
-            (2, b.binding()),
-            (3, temp_buffer.binding()),
-            (4, result_grad.binding()),
-            (5, params_buffer.as_entire_binding()),
-        ];
-        run_passes(
-            ctx,
-            "Binary Backward Safe",
-            &[
-                // Pass 1 scatters (target index in a, in b, gradient value) per output.
-                Pass {
-                    pipeline: backward.pass1,
-                    bindings: bindings.clone(),
-                    groups: Groups::cover(out_grad.len()),
-                },
-                // Pass 2 reduces the contributions to each gradient position.
-                Pass {
-                    pipeline: backward.pass2,
-                    bindings,
-                    groups: Groups::cover(a.len().max(b.len())),
-                },
-            ],
-        );
-
-        // Split the concatenated result into two separate buffers
-        let a_grad = result_grad.copy_region(0, a.len())?;
-        let b_grad = result_grad.copy_region(a.len(), b.len())?;
-
-        Some((a_grad, b_grad))
-    }
-
     /// Matrix multiplication: C = A @ B
     ///
     /// # Arguments
     /// * `a` - Matrix A with shape (m, k)
     /// * `b` - Matrix B with shape (k, n)
-    /// * `spec` - Validated `m x k @ k x n` geometry; must not be batched
+    /// * `spec` - Validated geometry: `batch_count()` stacked `m x k @ k x n` products, every
+    ///   operand already broadcast to the full batch
     /// # Panics
-    /// If `spec` is batched, or a buffer size doesn't match dims
+    /// If a buffer size doesn't match `spec`
     #[must_use]
     pub(crate) fn matmul(
         a: &GpuBuffer,
@@ -1131,25 +1019,32 @@ impl GpuKernels {
         spec: &crate::spec::MatmulSpec,
     ) -> Option<GpuBuffer> {
         assert_same_dtype("matmul", &[a, b]);
-        assert!(
-            !spec.is_batched(),
-            "GPU matmul kernels are 2D only; batched products run on the CPU path"
+        let (m, k, n, batch) = (spec.m, spec.k, spec.n, spec.batch_count());
+        assert_eq!(
+            a.len(),
+            batch * m * k,
+            "A buffer size doesn't match dimensions"
         );
-        let (m, k, n) = (spec.m, spec.k, spec.n);
-        assert_eq!(a.len(), m * k, "A buffer size doesn't match dimensions");
-        assert_eq!(b.len(), k * n, "B buffer size doesn't match dimensions");
+        assert_eq!(
+            b.len(),
+            batch * k * n,
+            "B buffer size doesn't match dimensions"
+        );
 
         let ctx = get_gpu_context()?;
         // Every element written: the tiles cover (m, n) and each in-bounds thread stores.
-        let result = GpuBuffer::uninit_of(a.dtype(), m * n)?;
+        let result = GpuBuffer::uninit_of(a.dtype(), batch * m * n)?;
 
         run_kernel(
             "MatMul",
             &ctx.pipelines_for(a.dtype()).matmul,
             &[a, b, &result],
-            bytemuck::bytes_of(&MatMulParams::new(m, k, n)),
+            bytemuck::bytes_of(&MatMulParams::of(spec)),
             // One workgroup per 16x16 tile of the (m, n) output.
-            Groups::Tiles(pack_u32(n).div_ceil(16), pack_u32(m).div_ceil(16)),
+            Groups::Tiles(
+                pack_u32(n).div_ceil(16),
+                pack_u32(m).div_ceil(16) * pack_u32(batch),
+            ),
         )?;
         Some(result)
     }
@@ -1162,11 +1057,12 @@ impl GpuKernels {
     /// # Arguments
     /// * `grad` - Output gradient with shape (m, n)
     /// * `b` - Matrix B from forward pass with shape (k, n)
-    /// * `spec` - Validated `m x k @ k x n` geometry; must not be batched
+    /// * `spec` - Validated geometry: `batch_count()` stacked `m x k @ k x n` products, every
+    ///   operand already broadcast to the full batch
     ///
     /// # Panics
-    /// If `grad` and `b` differ in dtype, `spec` is batched, `grad.len()` is not `m * n`, or
-    /// `b.len()` is not `k * n`.
+    /// If `grad` and `b` differ in dtype, `grad.len()` is not `batch * m * n`, or
+    /// `b.len()` is not `batch * k * n`.
     #[must_use]
     pub(crate) fn matmul_backward_a(
         grad: &GpuBuffer,
@@ -1174,28 +1070,31 @@ impl GpuKernels {
         spec: &crate::spec::MatmulSpec,
     ) -> Option<GpuBuffer> {
         assert_same_dtype("matmul_backward_a", &[grad, b]);
-        assert!(
-            !spec.is_batched(),
-            "GPU matmul kernels are 2D only; batched products run on the CPU path"
-        );
-        let (m, k, n) = (spec.m, spec.k, spec.n);
+        let (m, k, n, batch) = (spec.m, spec.k, spec.n, spec.batch_count());
         assert_eq!(
             grad.len(),
-            m * n,
+            batch * m * n,
             "Grad buffer size doesn't match dimensions"
         );
-        assert_eq!(b.len(), k * n, "B buffer size doesn't match dimensions");
+        assert_eq!(
+            b.len(),
+            batch * k * n,
+            "B buffer size doesn't match dimensions"
+        );
 
         let ctx = get_gpu_context()?;
-        let result = GpuBuffer::zeros_of(grad.dtype(), m * k)?;
+        let result = GpuBuffer::zeros_of(grad.dtype(), batch * m * k)?;
 
         run_kernel(
             "MatMul Backward A",
             &ctx.pipelines_for(grad.dtype()).matmul_backward_a,
             &[grad, b, &result],
-            bytemuck::bytes_of(&MatMulParams::new(m, k, n)),
+            bytemuck::bytes_of(&MatMulParams::of(spec)),
             // One workgroup per 16x16 tile of the (m, k) output.
-            Groups::Tiles(pack_u32(k).div_ceil(16), pack_u32(m).div_ceil(16)),
+            Groups::Tiles(
+                pack_u32(k).div_ceil(16),
+                pack_u32(m).div_ceil(16) * pack_u32(batch),
+            ),
         )?;
         Some(result)
     }
@@ -1208,11 +1107,12 @@ impl GpuKernels {
     /// # Arguments
     /// * `a` - Matrix A from forward pass with shape (m, k)
     /// * `grad` - Output gradient with shape (m, n)
-    /// * `spec` - Validated `m x k @ k x n` geometry; must not be batched
+    /// * `spec` - Validated geometry: `batch_count()` stacked `m x k @ k x n` products, every
+    ///   operand already broadcast to the full batch
     ///
     /// # Panics
-    /// If `a` and `grad` differ in dtype, `spec` is batched, `a.len()` is not `m * k`, or
-    /// `grad.len()` is not `m * n`.
+    /// If `a` and `grad` differ in dtype, `a.len()` is not `batch * m * k`, or
+    /// `grad.len()` is not `batch * m * n`.
     #[must_use]
     pub(crate) fn matmul_backward_b(
         a: &GpuBuffer,
@@ -1220,28 +1120,31 @@ impl GpuKernels {
         spec: &crate::spec::MatmulSpec,
     ) -> Option<GpuBuffer> {
         assert_same_dtype("matmul_backward_b", &[a, grad]);
-        assert!(
-            !spec.is_batched(),
-            "GPU matmul kernels are 2D only; batched products run on the CPU path"
+        let (m, k, n, batch) = (spec.m, spec.k, spec.n, spec.batch_count());
+        assert_eq!(
+            a.len(),
+            batch * m * k,
+            "A buffer size doesn't match dimensions"
         );
-        let (m, k, n) = (spec.m, spec.k, spec.n);
-        assert_eq!(a.len(), m * k, "A buffer size doesn't match dimensions");
         assert_eq!(
             grad.len(),
-            m * n,
+            batch * m * n,
             "Grad buffer size doesn't match dimensions"
         );
 
         let ctx = get_gpu_context()?;
-        let result = GpuBuffer::zeros_of(a.dtype(), k * n)?;
+        let result = GpuBuffer::zeros_of(a.dtype(), batch * k * n)?;
 
         run_kernel(
             "MatMul Backward B",
             &ctx.pipelines_for(a.dtype()).matmul_backward_b,
             &[a, grad, &result],
-            bytemuck::bytes_of(&MatMulParams::new(m, k, n)),
+            bytemuck::bytes_of(&MatMulParams::of(spec)),
             // One workgroup per 16x16 tile of the (k, n) output.
-            Groups::Tiles(pack_u32(n).div_ceil(16), pack_u32(k).div_ceil(16)),
+            Groups::Tiles(
+                pack_u32(n).div_ceil(16),
+                pack_u32(k).div_ceil(16) * pack_u32(batch),
+            ),
         )?;
         Some(result)
     }
@@ -2486,27 +2389,31 @@ mod matmul_tests {
         assert_eq!(c.to_vec(), vec![4.0, 5.0, 5.0, 9.0, 10.0, 11.0, 14.0, 21.0]);
     }
 
+    /// Two stacked products in one launch: each reads and writes its own slices.
     #[test]
-    fn test_gpu_matmul_rejects_a_batched_spec() {
+    fn test_gpu_matmul_batched_stacks_products() {
         if !gpu::is_gpu_available() {
             return;
         }
-        let a = GpuBuffer::from_slice(&[0.0; 12]).unwrap();
-        let b = GpuBuffer::from_slice(&[0.0; 12]).unwrap();
-        let batched = spec(&[2, 2, 3], &[2, 3, 2]);
-
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            GpuKernels::matmul(&a, &b, &batched)
-        }));
-        let Err(payload) = result else {
-            panic!("a batched spec must not reach the 2D kernel");
-        };
-        let msg = payload
-            .downcast_ref::<String>()
-            .cloned()
-            .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
-            .expect("panic payload should be a string");
-        assert!(msg.contains("2D only"), "{msg}");
+        let av: Vec<f32> = (1..=12u8).map(f32::from).collect();
+        let bv: Vec<f32> = (1..=12u8).map(|v| f32::from(v) * 0.5).collect();
+        let a = GpuBuffer::from_slice(&av).unwrap();
+        let b = GpuBuffer::from_slice(&bv).unwrap();
+        let c = GpuKernels::matmul(&a, &b, &spec(&[2, 2, 3], &[2, 3, 2])).unwrap();
+        let mut want = vec![0.0f32; 8];
+        for batch in 0..2 {
+            for i in 0..2 {
+                for j in 0..2 {
+                    *crate::index::slot(&mut want, batch * 4 + i * 2 + j) = (0..3)
+                        .map(|p| {
+                            crate::index::fetch(&av, batch * 6 + i * 3 + p)
+                                * crate::index::fetch(&bv, batch * 6 + p * 2 + j)
+                        })
+                        .sum();
+                }
+            }
+        }
+        assert_eq!(c.to_vec(), want);
     }
 }
 

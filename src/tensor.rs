@@ -1,6 +1,6 @@
 use crate::autograd::{CastGradFn, GradFn, ToDeviceGradFn, edge};
 use crate::device::Device;
-use crate::device_policy::{Pass, on_gap};
+use crate::device_policy::{Pass, kernel_failed, on_gap};
 use crate::dtype::DType;
 use crate::error::OrPanic;
 use crate::index::{fetch, slot, span};
@@ -1337,6 +1337,21 @@ impl SumDimGradFn {
 
     /// [`Self::backward`] in the gradient's dtype `T`.
     fn backward_typed<T: Real>(&self, out_grad: &RawTensor) -> Vec<Option<Storage>> {
+        let divisor_len = if self.mean {
+            self.input_shape.dim_at(self.dim)
+        } else {
+            1
+        };
+        if out_grad.device.is_gpu() {
+            let grad = RawTensor::gpu_sum_dim_backward(
+                &out_grad.data,
+                self.input_shape.truncate_rank(),
+                self.dim,
+                divisor_len,
+            )
+            .unwrap_or_else(|| kernel_failed(self.name()));
+            return vec![Some(grad)];
+        }
         let grad_data = out_grad.data.host::<T>();
         let grad_shape = &out_grad.shape;
 
@@ -1390,8 +1405,9 @@ impl SumDimGradFn {
 pub(crate) struct MaxDimGradFn {
     /// Shape of the tensor the max was taken over.
     input_shape: Shape,
-    /// Linear index, in the input, of each maximum element.
-    max_indices: Vec<usize>,
+    /// Linear index, in the input, of each maximum element; `None` for a GPU input,
+    /// whose backward recomputes them on the device from the saved input.
+    max_indices: Option<Vec<usize>>,
     /// Axis the max was taken along.
     dim: usize,
     /// Whether the reduced axis was kept with size 1.
@@ -1399,17 +1415,39 @@ pub(crate) struct MaxDimGradFn {
 }
 
 impl MaxDimGradFn {
+    /// Whether backward reads the input's values: only a GPU forward's, which recomputes
+    /// the winners from it (a CPU forward kept their indices).
+    pub(crate) const fn saves_input(&self) -> bool {
+        self.max_indices.is_none()
+    }
+
     /// Routes `out_grad` to the maximum elements; every other element gets zero.
     pub(crate) fn backward(
         &self,
         out_grad: &RawTensor,
-        _parents: &[Tensor],
+        parents: &[Tensor],
     ) -> Vec<Option<Storage>> {
-        dispatch_real!(out_grad.data.dtype(), T => self.backward_typed::<T>(out_grad))
+        let Some(max_indices) = &self.max_indices else {
+            // A GPU forward: `edge()` put the input on the output's device.
+            let input = parents.first().expect("max_dim has one parent").borrow();
+            let grad = RawTensor::gpu_max_dim_backward(
+                &input.data,
+                &out_grad.data,
+                self.input_shape.truncate_rank(),
+                self.dim,
+            )
+            .unwrap_or_else(|| kernel_failed("MaxDim"));
+            return vec![Some(grad)];
+        };
+        dispatch_real!(out_grad.data.dtype(), T => self.backward_typed::<T>(out_grad, max_indices))
     }
 
     /// [`Self::backward`] in the gradient's dtype `T`.
-    fn backward_typed<T: Real>(&self, out_grad: &RawTensor) -> Vec<Option<Storage>> {
+    fn backward_typed<T: Real>(
+        &self,
+        out_grad: &RawTensor,
+        max_indices: &[usize],
+    ) -> Vec<Option<Storage>> {
         let grad_data = out_grad.data.host::<T>();
         let grad_shape = &out_grad.shape;
 
@@ -1426,7 +1464,7 @@ impl MaxDimGradFn {
         let grad_strides = expanded_shape.strides();
         let grad_strides = grad_strides.truncate_rank();
 
-        for (out_idx, &max_lin_idx) in self.max_indices.iter().enumerate() {
+        for (out_idx, &max_lin_idx) in max_indices.iter().enumerate() {
             // Convert output index to coordinates in expanded shape
             let mut grad_coords = vec![0; expanded_shape.rank()];
             let mut rem = out_idx;
@@ -1488,6 +1526,33 @@ impl RawTensor {
 
         // Optimized stride-based reduction: O(1) per element instead of O(rank) coordinate conversion
         // View data as: [outer_size, dim_size, inner_size] where we sum over dim_size
+        let final_shape = if keepdim {
+            out_shape.clone()
+        } else {
+            out_shape.squeeze(dim)
+        };
+        let grad_fn = || {
+            GradFn::SumDim(SumDimGradFn {
+                input_shape: shape.clone(),
+                dim,
+                keepdim,
+                mean,
+            })
+        };
+
+        // On the GPU: one kernel, summing pairwise in f32 as the CPU path does.
+        if let Some(device) = Self::common_gpu_device(&[self_t]) {
+            let storage = Self::gpu_sum_dim(&data, shape.truncate_rank(), dim, divisor)
+                .unwrap_or_else(|| kernel_failed(op));
+            return Ok(edge(
+                [self_t.clone()],
+                storage,
+                final_shape,
+                device,
+                grad_fn(),
+            ));
+        }
+
         let outer_size = shape.numel_before(dim);
         let inner_size = shape.numel_from(dim + 1);
 
@@ -1509,26 +1574,12 @@ impl RawTensor {
             Storage::from_compute(dtype, result)
         });
 
-        // Squeeze dimension if keepdim=false
-        let final_shape = if keepdim {
-            out_shape
-        } else {
-            out_shape.squeeze(dim)
-        };
-
-        // Computed on the CPU (there is no GPU kernel): `edge()` applies the device
-        // policy when the input is on the GPU.
         Ok(edge(
             [self_t.clone()],
             storage,
             final_shape,
             Device::CPU,
-            GradFn::SumDim(SumDimGradFn {
-                input_shape: shape,
-                dim,
-                keepdim,
-                mean,
-            }),
+            grad_fn(),
         ))
     }
 
@@ -1674,6 +1725,30 @@ impl RawTensor {
         let dim = dim.0;
         let out_shape = shape.with_dim(dim, 1);
         let out_size = out_shape.numel();
+
+        // On the GPU the winners stay on the device: backward recomputes them from the
+        // input by the same rule, so no index list is kept.
+        if let Some(device) = Self::common_gpu_device(&[self_t]) {
+            let storage = Self::gpu_max_dim(&data, shape.truncate_rank(), dim)
+                .unwrap_or_else(|| kernel_failed("MaxDim"));
+            let final_shape = if keepdim {
+                out_shape
+            } else {
+                out_shape.squeeze(dim)
+            };
+            return edge(
+                [self_t.clone()],
+                storage,
+                final_shape,
+                device,
+                GradFn::MaxDim(MaxDimGradFn {
+                    input_shape: shape,
+                    max_indices: None,
+                    dim,
+                    keepdim,
+                }),
+            );
+        }
         let mut max_indices = vec![0; out_size]; // track which index won
 
         // Optimized stride-based reduction: O(1) per element instead of O(rank) coordinate conversion
@@ -1721,7 +1796,7 @@ impl RawTensor {
             Device::CPU,
             GradFn::MaxDim(MaxDimGradFn {
                 input_shape: shape,
-                max_indices,
+                max_indices: Some(max_indices),
                 dim,
                 keepdim,
             }),

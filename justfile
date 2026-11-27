@@ -544,6 +544,11 @@ bench-accel:
 bench-gpu:
 	cargo bench --features gpu --bench gpu_comparison --
 
+# The #464 reference workloads: one training step (MLP, CNN), CPU with Accelerate vs GPU
+[group('bench')]
+bench-train:
+	cargo bench {{full}} --bench gpu_training --
+
 # Save benchmark results for comparison
 [group('bench')]
 bench-save:

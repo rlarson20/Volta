@@ -55,7 +55,7 @@ fn cross_entropy_index_targets_parity_with_a_neg_inf_logit() {
     // them there. Pinned gaps: `log_softmax`'s per-axis reductions and its broadcast
     // subtract, and `gather`, which has no kernel (#78).
     let logits = vec![1.0, f32::NEG_INFINITY, 2.0, 0.5, 0.2, f32::NEG_INFINITY];
-    expect_gaps(&["Binary(Sub)", "Gather", "MaxDim", "SumDim"], || {
+    expect_gaps(&["Gather"], || {
         let z_cpu = RawTensor::new(logits.clone(), &[2, 3], true);
         let z_gpu = gpu_leaf(&z_cpu);
         let classes = RawTensor::new(vec![0.0, 1.0], &[2], false).to_dtype(DType::I64);

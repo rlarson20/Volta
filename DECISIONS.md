@@ -1,7 +1,7 @@
 # DECISIONS.md — Design decisions
 
 Why the code is the way it is, and what was tried and rejected. What was done is in the commit log; what is open is in the GitHub issues.
-Updated: 2026-11-24
+Updated: 2026-11-27
 
 **Read this first.** Entries are kept when a later one reverses them, for the reasoning. A reversed entry, or a reversed choice inside one, carries a `**Superseded by:**` line that names the entry in force. Superseded so far:
 
@@ -20,6 +20,8 @@ Updated: 2026-11-24
 | "Rulesets enforce the merge gate": `macos (stable)` on the `improvements` gate | "macOS checks move off the PR gate" (#233) |
 | "Rulesets enforce the merge gate": an `improvements` ruleset, and merge commits only into `main` | "One branch: `main`" |
 | "macOS checks move off the PR gate": `macos (stable)` required on PRs into `main`, and `merge-gate` blocking the merge into `main` | "One branch: `main`" |
+| "Broadcast Backward on GPU — Race Condition": the two-pass scatter | "GPU kernels are gathers; broadcasts expand first" (#464) |
+| "`DevicePolicy`: the device label is a promise": GPU broadcast backward and movement above rank 4 are gaps | "GPU kernels are gathers; broadcasts expand first" (#464) |
 
 A new entry that reverses an older one adds a row here and a `**Superseded by:**` line to the older entry, in the same PR.
 
@@ -165,6 +167,8 @@ Compile-time `cfg` gates the GPU code, with a not-gpu stub at each definition so
 
 ### Broadcast Backward on GPU — Race Condition
 
+**Superseded by:** "GPU kernels are gathers; broadcasts expand first" (#464). The two-pass kernels never worked (#60) and are deleted.
+
 Naïve parallel reduction over broadcast axes causes write races when multiple threads accumulate into the same output element.
 
 **Fix:** Two-pass scatter/reduce.
@@ -192,6 +196,30 @@ A Muon step on 4096x4096 took 25.5 s before and after: it is the matmuls, not th
 - *The tree is also the accuracy fix:* a chain of 2^25 f32 adds stalls at 2^24, a tree does not (S6, #41; the CPU half of S6 is separate).
 - *The tie rule is one WGSL function, `combine`,* which since #40 splits the gradient evenly over ties and NaNs like torch (it was `better`, which picked the highest index to match the CPU's `max_by`).
 - *The count lives in a Bool-typed buffer* (one `u32` word per element, like `amp_unscale`'s `found` flag), never exposed as a tensor. `DeviceMax` is defined in `gpu_ops.rs` with a not-gpu stub, so `reduce.rs` carries no `cfg`.
+
+### GPU kernels are gathers; broadcasts expand first (#464)
+
+**Decision:** every built-in layer trains on the GPU under `Strict` (`tests/gpu_train_step.rs` is the gate). The kernels that closed the last gaps are all gathers, one thread per element written, so none needs atomics and each sums in the CPU's order:
+
+- *Broadcasting binary ops* gather each repeating operand to the result's shape (`strided.wgsl`, rank 8), run the same-shape forward and backward kernels, and sum each gradient back to its operand's shape with one `sum_dim` pass per reduced axis. No op gained a broadcast formula.
+- *Axis reductions* (`sum_dim`, `mean_dim`, `max_dim`, `reduce_dim.wgsl`): one thread per output below an axis of 128, one workgroup per output at or above it. Permutes and expands above rank 4 use the same gather.
+- *Batched and vector matmuls* stack the products along the tile grid's y axis; vectors run as one-row or one-column matrices.
+- *`MaxPool2d` and `max_dim` keep no winner indices on the GPU.* Backward recomputes each winner from the saved input by the forward's rule, so both declare `saves_input` after a GPU forward (S9).
+- *`Embedding`* uploads its indices as `u32` (the GPU holds no integer dtype), and its backward reads a host-built list of each row's occurrences in ascending order.
+- *`ConvTranspose2d`* folds and unfolds its column matrix with `conv_transpose.wgsl` around the existing matmuls.
+
+**Why:** gathers trade extra memory traffic (an expanded operand, a recomputed window) for kernels that are exact, deterministic and small. The scatter alternatives need float atomics (unavailable in WGSL without extensions) or the two-pass scheme, which never worked (#60). Hand-fused kernels that remove the extra traffic are a separate issue, as is a lazy mode, which stays in the Backlog (RJ, 2026-11-27: "stick with eager").
+
+**Rejected:** a lazy broadcast view (strided bindings into the same-shape kernels). It would touch every binary shader for a saving that fusion makes anyway.
+
+**Measured** (`just bench-train`, Apple M2, release, CPU with Accelerate; RJ, 2026-11-27, on PR #527). One training step (forward, MSE, backward, Adam):
+
+| workload | CPU | GPU (Metal) | GPU submits per step |
+| --- | --- | --- | --- |
+| CNN, batch 64, 28x28 (2 conv + 2 linear) | 1.63 s | 68.5 ms | 89 |
+| MLP 784-2048-2048-10, batch 256 | 45.9 ms | 100.0 ms | 53 |
+
+Both GPU steps have 0 syncs and 0 readbacks. The CNN meets #464's target. Part of its margin is the CPU conv path rather than the GPU: it is 24x. The MLP does not meet the target: Accelerate's matmul beats the tiled WGSL matmul. That is #79's matmul profiling, and #528's fusion.
 
 ---
 
@@ -506,7 +534,7 @@ The "Shape boundary" worry was that the flip would mean a `truncate_rank()` at e
 - No CPU-scalar exception. PyTorch lets a 0-dim CPU tensor meet a CUDA tensor; Volta's scalars are shape `[1]`, and the exception would reopen the mixed-device hole. Library code builds constants on its input's device (`Tensor::constant_like`).
 - Errors are panics, not `Result`. Ops return `Tensor`; the H4 error-policy decision revisits this.
 
-**Also fixed on the way:** the GPU movement kernels pack shapes into `[u32; 4]`, so a rank-5 permute returned zeros (H5's truncation). Movement ops above rank 4, or with a pad width over 16 bits on dims 2–3, are now gaps. GPU binary backward with differing shapes is a gap too: its kernels are broken (#60), and the forward check made them reachable.
+**Also fixed on the way:** the GPU movement kernels pack shapes into `[u32; 4]`, so a rank-5 permute returned zeros (H5's truncation). Movement ops above rank 4, or with a pad width over 16 bits on dims 2–3, are now gaps. GPU binary backward with differing shapes is a gap too: its kernels are broken (#60), and the forward check made them reachable. **Superseded by:** "GPU kernels are gathers; broadcasts expand first" (#464), which closes both gaps.
 
 **Tests:** `tests/device_policy.rs` (forward and backward gaps under both policies, mixed devices, unknown GPU names, layers and losses keeping constants on the GPU, `no_grad`, event order, rank-5 movement), `device_policy::tests`, and `expect_gaps` in the parity and smoke tests, which asserts the exact set of ops each GPU test runs on the CPU. All ran on a real adapter (2026-10-30).
 

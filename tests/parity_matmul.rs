@@ -19,21 +19,21 @@ fn matmul_2d_2d_square_parity() {
 
 #[test]
 fn matmul_2d_1d_parity() {
-    expect_gaps(&["MatMul"], || {
+    expect_gaps(&[], || {
         assert_matmul_parity(&[4, 3], &[3], TOL_MATMUL_FWD, TOL_MATMUL_BWD);
     });
 }
 
 #[test]
 fn matmul_1d_2d_parity() {
-    expect_gaps(&["MatMul"], || {
+    expect_gaps(&[], || {
         assert_matmul_parity(&[3], &[3, 5], TOL_MATMUL_FWD, TOL_MATMUL_BWD);
     });
 }
 
 #[test]
 fn matmul_1d_1d_dot_parity() {
-    expect_gaps(&["MatMul"], || {
+    expect_gaps(&[], || {
         assert_matmul_parity(&[6], &[6], TOL_MATMUL_FWD, TOL_MATMUL_BWD);
     });
 }
@@ -49,4 +49,20 @@ fn matmul_2d_2d_multi_tile_partial_edges_parity() {
 #[test]
 fn matmul_2d_2d_tall_skinny_parity() {
     assert_matmul_parity(&[5, 41], &[41, 3], TOL_MATMUL_FWD, TOL_MATMUL_BWD);
+}
+
+/// Batched products, equal and broadcast batch dims, run on the GPU in one launch; a
+/// broadcast operand's gradient is summed back over the repeated batch dims.
+#[test]
+fn matmul_batched_parity() {
+    expect_gaps(&[], || {
+        for (a, b) in [
+            (&[2, 3, 4][..], &[2, 4, 5][..]),
+            (&[1, 3, 4], &[3, 4, 5]),
+            (&[2, 1, 3, 17], &[1, 3, 17, 5]),
+            (&[2, 2, 2, 2, 2, 3, 4], &[2, 1, 2, 1, 2, 4, 3]),
+        ] {
+            assert_matmul_parity(a, b, TOL_MATMUL_FWD, TOL_MATMUL_BWD);
+        }
+    });
 }

@@ -3,7 +3,7 @@
 //! Each test puts load on the command queue (many small ops, buffer-pool churn, a long
 //! dependent chain, mixed sizes, repeated readbacks) and then checks what load could
 //! break: every `gpu_sync()` completes (it returns `false` on a timeout), the pending
-//! count stays bounded by the auto-sync threshold, and the kernels' outputs are still
+//! count stays below the back-pressure threshold, and the kernels' outputs are still
 //! right afterwards, compared with values computed on the host. A recycled pool buffer
 //! read before it was written, or ops run out of order, shows up as a value mismatch.
 #[cfg(feature = "gpu")]
@@ -28,12 +28,12 @@ mod gpu_stress_tests {
         assert!(gpu_sync(), "gpu_sync timed out");
     }
 
-    /// Fails the test unless auto-sync has kept the pending count at or below the threshold.
+    /// Fails the test unless back-pressure has kept the pending count at or below the threshold.
     fn assert_pending_bounded(context: &str) {
         let (pending, threshold) = (gpu_pending_count(), gpu_sync_threshold());
         assert!(
             pending <= threshold,
-            "{context}: {pending} pending submissions, over the auto-sync threshold {threshold}"
+            "{context}: {pending} pending submissions, over the back-pressure threshold {threshold}"
         );
     }
 
@@ -91,8 +91,8 @@ mod gpu_stress_tests {
     }
 
     /// Each op is counted: from a clean queue, every relu adds the same number of
-    /// submissions (its output allocation and its kernel), until auto-sync empties the
-    /// queue; after that the count stays at or below the threshold.
+    /// submissions (its kernel), until back-pressure starts waiting for the oldest; after
+    /// that the count stays at or below the threshold.
     #[test]
     fn test_submission_tracking_accuracy() {
         let _serial = serial();
@@ -149,7 +149,7 @@ mod gpu_stress_tests {
         }
     }
 
-    /// Auto-sync: `threshold + 5` ops from a clean queue never leave `threshold` pending.
+    /// Back-pressure: `threshold + 5` ops from a clean queue never leave `threshold` pending.
     #[test]
     fn test_auto_sync_threshold() {
         let _serial = serial();
@@ -167,7 +167,7 @@ mod gpu_stress_tests {
             last = t.relu();
             assert!(
                 gpu_pending_count() < threshold,
-                "auto-sync should keep pending below {threshold}; got {} after {i} ops",
+                "back-pressure should keep pending below {threshold}; got {} after {i} ops",
                 gpu_pending_count()
             );
         }
@@ -256,9 +256,9 @@ mod gpu_stress_tests {
     }
 
     /// Repeated readbacks of the same tensors (staging buffers are pooled and reused):
-    /// every readback returns each tensor's own data. No pending-count bound here: a
-    /// readback's submit is counted but never auto-syncs (its blocking poll waits for the
-    /// queue anyway; see `GpuBuffer`'s readback), so the count can pass the threshold.
+    /// every readback returns each tensor's own data. A readback's submit joins the
+    /// back-pressure window like any other (its blocking poll then waits for the queue up to
+    /// that copy).
     #[test]
     fn test_staging_buffer_pooling() {
         let _serial = serial();

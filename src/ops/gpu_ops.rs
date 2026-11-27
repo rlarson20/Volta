@@ -270,36 +270,6 @@ impl RawTensor {
         Some(Storage::from_gpu_buffer(result))
     }
 
-    /// GPU-accelerated binary backward with RACE-FREE broadcasting support
-    ///
-    /// This uses a two-pass algorithm to avoid race conditions in gradient reduction.
-    ///
-    /// # Returns
-    /// A tuple of (gradient wrt a, gradient wrt b)
-    #[cfg(feature = "gpu")]
-    pub(crate) fn gpu_binary_backward_broadcast_safe(
-        out_grad: &Storage,
-        a: &Storage,
-        b: &Storage,
-        op: BinaryOp,
-        out_shape: &[usize],
-        a_shape: &[usize],
-        b_shape: &[usize],
-    ) -> Option<(Storage, Storage)> {
-        let buf_out = out_grad.gpu_buffer()?;
-        let buf_a = a.gpu_buffer()?;
-        let buf_b = b.gpu_buffer()?;
-
-        let (a_grad, b_grad) = GpuKernels::binary_backward_broadcast_safe(
-            buf_out, buf_a, buf_b, op, out_shape, a_shape, b_shape,
-        )?;
-
-        Some((
-            Storage::from_gpu_buffer(a_grad),
-            Storage::from_gpu_buffer(b_grad),
-        ))
-    }
-
     /// Run a binary op on the GPU when both inputs sit on the same GPU with equal shapes.
     ///
     /// Returns `(shape, storage, device)`, or `None` for the CPU path: CPU inputs, mixed
@@ -326,11 +296,35 @@ impl RawTensor {
         if !device_a.is_gpu() || !device_b.is_gpu() || device_a != device_b {
             return None;
         }
-        let shape = Self::flat_broadcast(&shape_a, &shape_b)?;
+        if let Some(shape) = Self::flat_broadcast(&shape_a, &shape_b) {
+            let storage =
+                Self::gpu_binary(&storage_a, &storage_b, op).unwrap_or_else(|| binary_failed(op));
+            return Some((shape, storage, device_a));
+        }
 
-        let storage = Self::gpu_binary(&storage_a, &storage_b, op)
-            .unwrap_or_else(|| kernel_failed(&format!("Binary({op:?})")));
+        // A real broadcast: each operand that repeats elements is gathered to the result's
+        // shape, then the same-shape kernel runs. Incompatible shapes, and ranks past the
+        // gather's, go to the CPU path, which reports or computes them.
+        let shape = shape_a.broadcast(&shape_b).ok()?;
+        if shape.rank() > crate::gpu::MAX_GATHER_RANK {
+            return None;
+        }
+        let a = Self::gpu_expand_operand(&storage_a, &shape_a, &shape)
+            .unwrap_or_else(|| binary_failed(op));
+        let b = Self::gpu_expand_operand(&storage_b, &shape_b, &shape)
+            .unwrap_or_else(|| binary_failed(op));
+        let storage = Self::gpu_binary(&a, &b, op).unwrap_or_else(|| binary_failed(op));
         Some((shape, storage, device_a))
+    }
+
+    /// `data` (shaped `from`) broadcast to `to` on the GPU: the storage itself when nothing
+    /// repeats (equal element counts), else a gathered copy.
+    #[cfg(feature = "gpu")]
+    fn gpu_expand_operand(data: &Storage, from: &Shape, to: &Shape) -> Option<Storage> {
+        if from.numel() == to.numel() {
+            return Some(data.clone());
+        }
+        Self::gpu_broadcast_to(data, from.truncate_rank(), to.truncate_rank())
     }
 
     /// The broadcast shape of `a` and `b` if broadcasting repeats no element: both have
@@ -379,19 +373,46 @@ impl RawTensor {
         if !(out_grad.device.is_gpu() && x.device.is_gpu() && y.device.is_gpu()) {
             return None;
         }
-        // Gap until the broadcast backward bind groups are fixed (issue #60, "GPU broadcast
-        // backward is broken"): `None` sends differing shapes to the CPU path, and the
-        // device policy applies when the gradient reaches its GPU parameter.
         // Equal element counts mean the broadcast repeated nothing (`flat_broadcast`), so
         // each gradient is `out_grad`'s buffer in its operand's shape.
         let n = out_grad.shape.numel();
-        if !(x.shape.numel() == n && y.shape.numel() == n) {
+        if x.shape.numel() == n && y.shape.numel() == n {
+            return Some(
+                Self::gpu_binary_backward_same_shape(op, out_grad, x, y)
+                    .unwrap_or_else(|| binary_failed(op)),
+            );
+        }
+        if out_grad.shape.rank() > crate::gpu::MAX_GATHER_RANK {
             return None;
         }
-        Some(
-            Self::gpu_binary_backward_same_shape(op, out_grad, x, y)
-                .unwrap_or_else(|| kernel_failed(&format!("Binary({op:?})"))),
-        )
+
+        // A real broadcast: the same-shape kernels run on both operands gathered to the
+        // output's shape, and each gradient is then summed back down to its operand's
+        // shape over the axes the broadcast repeated.
+        let out_shape = &out_grad.shape;
+        let xe = Self::gpu_expand_operand(&x.data, &x.shape, out_shape)
+            .unwrap_or_else(|| binary_failed(op));
+        let ye = Self::gpu_expand_operand(&y.data, &y.shape, out_shape)
+            .unwrap_or_else(|| binary_failed(op));
+        let reduce = |g: Storage, to: &Shape| {
+            if to.numel() == n {
+                g
+            } else {
+                Self::gpu_sum_to_shape(&g, out_shape.truncate_rank(), to.truncate_rank())
+                    .unwrap_or_else(|| binary_failed(op))
+            }
+        };
+        let gx = x.requires_grad.then(|| {
+            let g = Self::gpu_binary_backward_a(&out_grad.data, &xe, &ye, op)
+                .unwrap_or_else(|| binary_failed(op));
+            reduce(g, &x.shape)
+        });
+        let gy = y.requires_grad.then(|| {
+            let g = Self::gpu_binary_backward_b(&out_grad.data, &xe, &ye, op)
+                .unwrap_or_else(|| binary_failed(op));
+            reduce(g, &y.shape)
+        });
+        Some(vec![gx, gy])
     }
 
     /// Not-gpu stub: the CPU path always runs.
@@ -425,32 +446,6 @@ impl RawTensor {
         } else {
             None
         };
-        Some(vec![gx, gy])
-    }
-
-    /// Broadcasting binary backward via the race-free two-pass kernels.
-    #[cfg(feature = "gpu")]
-    #[expect(
-        dead_code,
-        reason = "unreachable until the broadcast backward bind groups are fixed (issue #60)"
-    )]
-    fn gpu_binary_backward_broadcast_shapes(
-        op: BinaryOp,
-        out_grad: &Self,
-        x: &Self,
-        y: &Self,
-    ) -> Option<Vec<Option<Storage>>> {
-        let (grad_a, grad_b) = Self::gpu_binary_backward_broadcast_safe(
-            &out_grad.data,
-            &x.data,
-            &y.data,
-            op,
-            out_grad.shape.truncate_rank(),
-            x.shape.truncate_rank(),
-            y.shape.truncate_rank(),
-        )?;
-        let gx = x.requires_grad.then_some(grad_a);
-        let gy = y.requires_grad.then_some(grad_b);
         Some(vec![gx, gy])
     }
 
@@ -1255,8 +1250,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "#60: GPU broadcast backward: the two-pass pass-1 bind group has 6 \
-                bindings but wgpu's auto layout keeps only those the entry point uses (3 for Add)"]
     fn gpu_binary_backward_broadcast_matches_cpu() {
         assert_gpu_backward_matches_cpu(&[
             (&[3, 1], &[1, 4]),
@@ -1376,5 +1369,242 @@ mod tests {
             .expect("optimizer step");
 
         assert_eq!(param.to_vec(), vec![0.0, 1.0]);
+    }
+}
+
+// ===== RANK-8 LAYOUT AND AXIS REDUCTIONS (#67) =====
+//
+// Each wrapper returns `None` when `data` is not GPU storage or the kernel could not run;
+// callers check the device first, so a `None` is a kernel failure (`kernel_failed`).
+
+/// Panics as [`kernel_failed`] for binary `op`, in any return type.
+#[cfg(feature = "gpu")]
+fn binary_failed<T>(op: BinaryOp) -> T {
+    kernel_failed(&format!("Binary({op:?})"))
+}
+
+#[cfg(feature = "gpu")]
+impl RawTensor {
+    /// `sum_dim` over `axis` of `shape` on the GPU, divided by `divisor` (1, or the axis
+    /// length for `mean_dim`), as `shape` with that axis removed (flat).
+    pub(crate) fn gpu_sum_dim(
+        data: &Storage,
+        shape: &[usize],
+        axis: usize,
+        divisor: usize,
+    ) -> Option<Storage> {
+        let view = crate::gpu::AxisView::of(shape, axis);
+        let divisor = <f32 as crate::real::Real>::from_usize(divisor);
+        GpuKernels::sum_dim(data.gpu_buffer()?, view, divisor).map(Storage::from_gpu_buffer)
+    }
+
+    /// `max_dim` values over `axis` of `shape` on the GPU (flat).
+    pub(crate) fn gpu_max_dim(data: &Storage, shape: &[usize], axis: usize) -> Option<Storage> {
+        let view = crate::gpu::AxisView::of(shape, axis);
+        GpuKernels::max_dim(data.gpu_buffer()?, view).map(Storage::from_gpu_buffer)
+    }
+
+    /// Backward of [`Self::gpu_sum_dim`]: `grad / divisor` broadcast along `axis`, shaped
+    /// `input_shape`.
+    pub(crate) fn gpu_sum_dim_backward(
+        grad: &Storage,
+        input_shape: &[usize],
+        axis: usize,
+        divisor: usize,
+    ) -> Option<Storage> {
+        let view = crate::gpu::AxisView::of(input_shape, axis);
+        let divisor = <f32 as crate::real::Real>::from_usize(divisor);
+        GpuKernels::sum_dim_backward(grad.gpu_buffer()?, view, divisor)
+            .map(Storage::from_gpu_buffer)
+    }
+
+    /// Backward of [`Self::gpu_max_dim`]: `grad` at each row's maximum of `input`, zero
+    /// elsewhere.
+    pub(crate) fn gpu_max_dim_backward(
+        input: &Storage,
+        grad: &Storage,
+        input_shape: &[usize],
+        axis: usize,
+    ) -> Option<Storage> {
+        let view = crate::gpu::AxisView::of(input_shape, axis);
+        GpuKernels::max_dim_backward(input.gpu_buffer()?, grad.gpu_buffer()?, view)
+            .map(Storage::from_gpu_buffer)
+    }
+
+    /// `data` (shaped `in_shape`) broadcast to `out_shape` on the GPU, contiguous.
+    pub(crate) fn gpu_broadcast_to(
+        data: &Storage,
+        in_shape: &[usize],
+        out_shape: &[usize],
+    ) -> Option<Storage> {
+        GpuKernels::broadcast_to(data.gpu_buffer()?, in_shape, out_shape)
+            .map(Storage::from_gpu_buffer)
+    }
+
+    /// `data` (shaped `in_shape`) summed down to `out_shape`, which broadcasts to
+    /// `in_shape`: the gradient of a broadcast.
+    pub(crate) fn gpu_sum_to_shape(
+        data: &Storage,
+        in_shape: &[usize],
+        out_shape: &[usize],
+    ) -> Option<Storage> {
+        GpuKernels::sum_to_shape(data.gpu_buffer()?, in_shape, out_shape)
+            .map(Storage::from_gpu_buffer)
+    }
+
+    /// `data` (shaped `old_shape`) permuted by `axes`, at any rank up to 8.
+    pub(crate) fn gpu_permute_any(
+        data: &Storage,
+        old_shape: &[usize],
+        axes: &[usize],
+    ) -> Option<Storage> {
+        GpuKernels::permute_any(data.gpu_buffer()?, old_shape, axes).map(Storage::from_gpu_buffer)
+    }
+
+    /// `MaxPool2d` forward over the padded input `data` on the GPU.
+    pub(crate) fn gpu_maxpool_forward(
+        data: &Storage,
+        spec: &crate::spec::Window2dSpec,
+    ) -> Option<Storage> {
+        GpuKernels::maxpool_forward(data.gpu_buffer()?, spec).map(Storage::from_gpu_buffer)
+    }
+
+    /// `MaxPool2d` backward: the gradient of the padded input `data`.
+    pub(crate) fn gpu_maxpool_backward(
+        data: &Storage,
+        grad: &Storage,
+        spec: &crate::spec::Window2dSpec,
+    ) -> Option<Storage> {
+        GpuKernels::maxpool_backward(data.gpu_buffer()?, grad.gpu_buffer()?, spec)
+            .map(Storage::from_gpu_buffer)
+    }
+
+    /// `Embedding` forward: rows `rows` of `weight` (`[vocab, dim]`).
+    pub(crate) fn gpu_embedding_forward(
+        weight: &Storage,
+        rows: &[usize],
+        dim: usize,
+    ) -> Option<Storage> {
+        GpuKernels::embedding_forward(weight.gpu_buffer()?, rows, dim).map(Storage::from_gpu_buffer)
+    }
+
+    /// `Embedding` backward: the weight gradient `[vocab, dim]`.
+    pub(crate) fn gpu_embedding_backward(
+        grad: &Storage,
+        rows: &[usize],
+        vocab: usize,
+        dim: usize,
+    ) -> Option<Storage> {
+        GpuKernels::embedding_backward(grad.gpu_buffer()?, rows, vocab, dim)
+            .map(Storage::from_gpu_buffer)
+    }
+
+    /// `ConvTranspose2d`'s fold of `col` into the output image, plus `bias`.
+    pub(crate) fn gpu_conv_transpose_col2im(
+        col: &Storage,
+        bias: Option<&Storage>,
+        spec: &crate::spec::ConvTranspose2dSpec,
+    ) -> Option<Storage> {
+        let bias = match bias {
+            Some(b) => Some(b.gpu_buffer()?),
+            None => None,
+        };
+        GpuKernels::conv_transpose_col2im(col.gpu_buffer()?, bias, spec)
+            .map(Storage::from_gpu_buffer)
+    }
+
+    /// `ConvTranspose2d` backward's unfold of the output gradient into columns.
+    pub(crate) fn gpu_conv_transpose_im2col(
+        grad: &Storage,
+        spec: &crate::spec::ConvTranspose2dSpec,
+    ) -> Option<Storage> {
+        GpuKernels::conv_transpose_im2col(grad.gpu_buffer()?, spec).map(Storage::from_gpu_buffer)
+    }
+}
+
+/// Without the `gpu` feature there is no GPU storage: every wrapper answers `None`, and
+/// callers only reach them for GPU tensors, which can't exist.
+#[cfg(not(feature = "gpu"))]
+impl RawTensor {
+    /// Not-gpu stub.
+    pub(crate) fn gpu_sum_dim(_: &Storage, _: &[usize], _: usize, _: usize) -> Option<Storage> {
+        None
+    }
+    /// Not-gpu stub.
+    pub(crate) fn gpu_max_dim(_: &Storage, _: &[usize], _: usize) -> Option<Storage> {
+        None
+    }
+    /// Not-gpu stub.
+    pub(crate) fn gpu_sum_dim_backward(
+        _: &Storage,
+        _: &[usize],
+        _: usize,
+        _: usize,
+    ) -> Option<Storage> {
+        None
+    }
+    /// Not-gpu stub.
+    pub(crate) fn gpu_max_dim_backward(
+        _: &Storage,
+        _: &Storage,
+        _: &[usize],
+        _: usize,
+    ) -> Option<Storage> {
+        None
+    }
+    /// Not-gpu stub.
+    pub(crate) fn gpu_broadcast_to(_: &Storage, _: &[usize], _: &[usize]) -> Option<Storage> {
+        None
+    }
+    /// Not-gpu stub.
+    pub(crate) fn gpu_sum_to_shape(_: &Storage, _: &[usize], _: &[usize]) -> Option<Storage> {
+        None
+    }
+    /// Not-gpu stub.
+    pub(crate) fn gpu_permute_any(_: &Storage, _: &[usize], _: &[usize]) -> Option<Storage> {
+        None
+    }
+    /// Not-gpu stub.
+    pub(crate) fn gpu_maxpool_forward(
+        _: &Storage,
+        _: &crate::spec::Window2dSpec,
+    ) -> Option<Storage> {
+        None
+    }
+    /// Not-gpu stub.
+    pub(crate) fn gpu_maxpool_backward(
+        _: &Storage,
+        _: &Storage,
+        _: &crate::spec::Window2dSpec,
+    ) -> Option<Storage> {
+        None
+    }
+    /// Not-gpu stub.
+    pub(crate) fn gpu_embedding_forward(_: &Storage, _: &[usize], _: usize) -> Option<Storage> {
+        None
+    }
+    /// Not-gpu stub.
+    pub(crate) fn gpu_embedding_backward(
+        _: &Storage,
+        _: &[usize],
+        _: usize,
+        _: usize,
+    ) -> Option<Storage> {
+        None
+    }
+    /// Not-gpu stub.
+    pub(crate) fn gpu_conv_transpose_col2im(
+        _: &Storage,
+        _: Option<&Storage>,
+        _: &crate::spec::ConvTranspose2dSpec,
+    ) -> Option<Storage> {
+        None
+    }
+    /// Not-gpu stub.
+    pub(crate) fn gpu_conv_transpose_im2col(
+        _: &Storage,
+        _: &crate::spec::ConvTranspose2dSpec,
+    ) -> Option<Storage> {
+        None
     }
 }

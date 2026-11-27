@@ -130,20 +130,29 @@ fn event(op: &str, pass: Pass) -> FallbackEvent {
     FallbackEvent::new(op, pass)
 }
 
-/// Under `Strict`, a GPU binary op whose operands broadcast (no GPU kernel) panics.
+/// The dims of a rank-9 tensor: one past the GPU's rank-8 strided gather, so its
+/// `permute` stays a device-policy gap (forward and backward) whatever kernels land.
+const RANK9: [usize; 9] = [2, 1, 1, 1, 1, 1, 1, 1, 3];
+
+/// Reverses the axes of a rank-9 tensor: a permute with no GPU kernel.
+fn reverse9(x: &Tensor) -> Tensor {
+    let axes: Vec<Axis> = (0..9).rev().map(Axis).collect();
+    x.permute(&axes)
+}
+
+/// Under `Strict`, an op with no GPU kernel for its GPU input (a rank-9 permute) panics.
 #[test]
 fn gap_strict_panics() {
     if skip_if_no_gpu() {
         return;
     }
-    let (_, a) = pair(&[2, 3]);
-    let (_, b) = pair(&[3]);
+    let (_, a) = pair(&RANK9);
     let _strict = with_device_policy(DevicePolicy::Strict);
     let msg = panic_message(|| {
-        let _ = a.add(&b);
+        let _ = reverse9(&a);
     });
     assert!(
-        msg.contains("Binary(Add): no GPU kernel for this case"),
+        msg.contains("Movement(Permute): no GPU kernel for this case"),
         "{msg}"
     );
 }
@@ -154,31 +163,28 @@ fn gap_prefer_gpu_runs_and_records() {
     if skip_if_no_gpu() {
         return;
     }
-    let (a_cpu, a) = pair(&[2, 3]);
-    let (b_cpu, b) = pair(&[3]);
+    let (a_cpu, a) = pair(&RANK9);
     let _prefer = with_device_policy(DevicePolicy::PreferGpu);
     let _ = take_fallback_events();
-    let out = a.add(&b);
+    let out = reverse9(&a);
     assert!(out.device().is_gpu());
     assert!(out.grad_storage().is_none());
-    assert_close("add", &a_cpu.add(&b_cpu).data(), &out.data(), 1e-6);
+    assert_close("permute", &reverse9(&a_cpu).data(), &out.data(), 1e-6);
     assert_eq!(
         take_fallback_events(),
-        vec![event("Binary(Add)", Pass::Forward)]
+        vec![event("Movement(Permute)", Pass::Forward)]
     );
 }
 
-/// Batched matmul has no GPU kernel: under `PreferGpu` it runs on the CPU and lands on
-/// the GPU.
+/// Batched matmul runs on the GPU under `Strict`, forward and backward (#67).
 #[test]
-fn batched_matmul_gap_prefer_gpu() {
+fn batched_matmul_on_gpu_under_strict() {
     if skip_if_no_gpu() {
         return;
     }
-    let (a_cpu, a) = pair(&[2, 3, 4]);
-    let (b_cpu, b) = pair(&[2, 4, 5]);
-    let _prefer = with_device_policy(DevicePolicy::PreferGpu);
-    let _ = take_fallback_events();
+    let (a_cpu, a) = leaf_pair(&[2, 3, 4]);
+    let (b_cpu, b) = leaf_pair(&[2, 4, 5]);
+    let _strict = with_device_policy(DevicePolicy::Strict);
     let out = a.matmul(&b);
     assert!(out.device().is_gpu());
     assert_close(
@@ -187,7 +193,9 @@ fn batched_matmul_gap_prefer_gpu() {
         &out.data(),
         TOL_MATMUL_FWD,
     );
-    assert_eq!(take_fallback_events(), vec![event("MatMul", Pass::Forward)]);
+    out.sum().into_loss().unwrap().backward();
+    assert!(a.grad_storage().unwrap().is_gpu());
+    assert!(b.grad_storage().unwrap().is_gpu());
 }
 
 /// Mixed devices panic even under `PreferGpu`.
@@ -210,18 +218,17 @@ fn gap_under_no_grad_still_placed() {
     if skip_if_no_gpu() {
         return;
     }
-    let (_, a) = pair(&[2, 3]);
-    let (_, b) = pair(&[3]);
+    let (_, a) = pair(&RANK9);
     let _prefer = with_device_policy(DevicePolicy::PreferGpu);
     let _ = take_fallback_events();
     let out = {
         let _ng = volta::autograd::no_grad();
-        a.add(&b)
+        reverse9(&a)
     };
     assert!(out.device().is_gpu());
     assert_eq!(
         take_fallback_events(),
-        vec![event("Binary(Add)", Pass::Forward)]
+        vec![event("Movement(Permute)", Pass::Forward)]
     );
 }
 
@@ -421,13 +428,23 @@ fn backward_gap_prefer_gpu_grads_on_gpu() {
     if skip_if_no_gpu() {
         return;
     }
-    let (x_cpu, x) = leaf_pair(&[2, 3, 4]);
-    let (w_cpu, w) = leaf_pair(&[2, 4, 5]);
-    x_cpu.matmul(&w_cpu).sum().into_loss().unwrap().backward();
+    let (x_cpu, x) = leaf_pair(&RANK9);
+    let (w_cpu, w) = leaf_pair(&[3, 1, 1, 1, 1, 1, 1, 1, 2]);
+    reverse9(&x_cpu)
+        .elem_mul(&w_cpu)
+        .sum()
+        .into_loss()
+        .unwrap()
+        .backward();
 
     let _prefer = with_device_policy(DevicePolicy::PreferGpu);
     let _ = take_fallback_events();
-    x.matmul(&w).sum().into_loss().unwrap().backward();
+    reverse9(&x)
+        .elem_mul(&w)
+        .sum()
+        .into_loss()
+        .unwrap()
+        .backward();
     for (name, cpu, gpu) in [("x", &x_cpu, &x), ("w", &w_cpu, &w)] {
         assert!(
             gpu.grad_storage().unwrap().is_gpu(),
@@ -437,12 +454,12 @@ fn backward_gap_prefer_gpu_grads_on_gpu() {
             name,
             &cpu.grad().unwrap(),
             &gpu.grad().unwrap(),
-            TOL_MATMUL_BWD,
+            TOL_BWD_GPU,
         );
     }
     assert!(
-        take_fallback_events().contains(&event("MatMul", Pass::Backward)),
-        "missing backward MatMul event"
+        take_fallback_events().contains(&event("Movement(Permute)", Pass::Backward)),
+        "missing backward permute event"
     );
 }
 
@@ -452,38 +469,36 @@ fn backward_gap_strict_panics() {
     if skip_if_no_gpu() {
         return;
     }
-    let (_, a) = leaf_pair(&[2, 3]);
-    let (_, b) = leaf_pair(&[3]);
-    // The broadcasting add's forward is a gap too, so build the graph under `PreferGpu`;
-    // its backward computes both gradients on the CPU, which `Strict` then rejects.
+    let (_, a) = leaf_pair(&RANK9);
+    // The rank-9 permute's forward is a gap too, so build the graph under `PreferGpu`;
+    // its backward computes the gradient on the CPU, which `Strict` then rejects.
     let loss = {
         let _prefer = with_device_policy(DevicePolicy::PreferGpu);
-        a.add(&b).sum().into_loss().unwrap()
+        reverse9(&a).sum().into_loss().unwrap()
     };
     let _strict = with_device_policy(DevicePolicy::Strict);
     let msg = panic_message(|| loss.backward());
     assert!(
-        msg.contains("Binary(Add): no GPU kernel for this case"),
+        msg.contains("Movement(Permute): no GPU kernel for this case"),
         "{msg}"
     );
 }
 
-/// A broadcasting add on the GPU backpropagates without reaching the broken GPU
-/// broadcast kernels, and the summed bias gradient is right.
+/// A broadcasting add backpropagates on the GPU under `Strict` (#67, #60), and the
+/// summed bias gradient is right.
 #[test]
-fn backward_broadcast_add_prefer_gpu() {
+fn backward_broadcast_add_on_gpu() {
     if skip_if_no_gpu() {
         return;
     }
     let (_, a) = leaf_pair(&[2, 3]);
     let (_, b) = leaf_pair(&[3]);
-    let _prefer = with_device_policy(DevicePolicy::PreferGpu);
-    let _ = take_fallback_events();
+    let _strict = with_device_policy(DevicePolicy::Strict);
     a.add(&b).sum().into_loss().unwrap().backward();
     assert!(a.grad_storage().unwrap().is_gpu());
     assert!(b.grad_storage().unwrap().is_gpu());
+    assert_eq!(a.grad().unwrap(), vec![1.0; 6]);
     assert_eq!(b.grad().unwrap(), vec![2.0, 2.0, 2.0]);
-    assert!(take_fallback_events().contains(&event("Binary(Add)", Pass::Backward)));
 }
 
 /// A gap in the middle of a graph (kernel op, gap op, kernel op) backpropagates to the
@@ -493,25 +508,20 @@ fn gap_mid_graph_backward_matches_cpu() {
     if skip_if_no_gpu() {
         return;
     }
-    let (x_cpu, x) = leaf_pair(&[2, 3, 4]);
-    let (w_cpu, w) = leaf_pair(&[2, 4, 5]);
-    x_cpu
-        .exp()
-        .matmul(&w_cpu)
-        .relu()
-        .sum()
-        .into_loss()
-        .unwrap()
-        .backward();
-
+    let (x_cpu, x) = leaf_pair(&RANK9);
+    let (w_cpu, w) = leaf_pair(&[3, 1, 1, 1, 1, 1, 1, 1, 2]);
+    let run = |x: &Tensor, w: &Tensor| {
+        reverse9(&x.exp())
+            .elem_mul(w)
+            .relu()
+            .sum()
+            .into_loss()
+            .unwrap()
+            .backward();
+    };
+    run(&x_cpu, &w_cpu);
     let _prefer = with_device_policy(DevicePolicy::PreferGpu);
-    x.exp()
-        .matmul(&w)
-        .relu()
-        .sum()
-        .into_loss()
-        .unwrap()
-        .backward();
+    run(&x, &w);
     for (name, cpu, gpu) in [("x", &x_cpu, &x), ("w", &w_cpu, &w)] {
         assert!(
             gpu.grad_storage().unwrap().is_gpu(),
@@ -521,7 +531,7 @@ fn gap_mid_graph_backward_matches_cpu() {
             name,
             &cpu.grad().unwrap(),
             &gpu.grad().unwrap(),
-            TOL_MATMUL_BWD,
+            TOL_BWD_GPU,
         );
     }
 }
@@ -532,13 +542,15 @@ fn events_ordered_and_drained() {
     if skip_if_no_gpu() {
         return;
     }
-    let (_, x) = leaf_pair(&[2, 3, 4]);
-    let (_, w) = leaf_pair(&[2, 4, 5]);
+    let (_, x) = leaf_pair(&RANK9);
     let _prefer = with_device_policy(DevicePolicy::PreferGpu);
     let _ = take_fallback_events();
-    x.matmul(&w).sum().into_loss().unwrap().backward();
+    reverse9(&x).sum().into_loss().unwrap().backward();
     let events = take_fallback_events();
-    assert_eq!(events.first(), Some(&event("MatMul", Pass::Forward)));
+    assert_eq!(
+        events.first(),
+        Some(&event("Movement(Permute)", Pass::Forward))
+    );
     let first_backward = events
         .iter()
         .position(|e| e.pass == Pass::Backward)
@@ -548,63 +560,44 @@ fn events_ordered_and_drained() {
             .iter()
             .all(|e| e.pass == Pass::Backward)
     );
-    assert!(events[first_backward..].contains(&event("MatMul", Pass::Backward)));
+    assert!(events[first_backward..].contains(&event("Movement(Permute)", Pass::Backward)));
     assert!(take_fallback_events().is_empty());
 }
 
-/// `sum_dim` has no GPU kernel: it used to compute on the CPU and upload silently.
+/// A one-input op under test.
+type UnaryFn = fn(&Tensor) -> Tensor;
+
+/// `sum_dim`, `mean_dim` and `max_dim` run on the GPU under `Strict`, forward and backward
+/// (they used to compute on the CPU and upload, #67).
 #[test]
-fn sum_dim_is_a_gap() {
+fn axis_reductions_run_on_gpu_under_strict() {
     if skip_if_no_gpu() {
         return;
     }
-    let (_, x) = pair(&[2, 3]);
+    let (x_cpu, x) = leaf_pair(&[2, 3]);
     let _strict = with_device_policy(DevicePolicy::Strict);
-    let msg = panic_message(|| {
-        let _ = x.sum_dim(Axis(1), false);
-    });
-    assert!(msg.contains("SumDim: no GPU kernel"), "{msg}");
-}
-
-/// `max_dim` has no GPU kernel either.
-#[test]
-fn max_dim_is_a_gap() {
-    if skip_if_no_gpu() {
-        return;
+    let ops: [(&str, UnaryFn); 3] = [
+        ("sum_dim", |t| t.sum_dim(Axis(1), false)),
+        ("mean_dim", |t| t.mean_dim(Axis(0), true)),
+        ("max_dim", |t| t.max_dim(Axis(1), false)),
+    ];
+    for (name, op) in ops {
+        let out = op(&x);
+        assert!(out.device().is_gpu(), "{name} left the GPU");
+        assert_close(name, &op(&x_cpu).data(), &out.data(), TOL_FWD_GPU);
     }
-    let (_, x) = pair(&[2, 3]);
-    let _strict = with_device_policy(DevicePolicy::Strict);
-    let msg = panic_message(|| {
-        let _ = x.max_dim(Axis(1), false);
-    });
-    assert!(msg.contains("MaxDim: no GPU kernel"), "{msg}");
 }
 
-/// The GPU movement kernels hold at most four dims: rank 5 is a gap, not a silently
-/// truncated kernel (H5).
+/// The rank-4 movement kernels hand rank 5 to the rank-8 strided gather, so a rank-5
+/// permute runs on the GPU under `Strict` instead of a silently truncated kernel (H5).
 #[test]
-fn rank5_permute_is_a_gap() {
-    if skip_if_no_gpu() {
-        return;
-    }
-    let (_, x) = pair(&[2, 1, 3, 1, 2]);
-    let axes = [Axis(4), Axis(3), Axis(2), Axis(1), Axis(0)];
-    let _strict = with_device_policy(DevicePolicy::Strict);
-    let msg = panic_message(|| {
-        let _ = x.permute(&axes);
-    });
-    assert!(msg.contains("Movement(Permute): no GPU kernel"), "{msg}");
-}
-
-/// Under `PreferGpu`, a rank-5 permute on the GPU matches the CPU.
-#[test]
-fn rank5_permute_prefer_gpu_matches_cpu() {
+fn rank5_permute_runs_on_gpu_under_strict() {
     if skip_if_no_gpu() {
         return;
     }
     let (x_cpu, x) = pair(&[2, 1, 3, 1, 2]);
     let axes = [Axis(4), Axis(3), Axis(2), Axis(1), Axis(0)];
-    let _prefer = with_device_policy(DevicePolicy::PreferGpu);
+    let _strict = with_device_policy(DevicePolicy::Strict);
     let out = x.permute(&axes);
     assert!(out.device().is_gpu());
     assert_eq!(out.data(), x_cpu.permute(&axes).data());
