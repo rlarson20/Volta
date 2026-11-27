@@ -66,6 +66,10 @@ rustversion = "1.0.6"
 # Validates every shader expansion without a device (src/gpu/shader_template.rs). Same
 # version as wgpu's own naga, so the lockfile keeps one copy.
 naga = { version = "30", features = ["wgsl-in"] }
+# Random-DAG gradient checks (src/lib_tests/dag_tests.rs, #532). Without default features:
+# no fork or timeout support (rusty-fork, tempfile), which the suite doesn't use. 1.12 needs
+# rustc 1.88, under the 1.89 MSRV.
+proptest = { version = "1.12", default-features = false, features = ["std"] }
 
 [features]
 # CPU-only by default; each backend is opt-in and additive (#378, DECISIONS.md,

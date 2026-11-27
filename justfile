@@ -113,6 +113,13 @@ mutants-all:
 mutants-core *flags:
 	cargo mutants --no-default-features --file src/autograd.rs --file 'src/ops/**' --exclude src/ops/gpu_ops.rs {{flags}}
 
+# The random-DAG gradient checks (src/lib_tests/dag_tests.rs, #532) with far more cases than
+# the default run (256, a few seconds): `just dag-soak` runs 5000, `just dag-soak 500` fewer.
+# mutants.yml runs it weekly. A failure prints the shrunk DAG as a test body to pin.
+[group('analysis')]
+dag-soak cases="5000":
+	PROPTEST_CASES={{cases}} cargo test --lib --no-default-features dag_tests::random_dags
+
 # Find unused dependencies
 [group('ci')]
 dead-deps:

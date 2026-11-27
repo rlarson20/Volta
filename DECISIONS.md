@@ -1050,6 +1050,25 @@ Autograd is a sequential graph walk over `Rc<RefCell<_>>`, and nothing in it is 
 
 ---
 
+### Random-DAG gradient checks: an entropy-driven generator, f64 at 1e-7 (#532)
+
+**Context:** each op's backward has its own finite-difference test, one graph and one hand-picked loss at a time. Nothing composes ops the way a model does, so a backward that is wrong only under composition (a broadcast meeting a reduction, a permute feeding a matmul, a node used twice) passes every one of them. Phase 4 rewrites the graph plumbing (#495, #498, the arena), and ADDENDUM §10.2 asks for a property-based random-DAG gradient check before it.
+
+**Decision:** `src/lib_tests/dag_tests.rs`. proptest generates a vector of `u32` rolls and `Dag::build` reads it like dice, tracking every value's shape so each op it emits is well formed. The DAG's every leaf is checked against a central difference in f64 (`gradcheck_all` in `src/lib_tests/gradcheck_f64.rs`, shared with `f64_tests`; test-only, because a public f64 gradcheck would be a design decision), on a randomly weighted sum. The default is 256 cases (a second or two); `PROPTEST_CASES` overrides it, and `mutants.yml` runs `just dag-soak 20000` weekly.
+
+**Why a roll stream, not strategy combinators:** the generator must know each value's shape to emit a valid next op, and it must reuse earlier values (diamonds, a leaf feeding several ops). Building that out of `prop_flat_map` makes reuse awkward and shrinks poorly. A stream shrinks toward a shorter program in which every roll takes its first option, and `Display` on the built `Dag` prints it as a test body to pin.
+
+**Why 1e-7 holds, with guards:** the central difference's rounding noise is about `1e-16 * |loss| / EPS`, so it grows with the values. Over 1500 generated DAGs with values allowed up to 1e3 the worst leaf error was 1.1e-7 (an `exp` of a product, loss 260), and every error above 1e-8 came from a value or loss over 50. With values and loss capped at 50 the worst of 4061 leaf checks was 8.4e-9, 12 times under the tolerance. The fix is to discard such cases, not to loosen the tolerance: f32 needs 1e-2, which hides real bugs.
+
+**Choices:**
+- *Guards discard, they don't repair.* After one forward pass `prop_assume!` drops a DAG whose `relu` input is within 1e-3 of 0, whose denominator is under 0.1, or whose values or loss exceed 50. Domain-restricted operands (`div` denominators) are positive by construction. About 11% of DAGs are discarded; `guards_reject_a_minority_of_generated_dags` fails above 25%, so a generator change cannot quietly hollow the suite out.
+- *Matmul rank mismatch is not generated.* Volta rejects matrices of unequal rank by design (`MatmulSpec`), which is what makes B4 unreachable. Rank mismatch is generated for the elementwise ops, and the supported mixed forms (`[m, k] @ [k]`, `[k] @ [k, n]`) for matmul. The generator's shape rules are checked against Volta's on every run (`Dag::run` asserts each op's output shape).
+- *One fixed test for the large matmul* (`[17, 23] @ [23, 19]`, plain and through `permute`): FD cost grows with leaf elements, so generated DAGs stay small (at most 150 leaf elements, 12 ops). Larger generated matmuls and more ops are #533; how kinks and domain edges are handled is #534.
+- *No proptest failure-persistence file.* A shrunk failure is pinned as a plain `#[test]` from the printed body, as the issue asks.
+- *CPU only.* A GPU variant that compares against the CPU on lavapipe is its own issue.
+
+**Rejected:** checking a random subset of a large leaf's elements (it drops "every leaf"); a tolerance that widens with DAG depth (the kind that hides bugs).
+
 ### Max ties and NaN follow torch, op by op (#40, S2/S3/S4)
 
 **Decision:** the max family has no single tie rule, because torch has none. Each op copies its torch counterpart, and `src/ops/max_rule.rs` and the shared WGSL prelude hold the rules in one place:

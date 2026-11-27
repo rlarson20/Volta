@@ -3,7 +3,8 @@ on:
   # Mutation testing of the autograd core (`just mutants-core`: src/autograd.rs and src/ops/,
   # CPU lane). Too slow for every PR (about 400 mutants at ~20 s each), so it runs weekly and by
   # hand, in shards. A signal, not a gate: surviving ("missed") mutants are listed in each
-  # shard's job summary and do not fail the run.
+  # shard's job summary and do not fail the run. The same schedule runs the random-DAG gradient
+  # checks at a high case count (`dag-soak` below).
   schedule:
     - cron: "0 3 * * 0" # Weekly on Sunday
   workflow_dispatch:
@@ -70,6 +71,35 @@ jobs:
           path: mutants.out
           if-no-files-found: ignore
           retention-days: 30
+
+  # The random-DAG gradient checks (#532) at 20000 cases, against the 256 of every `cargo
+  # test`. Unlike a surviving mutant, a failure here is a finding: a backward that is wrong
+  # under composition, or an input the generator's guards should have rejected.
+  dag-soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+          tools: just
+      - name: Random-DAG gradient checks, 20000 cases
+        run: just dag-soak 20000
+
+  report-dag-soak:
+    needs: dag-soak
+    if: always() && needs.dag-soak.result == 'failure' && github.event_name == 'schedule'
+    permissions:
+      actions: read
+      issues: write
+    uses: ./.github/workflows/report-failure.yml
+    with:
+      title: "Random-DAG gradient checks failed on ${{ github.ref_name }}"
+      labels: kind:bug,area:autograd,P1
+      workflow: mutants.yml
+      details: >-
+        The random-DAG gradient checks (`just dag-soak`) failed at 20000 cases. The log has the shrunk DAG as a test body: pin it as a `#[test]` in `src/lib_tests/dag_tests.rs`. Then decide whether it is a real backward bug (file it, with the case as an `#[ignore = "<defect ID>: ..."]` repro) or an input the generator's guards should reject.
 
   # A scheduled failure is open work, so it becomes an issue (#258); without this a weekly or
   # nightly job just goes red where nobody looks. Not `merge-gate`: only macOS gates a release.
