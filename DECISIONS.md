@@ -212,6 +212,15 @@ A Muon step on 4096x4096 took 25.5 s before and after: it is the matmuls, not th
 
 **Rejected:** a lazy broadcast view (strided bindings into the same-shape kernels). It would touch every binary shader for a saving that fusion makes anyway.
 
+**Measured** (`just bench-train`, Apple M2, release, CPU with Accelerate; RJ, 2026-11-27, on PR #527). One training step (forward, MSE, backward, Adam):
+
+| workload | CPU | GPU (Metal) | GPU submits per step |
+| --- | --- | --- | --- |
+| CNN, batch 64, 28x28 (2 conv + 2 linear) | 1.63 s | 68.5 ms | 89 |
+| MLP 784-2048-2048-10, batch 256 | 45.9 ms | 100.0 ms | 53 |
+
+Both GPU steps have 0 syncs and 0 readbacks. The CNN meets #464's target. Part of its margin is the CPU conv path rather than the GPU: it is 24x. The MLP does not meet the target: Accelerate's matmul beats the tiled WGSL matmul. That is #79's matmul profiling, and #528's fusion.
+
 ---
 
 ## Invariant Wall (ADDENDUM Phase 1)
