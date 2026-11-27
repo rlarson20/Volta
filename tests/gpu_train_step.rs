@@ -1,10 +1,10 @@
 //! The GPU gate for #464: every built-in layer runs a full training step on the GPU (forward,
 //! a randomly weighted loss, backward, one `Adam` step) and matches the same step on the CPU.
 //!
-//! Each case runs under `DevicePolicy::PreferGpu` and asserts the exact set of ops that ran
-//! on the CPU for GPU inputs (the device-policy gaps). `GAPS` lists each case's gaps; a GPU
-//! kernel that lands removes names from it, and the gate is met when every entry is empty.
-//! All mismatches are reported together, so one run shows the whole table.
+//! Each case's GPU step runs under `DevicePolicy::Strict`, so any op that would compute on
+//! the CPU for GPU inputs (a device-policy gap) panics. A panicking case is caught and
+//! reported with the others, so one run shows every failing layer. `gpu_counters` checks
+//! that the step never waits on the host (no readback, no queue drain).
 //!
 //! Skips cleanly when no GPU adapter is available.
 
@@ -13,7 +13,7 @@
 #[path = "common/mod.rs"]
 mod common;
 
-use std::collections::BTreeSet;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use common::{TOL_MATMUL_BWD, gpu_device, gpu_leaf, skip_if_no_gpu};
 use volta::io::StateDict;
@@ -23,9 +23,7 @@ use volta::nn::{
     MultiHeadAttention, PixelShuffle, PositionalEncoding, PositionalEncodingType, ReLU,
     RecurrentLayer, Sequential, Sigmoid, Tanh, TransformerBlock,
 };
-use volta::{
-    DevicePolicy, RawTensor, Tensor, manual_seed, take_fallback_events, with_device_policy,
-};
+use volta::{DevicePolicy, RawTensor, Tensor, manual_seed, with_device_policy};
 
 /// One built-in layer, built fresh on the CPU each time it is called.
 type Build = fn() -> Box<dyn Layer>;
@@ -49,7 +47,7 @@ enum Check {
     DeviceOnly,
 }
 
-/// A layer, its input and its expected gaps.
+/// A layer and its input.
 struct Case {
     /// The name in failure messages.
     name: &'static str,
@@ -59,8 +57,6 @@ struct Case {
     input: Input,
     /// How results are compared.
     check: Check,
-    /// The ops that run on the CPU for GPU inputs today (the device-policy gaps).
-    gaps: &'static [&'static str],
 }
 
 /// `LSTMCell` unrolled two steps from the zero state, as a `Layer`.
@@ -124,14 +120,12 @@ const CASES: &[Case] = &[
         build: || Box::new(Linear::new(16, 8, true)),
         input: Input::Float(&[4, 16]),
         check: Check::Full,
-        gaps: &[],
     },
     Case {
         name: "Linear (no bias)",
         build: || Box::new(Linear::new(16, 8, false)),
         input: Input::Float(&[4, 16]),
         check: Check::Full,
-        gaps: &[],
     },
     Case {
         name: "MLP",
@@ -144,140 +138,120 @@ const CASES: &[Case] = &[
         },
         input: Input::Float(&[4, 16]),
         check: Check::Full,
-        gaps: &[],
     },
     Case {
         name: "Conv2d",
         build: || Box::new(Conv2d::new(3, 4, 3, 1, 1, true)),
         input: Input::Float(&[2, 3, 8, 8]),
         check: Check::Full,
-        gaps: &[],
     },
     Case {
         name: "ConvTranspose2d",
         build: || Box::new(ConvTranspose2d::new(3, 4, 3, 2, 1, true)),
         input: Input::Float(&[2, 3, 5, 5]),
         check: Check::Full,
-        gaps: &["ConvTranspose2d"],
     },
     Case {
         name: "MaxPool2d",
         build: || Box::new(MaxPool2d::new(2, 2, 0)),
         input: Input::Float(&[2, 3, 8, 8]),
         check: Check::Full,
-        gaps: &["MaxPool2d"],
     },
     Case {
         name: "BatchNorm1d",
         build: || Box::new(BatchNorm1d::new(16)),
         input: Input::Float(&[4, 16]),
         check: Check::Full,
-        gaps: &[],
     },
     Case {
         name: "BatchNorm2d",
         build: || Box::new(BatchNorm2d::new(3)),
         input: Input::Float(&[2, 3, 6, 6]),
         check: Check::Full,
-        gaps: &[],
     },
     Case {
         name: "LayerNorm",
         build: || Box::new(LayerNorm::new(vec![16])),
         input: Input::Float(&[4, 16]),
         check: Check::Full,
-        gaps: &[],
     },
     Case {
         name: "GELU",
         build: || Box::new(GELU),
         input: Input::Float(&[4, 16]),
         check: Check::Full,
-        gaps: &[],
     },
     Case {
         name: "ReLU",
         build: || Box::new(ReLU),
         input: Input::Float(&[4, 16]),
         check: Check::Full,
-        gaps: &[],
     },
     Case {
         name: "Sigmoid",
         build: || Box::new(Sigmoid),
         input: Input::Float(&[4, 16]),
         check: Check::Full,
-        gaps: &[],
     },
     Case {
         name: "Tanh",
         build: || Box::new(Tanh),
         input: Input::Float(&[4, 16]),
         check: Check::Full,
-        gaps: &[],
     },
     Case {
         name: "Flatten",
         build: || Box::new(Flatten),
         input: Input::Float(&[2, 3, 4, 4]),
         check: Check::Full,
-        gaps: &[],
     },
     Case {
         name: "PixelShuffle",
         build: || Box::new(PixelShuffle::new(2)),
         input: Input::Float(&[2, 8, 3, 3]),
         check: Check::Full,
-        gaps: &[],
     },
     Case {
         name: "Dropout",
         build: || Box::new(Dropout::new(0.5)),
         input: Input::Float(&[4, 16]),
         check: Check::DeviceOnly,
-        gaps: &[],
     },
     Case {
         name: "Embedding",
         build: || Box::new(Embedding::new(20, 8)),
         input: Input::Indices,
         check: Check::Full,
-        gaps: &["Embedding"],
     },
     Case {
         name: "LSTMCell (2 steps)",
         build: || Box::new(TwoSteps(LSTMCell::new(8, 6, true))),
         input: Input::Float(&[3, 8]),
         check: Check::Full,
-        gaps: &[],
     },
     Case {
         name: "MultiHeadAttention",
         build: || Box::new(MultiHeadAttention::new(16, 4, 0.0)),
         input: Input::Float(&[2, 5, 16]),
         check: Check::Full,
-        gaps: &[],
     },
     Case {
         name: "MultiHeadAttention (causal)",
         build: || Box::new(CausalMha(MultiHeadAttention::new(16, 4, 0.0))),
         input: Input::Float(&[2, 5, 16]),
         check: Check::Full,
-        gaps: &[],
     },
     Case {
         name: "FeedForward",
         build: || Box::new(FeedForward::new(16, 2, 0.0)),
         input: Input::Float(&[2, 5, 16]),
         check: Check::Full,
-        gaps: &[],
     },
     Case {
         name: "TransformerBlock",
         build: || Box::new(TransformerBlock::new(16, 4, 2, 0.0)),
         input: Input::Float(&[2, 5, 16]),
         check: Check::Full,
-        gaps: &[],
     },
     Case {
         name: "PositionalEncoding (learned)",
@@ -290,7 +264,6 @@ const CASES: &[Case] = &[
         },
         input: Input::Float(&[2, 5, 16]),
         check: Check::Full,
-        gaps: &[],
     },
 ];
 
@@ -354,8 +327,8 @@ fn run(case: &Case) -> Vec<String> {
     let mut opt_cpu = Adam::new(cpu.parameters(), 1e-2, (0.9, 0.999), 1e-8, 0.0);
     opt_cpu.step();
 
-    let _prefer = with_device_policy(DevicePolicy::PreferGpu);
-    let _ = take_fallback_events();
+    let _strict = with_device_policy(DevicePolicy::Strict);
+    let before = volta::gpu::gpu_counters();
     let out_gpu = gpu.forward(&x_gpu);
     out_gpu
         .elem_mul(&w_gpu)
@@ -363,13 +336,20 @@ fn run(case: &Case) -> Vec<String> {
         .into_loss()
         .unwrap()
         .backward();
-    let grads_gpu: Vec<Option<Vec<f32>>> = gpu.parameters().iter().map(Tensor::grad).collect();
     let mut opt_gpu = Adam::new(gpu.parameters(), 1e-2, (0.9, 0.999), 1e-8, 0.0);
     opt_gpu.step();
-    let got: BTreeSet<String> = take_fallback_events().into_iter().map(|e| e.op).collect();
-    let want: BTreeSet<String> = case.gaps.iter().map(ToString::to_string).collect();
-    if got != want {
-        errs.push(format!("{}: gaps {got:?}, expected {want:?}", case.name));
+    let used = volta::gpu::gpu_counters().since(&before);
+    // Adam leaves the gradients as they were; reading them is outside the window.
+    let grads_gpu: Vec<Option<Vec<f32>>> = gpu.parameters().iter().map(Tensor::grad).collect();
+    // The step stays on the device: no readback and no queue drain from the first forward
+    // op to the end of the optimizer step. Uploads are allowed: the backward seed and the
+    // few constants layers build with `constant_like` are small host-to-GPU copies, which
+    // queue without waiting.
+    if used.readbacks != 0 || used.syncs != 0 {
+        errs.push(format!(
+            "{}: the step waited on the host: {used:?}",
+            case.name
+        ));
     }
 
     if !out_gpu.device().is_gpu() {
@@ -429,13 +409,24 @@ fn run(case: &Case) -> Vec<String> {
     errs
 }
 
-/// Every built-in layer trains one step on the GPU, matching the CPU, with exactly the
-/// gaps `CASES` lists.
+/// Every built-in layer trains one step on the GPU under `Strict`, matching the CPU.
 #[test]
 fn every_layer_trains_one_step_on_gpu() {
     if skip_if_no_gpu() {
         return;
     }
-    let errs: Vec<String> = CASES.iter().flat_map(run).collect();
+    let errs: Vec<String> = CASES
+        .iter()
+        .flat_map(|case| {
+            catch_unwind(AssertUnwindSafe(|| run(case))).unwrap_or_else(|panic| {
+                let msg = panic
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| panic.downcast_ref::<&str>().copied())
+                    .unwrap_or("non-string panic");
+                vec![format!("{}: panicked: {msg}", case.name)]
+            })
+        })
+        .collect();
     assert!(errs.is_empty(), "\n{}", errs.join("\n"));
 }

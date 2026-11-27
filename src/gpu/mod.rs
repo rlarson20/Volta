@@ -15,6 +15,7 @@ pub(crate) mod shader_template;
 /// Pool of `MAP_READ` staging buffers for GPU-to-CPU transfers.
 pub(crate) mod staging_pool;
 
+pub use crate::gpu_counters::GpuCounters;
 pub use buffer::GpuBuffer;
 pub(crate) use buffer::check_fits;
 pub(crate) use context::GpuContext;
@@ -101,8 +102,9 @@ pub fn gpu_sync() -> bool {
 
 /// Get the current number of pending GPU submissions (diagnostic)
 ///
-/// This returns the number of GPU submissions that have been queued but
-/// not yet synchronized. Useful for debugging GPU command queue issues.
+/// This returns the GPU submissions not yet known to be complete, plus uploads not yet
+/// flushed: the back-pressure window, which stays below [`gpu_sync_threshold`]. Useful for
+/// debugging GPU command queue issues.
 ///
 /// Returns 0 if GPU is not available.
 ///
@@ -121,10 +123,30 @@ pub fn gpu_pending_count() -> u32 {
     get_gpu_context().map_or(0, context::GpuContext::pending_count)
 }
 
-/// Get the GPU sync threshold (diagnostic)
+/// How often the GPU backend has submitted work, drained the queue, and copied data
+/// between host and GPU since the process started (see [`GpuCounters`]).
 ///
-/// Returns the number of pending submissions that triggers automatic
-/// synchronization. Returns 0 if GPU is not available.
+/// # Example
+///
+/// ```no_run
+/// use volta::{Device, randn};
+/// use volta::gpu::gpu_counters;
+///
+/// let x = randn(&[64, 64]).to_device(Device::gpu().expect("a GPU"));
+/// let before = gpu_counters();
+/// let _ = x.relu().relu();
+/// let used = gpu_counters().since(&before);
+/// assert_eq!(used.readbacks, 0);
+/// ```
+#[must_use]
+pub fn gpu_counters() -> GpuCounters {
+    crate::gpu_counters::snapshot()
+}
+
+/// Get the GPU back-pressure threshold (diagnostic)
+///
+/// Returns the most submissions kept in flight: past it, a new submission waits for the
+/// oldest to finish (not for the whole queue). Returns 0 if GPU is not available.
 #[must_use]
 pub fn gpu_sync_threshold() -> u32 {
     get_gpu_context().map_or(0, context::GpuContext::sync_threshold)

@@ -9,7 +9,7 @@ use super::pool::{BufferPool, BufferPoolConfig};
 use super::shader_template::Elem;
 use super::staging_pool::StagingBufferPool;
 use crate::dtype::DType;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -35,8 +35,13 @@ type CastPipelines = HashMap<(Elem, Elem, &'static str), Arc<wgpu::ComputePipeli
 /// element index can address (#306).
 const MAX_ADDRESSABLE_BINDING_BYTES: u64 = (1 << 32) * 4;
 
-/// Default threshold for pending submissions before forcing a sync.
-/// This prevents GPU command queue exhaustion during rapid-fire operations.
+/// The most submissions in flight before a new one waits for the oldest (back-pressure),
+/// and the most `write_buffer` uploads left unflushed before an empty submit flushes them.
+///
+/// Until #464 this many submissions drained the whole queue, so every 16th kernel waited for
+/// the GPU to go idle and the next one started from an empty pipeline. Waiting for the
+/// oldest instead keeps up to this many in flight, which bounds the queue's memory the same
+/// way without the drain.
 const DEFAULT_SYNC_THRESHOLD: u32 = 16;
 
 /// Hard timeout for GPU sync operations (M2 Mac optimized)
@@ -76,9 +81,13 @@ pub struct GpuContext {
     buffer_pool: Arc<BufferPool>,
     /// Staging buffer pool for GPU→CPU transfers
     staging_pool: Arc<StagingBufferPool>,
-    /// Counter for pending GPU submissions (for back-pressure throttling)
+    /// Submissions and uploads since the last full sync (diagnostic, `gpu_pending_count`).
     pending_submissions: AtomicU32,
-    /// Threshold before forcing a sync to prevent command queue exhaustion
+    /// `write_buffer` uploads since the last submit, which flushes them.
+    unflushed_writes: AtomicU32,
+    /// Submissions not yet known to be complete, oldest first (the back-pressure window).
+    in_flight: Mutex<VecDeque<wgpu::SubmissionIndex>>,
+    /// The most submissions in flight, and the most unflushed uploads.
     sync_threshold: u32,
 }
 
@@ -329,6 +338,20 @@ pub struct ComputePipelines {
     pub max_dim_backward_cols: wgpu::ComputePipeline,
     /// Backward of `max_dim`, one workgroup per output row.
     pub max_dim_backward_rows: wgpu::ComputePipeline,
+
+    // Windowed and indexed layers (`maxpool.wgsl`, `embedding.wgsl`, `conv_transpose.wgsl`)
+    /// `MaxPool2d` forward over a padded input.
+    pub maxpool_forward: wgpu::ComputePipeline,
+    /// `MaxPool2d` backward: a gather that recomputes each window's winner.
+    pub maxpool_backward: wgpu::ComputePipeline,
+    /// `Embedding` forward: a row gather.
+    pub embedding_forward: wgpu::ComputePipeline,
+    /// `Embedding` backward: a per-row sum over a host-built CSR of occurrences.
+    pub embedding_backward: wgpu::ComputePipeline,
+    /// `ConvTranspose2d` fold of the column matrix into the image, plus the bias.
+    pub conv_transpose_col2im: wgpu::ComputePipeline,
+    /// `ConvTranspose2d` backward's unfold of the output gradient into columns.
+    pub conv_transpose_im2col: wgpu::ComputePipeline,
 }
 
 impl GpuContext {
@@ -426,6 +449,8 @@ impl GpuContext {
             buffer_pool,
             staging_pool,
             pending_submissions: AtomicU32::new(0),
+            unflushed_writes: AtomicU32::new(0),
+            in_flight: Mutex::new(VecDeque::new()),
             sync_threshold: DEFAULT_SYNC_THRESHOLD,
         })
     }
@@ -553,11 +578,52 @@ impl GpuContext {
         &self.staging_pool
     }
 
-    /// Increment the pending submission counter.
-    /// Call this after each `queue.submit()`.
-    pub fn increment_pending(&self) {
+    /// Increment the pending counter (diagnostic only).
+    fn increment_pending(&self) {
         let new_count = self.pending_submissions.fetch_add(1, Ordering::Relaxed) + 1;
         log::trace!("[GPU] pending count: {} -> {new_count}", new_count - 1);
+    }
+
+    /// Submit `commands` (`None`: an empty submit, which flushes queued uploads), count it,
+    /// and apply back-pressure: once `sync_threshold` submissions are in flight, wait for
+    /// the oldest, so fewer than `sync_threshold` stay pending. Every submission goes through here, so none can skip the count or the wait
+    /// (#131).
+    pub(crate) fn submit(&self, commands: Option<wgpu::CommandBuffer>) -> wgpu::SubmissionIndex {
+        let index = self.queue.submit(commands);
+        crate::gpu_counters::note_submit();
+        self.increment_pending();
+        self.unflushed_writes.store(0, Ordering::Relaxed);
+        let oldest = {
+            let mut in_flight = self.in_flight.lock().expect("in-flight list poisoned");
+            in_flight.push_back(index.clone());
+            if in_flight.len() >= self.sync_threshold as usize {
+                in_flight.pop_front()
+            } else {
+                None
+            }
+        };
+        if let Some(oldest) = oldest {
+            // Only the oldest: the newer submissions keep the GPU busy meanwhile.
+            if let Err(e) = self.device.poll(wgpu::PollType::Wait {
+                submission_index: Some(oldest),
+                timeout: Some(Duration::from_secs(get_sync_timeout_secs())),
+            }) {
+                log::warn!("[GPU] back-pressure wait timed out: {e:?}");
+            }
+        }
+        index
+    }
+
+    /// Count a `write_buffer` upload. Queued uploads count toward the back-pressure window
+    /// (their staging memory is held until a submit), so once they and the submissions in
+    /// flight reach `sync_threshold`, an empty submit flushes them.
+    pub(crate) fn wrote_buffer(&self) {
+        crate::gpu_counters::note_upload();
+        self.increment_pending();
+        self.unflushed_writes.fetch_add(1, Ordering::Relaxed);
+        if self.pending_count() >= self.sync_threshold {
+            self.submit(None);
+        }
     }
 
     /// Force GPU synchronization - wait for all pending commands to complete.
@@ -581,10 +647,12 @@ impl GpuContext {
         }
 
         log::debug!("[GPU] syncing {pending} pending submissions...");
+        crate::gpu_counters::note_sync();
 
         // `write_buffer` data sits in wgpu's staging area until the next submit, so an upload
         // alone is never in flight. An empty submit flushes it and gives `poll` something to wait on.
         let flush = self.queue.submit(std::iter::empty::<wgpu::CommandBuffer>());
+        self.unflushed_writes.store(0, Ordering::Relaxed);
 
         // Poll until that submission, and so everything before it, completes. Waiting on
         // our own index rather than `None` keeps another thread's in-flight submit out of
@@ -597,6 +665,10 @@ impl GpuContext {
         // Reset the counter regardless of success/failure
         // (we may have completed some work even on timeout)
         self.pending_submissions.store(0, Ordering::Relaxed);
+        self.in_flight
+            .lock()
+            .expect("in-flight list poisoned")
+            .clear();
 
         match result {
             Ok(_) => {
@@ -612,28 +684,19 @@ impl GpuContext {
         }
     }
 
-    /// Conditionally sync if pending submissions exceed the threshold.
-    ///
-    /// This provides automatic back-pressure to prevent GPU command queue
-    /// exhaustion during rapid-fire operations. Call after each submit to
-    /// ensure the queue doesn't grow unbounded.
-    pub fn maybe_sync(&self) {
-        let pending = self.pending_submissions.load(Ordering::Relaxed);
-        if pending >= self.sync_threshold {
-            log::trace!(
-                "[GPU] auto-sync triggered: {pending} >= {}",
-                self.sync_threshold
-            );
-            self.sync();
-        }
-    }
-
     /// Get the current pending submission count (diagnostic)
     ///
-    /// This is useful for debugging GPU command queue issues.
-    /// Returns the number of unsynced GPU submissions.
+    /// The back-pressure window: submissions not yet known to be complete plus uploads
+    /// not yet flushed, always below `sync_threshold`.
     pub fn pending_count(&self) -> u32 {
-        self.pending_submissions.load(Ordering::Relaxed)
+        let in_flight = self
+            .in_flight
+            .lock()
+            .expect("in-flight list poisoned")
+            .len();
+        u32::try_from(in_flight)
+            .expect("the in-flight window is bounded by a u32 threshold")
+            .saturating_add(self.unflushed_writes.load(Ordering::Relaxed))
     }
 
     /// Get the sync threshold (diagnostic)
@@ -801,6 +864,27 @@ impl GpuContext {
             label: Some("Reduce Dim Shader"),
             source: wgpu::ShaderSource::Wgsl(
                 expand(include_str!("shaders/reduce_dim.wgsl"), elem, Elem::F32).into(),
+            ),
+        });
+
+        let maxpool_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("MaxPool Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/maxpool.wgsl"), elem, Elem::F32).into(),
+            ),
+        });
+
+        let embedding_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Embedding Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/embedding.wgsl"), elem, Elem::F32).into(),
+            ),
+        });
+
+        let conv_transpose_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("ConvTranspose Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/conv_transpose.wgsl"), elem, Elem::F32).into(),
             ),
         });
 
@@ -1188,6 +1272,28 @@ impl GpuContext {
                 &reduce_dim_shader,
                 "max_dim_backward_rows",
                 "Max Dim Backward Rows",
+            ),
+            maxpool_forward: create_pipeline(&maxpool_shader, "maxpool_forward", "MaxPool2d"),
+            maxpool_backward: create_pipeline(
+                &maxpool_shader,
+                "maxpool_backward",
+                "MaxPool2d Backward",
+            ),
+            embedding_forward: create_pipeline(&embedding_shader, "embedding_forward", "Embedding"),
+            embedding_backward: create_pipeline(
+                &embedding_shader,
+                "embedding_backward",
+                "Embedding Backward",
+            ),
+            conv_transpose_col2im: create_pipeline(
+                &conv_transpose_shader,
+                "col2im_t",
+                "ConvTranspose2d Col2im",
+            ),
+            conv_transpose_im2col: create_pipeline(
+                &conv_transpose_shader,
+                "im2col_t",
+                "ConvTranspose2d Im2col",
             ),
         }
     }

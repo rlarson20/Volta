@@ -34,7 +34,7 @@ fn is_gpu_enabled() -> bool {
     is_gpu_available()
 }
 
-/// Panics if the GPU's queued-submission backlog has outgrown the auto-sync threshold, or if
+/// Panics if the GPU's queued-submission backlog has outgrown the back-pressure threshold, or if
 /// draining it times out, so a benchmark never starts or ends on a runaway queue. `when`
 /// names the point in the benchmark for the message.
 #[cfg(feature = "gpu")]
@@ -43,7 +43,7 @@ fn assert_gpu_drained(when: &str) {
     let threshold = gpu_sync_threshold();
     assert!(
         pending <= threshold,
-        "{pending} GPU submissions pending {when}, above the auto-sync threshold {threshold}"
+        "{pending} GPU submissions pending {when}, above the back-pressure threshold {threshold}"
     );
     assert!(gpu_sync(), "GPU sync timed out {when}");
 }

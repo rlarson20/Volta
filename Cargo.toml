@@ -92,6 +92,11 @@ required-features = ["gpu"]
 name = "conv_algorithms"
 harness = false
 
+[[bench]]
+name = "gpu_training"
+harness = false
+required-features = ["gpu"]
+
 [lints.rust]
 missing_docs = "deny"
 # Every public type can be `dbg!`ed and held in a `#[derive(Debug)]` struct (#116).

@@ -1415,6 +1415,12 @@ pub(crate) struct MaxDimGradFn {
 }
 
 impl MaxDimGradFn {
+    /// Whether backward reads the input's values: only a GPU forward's, which recomputes
+    /// the winners from it (a CPU forward kept their indices).
+    pub(crate) const fn saves_input(&self) -> bool {
+        self.max_indices.is_none()
+    }
+
     /// Routes `out_grad` to the maximum elements; every other element gets zero.
     pub(crate) fn backward(
         &self,

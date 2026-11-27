@@ -794,3 +794,26 @@ fn test_gpu_binary_backward_broadcast_stress() {
         );
     });
 }
+
+/// `zeros_of` clears on the GPU (#464), so a buffer reused from the pool, still holding a
+/// dropped tensor's bytes, comes back all zero, in every GPU dtype. (Its upload count is
+/// not asserted here: lib tests share the process-wide counters across threads.)
+#[cfg(feature = "gpu")]
+#[test]
+fn zeros_of_clears_a_reused_pool_buffer() {
+    use crate::gpu::GpuBuffer;
+    if !is_gpu_available() {
+        return;
+    }
+    let n = 1000;
+    let dirty: Vec<f32> = (1..=n).map(|i| i as f32).collect();
+    for dtype in [DType::F32, DType::F16, DType::BF16, DType::Bool] {
+        drop(GpuBuffer::from_slice(&dirty).expect("upload"));
+        let zeros = GpuBuffer::zeros_of(dtype, n).expect("zeros");
+        let host = zeros.to_host();
+        assert!(
+            host.as_bytes().iter().all(|&b| b == 0),
+            "{dtype:?}: a reused buffer kept old bytes"
+        );
+    }
+}

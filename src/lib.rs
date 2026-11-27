@@ -70,6 +70,8 @@ pub mod gpu;
 pub mod dtype;
 /// Error type and `Result` alias.
 pub mod error;
+/// `GpuCounters`, re-exported from `volta::gpu` in both builds.
+mod gpu_counters;
 pub(crate) mod index;
 /// The float types kernels compute in (`f32`, `f64`) and the dtype dispatch.
 pub(crate) mod real;

@@ -1460,6 +1460,66 @@ impl RawTensor {
     ) -> Option<Storage> {
         GpuKernels::permute_any(data.gpu_buffer()?, old_shape, axes).map(Storage::from_gpu_buffer)
     }
+
+    /// `MaxPool2d` forward over the padded input `data` on the GPU.
+    pub(crate) fn gpu_maxpool_forward(
+        data: &Storage,
+        spec: &crate::spec::Window2dSpec,
+    ) -> Option<Storage> {
+        GpuKernels::maxpool_forward(data.gpu_buffer()?, spec).map(Storage::from_gpu_buffer)
+    }
+
+    /// `MaxPool2d` backward: the gradient of the padded input `data`.
+    pub(crate) fn gpu_maxpool_backward(
+        data: &Storage,
+        grad: &Storage,
+        spec: &crate::spec::Window2dSpec,
+    ) -> Option<Storage> {
+        GpuKernels::maxpool_backward(data.gpu_buffer()?, grad.gpu_buffer()?, spec)
+            .map(Storage::from_gpu_buffer)
+    }
+
+    /// `Embedding` forward: rows `rows` of `weight` (`[vocab, dim]`).
+    pub(crate) fn gpu_embedding_forward(
+        weight: &Storage,
+        rows: &[usize],
+        dim: usize,
+    ) -> Option<Storage> {
+        GpuKernels::embedding_forward(weight.gpu_buffer()?, rows, dim).map(Storage::from_gpu_buffer)
+    }
+
+    /// `Embedding` backward: the weight gradient `[vocab, dim]`.
+    pub(crate) fn gpu_embedding_backward(
+        grad: &Storage,
+        rows: &[usize],
+        vocab: usize,
+        dim: usize,
+    ) -> Option<Storage> {
+        GpuKernels::embedding_backward(grad.gpu_buffer()?, rows, vocab, dim)
+            .map(Storage::from_gpu_buffer)
+    }
+
+    /// `ConvTranspose2d`'s fold of `col` into the output image, plus `bias`.
+    pub(crate) fn gpu_conv_transpose_col2im(
+        col: &Storage,
+        bias: Option<&Storage>,
+        spec: &crate::spec::ConvTranspose2dSpec,
+    ) -> Option<Storage> {
+        let bias = match bias {
+            Some(b) => Some(b.gpu_buffer()?),
+            None => None,
+        };
+        GpuKernels::conv_transpose_col2im(col.gpu_buffer()?, bias, spec)
+            .map(Storage::from_gpu_buffer)
+    }
+
+    /// `ConvTranspose2d` backward's unfold of the output gradient into columns.
+    pub(crate) fn gpu_conv_transpose_im2col(
+        grad: &Storage,
+        spec: &crate::spec::ConvTranspose2dSpec,
+    ) -> Option<Storage> {
+        GpuKernels::conv_transpose_im2col(grad.gpu_buffer()?, spec).map(Storage::from_gpu_buffer)
+    }
 }
 
 /// Without the `gpu` feature there is no GPU storage: every wrapper answers `None`, and
@@ -1502,6 +1562,49 @@ impl RawTensor {
     }
     /// Not-gpu stub.
     pub(crate) fn gpu_permute_any(_: &Storage, _: &[usize], _: &[usize]) -> Option<Storage> {
+        None
+    }
+    /// Not-gpu stub.
+    pub(crate) fn gpu_maxpool_forward(
+        _: &Storage,
+        _: &crate::spec::Window2dSpec,
+    ) -> Option<Storage> {
+        None
+    }
+    /// Not-gpu stub.
+    pub(crate) fn gpu_maxpool_backward(
+        _: &Storage,
+        _: &Storage,
+        _: &crate::spec::Window2dSpec,
+    ) -> Option<Storage> {
+        None
+    }
+    /// Not-gpu stub.
+    pub(crate) fn gpu_embedding_forward(_: &Storage, _: &[usize], _: usize) -> Option<Storage> {
+        None
+    }
+    /// Not-gpu stub.
+    pub(crate) fn gpu_embedding_backward(
+        _: &Storage,
+        _: &[usize],
+        _: usize,
+        _: usize,
+    ) -> Option<Storage> {
+        None
+    }
+    /// Not-gpu stub.
+    pub(crate) fn gpu_conv_transpose_col2im(
+        _: &Storage,
+        _: Option<&Storage>,
+        _: &crate::spec::ConvTranspose2dSpec,
+    ) -> Option<Storage> {
+        None
+    }
+    /// Not-gpu stub.
+    pub(crate) fn gpu_conv_transpose_im2col(
+        _: &Storage,
+        _: &crate::spec::ConvTranspose2dSpec,
+    ) -> Option<Storage> {
         None
     }
 }

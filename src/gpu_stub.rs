@@ -8,6 +8,7 @@
 //! GPU types (`GpuBuffer`) are missing here.
 
 use crate::Tensor;
+pub use crate::gpu_counters::GpuCounters;
 
 /// Whether a GPU is available: always `false` without the `gpu` feature.
 #[must_use]
@@ -35,7 +36,18 @@ pub const fn gpu_pending_count() -> u32 {
     0
 }
 
-/// The automatic-sync threshold: 0 without the `gpu` feature, as with no GPU.
+/// GPU backend event counts: all 0 without the `gpu` feature.
+#[must_use]
+pub const fn gpu_counters() -> GpuCounters {
+    GpuCounters {
+        submits: 0,
+        syncs: 0,
+        readbacks: 0,
+        uploads: 0,
+    }
+}
+
+/// The back-pressure threshold: 0 without the `gpu` feature, as with no GPU.
 #[must_use]
 pub const fn gpu_sync_threshold() -> u32 {
     0

@@ -4,6 +4,7 @@
 //! Each operation creates a command buffer, binds the appropriate
 //! pipeline and buffers, and submits work to the GPU.
 mod axis;
+mod window;
 pub(crate) use axis::{AxisView, MAX_GATHER_RANK};
 
 use super::shader_template::Elem;
@@ -675,9 +676,8 @@ fn uniform_buffer(ctx: &GpuContext, bytes: &[u8]) -> wgpu::Buffer {
         })
 }
 
-/// Record `passes`, in order, in one command buffer and submit it, then count it as
-/// pending (`increment_pending`) and let the throttle decide whether to wait
-/// (`maybe_sync`). Every kernel submits through here, so none can skip either step (#131).
+/// Record `passes`, in order, in one command buffer and submit it through
+/// `GpuContext::submit`, which counts it and applies back-pressure (#131).
 ///
 /// A pass borrows the `wgpu::Buffer`s it binds, so the caller holds every `GpuBuffer` it binds past
 /// this call: dropping one returns it to the shared pool, where another thread could write
@@ -716,9 +716,7 @@ fn run_passes(ctx: &GpuContext, label: &str, passes: &[Pass<'_>]) {
             }
         }
     }
-    ctx.queue().submit(Some(encoder.finish()));
-    ctx.increment_pending();
-    ctx.maybe_sync();
+    ctx.submit(Some(encoder.finish()));
 }
 
 /// Run `pipeline` once over `groups`, with `buffers` bound at 0, 1, .. and, unless
