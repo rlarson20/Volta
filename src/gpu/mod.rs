@@ -21,7 +21,7 @@ pub(crate) use context::GpuContext;
 #[cfg(test)]
 pub(crate) use context::set_f16_emulation;
 pub(crate) use context::{BinaryBackwardPipelines, ComputePipelines};
-pub(crate) use kernels::{GpuKernels, MaxResult, OptimizerStepParams};
+pub(crate) use kernels::{AxisView, GpuKernels, MAX_GATHER_RANK, MaxResult, OptimizerStepParams};
 
 use std::sync::OnceLock;
 

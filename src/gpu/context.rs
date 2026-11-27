@@ -89,10 +89,6 @@ pub(crate) struct BinaryBackwardPipelines<'p> {
     pub a: &'p wgpu::ComputePipeline,
     /// Same-shape gradient wrt the second input.
     pub b: &'p wgpu::ComputePipeline,
-    /// Broadcast backward, scatter pass.
-    pub pass1: &'p wgpu::ComputePipeline,
-    /// Broadcast backward, reduce pass.
-    pub pass2: &'p wgpu::ComputePipeline,
 }
 
 /// Collection of pre-compiled compute pipelines
@@ -213,30 +209,6 @@ pub struct ComputePipelines {
     pub mod_backward_b: wgpu::ComputePipeline,
 
     // Binary backward operations with RACE-FREE broadcasting (two-pass)
-    /// Broadcast backward of `add`, scatter pass: records each output element's contribution in a temporary buffer.
-    pub add_broadcast_pass1: wgpu::ComputePipeline,
-    /// Broadcast backward of `add`, reduce pass: accumulates the temporary buffer into the operand gradients without write races.
-    pub add_broadcast_pass2: wgpu::ComputePipeline,
-    /// Broadcast backward of `sub`, scatter pass: records each output element's contribution in a temporary buffer.
-    pub sub_broadcast_pass1: wgpu::ComputePipeline,
-    /// Broadcast backward of `sub`, reduce pass: accumulates the temporary buffer into the operand gradients without write races.
-    pub sub_broadcast_pass2: wgpu::ComputePipeline,
-    /// Broadcast backward of `mul`, scatter pass: records each output element's contribution in a temporary buffer.
-    pub mul_broadcast_pass1: wgpu::ComputePipeline,
-    /// Broadcast backward of `mul`, reduce pass: accumulates the temporary buffer into the operand gradients without write races.
-    pub mul_broadcast_pass2: wgpu::ComputePipeline,
-    /// Broadcast backward of `div`, scatter pass: records each output element's contribution in a temporary buffer.
-    pub div_broadcast_pass1: wgpu::ComputePipeline,
-    /// Broadcast backward of `div`, reduce pass: accumulates the temporary buffer into the operand gradients without write races.
-    pub div_broadcast_pass2: wgpu::ComputePipeline,
-    /// Broadcast backward of `max`, scatter pass: records each output element's contribution in a temporary buffer.
-    pub max_broadcast_pass1: wgpu::ComputePipeline,
-    /// Broadcast backward of `max`, reduce pass: accumulates the temporary buffer into the operand gradients without write races.
-    pub max_broadcast_pass2: wgpu::ComputePipeline,
-    /// Broadcast backward of `mod`, scatter pass: records each output element's contribution in a temporary buffer.
-    pub mod_broadcast_pass1: wgpu::ComputePipeline,
-    /// Broadcast backward of `mod`, reduce pass: accumulates the temporary buffer into the operand gradients without write races.
-    pub mod_broadcast_pass2: wgpu::ComputePipeline,
 
     // Reductions
     /// First pass of a sum or mean: input to one partial sum per 1024 elements.
@@ -339,6 +311,24 @@ pub struct ComputePipelines {
     pub igemm_backward_input: wgpu::ComputePipeline,
     /// Weight gradient of implicit-GEMM convolution.
     pub igemm_backward_weight: wgpu::ComputePipeline,
+
+    // Strided gather and axis reductions
+    /// Rank-8 strided gather (`strided.wgsl`): permute, expand and broadcast at any rank.
+    pub gather: wgpu::ComputePipeline,
+    /// `sum_dim`/`mean_dim`, one thread per output (short axes).
+    pub sum_dim_cols: wgpu::ComputePipeline,
+    /// `sum_dim`/`mean_dim`, one workgroup per output (long axes).
+    pub sum_dim_rows: wgpu::ComputePipeline,
+    /// `max_dim`, one thread per output.
+    pub max_dim_cols: wgpu::ComputePipeline,
+    /// `max_dim`, one workgroup per output.
+    pub max_dim_rows: wgpu::ComputePipeline,
+    /// Backward of `sum_dim`/`mean_dim`: the gradient broadcast along the axis.
+    pub sum_dim_backward: wgpu::ComputePipeline,
+    /// Backward of `max_dim`, one thread per output row.
+    pub max_dim_backward_cols: wgpu::ComputePipeline,
+    /// Backward of `max_dim`, one workgroup per output row.
+    pub max_dim_backward_rows: wgpu::ComputePipeline,
 }
 
 impl GpuContext {
@@ -721,19 +711,6 @@ impl GpuContext {
             ),
         });
 
-        let binary_backward_safe_shader =
-            device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("Binary Backward Safe Shader"),
-                source: wgpu::ShaderSource::Wgsl(
-                    expand(
-                        include_str!("shaders/binary_backward_safe.wgsl"),
-                        elem,
-                        elem,
-                    )
-                    .into(),
-                ),
-            });
-
         let matmul_backward_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("MatMul Backward Shader"),
             source: wgpu::ShaderSource::Wgsl(
@@ -812,6 +789,20 @@ impl GpuContext {
                     .into(),
                 ),
             });
+
+        let strided_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Strided Gather Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/strided.wgsl"), elem, Elem::F32).into(),
+            ),
+        });
+
+        let reduce_dim_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Reduce Dim Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                expand(include_str!("shaders/reduce_dim.wgsl"), elem, Elem::F32).into(),
+            ),
+        });
 
         let igemm_backward_weight_shader =
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1046,66 +1037,6 @@ impl GpuContext {
             ),
 
             // Binary backward with RACE-FREE broadcasting (two-pass)
-            add_broadcast_pass1: create_pipeline(
-                &binary_backward_safe_shader,
-                "add_broadcast_pass1",
-                "Add Broadcast Pass1 Pipeline",
-            ),
-            add_broadcast_pass2: create_pipeline(
-                &binary_backward_safe_shader,
-                "add_broadcast_pass2",
-                "Add Broadcast Pass2 Pipeline",
-            ),
-            sub_broadcast_pass1: create_pipeline(
-                &binary_backward_safe_shader,
-                "sub_broadcast_pass1",
-                "Sub Broadcast Pass1 Pipeline",
-            ),
-            sub_broadcast_pass2: create_pipeline(
-                &binary_backward_safe_shader,
-                "sub_broadcast_pass2",
-                "Sub Broadcast Pass2 Pipeline",
-            ),
-            mul_broadcast_pass1: create_pipeline(
-                &binary_backward_safe_shader,
-                "mul_broadcast_pass1",
-                "Mul Broadcast Pass1 Pipeline",
-            ),
-            mul_broadcast_pass2: create_pipeline(
-                &binary_backward_safe_shader,
-                "mul_broadcast_pass2",
-                "Mul Broadcast Pass2 Pipeline",
-            ),
-            div_broadcast_pass1: create_pipeline(
-                &binary_backward_safe_shader,
-                "div_broadcast_pass1",
-                "Div Broadcast Pass1 Pipeline",
-            ),
-            div_broadcast_pass2: create_pipeline(
-                &binary_backward_safe_shader,
-                "div_broadcast_pass2",
-                "Div Broadcast Pass2 Pipeline",
-            ),
-            max_broadcast_pass1: create_pipeline(
-                &binary_backward_safe_shader,
-                "max_broadcast_pass1",
-                "Max Broadcast Pass1 Pipeline",
-            ),
-            max_broadcast_pass2: create_pipeline(
-                &binary_backward_safe_shader,
-                "max_broadcast_pass2",
-                "Max Broadcast Pass2 Pipeline",
-            ),
-            mod_broadcast_pass1: create_pipeline(
-                &binary_backward_safe_shader,
-                "mod_broadcast_pass1",
-                "Mod Broadcast Pass1 Pipeline",
-            ),
-            mod_broadcast_pass2: create_pipeline(
-                &binary_backward_safe_shader,
-                "mod_broadcast_pass2",
-                "Mod Broadcast Pass2 Pipeline",
-            ),
 
             // Reductions
             sum_first: create_pipeline(&reduce_shader, "sum_first", "Sum First Pipeline"),
@@ -1236,6 +1167,27 @@ impl GpuContext {
                 &igemm_backward_weight_shader,
                 "igemm_backward_weight_main",
                 "iGEMM Backward Weight Pipeline",
+            ),
+
+            gather: create_pipeline(&strided_shader, "gather", "Gather Pipeline"),
+            sum_dim_cols: create_pipeline(&reduce_dim_shader, "sum_dim_cols", "Sum Dim Cols"),
+            sum_dim_rows: create_pipeline(&reduce_dim_shader, "sum_dim_rows", "Sum Dim Rows"),
+            max_dim_cols: create_pipeline(&reduce_dim_shader, "max_dim_cols", "Max Dim Cols"),
+            max_dim_rows: create_pipeline(&reduce_dim_shader, "max_dim_rows", "Max Dim Rows"),
+            sum_dim_backward: create_pipeline(
+                &reduce_dim_shader,
+                "sum_dim_backward",
+                "Sum Dim Backward",
+            ),
+            max_dim_backward_cols: create_pipeline(
+                &reduce_dim_shader,
+                "max_dim_backward_cols",
+                "Max Dim Backward Cols",
+            ),
+            max_dim_backward_rows: create_pipeline(
+                &reduce_dim_shader,
+                "max_dim_backward_rows",
+                "Max Dim Backward Rows",
             ),
         }
     }

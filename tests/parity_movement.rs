@@ -22,7 +22,7 @@ use volta::Device;
 
 #[test]
 fn transpose_parity() {
-    expect_gaps(&["Transpose"], || {
+    expect_gaps(&[], || {
         assert_unary_parity(
             "transpose",
             volta::Tensor::transpose,
@@ -35,7 +35,7 @@ fn transpose_parity() {
 
 #[test]
 fn transpose_backward_parity() {
-    expect_gaps(&["Transpose"], || {
+    expect_gaps(&[], || {
         assert_unary_parity_backward(
             "transpose",
             volta::Tensor::transpose,
@@ -235,15 +235,15 @@ fn flatten_backward_parity() {
 // Skipping as the operation is not implemented in the framework.
 // ---------------------------------------------------------------------------
 
-/// Rank 5 is past the GPU permute kernels (rank <= 4), so forward and backward are gaps
-/// and the backward runs its CPU path on a GPU gradient. That path once relabeled the
-/// GPU storage as CPU instead of copying it to the host, and panicked.
+/// Rank 5 is past the rank-4 GPU permute kernels, so forward and backward run on the
+/// rank-8 strided gather (#67). Before that they were gaps, whose CPU backward once
+/// relabeled the GPU storage as CPU instead of copying it to the host, and panicked.
 #[test]
-fn permute_rank5_backward_gap_parity() {
+fn permute_rank5_backward_parity() {
     if skip_if_no_gpu() {
         return;
     }
-    expect_gaps(&["Movement(Permute)"], || {
+    expect_gaps(&[], || {
         let shape = [2, 1, 3, 2, 2];
         let axes = [Axis(4), Axis(2), Axis(0), Axis(3), Axis(1)];
         let x_cpu = make_input(&shape, true, (-2.0, 2.0));

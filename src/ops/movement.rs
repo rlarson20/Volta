@@ -240,6 +240,12 @@ const fn gpu_movement_supported(rank: usize) -> bool {
     rank <= 4
 }
 
+/// Whether the rank-8 strided gather covers this rank, for `permute` and `expand` above
+/// rank 4.
+const fn gpu_gather_supported(rank: usize) -> bool {
+    rank <= 8
+}
+
 /// Whether the GPU `pad` kernels cover this padding: rank <= 4, and dims 2 and 3 are packed
 /// as two 16-bit halves of one `u32` each, so their pad widths must fit in 16 bits.
 fn gpu_pad_supported(padding: &[(usize, usize)]) -> bool {
@@ -507,6 +513,15 @@ impl MovementGradFn {
                     .unwrap_or_else(|| kernel_failed("Movement(Permute)"));
                     return vec![Some(grad_storage)];
                 }
+                if out_grad.device.is_gpu() && gpu_gather_supported(self.original_shape.rank()) {
+                    let grad_storage = RawTensor::gpu_permute_any(
+                        &out_grad.data,
+                        out_grad.shape.truncate_rank(),
+                        &inverse_axes,
+                    )
+                    .unwrap_or_else(|| kernel_failed("Movement(Permute)"));
+                    return vec![Some(grad_storage)];
+                }
 
                 // CPU path. `out_grad` may be GPU storage (a rank the kernel doesn't
                 // cover), so copy it to the host rather than relabel it.
@@ -529,6 +544,15 @@ impl MovementGradFn {
                         &out_grad.data,
                         self.original_shape.truncate_rank(),
                         new_shape,
+                    )
+                    .unwrap_or_else(|| kernel_failed("Movement(Expand)"));
+                    return vec![Some(grad_storage)];
+                }
+                if out_grad.device.is_gpu() && gpu_gather_supported(self.original_shape.rank()) {
+                    let grad_storage = RawTensor::gpu_sum_to_shape(
+                        &out_grad.data,
+                        new_shape,
+                        self.original_shape.truncate_rank(),
                     )
                     .unwrap_or_else(|| kernel_failed("Movement(Expand)"));
                     return vec![Some(grad_storage)];
@@ -814,6 +838,12 @@ impl RawTensor {
                 .unwrap_or_else(|| kernel_failed("Movement(Permute)"));
             return (storage, new_shape, device);
         }
+        // Above rank 4, the rank-8 strided gather.
+        if device.is_gpu() && gpu_gather_supported(shape.rank()) {
+            let storage = Self::gpu_permute_any(&data, shape.truncate_rank(), axes)
+                .unwrap_or_else(|| kernel_failed("Movement(Permute)"));
+            return (storage, new_shape, device);
+        }
 
         // CPU path (`movement_edge` applies the device policy to a GPU input)
         let old_strides = shape.strides();
@@ -927,11 +957,19 @@ impl RawTensor {
         let new_size = out_shape.numel();
 
         // GPU path when the kernel covers this case; a `None` from it is a failure.
-        let gpu_storage =
-            (device.is_gpu() && gpu_movement_supported(old_shape.rank())).then(|| {
+        let gpu_storage = if device.is_gpu() && gpu_movement_supported(old_shape.rank()) {
+            Some(
                 Self::gpu_expand(&data, old_shape.truncate_rank(), new_shape)
-                    .unwrap_or_else(|| kernel_failed("Movement(Expand)"))
-            });
+                    .unwrap_or_else(|| kernel_failed("Movement(Expand)")),
+            )
+        } else if device.is_gpu() && gpu_gather_supported(old_shape.rank()) {
+            Some(
+                Self::gpu_broadcast_to(&data, old_shape.truncate_rank(), new_shape)
+                    .unwrap_or_else(|| kernel_failed("Movement(Expand)")),
+            )
+        } else {
+            None
+        };
         let (storage, out_device) = if let Some(storage) = gpu_storage {
             (storage, device)
         } else {

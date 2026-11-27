@@ -14,7 +14,7 @@ struct Params {
     m: u32,  // Rows of A
     k: u32,  // Cols of A / Rows of B
     n: u32,  // Cols of B
-    _padding: u32,
+    batch: u32, // Independent products, stacked: A is [batch, M, K], B [batch, K, N], C [batch, M, N]
 }
 
 @group(0) @binding(3) var<uniform> params: Params;
@@ -33,8 +33,18 @@ fn matmul(
     @builtin(local_invocation_id) local_id: vec3<u32>,
 ) {
     let global_id = tile_global_id(wg_id, num_wg, local_id, (params.n + 15u) / 16u);
-    let row = global_id.y;
+    // Tile rows are stacked per product: tile row r is row tile r % tiles_y of product
+    // r / tiles_y. A workgroup past the last product (a 2-D dispatch's tail) reads product 0
+    // and stores nothing (its row is out of range).
+    let tiles_y = (params.m + 15u) / 16u;
+    let batch_raw = (global_id.y / 16u) / tiles_y;
+    let in_batch = batch_raw < params.batch;
+    let batch = select(0u, batch_raw, in_batch);
+    let row = select(params.m, ((global_id.y / 16u) % tiles_y) * 16u + local_id.y, in_batch);
     let col = global_id.x;
+    let a_off = batch * params.m * params.k;
+    let b_off = batch * params.k * params.n;
+    let c_off = batch * params.m * params.n;
     let local_row = local_id.y;
     let local_col = local_id.x;
 
@@ -50,7 +60,7 @@ fn matmul(
         let a_row = row;
         let a_col = t * TILE_SIZE + local_col;
         if (a_row < params.m && a_col < params.k) {
-            tile_a[local_row * TILE_SIZE + local_col] = ld_a(a_row * params.k + a_col);
+            tile_a[local_row * TILE_SIZE + local_col] = ld_a(a_off + a_row * params.k + a_col);
         } else {
             tile_a[local_row * TILE_SIZE + local_col] = 0.0;
         }
@@ -59,7 +69,7 @@ fn matmul(
         let b_row = t * TILE_SIZE + local_row;
         let b_col = col;
         if (b_row < params.k && b_col < params.n) {
-            tile_b[local_row * TILE_SIZE + local_col] = ld_b(b_row * params.n + b_col);
+            tile_b[local_row * TILE_SIZE + local_col] = ld_b(b_off + b_row * params.n + b_col);
         } else {
             tile_b[local_row * TILE_SIZE + local_col] = 0.0;
         }
@@ -80,6 +90,6 @@ fn matmul(
 
     // Write result
     if (row < params.m && col < params.n) {
-        st_c(row * params.n + col, pairwise_total(&acc));
+        st_c(c_off + row * params.n + col, pairwise_total(&acc));
     }
 }

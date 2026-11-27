@@ -204,7 +204,7 @@ fn test_matmul_backward_gpu() {
 #[cfg(feature = "gpu")]
 #[test]
 fn test_linear_layer_backward_gpu() {
-    expect_gaps(&["Binary(Add)"], || {
+    expect_gaps(&[], || {
         use crate::nn::{Linear, Module};
         if !is_gpu_available() {
             return; // Skip test if GPU not available
@@ -660,7 +660,7 @@ fn test_sgd_momentum_state_stays_on_gpu() {
 #[cfg(feature = "gpu")]
 #[test]
 fn test_gpu_binary_backward_broadcast_add() {
-    expect_gaps(&["Binary(Add)"], || {
+    expect_gaps(&[], || {
         if !is_gpu_available() {
             return;
         }
@@ -729,7 +729,7 @@ fn test_gpu_binary_backward_broadcast_add() {
 #[cfg(feature = "gpu")]
 #[test]
 fn test_gpu_binary_backward_broadcast_mul() {
-    expect_gaps(&["Binary(Mul)"], || {
+    expect_gaps(&[], || {
         if !is_gpu_available() {
             return;
         }
@@ -765,7 +765,7 @@ fn test_gpu_binary_backward_broadcast_mul() {
 #[cfg(feature = "gpu")]
 #[test]
 fn test_gpu_binary_backward_broadcast_stress() {
-    expect_gaps(&["Binary(Add)"], || {
+    expect_gaps(&[], || {
         if !is_gpu_available() {
             return;
         }

@@ -88,7 +88,7 @@ fn gpu_gelu_matches_cpu_at_minus_three() {
     let mut got = Vec::new();
     // GELU's scalar constants are `[1]` tensors, and broadcasting is a GPU gap, so only
     // `erf` runs on the device; the binary ops run on the CPU under `PreferGpu`.
-    expect_gaps(&["Binary(Add)", "Binary(Div)", "Binary(Mul)"], || {
+    expect_gaps(&[], || {
         got = GELU::new().forward(&gpu_leaf(&cpu(&xs))).data();
     });
     assert_eq!(want.len(), got.len());

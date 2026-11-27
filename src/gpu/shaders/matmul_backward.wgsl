@@ -14,7 +14,7 @@ struct BackwardParams {
              // For backward_b: cols of A / rows of dB
     n: u32,  // For backward_a: cols of grad / cols of B (the shared dimension)
              // For backward_b: cols of grad / cols of dB
-    _padding: u32,
+    batch: u32, // Independent products, stacked as in `matmul.wgsl`
 }
 
 // ============ matmul_backward_a: dA = grad @ B^T =============
@@ -38,7 +38,16 @@ fn matmul_backward_a(
     @builtin(local_invocation_id) local_id: vec3<u32>,
 ) {
     let global_id = tile_global_id(wg_id, num_wg, local_id, (params_a.k + 15u) / 16u);
-    let row = global_id.y;  // Row in dA (also row in grad)
+    // Stacked products, as in `matmul.wgsl`.
+    let tiles_y = (params_a.m + 15u) / 16u;
+    let batch_raw = (global_id.y / 16u) / tiles_y;
+    let in_batch = batch_raw < params_a.batch;
+    let batch = select(0u, batch_raw, in_batch);
+    let g_off = batch * params_a.m * params_a.n;
+    let b_off = batch * params_a.k * params_a.n;
+    let d_off = batch * params_a.m * params_a.k;
+    // Row in dA (also row in grad)
+    let row = select(params_a.m, ((global_id.y / 16u) % tiles_y) * 16u + local_id.y, in_batch);
     let col = global_id.x;  // Col in dA (also row in B, which is col in B^T)
     let local_row = local_id.y;
     let local_col = local_id.x;
@@ -55,7 +64,7 @@ fn matmul_backward_a(
         let grad_row = row;
         let grad_col = t * TILE_SIZE + local_col;
         if (grad_row < params_a.m && grad_col < params_a.n) {
-            tile_grad[local_row * TILE_SIZE + local_col] = ld_grad_a(grad_row * params_a.n + grad_col);
+            tile_grad[local_row * TILE_SIZE + local_col] = ld_grad_a(g_off + grad_row * params_a.n + grad_col);
         } else {
             tile_grad[local_row * TILE_SIZE + local_col] = 0.0;
         }
@@ -69,7 +78,7 @@ fn matmul_backward_a(
         let bt_col = col;
         if (bt_row < params_a.n && bt_col < params_a.k) {
             // Read B[bt_col, bt_row] to get B^T[bt_row, bt_col]
-            tile_b[local_row * TILE_SIZE + local_col] = ld_b(bt_col * params_a.n + bt_row);
+            tile_b[local_row * TILE_SIZE + local_col] = ld_b(b_off + bt_col * params_a.n + bt_row);
         } else {
             tile_b[local_row * TILE_SIZE + local_col] = 0.0;
         }
@@ -88,7 +97,7 @@ fn matmul_backward_a(
 
     // Write result
     if (row < params_a.m && col < params_a.k) {
-        st_dA(row * params_a.k + col, pairwise_total(&acc));
+        st_dA(d_off + row * params_a.k + col, pairwise_total(&acc));
     }
 }
 
@@ -108,7 +117,16 @@ fn matmul_backward_b(
     @builtin(local_invocation_id) local_id: vec3<u32>,
 ) {
     let global_id = tile_global_id(wg_id, num_wg, local_id, (params_b.n + 15u) / 16u);
-    let row = global_id.y;  // Row in dB (also col in A, which is row in A^T)
+    // Stacked products, as in `matmul.wgsl`.
+    let tiles_y = (params_b.k + 15u) / 16u;
+    let batch_raw = (global_id.y / 16u) / tiles_y;
+    let in_batch = batch_raw < params_b.batch;
+    let batch = select(0u, batch_raw, in_batch);
+    let a_off = batch * params_b.m * params_b.k;
+    let g_off = batch * params_b.m * params_b.n;
+    let d_off = batch * params_b.k * params_b.n;
+    // Row in dB (also col in A, which is row in A^T)
+    let row = select(params_b.k, ((global_id.y / 16u) % tiles_y) * 16u + local_id.y, in_batch);
     let col = global_id.x;  // Col in dB (also col in grad)
     let local_row = local_id.y;
     let local_col = local_id.x;
@@ -129,7 +147,7 @@ fn matmul_backward_b(
         let at_col = t * TILE_SIZE + local_col;
         if (at_row < params_b.k && at_col < params_b.m) {
             // Read A[at_col, at_row] to get A^T[at_row, at_col]
-            tile_a[local_row * TILE_SIZE + local_col] = ld_a(at_col * params_b.k + at_row);
+            tile_a[local_row * TILE_SIZE + local_col] = ld_a(a_off + at_col * params_b.k + at_row);
         } else {
             tile_a[local_row * TILE_SIZE + local_col] = 0.0;
         }
@@ -138,7 +156,7 @@ fn matmul_backward_b(
         let grad_row = t * TILE_SIZE + local_row;
         let grad_col = col;
         if (grad_row < params_b.m && grad_col < params_b.n) {
-            tile_grad[local_row * TILE_SIZE + local_col] = ld_grad_b(grad_row * params_b.n + grad_col);
+            tile_grad[local_row * TILE_SIZE + local_col] = ld_grad_b(g_off + grad_row * params_b.n + grad_col);
         } else {
             tile_grad[local_row * TILE_SIZE + local_col] = 0.0;
         }
@@ -157,7 +175,7 @@ fn matmul_backward_b(
 
     // Write result
     if (row < params_b.k && col < params_b.n) {
-        st_dB(row * params_b.n + col, pairwise_total(&acc));
+        st_dB(d_off + row * params_b.n + col, pairwise_total(&acc));
     }
 }
 

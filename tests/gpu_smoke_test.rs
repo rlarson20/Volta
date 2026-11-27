@@ -351,7 +351,7 @@ fn test_tensor_gpu_binary_basic_matches_cpu() {
 #[test]
 #[cfg(feature = "gpu")]
 fn test_tensor_gpu_sum_dim_device_and_grad_on_gpu() {
-    expect_gaps(&["SumDim"], || {
+    expect_gaps(&[], || {
         use volta::gpu::is_gpu_available;
         use volta::{Device, RawTensor};
 
@@ -387,7 +387,7 @@ fn test_tensor_gpu_sum_dim_device_and_grad_on_gpu() {
 #[test]
 #[cfg(feature = "gpu")]
 fn test_tensor_gpu_max_dim_device_and_grad_on_gpu() {
-    expect_gaps(&["MaxDim"], || {
+    expect_gaps(&[], || {
         use volta::gpu::is_gpu_available;
         use volta::{Device, RawTensor};
 

@@ -231,14 +231,11 @@ pub fn assert_matmul_parity(a_shape: &[usize], b_shape: &[usize], tol_fwd: f32, 
 
     let c_cpu = a_cpu.matmul(&b_cpu);
     let c_gpu = a_gpu.matmul(&b_gpu);
-    // Only the rank >= 2 arm has a GPU kernel; the vector arms compute on the host and return a
-    // CPU tensor, so for them this checks GPU-resident operands, not a kernel.
-    if a_shape.len() >= 2 && b_shape.len() >= 2 {
-        assert!(
-            matches!(c_gpu.device(), Device::GPU(_)),
-            "GPU matmul fell back to the CPU, so this would compare the CPU with itself"
-        );
-    }
+    // Every arm has a GPU kernel (a vector is a 1-row or 1-column matrix there).
+    assert!(
+        matches!(c_gpu.device(), Device::GPU(_)),
+        "GPU matmul fell back to the CPU, so this would compare the CPU with itself"
+    );
 
     // A randomly weighted loss: `.sum()` makes dC all ones, which cannot tell dA = dC @ B^T
     // from dA = dC @ B (or a swapped k/n) on shapes where the two agree.

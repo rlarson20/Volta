@@ -38,8 +38,7 @@
 ///         differentiable {
 ///             /// x + y
 ///             Add => |a, b| a + b, |g, _a, _b| (g, g),
-///                 gpu(add, add_backward_a, add_backward_b,
-///                     add_broadcast_pass1, add_broadcast_pass2);
+///                 gpu(add, add_backward_a, add_backward_b);
 ///         }
 ///         non_differentiable {
 ///             /// Comparison-like op with no derivative.
@@ -51,9 +50,9 @@
 ///
 /// - The backward returns the per-element pair `(∂L/∂a, ∂L/∂b)` *before* any reduction
 ///   over broadcast dimensions; the caller does that reduction once for every op.
-/// - `gpu(fwd, bwd_a, bwd_b, pass1, pass2)` names the forward, same-shape backward, and
-///   two-pass broadcast-backward `ComputePipelines` fields. `gpu(fwd)` is the forward
-///   only.
+/// - `gpu(fwd, bwd_a, bwd_b)` names the forward and same-shape backward
+///   `ComputePipelines` fields; a broadcasting backward runs them on operands gathered to
+///   the output's shape and sums each gradient back down. `gpu(fwd)` is the forward only.
 /// - The `non_differentiable` section may be empty (`non_differentiable {}`), as it is
 ///   while every binary op has a derivative.
 /// - `is_trivial` is true exactly for the `non_differentiable` rows, and their
@@ -166,7 +165,7 @@ macro_rules! define_ops {
                     $(#[$dmeta:meta])*
                     $dvariant:ident => |$da:ident, $db:ident| $dfwd:expr,
                         |$dg:ident, $dga:ident, $dgb:ident| $dbwd:expr,
-                        gpu($dfp:ident, $dpa:ident, $dpb:ident, $dp1:ident, $dp2:ident);
+                        gpu($dfp:ident, $dpa:ident, $dpb:ident);
                 )*
             }
             non_differentiable {
@@ -303,8 +302,6 @@ macro_rules! define_ops {
                     $(Self::$dvariant => Some($crate::gpu::BinaryBackwardPipelines {
                         a: &p.$dpa,
                         b: &p.$dpb,
-                        pass1: &p.$dp1,
-                        pass2: &p.$dp2,
                     }),)*
                     $(Self::$nvariant => None,)*
                 }
